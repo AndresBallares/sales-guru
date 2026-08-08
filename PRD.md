@@ -51,7 +51,7 @@ Credits are the unit that meters AI generation (strategy + copy + image) usage; 
 1. **Foundation** — React 19 + TS + Vite frontend, Python (uv) + FastAPI backend, Prisma schema (SQLite dev → Postgres prod) via `prisma-client-py`, test/lint/CI tooling. *(done)*
 2. **Auth** — `POST /auth/signup` (auto-provisions Organization, auto-logs in), `/login`, `/logout`, `/me`; DB-backed sessions via httpOnly cookie, tokens hashed at rest. Frontend: `/login`, `/signup` pages, `AuthProvider`/`useAuth`, route guards. *(done)*
 3. **Business + product + audience onboarding** — Business (dashboard: list + create form), Product, and Audience (both on a `/businesses/:id` detail page, via `ProductsSection`/`AudiencesSection`) all done, backend + frontend. `GET /businesses/{id}` added for the detail page. Only image upload remains pending from this step.
-4. **Objective + Meta Ads connection** — objective selector, Meta OAuth, ad account/Page selection
+4. **Objective + Meta Ads connection** — objective selector done: `POST/GET /businesses/{id}/campaigns` (`CampaignsSection`), objective is one of the fixed PRD.md §7 values, campaign optionally references a product/audience from the same business (cross-business references 404, scoped lookup). Meta OAuth + ad account/Page selection still pending — deliberately deferred to step 8 (publish), per §6.
 5. **AI strategy generation** — LLM call grounded in business/product/objective, stored strategy record
 6. **AI ad generation** — ad copy + creative generation grounded in the strategy
 7. **Approval flow** — review/edit UI, explicit user approval gate before publish

@@ -3,11 +3,13 @@ import {
   ApiError,
   createAudience,
   createBusiness,
+  createCampaign,
   createProduct,
   getBusiness,
   getMe,
   listAudiences,
   listBusinesses,
+  listCampaigns,
   listProducts,
   login,
   logout,
@@ -254,5 +256,38 @@ describe('listAudiences', () => {
     await expect(listAudiences('biz-1')).resolves.toEqual([])
     const [url] = fetchMock.mock.calls[0]
     expect(url).toContain('/businesses/biz-1/audiences')
+  })
+})
+
+describe('createCampaign', () => {
+  it('sends only the provided fields and returns the created campaign', async () => {
+    const campaign = {
+      id: '1',
+      objective: 'SALES' as const,
+      status: 'DRAFT',
+      productId: null,
+      audienceId: null,
+      metaCampaignId: null,
+    }
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(jsonResponse(campaign, 201))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(createCampaign('biz-1', { objective: 'SALES' })).resolves.toEqual(
+      campaign,
+    )
+    const [url, options] = fetchMock.mock.calls[0]
+    expect(url).toContain('/businesses/biz-1/campaigns')
+    expect(JSON.parse(options?.body as string)).toEqual({ objective: 'SALES' })
+  })
+})
+
+describe('listCampaigns', () => {
+  it('returns the list of campaigns for a business', async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(jsonResponse([]))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(listCampaigns('biz-1')).resolves.toEqual([])
+    const [url] = fetchMock.mock.calls[0]
+    expect(url).toContain('/businesses/biz-1/campaigns')
   })
 })

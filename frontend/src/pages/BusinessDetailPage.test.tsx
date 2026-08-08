@@ -16,6 +16,7 @@ vi.mock('../lib/api', async (importOriginal) => {
     getBusiness: vi.fn<typeof actual.getBusiness>(),
     listProducts: vi.fn<typeof actual.listProducts>(),
     listAudiences: vi.fn<typeof actual.listAudiences>(),
+    listCampaigns: vi.fn<typeof actual.listCampaigns>(),
   }
 })
 const mockedApi = vi.mocked(api)
@@ -35,6 +36,7 @@ beforeEach(() => {
   mockedApi.getBusiness.mockResolvedValue(business)
   mockedApi.listProducts.mockResolvedValue([])
   mockedApi.listAudiences.mockResolvedValue([])
+  mockedApi.listCampaigns.mockResolvedValue([])
 })
 
 function renderPage() {
@@ -50,12 +52,13 @@ function renderPage() {
 }
 
 describe('BusinessDetailPage', () => {
-  it('shows the business name and renders both onboarding sections', async () => {
+  it('shows the business name and renders all onboarding sections', async () => {
     renderPage()
 
     expect(await screen.findByRole('heading', { name: 'Acme Widgets' })).toBeInTheDocument()
     expect(await screen.findByRole('heading', { name: 'Products' })).toBeInTheDocument()
     expect(await screen.findByRole('heading', { name: 'Audiences' })).toBeInTheDocument()
+    expect(await screen.findByRole('heading', { name: 'Campaigns' })).toBeInTheDocument()
   })
 
   it('shows an error if the business fails to load', async () => {

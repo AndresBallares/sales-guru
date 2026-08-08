@@ -60,6 +60,23 @@ export interface AudienceCreateInput {
   desire?: string
 }
 
+export type Objective = 'SALES' | 'LEADS' | 'TRAFFIC' | 'MESSAGES' | 'AWARENESS'
+
+export interface Campaign {
+  id: string
+  objective: Objective
+  status: string
+  productId: string | null
+  audienceId: string | null
+  metaCampaignId: string | null
+}
+
+export interface CampaignCreateInput {
+  objective: Objective
+  productId?: string
+  audienceId?: string
+}
+
 const API_URL: string = import.meta.env.VITE_API_URL ?? 'http://localhost:8000'
 
 export class ApiError extends Error {
@@ -184,4 +201,18 @@ export function createAudience(
 
 export function listAudiences(businessId: string): Promise<Audience[]> {
   return request<Audience[]>(`/businesses/${businessId}/audiences`)
+}
+
+export function createCampaign(
+  businessId: string,
+  input: CampaignCreateInput,
+): Promise<Campaign> {
+  return request<Campaign>(`/businesses/${businessId}/campaigns`, {
+    method: 'POST',
+    body: JSON.stringify(input),
+  })
+}
+
+export function listCampaigns(businessId: string): Promise<Campaign[]> {
+  return request<Campaign[]>(`/businesses/${businessId}/campaigns`)
 }
