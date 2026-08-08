@@ -29,6 +29,39 @@ jobs:
             frontend:
               - 'frontend/**'
 
+  # Backstop for the local commit-msg hook (scripts/check-no-ai-coauthor.sh)
+  # — catches commits pushed with --no-verify or from a machine that never
+  # ran `pre-commit install`. Runs unconditionally (not path-scoped): a bad
+  # trailer can ride along with any change, including docs-only ones.
+  commit-message-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: No AI co-author attribution in commit messages
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            range="${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }}"
+          else
+            before="${{ github.event.before }}"
+            after="${{ github.event.after }}"
+            if [ "$before" = "0000000000000000000000000000000000000000" ]; then
+              range="-1 $after"
+            else
+              range="$before..$after"
+            fi
+          fi
+
+          bad="$(git log $range --pretty=%B | grep -Ei '^co-authored-by:.*(claude|anthropic)' || true)"
+          if [ -n "$bad" ]; then
+            echo "::error::Commit message has a Co-authored-by trailer attributing to Claude/Anthropic."
+            echo "$bad"
+            exit 1
+          fi
+
   backend-ci:
     needs: changes
     if: needs.changes.outputs.backend == 'true'
@@ -128,15 +161,21 @@ jobs:
   # job that *did* run failed, so it's a stable, always-present check name.
   ci-status:
     if: always()
-    needs: [changes, backend-ci, frontend-ci]
+    needs: [changes, commit-message-check, backend-ci, frontend-ci]
     runs-on: ubuntu-latest
     steps:
       - name: Verify no required job failed
         run: |
+          commit_result="${{ needs.commit-message-check.result }}"
           backend_result="${{ needs.backend-ci.result }}"
           frontend_result="${{ needs.frontend-ci.result }}"
+          echo "commit-message-check: $commit_result"
           echo "backend-ci: $backend_result"
           echo "frontend-ci: $frontend_result"
+          if [[ "$commit_result" == "failure" || "$commit_result" == "cancelled" ]]; then
+            echo "commit-message-check did not pass" >&2
+            exit 1
+          fi
           if [[ "$backend_result" == "failure" || "$backend_result" == "cancelled" ]]; then
             echo "backend-ci did not pass" >&2
             exit 1
