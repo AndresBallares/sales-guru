@@ -81,8 +81,13 @@ npx playwright install --with-deps chromium   # only needed for e2e tests
 # Pre-commit hooks (run from repo root)
 cd ..
 uv tool install pre-commit      # if you don't already have pre-commit
-pre-commit install
+pre-commit install              # installs both the pre-commit and commit-msg hooks
 ```
+
+Pre-commit runs the same lint/type/test checks as CI, plus one commit-message
+check: no `Co-Authored-By: Claude ...` trailer is allowed (rejected by
+`scripts/check-no-ai-coauthor.sh`) — commit messages in this repo don't
+attribute authorship to Claude/Anthropic.
 
 ## Running the app
 

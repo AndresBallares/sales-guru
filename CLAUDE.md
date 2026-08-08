@@ -38,8 +38,9 @@ test -d frontend/node_modules && echo "frontend/node_modules present" || echo "M
 test -d ~/Library/Caches/ms-playwright 2>/dev/null || test -d ~/.cache/ms-playwright 2>/dev/null \
   && echo "Playwright browsers present" || echo "MISSING: (cd frontend && npx playwright install --with-deps chromium)"
 
-# 8. Pre-commit hooks installed in this repo?
-test -f .git/hooks/pre-commit && echo "pre-commit hook installed" || echo "MISSING: pre-commit install"
+# 8. Pre-commit hooks installed in this repo? (both stages — plain
+#    `pre-commit install` covers both via default_install_hook_types)
+test -f .git/hooks/pre-commit -a -f .git/hooks/commit-msg && echo "pre-commit hooks installed" || echo "MISSING: pre-commit install"
 ```
 
 If step 1 fails for any tool, stop and point the user at README.md's
@@ -67,4 +68,9 @@ GitHub or Render.
 - **Schema changes**: always `uv run prisma migrate dev --name <desc>`, never
   `prisma db push` — see README.md's Database schema changes section for why.
 - **Line endings**: LF, enforced by `.gitattributes` — no action needed.
+- **Commit messages must not attribute authorship to Claude or Anthropic** —
+  no `Co-Authored-By: Claude ...` trailer. Enforced by a `commit-msg` hook
+  (`scripts/check-no-ai-coauthor.sh`), so don't add that trailer even as the
+  default Claude Code commit template suggests — the commit will be
+  rejected.
 - Full detail on all of the above: [`README.md`](./README.md).

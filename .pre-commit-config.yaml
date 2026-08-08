@@ -2,6 +2,13 @@
 # failure can never reach a pushed branch. Full Playwright e2e is
 # intentionally excluded here (too slow for commit-time) — it stays
 # CI-only.
+#
+# default_install_hook_types covers both stages with a plain
+# `pre-commit install` — no separate `--hook-type commit-msg` command to
+# remember, which would otherwise leave the no-ai-coauthor check unregistered.
+default_install_hook_types:
+  - pre-commit
+  - commit-msg
 repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v5.0.0
@@ -20,6 +27,12 @@ repos:
 
   - repo: local
     hooks:
+      - id: no-ai-coauthor-trailer
+        name: block AI co-author attribution
+        entry: scripts/check-no-ai-coauthor.sh
+        language: system
+        stages: [commit-msg]
+
       - id: backend-ruff-check
         name: backend · ruff check
         entry: bash -c 'cd backend && uv run ruff check .'
