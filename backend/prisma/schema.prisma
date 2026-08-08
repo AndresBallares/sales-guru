@@ -55,13 +55,18 @@ model Subscription {
   updatedAt      DateTime     @updatedAt
 }
 
+// Business onboarding fields (PRD.md §7): name required, the rest optional
+// to keep signup friction low — AI strategy generation degrades gracefully
+// with less context rather than blocking onboarding on them.
 model Business {
   id             String          @id @default(cuid())
   organization   Organization    @relation(fields: [organizationId], references: [id])
   organizationId String
   name           String
+  website        String?
   industry       String?
-  toneOfVoice    String?
+  location       String?
+  description    String?
   products       Product[]
   audiences      Audience[]
   metaConnection MetaConnection?
@@ -70,12 +75,18 @@ model Business {
   updatedAt      DateTime        @updatedAt
 }
 
+// Product has no separate name field — `description` ("What do you sell?")
+// doubles as its identity, truncated for display in lists (PRD.md §7).
 model Product {
   id          String         @id @default(cuid())
   business    Business       @relation(fields: [businessId], references: [id])
   businessId  String
-  name        String
-  description String?
+  description String
+  price       Float?
+  margin      Float?
+  features    String?
+  benefits    String?
+  url         String?
   images      ProductImage[]
   campaigns   Campaign[]
   createdAt   DateTime       @default(now())
@@ -90,12 +101,22 @@ model ProductImage {
   createdAt DateTime @default(now())
 }
 
+// Same no-separate-name convention as Product — `description` ("Who buys?")
+// is the identity. ageMin/ageMax are separate ints (not a freeform range
+// string) to match Meta's age_min/age_max targeting fields directly.
+// location/interests stay freeform text — Meta resolves those to its own
+// location/interest taxonomy IDs at publish time (PRD.md §7), not here.
 model Audience {
   id          String     @id @default(cuid())
   business    Business   @relation(fields: [businessId], references: [id])
   businessId  String
-  name        String
-  description String?
+  description String
+  ageMin      Int?
+  ageMax      Int?
+  location    String?
+  interests   String?
+  problem     String?
+  desire      String?
   campaigns   Campaign[]
   createdAt   DateTime   @default(now())
   updatedAt   DateTime   @updatedAt
@@ -114,25 +135,27 @@ model MetaConnection {
   updatedAt      DateTime @updatedAt
 }
 
-// Campaign.objective: AWARENESS | TRAFFIC | CONVERSIONS
+// Campaign.objective: SALES | LEADS | TRAFFIC | MESSAGES | AWARENESS
+//                     (PRD.md §7 — maps to Meta's own campaign objectives
+//                     at publish time)
 // Campaign.status: DRAFT | STRATEGY_GENERATED | ADS_GENERATED |
 //                  PENDING_APPROVAL | APPROVED | LIVE | PAUSED | FAILED
 model Campaign {
-  id             String     @id @default(cuid())
-  business       Business   @relation(fields: [businessId], references: [id])
+  id             String    @id @default(cuid())
+  business       Business  @relation(fields: [businessId], references: [id])
   businessId     String
-  product        Product?   @relation(fields: [productId], references: [id])
+  product        Product?  @relation(fields: [productId], references: [id])
   productId      String?
-  audience       Audience?  @relation(fields: [audienceId], references: [id])
+  audience       Audience? @relation(fields: [audienceId], references: [id])
   audienceId     String?
   objective      String
-  status         String     @default("DRAFT")
+  status         String    @default("DRAFT")
   strategy       Strategy?
   adSets         AdSet[]
   metrics        Metric[]
   metaCampaignId String?
-  createdAt      DateTime   @default(now())
-  updatedAt      DateTime   @updatedAt
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
 }
 
 model Strategy {
@@ -162,15 +185,15 @@ model AdSet {
 
 // Ad.status: DRAFT | READY | LIVE | PAUSED
 model Ad {
-  id         String     @id @default(cuid())
-  adSet      AdSet      @relation(fields: [adSetId], references: [id])
-  adSetId    String
-  name       String
-  status     String     @default("DRAFT")
-  creatives  Creative[]
-  metaAdId   String?
-  createdAt  DateTime   @default(now())
-  updatedAt  DateTime   @updatedAt
+  id        String     @id @default(cuid())
+  adSet     AdSet      @relation(fields: [adSetId], references: [id])
+  adSetId   String
+  name      String
+  status    String     @default("DRAFT")
+  creatives Creative[]
+  metaAdId  String?
+  createdAt DateTime   @default(now())
+  updatedAt DateTime   @updatedAt
 }
 
 // Creative.status: GENERATED | APPROVED | REJECTED

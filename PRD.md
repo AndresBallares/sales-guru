@@ -11,10 +11,10 @@ Functional reference for scope/pricing: saleads.ai/es/subscribe. Sales Guru is a
 The MVP is this end-to-end flow, in order. Each step is a fully working component before moving to the next (see §5, Build order).
 
 1. **Create account** — sign up / log in
-2. **Create business** — business profile (name, industry, target audience, tone/voice)
-3. **Describe product** — what the business sells / is promoting
+2. **Create business** — business profile (see §7 for exact fields)
+3. **Describe product & define audience** — what the business sells, and who buys it (see §7 for exact fields)
 4. **Upload images** — product/brand image assets, used as ad creative input
-5. **Select objective** — campaign goal (awareness / traffic / conversions — maps to Meta Ads campaign objectives)
+5. **Select objective** — campaign goal (see §7 for the exact value set — maps to Meta Ads campaign objectives)
 6. **Connect Meta Ads** — OAuth into the user's Meta Business account, select ad account + Page
 7. **AI generates strategy** — targeting, budget, objective-specific recommendations grounded in the business profile + product description
 8. **AI generates ads** — ad copy variants + ad creative (composed from uploaded images and/or AI-generated), grounded in the strategy
@@ -66,5 +66,63 @@ Credits are the unit that meters AI generation (strategy + copy + image) usage; 
 - LLM provider: Anthropic (Claude) for strategy + copy generation
 - Image provider: TBD at step 6 (evaluate at implementation time)
 - Ad platform: Meta Marketing API (step 8-9); Google/TikTok deferred
-- CI/CD: GitHub Actions (path-scoped lint/type/test per package) must pass before deploy; Render hosts frontend/backend as separate services, deployed via deploy-hook triggered only after CI succeeds on the relevant path, docs-only changes deploy nothing
-- Repo: monorepo at `/Users/andres/Documents/AI-NATIVE/sales-guru` — `frontend/`, `backend/`, `prisma/`, `docs/`, `.github/workflows/`
+- CI/CD: GitHub Actions (path-scoped lint/type/test per package) via `ci-status` aggregate check; Render hosts frontend/backend as separate services, each with `autoDeployTrigger: checksPass` (native Render feature — waits for the GitHub check to pass, no custom deploy-hook plumbing) and a per-service `buildFilter`, so docs-only changes deploy nothing
+- Repo: monorepo at `/Users/andres/Documents/AI-NATIVE/sales-guru` — `frontend/`, `backend/` (includes `backend/prisma/`), `docs/`, `.github/workflows/`
+- Schema changes always go through `prisma migrate dev --name <desc>` (never `prisma db push`) so a real migration history exists for `prisma migrate deploy` to apply in CI/Render
+
+## 7. Onboarding field specifications (confirmed 2026-08-08)
+
+Elaborates MVP steps 2, 3, and 5. Schema lives in `backend/prisma/schema.prisma`;
+this section is the product-facing rationale for those fields.
+
+**Business** (step 2) — `name` required, rest optional (low signup friction; AI
+strategy generation degrades gracefully with less context):
+
+| Field | Notes |
+|---|---|
+| Nombre (name) | required |
+| Website | |
+| Industria (industry) | |
+| Ubicación (location) | |
+| Descripción (description) | |
+
+**Product** (step 3) — no separate name field; `description` ("What do you
+sell?") doubles as its identity, truncated for display in lists:
+
+| Field | Notes |
+|---|---|
+| What do you sell? | → `description`, required |
+| Price | |
+| Margin | assumed profit margin %; revisit if meant differently |
+| Features | freeform text for MVP, not a structured list — an LLM parses freeform bullets fine for ad generation |
+| Benefits | freeform text, same reasoning |
+| URL | product page link, distinct from Business.website; this is the actual destination URL Meta requires on traffic/conversion ads |
+
+**Audience** ("who buys" — step 3) — same no-separate-name convention as
+Product; `description` ("Who buys?") is the identity:
+
+| Field | Notes |
+|---|---|
+| Who buys? | → `description`, required |
+| Age | → `ageMin`/`ageMax` as two integers, not a freeform range string — matches Meta's `age_min`/`age_max` targeting fields directly, no parsing needed at publish time |
+| Location | freeform text; Meta resolves free text to its own location IDs via a targeting-search call at publish time (step 8), not at data-entry time |
+| Interests | freeform text; same reasoning — resolved against Meta's interest taxonomy at publish time |
+| Problem | feeds strategy/copywriting AI (classic problem/desire direct-response framework) |
+| Desire | feeds strategy/copywriting AI |
+
+**Campaign objective** (step 5) — maps directly to Meta's own campaign
+objectives:
+
+| Field | `Campaign.objective` value |
+|---|---|
+| Ventas | `SALES` |
+| Leads | `LEADS` |
+| Tráfico | `TRAFFIC` |
+| Mensajes | `MESSAGES` |
+| Reconocimiento | `AWARENESS` |
+
+**Known gap, not a blocker today:** `SALES` on Meta's side is normally
+tracked via a Pixel or Conversions API integration on the business's own
+site. Nothing models that yet — a Sales-objective campaign can still publish
+and run without it, just with worse optimization/measurement. Revisit when
+building step 8 (Campaign publish).
