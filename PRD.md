@@ -18,7 +18,7 @@ The MVP is this end-to-end flow, in order. Each step is a fully working componen
 6. **Connect Meta Ads** — OAuth into the user's Meta Business account, select ad account + Page
 7. **AI generates strategy** — targeting, budget, objective-specific recommendations grounded in the business profile + product description
 8. **AI generates ads** — ad copy variants + ad creative (composed from uploaded images and/or AI-generated), grounded in the strategy
-9. **User approves** — review/edit the generated strategy + ads before anything goes live
+9. **User approves** — review the generated strategy + ads; a single explicit **"Approve & Publish"** action is the only thing that triggers step 10 — approving never silently publishes on its own (see the checkpoint note under §5 step 8)
 10. **Campaign goes live** — publish via the Meta Marketing API (create campaign / ad set / ad)
 11. **Dashboard shows results** — pull performance metrics back from the Meta Ads Insights API
 
@@ -57,7 +57,8 @@ Credits are the unit that meters AI generation (strategy + copy + image) usage; 
 5. **AI strategy generation** — LLM call grounded in business/product/objective, stored strategy record *(done)*
 6. **AI ad generation** — ad copy + creative generation grounded in the strategy *(done)*. Also where the Meta Ads OAuth connection itself lives (`app/api/meta.py`, `MetaConnectionSection`): connect → pick ad account + Page → `MetaConnection` stored, scoped per business. Built as its own component ahead of schedule (originally deferred to step 8 per an earlier version of §6) — actual campaign publishing (create campaign/ad set/ad on Meta) is still step 8, separate from this connection step.
 7. **Approval flow** — review/edit UI, explicit user approval gate before publish *(done)*
-8. **Campaign publish** — Meta Marketing API integration to create live campaign/ad set/ad from approved content, using the ad account/Page selected in step 6
+8. **Campaign publish** — Meta Marketing API integration to create live campaign/ad set/ad from approved content, using the ad account/Page selected in step 6.
+   **Checkpoint requirement (confirmed 2026-08-08):** AI creates campaign → user reviews → single explicit **"Approve & Publish"** action → Meta API call. No automatic publishing on approval alone — step 7's approve action and this step's actual Meta API call must be the same explicit user click, not two separate steps where one silently triggers the other. This is gated behind a toggle (default **off**, i.e. manual approve-and-publish required) so the checkpoint itself can be disabled later to allow auto-publish-on-approval, without changing the underlying publish logic — proposed as a per-`Business` setting (e.g. `Business.autoPublish`, default `false`), to be confirmed when step 8 is actually built.
 9. **Results dashboard** — Meta Insights API integration, campaign performance view
 10. **(Post-MVP) Billing** — Stripe plans, checkout, credit balance sync per §3
 11. **(Post-MVP) Google/TikTok Ads, auto-optimizer, agency tier, team seats**
