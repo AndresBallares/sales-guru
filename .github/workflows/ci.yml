@@ -49,6 +49,16 @@ jobs:
       - name: Install dependencies
         run: uv sync --locked
 
+      # Must run before any lint/type-check step: mypy and ty both import
+      # the generated `prisma` client (it doesn't exist as real code until
+      # `prisma generate` runs), so type-checking first fails on a fresh
+      # checkout with "Module 'prisma' has no attribute 'Prisma'".
+      - name: Generate Prisma client
+        run: uv run prisma generate
+
+      - name: Apply Prisma migrations
+        run: uv run prisma migrate deploy
+
       - name: Lint (ruff)
         run: uv run ruff check .
 
@@ -60,12 +70,6 @@ jobs:
 
       - name: Type check (ty)
         run: uv run ty check
-
-      - name: Generate Prisma client
-        run: uv run prisma generate
-
-      - name: Apply Prisma migrations
-        run: uv run prisma migrate deploy
 
       - name: Test (pytest, coverage >=90%)
         run: uv run pytest
