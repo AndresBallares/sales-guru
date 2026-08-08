@@ -85,10 +85,25 @@ def test_create_campaign_with_only_objective(client: TestClient) -> None:
     body = response.json()
     assert body["objective"] == "AWARENESS"
     assert body["status"] == "DRAFT"
+    assert body["name"] is None
     assert body["productId"] is None
     assert body["audienceId"] is None
     assert body["metaCampaignId"] is None
     assert "id" in body
+
+
+def test_create_campaign_with_a_name(client: TestClient) -> None:
+    """An optional human-readable name is stored and returned."""
+    _signed_up_client(client)
+    business_id = _create_business(client)
+
+    response = client.post(
+        f"/businesses/{business_id}/campaigns",
+        json={"objective": "SALES", "name": "Custom Colombian Emerald Ring"},
+    )
+
+    assert response.status_code == 201
+    assert response.json()["name"] == "Custom Colombian Emerald Ring"
 
 
 def test_create_campaign_with_product_and_audience(client: TestClient) -> None:

@@ -29,6 +29,7 @@ def _to_response(campaign: Campaign) -> CampaignResponse:
     """
     return CampaignResponse(
         id=campaign.id,
+        name=campaign.name,
         objective=campaign.objective,
         status=campaign.status,
         product_id=campaign.productId,
@@ -108,6 +109,7 @@ async def create_campaign(
     campaign = await db.campaign.create(
         data={
             "businessId": business.id,
+            "name": payload.name,
             "objective": payload.objective,
             "productId": payload.product_id,
             "audienceId": payload.audience_id,

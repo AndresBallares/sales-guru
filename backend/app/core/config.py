@@ -19,6 +19,9 @@ class Settings(BaseSettings):
             tries to JSON-parse env values for list-typed fields before any
             validator runs, which crashes on a plain comma-separated string
             — see cors_origins_list for the parsed form.
+        anthropic_api_key: Key for the Marketing Strategist Agent's LLM
+            calls (PRD.md §6). None until set — endpoints that need it
+            raise a clear error rather than the app failing to start.
     """
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
@@ -27,6 +30,7 @@ class Settings(BaseSettings):
     environment: str = "development"
     database_url: str = "file:./dev.db"
     cors_origins: str = "http://localhost:5173"
+    anthropic_api_key: str | None = None
 
     @property
     def cors_origins_list(self) -> list[str]:

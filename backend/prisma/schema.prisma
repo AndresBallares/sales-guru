@@ -153,6 +153,10 @@ model MetaConnection {
 //                     at publish time)
 // Campaign.status: DRAFT | STRATEGY_GENERATED | ADS_GENERATED |
 //                  PENDING_APPROVAL | APPROVED | LIVE | PAUSED | FAILED
+// Campaign.name is a human-readable label (e.g. "Custom Colombian Emerald
+// Ring") — without it, campaigns are only distinguishable by
+// objective+product+audience, and two campaigns with the same objective
+// would look identical in any list.
 model Campaign {
   id             String    @id @default(cuid())
   business       Business  @relation(fields: [businessId], references: [id])
@@ -161,6 +165,7 @@ model Campaign {
   productId      String?
   audience       Audience? @relation(fields: [audienceId], references: [id])
   audienceId     String?
+  name           String?
   objective      String
   status         String    @default("DRAFT")
   strategy       Strategy?
@@ -171,14 +176,18 @@ model Campaign {
   updatedAt      DateTime  @updatedAt
 }
 
+// content holds the full structured Marketing Strategist Agent output
+// (objective/targetAudience/offer/positioning/creativeAngles/copyStrategy/
+// budgetRecommendation) as a JSON-serialized string — SQLite has no native
+// Json type (confirmed earlier in this build), so this follows the same
+// "serialize at the app layer" pattern already used elsewhere in this
+// schema, validated/typed via a Pydantic model on the way in and out.
 model Strategy {
-  id                   String   @id @default(cuid())
-  campaign             Campaign @relation(fields: [campaignId], references: [id])
-  campaignId           String   @unique
-  targeting            String
-  budgetRecommendation String
-  rationale            String
-  createdAt            DateTime @default(now())
+  id         String   @id @default(cuid())
+  campaign   Campaign @relation(fields: [campaignId], references: [id])
+  campaignId String   @unique
+  content    String
+  createdAt  DateTime @default(now())
 }
 
 // AdSet.status: DRAFT | READY | LIVE | PAUSED
@@ -210,12 +219,29 @@ model Ad {
 }
 
 // Creative.status: GENERATED | APPROVED | REJECTED
+// Creative.cta: a curated MVP subset of Meta's real call-to-action button
+// enum (Meta has 40+ values; not replicating all of them until publish,
+// step 8, actually needs to) — SHOP_NOW | LEARN_MORE | SIGN_UP | SUBSCRIBE |
+// CONTACT_US | MESSAGE_PAGE | GET_OFFER | DOWNLOAD | BOOK_NOW
+//
+// bodyText is Meta's "Primary Text" (main copy above the image/video);
+// description is Meta's separate, distinct secondary line — these are two
+// different fields on Meta's own ad creative, not one.
+//
+// creativeAngle records which of the parent Strategy's creativeAngles this
+// variant was built around, for traceability in the approval UI.
+// imagePrompt is the generation recipe, kept distinct from imageUrl (the
+// resulting asset) so a variant can be regenerated/tweaked from its prompt.
 model Creative {
   id             String   @id @default(cuid())
   ad             Ad       @relation(fields: [adId], references: [id])
   adId           String
   headline       String
   bodyText       String
+  description    String
+  cta            String
+  creativeAngle  String?
+  imagePrompt    String?
   imageUrl       String?
   status         String   @default("GENERATED")
   metaCreativeId String?

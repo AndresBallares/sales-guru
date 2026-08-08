@@ -60,13 +60,14 @@ test('sign up, create a business, log out, log back in', async ({ page }) => {
   await expect(page.getByText('No campaigns yet')).toBeVisible()
   // Focusing the dropdowns triggers a refetch (see CampaignsSection) so the
   // product/audience just created above actually appear as options.
+  await page.getByLabel('Name', { exact: true }).fill('Spring Wallet Sale')
   await page.getByLabel('Product').focus()
   await page.getByLabel('Product').selectOption({ label: 'Handmade leather wallets' })
   await page.getByLabel('Audience').selectOption({ label: 'Busy professionals, 30-55' })
   await page.getByLabel('Objective').selectOption({ label: 'Ventas' })
   await page.getByRole('button', { name: 'Create campaign' }).click()
 
-  await expect(page.getByText('Ventas — DRAFT')).toBeVisible()
+  await expect(page.getByText('Spring Wallet Sale — Ventas — DRAFT')).toBeVisible()
 
   const businessDetailResults = await new AxeBuilder({ page }).analyze()
   expect(businessDetailResults.violations).toEqual([])

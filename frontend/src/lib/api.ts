@@ -64,6 +64,7 @@ export type Objective = 'SALES' | 'LEADS' | 'TRAFFIC' | 'MESSAGES' | 'AWARENESS'
 
 export interface Campaign {
   id: string
+  name: string | null
   objective: Objective
   status: string
   productId: string | null
@@ -73,6 +74,7 @@ export interface Campaign {
 
 export interface CampaignCreateInput {
   objective: Objective
+  name?: string
   productId?: string
   audienceId?: string
 }
@@ -215,4 +217,45 @@ export function createCampaign(
 
 export function listCampaigns(businessId: string): Promise<Campaign[]> {
   return request<Campaign[]>(`/businesses/${businessId}/campaigns`)
+}
+
+export interface TargetAudience {
+  ageMin: number | null
+  ageMax: number | null
+  location: string[]
+  interests: string[]
+  problem: string | null
+  desire: string | null
+}
+
+export interface BudgetRecommendation {
+  daily: number
+  rationale: string
+}
+
+export interface StrategyContent {
+  targetAudience: TargetAudience
+  offer: string
+  positioning: string
+  creativeAngles: string[]
+  copyStrategy: string
+  budgetRecommendation: BudgetRecommendation
+  objective: Objective
+}
+
+export interface Strategy {
+  id: string
+  campaignId: string
+  content: StrategyContent
+  createdAt: string
+}
+
+export function createStrategy(businessId: string, campaignId: string): Promise<Strategy> {
+  return request<Strategy>(`/businesses/${businessId}/campaigns/${campaignId}/strategy`, {
+    method: 'POST',
+  })
+}
+
+export function getStrategy(businessId: string, campaignId: string): Promise<Strategy> {
+  return request<Strategy>(`/businesses/${businessId}/campaigns/${campaignId}/strategy`)
 }

@@ -263,6 +263,7 @@ describe('createCampaign', () => {
   it('sends only the provided fields and returns the created campaign', async () => {
     const campaign = {
       id: '1',
+      name: null,
       objective: 'SALES' as const,
       status: 'DRAFT',
       productId: null,
