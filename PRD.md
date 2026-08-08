@@ -46,9 +46,9 @@ Credits are the unit that meters AI generation (strategy + copy + image) usage; 
 
 ## 5. Build order (one component at a time, each fully working before the next)
 
-1. **Foundation** — React 19 + TS + Vite frontend, Python (uv) + FastAPI backend, Prisma schema (SQLite dev → Postgres prod) via `prisma-client-py`, test/lint/CI tooling. *(in progress)*
-2. **Auth** — create account, log in
-3. **Business + product onboarding** — create business, describe product, upload images
+1. **Foundation** — React 19 + TS + Vite frontend, Python (uv) + FastAPI backend, Prisma schema (SQLite dev → Postgres prod) via `prisma-client-py`, test/lint/CI tooling. *(done)*
+2. **Auth** — `POST /auth/signup` (auto-provisions Organization, auto-logs in), `/login`, `/logout`, `/me`; DB-backed sessions via httpOnly cookie, tokens hashed at rest. *(backend done — no frontend UI yet)*
+3. **Business + product onboarding** — `POST /businesses` + `GET /businesses` done (backend only, no frontend UI yet). Product/Audience/image upload endpoints still pending.
 4. **Objective + Meta Ads connection** — objective selector, Meta OAuth, ad account/Page selection
 5. **AI strategy generation** — LLM call grounded in business/product/objective, stored strategy record
 6. **AI ad generation** — ad copy + creative generation grounded in the strategy

@@ -4,9 +4,11 @@ version = "0.1.0"
 description = "Sales Guru API"
 requires-python = ">=3.12"
 dependencies = [
+    "argon2-cffi>=25.1.0",
     "fastapi>=0.141.1",
     "prisma>=0.15.0",
     "pydantic-settings>=2.15.0",
+    "pydantic[email]>=2.13.4",
     "uvicorn[standard]>=0.52.1",
 ]
 
@@ -49,8 +51,22 @@ ignore = [
 [tool.ruff.lint.pydocstyle]
 convention = "google"
 
+[tool.ruff.lint.flake8-bugbear]
+# FastAPI's dependency-injection pattern is Depends(...)/Query(...)/etc. as
+# a default argument value — that's correct, documented FastAPI usage, not
+# the mutable-default-argument bug B008 exists to catch.
+extend-immutable-calls = [
+    "fastapi.Depends",
+    "fastapi.Cookie",
+    "fastapi.Query",
+    "fastapi.Path",
+    "fastapi.Body",
+    "fastapi.Header",
+]
+
 [tool.ruff.lint.per-file-ignores]
 "tests/*" = ["D", "ANN"]
+"tests/conftest.py" = ["D", "ANN", "E402"]
 
 [tool.ruff.format]
 quote-style = "double"
