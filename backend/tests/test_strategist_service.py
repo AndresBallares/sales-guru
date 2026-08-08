@@ -142,8 +142,14 @@ def test_build_prompt_handles_no_product_or_audience() -> None:
 async def test_generate_strategy_raises_without_an_api_key(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """No ANTHROPIC_API_KEY configured raises a clear error, not a crash."""
-    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    """No ANTHROPIC_API_KEY configured raises a clear error, not a crash.
+
+    Set to "" rather than deleted — Settings reads .env directly (not just
+    os.environ, see app/core/config.py), so delenv alone doesn't hide a
+    real key that's actually present in .env; an explicit empty env var
+    does, since it outranks the dotenv source.
+    """
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "")
     get_settings.cache_clear()
 
     with pytest.raises(strategist.StrategistError, match="not configured"):

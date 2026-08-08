@@ -14,6 +14,10 @@ vi.mock('../lib/api', async (importOriginal) => {
     listAudiences: vi.fn<typeof actual.listAudiences>(),
     createStrategy: vi.fn<typeof actual.createStrategy>(),
     getStrategy: vi.fn<typeof actual.getStrategy>(),
+    createCreatives: vi.fn<typeof actual.createCreatives>(),
+    listCreatives: vi.fn<typeof actual.listCreatives>(),
+    selectCreative: vi.fn<typeof actual.selectCreative>(),
+    approveCampaign: vi.fn<typeof actual.approveCampaign>(),
   }
 })
 const mockedApi = vi.mocked(api)
@@ -40,11 +44,30 @@ const FAKE_STRATEGY: api.Strategy = {
   },
 }
 
+function fakeCreative(overrides: Partial<api.Creative> = {}): api.Creative {
+  return {
+    id: 'creative-1',
+    campaignId: 'camp-1',
+    adId: null,
+    headline: 'Emeralds With a Story',
+    bodyText: 'Custom Colombian emerald rings, handcrafted around you.',
+    description: 'Ethically sourced. Made to order.',
+    cta: 'SHOP_NOW',
+    creativeAngle: 'Craftsmanship',
+    imagePrompt: 'A close-up of a hand-set emerald ring on dark velvet',
+    videoPrompt: 'A jeweler setting an emerald into a ring, slow motion',
+    status: 'GENERATED',
+    createdAt: '2026-08-08T00:00:00Z',
+    ...overrides,
+  }
+}
+
 beforeEach(() => {
   vi.resetAllMocks()
   mockedApi.listProducts.mockResolvedValue([])
   mockedApi.listAudiences.mockResolvedValue([])
   mockedApi.getStrategy.mockRejectedValue(new api.ApiError(404, 'Strategy not found'))
+  mockedApi.listCreatives.mockResolvedValue([])
 })
 
 describe('CampaignsSection', () => {
@@ -311,5 +334,228 @@ describe('CampaignsSection', () => {
 
     expect(await screen.findByText(/Custom emerald rings/)).toBeInTheDocument()
     expect(mockedApi.getStrategy).toHaveBeenCalledWith('biz-1', 'camp-1')
+  })
+
+  it('generates ad creatives once a strategy exists and displays them', async () => {
+    mockedApi.listCampaigns.mockResolvedValue([
+      {
+        id: 'camp-1',
+        name: null,
+        objective: 'SALES',
+        status: 'STRATEGY_GENERATED',
+        productId: null,
+        audienceId: null,
+        metaCampaignId: null,
+      },
+    ])
+    mockedApi.getStrategy.mockResolvedValue(FAKE_STRATEGY)
+    mockedApi.createCreatives.mockResolvedValue([
+      fakeCreative({ id: 'creative-1', headline: 'Headline A' }),
+      fakeCreative({ id: 'creative-2', headline: 'Headline B' }),
+    ])
+    const user = userEvent.setup()
+
+    render(<CampaignsSection businessId="biz-1" />)
+    await screen.findByText(/Custom emerald rings/)
+
+    await user.click(screen.getByRole('button', { name: 'Generate ads' }))
+
+    expect(await screen.findByText('Headline A')).toBeInTheDocument()
+    expect(screen.getByText('Headline B')).toBeInTheDocument()
+    expect(screen.getAllByText(/Ethically sourced/)).toHaveLength(2)
+    expect(mockedApi.createCreatives).toHaveBeenCalledWith('biz-1', 'camp-1')
+    expect(
+      screen.getByRole('button', { name: 'Regenerate ads' }),
+    ).toBeInTheDocument()
+  })
+
+  it('shows an error if ad generation fails', async () => {
+    mockedApi.listCampaigns.mockResolvedValue([
+      {
+        id: 'camp-1',
+        name: null,
+        objective: 'SALES',
+        status: 'STRATEGY_GENERATED',
+        productId: null,
+        audienceId: null,
+        metaCampaignId: null,
+      },
+    ])
+    mockedApi.getStrategy.mockResolvedValue(FAKE_STRATEGY)
+    mockedApi.createCreatives.mockRejectedValue(
+      new api.ApiError(400, 'Generate a strategy for this campaign first'),
+    )
+    const user = userEvent.setup()
+
+    render(<CampaignsSection businessId="biz-1" />)
+    await screen.findByText(/Custom emerald rings/)
+
+    await user.click(screen.getByRole('button', { name: 'Generate ads' }))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'Generate a strategy for this campaign first',
+    )
+  })
+
+  it('loads previously generated creatives for a non-draft campaign', async () => {
+    mockedApi.listCampaigns.mockResolvedValue([
+      {
+        id: 'camp-1',
+        name: null,
+        objective: 'SALES',
+        status: 'ADS_GENERATED',
+        productId: null,
+        audienceId: null,
+        metaCampaignId: null,
+      },
+    ])
+    mockedApi.getStrategy.mockResolvedValue(FAKE_STRATEGY)
+    mockedApi.listCreatives.mockResolvedValue([fakeCreative()])
+
+    render(<CampaignsSection businessId="biz-1" />)
+
+    expect(await screen.findByText('Emeralds With a Story')).toBeInTheDocument()
+    expect(mockedApi.listCreatives).toHaveBeenCalledWith('biz-1', 'camp-1')
+  })
+
+  it('selects a creative, marking it selected in the UI and unlocking approval', async () => {
+    const draftCampaign = {
+      id: 'camp-1',
+      name: null,
+      objective: 'SALES' as const,
+      status: 'ADS_GENERATED',
+      productId: null,
+      audienceId: null,
+      metaCampaignId: null,
+    }
+    mockedApi.listCampaigns.mockResolvedValueOnce([draftCampaign])
+    mockedApi.listCampaigns.mockResolvedValueOnce([
+      { ...draftCampaign, status: 'PENDING_APPROVAL' },
+    ])
+    mockedApi.getStrategy.mockResolvedValue(FAKE_STRATEGY)
+    mockedApi.listCreatives.mockResolvedValueOnce([
+      fakeCreative({ id: 'creative-1', headline: 'Headline A' }),
+      fakeCreative({ id: 'creative-2', headline: 'Headline B' }),
+    ])
+    // After selection, refresh() re-fetches creatives too — reflect the
+    // real backend's post-select statuses, not the pre-select snapshot.
+    mockedApi.listCreatives.mockResolvedValueOnce([
+      fakeCreative({ id: 'creative-1', headline: 'Headline A', status: 'SELECTED' }),
+      fakeCreative({ id: 'creative-2', headline: 'Headline B', status: 'REJECTED' }),
+    ])
+    mockedApi.selectCreative.mockResolvedValue(
+      fakeCreative({ id: 'creative-1', headline: 'Headline A', status: 'SELECTED' }),
+    )
+    const user = userEvent.setup()
+
+    render(<CampaignsSection businessId="biz-1" />)
+    await screen.findByText('Headline A')
+
+    await user.click(screen.getAllByRole('button', { name: 'Select this ad' })[0])
+
+    expect(mockedApi.selectCreative).toHaveBeenCalledWith('biz-1', 'camp-1', 'creative-1')
+    expect(await screen.findByRole('button', { name: 'Selected' })).toBeInTheDocument()
+    // Selecting an ad must refresh the campaign list so its now-current
+    // PENDING_APPROVAL status unlocks the Approve button without a reload.
+    expect(
+      await screen.findByRole('button', { name: 'Approve campaign' }),
+    ).toBeInTheDocument()
+  })
+
+  it('shows an approve button once a campaign is pending approval, and approves it', async () => {
+    mockedApi.listCampaigns.mockResolvedValueOnce([
+      {
+        id: 'camp-1',
+        name: null,
+        objective: 'SALES',
+        status: 'PENDING_APPROVAL',
+        productId: null,
+        audienceId: null,
+        metaCampaignId: null,
+      },
+    ])
+    mockedApi.listCampaigns.mockResolvedValueOnce([
+      {
+        id: 'camp-1',
+        name: null,
+        objective: 'SALES',
+        status: 'APPROVED',
+        productId: null,
+        audienceId: null,
+        metaCampaignId: null,
+      },
+    ])
+    mockedApi.getStrategy.mockResolvedValue(FAKE_STRATEGY)
+    mockedApi.listCreatives.mockResolvedValue([fakeCreative({ status: 'SELECTED' })])
+    mockedApi.approveCampaign.mockResolvedValue({
+      id: 'camp-1',
+      name: null,
+      objective: 'SALES',
+      status: 'APPROVED',
+      productId: null,
+      audienceId: null,
+      metaCampaignId: null,
+    })
+    const user = userEvent.setup()
+
+    render(<CampaignsSection businessId="biz-1" />)
+    await screen.findByText('Ventas — PENDING_APPROVAL')
+
+    await user.click(screen.getByRole('button', { name: 'Approve campaign' }))
+
+    expect(mockedApi.approveCampaign).toHaveBeenCalledWith('biz-1', 'camp-1')
+    expect(await screen.findByRole('button', { name: 'Approved' })).toBeInTheDocument()
+  })
+
+  it('does not show an approve button for a campaign that is not yet ready', async () => {
+    mockedApi.listCampaigns.mockResolvedValue([
+      {
+        id: 'camp-1',
+        name: null,
+        objective: 'SALES',
+        status: 'ADS_GENERATED',
+        productId: null,
+        audienceId: null,
+        metaCampaignId: null,
+      },
+    ])
+    mockedApi.getStrategy.mockResolvedValue(FAKE_STRATEGY)
+    mockedApi.listCreatives.mockResolvedValue([fakeCreative()])
+
+    render(<CampaignsSection businessId="biz-1" />)
+    await screen.findByText('Emeralds With a Story')
+
+    expect(
+      screen.queryByRole('button', { name: 'Approve campaign' }),
+    ).not.toBeInTheDocument()
+  })
+
+  it('shows an error if approval fails', async () => {
+    mockedApi.listCampaigns.mockResolvedValue([
+      {
+        id: 'camp-1',
+        name: null,
+        objective: 'SALES',
+        status: 'PENDING_APPROVAL',
+        productId: null,
+        audienceId: null,
+        metaCampaignId: null,
+      },
+    ])
+    mockedApi.getStrategy.mockResolvedValue(FAKE_STRATEGY)
+    mockedApi.listCreatives.mockResolvedValue([fakeCreative({ status: 'SELECTED' })])
+    mockedApi.approveCampaign.mockRejectedValue(
+      new api.ApiError(400, 'Select an ad creative before approving this campaign'),
+    )
+    const user = userEvent.setup()
+
+    render(<CampaignsSection businessId="biz-1" />)
+    await screen.findByText('Ventas — PENDING_APPROVAL')
+
+    await user.click(screen.getByRole('button', { name: 'Approve campaign' }))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'Select an ad creative before approving this campaign',
+    )
   })
 })

@@ -1,14 +1,19 @@
 import { useCallback, useEffect, useState, type FormEvent } from 'react'
 import {
   ApiError,
+  approveCampaign,
   createCampaign,
+  createCreatives,
   createStrategy,
   getStrategy,
   listAudiences,
   listCampaigns,
+  listCreatives,
   listProducts,
+  selectCreative,
   type Audience,
   type Campaign,
+  type Creative,
   type Objective,
   type Product,
   type StrategyContent,
@@ -21,6 +26,8 @@ const OBJECTIVE_LABELS: Record<Objective, string> = {
   MESSAGES: 'Mensajes',
   AWARENESS: 'Reconocimiento',
 }
+
+const VARIANT_LETTERS = ['A', 'B', 'C', 'D']
 
 export function CampaignsSection({ businessId }: { businessId: string }) {
   const [campaigns, setCampaigns] = useState<Campaign[]>([])
@@ -39,6 +46,14 @@ export function CampaignsSection({ businessId }: { businessId: string }) {
   const [strategies, setStrategies] = useState<Record<string, StrategyContent>>({})
   const [generatingId, setGeneratingId] = useState<string | null>(null)
   const [strategyErrors, setStrategyErrors] = useState<Record<string, string>>({})
+
+  const [creatives, setCreatives] = useState<Record<string, Creative[]>>({})
+  const [generatingCreativesId, setGeneratingCreativesId] = useState<string | null>(null)
+  const [creativeErrors, setCreativeErrors] = useState<Record<string, string>>({})
+  const [selectingId, setSelectingId] = useState<string | null>(null)
+
+  const [approvingId, setApprovingId] = useState<string | null>(null)
+  const [approveErrors, setApproveErrors] = useState<Record<string, string>>({})
 
   const refresh = useCallback(async () => {
     setLoading(true)
@@ -68,6 +83,24 @@ export function CampaignsSection({ businessId }: { businessId: string }) {
         const next = { ...prev }
         for (const entry of fetched) {
           if (entry) next[entry[0]] = entry[1]
+        }
+        return next
+      })
+
+      // Same reasoning as strategies above — creatives aren't included on
+      // the campaign list, so a page reload needs its own fetch to show a
+      // previously generated batch.
+      const fetchedCreatives = await Promise.all(
+        generated.map((c) =>
+          listCreatives(businessId, c.id)
+            .then((list) => [c.id, list] as const)
+            .catch(() => null),
+        ),
+      )
+      setCreatives((prev) => {
+        const next = { ...prev }
+        for (const entry of fetchedCreatives) {
+          if (entry && entry[1].length > 0) next[entry[0]] = entry[1]
         }
         return next
       })
@@ -130,6 +163,61 @@ export function CampaignsSection({ businessId }: { businessId: string }) {
     }
   }
 
+  async function handleGenerateCreatives(campaignId: string) {
+    setGeneratingCreativesId(campaignId)
+    setCreativeErrors((prev) => ({ ...prev, [campaignId]: '' }))
+    try {
+      const generated = await createCreatives(businessId, campaignId)
+      setCreatives((prev) => ({ ...prev, [campaignId]: generated }))
+    } catch (err) {
+      setCreativeErrors((prev) => ({
+        ...prev,
+        [campaignId]: err instanceof ApiError ? err.message : 'Could not generate ads.',
+      }))
+    } finally {
+      setGeneratingCreativesId(null)
+    }
+  }
+
+  async function handleSelectCreative(campaignId: string, creativeId: string) {
+    setSelectingId(creativeId)
+    try {
+      const updated = await selectCreative(businessId, campaignId, creativeId)
+      setCreatives((prev) => ({
+        ...prev,
+        [campaignId]: (prev[campaignId] ?? []).map((c) =>
+          c.id === updated.id ? updated : { ...c, status: 'REJECTED' },
+        ),
+      }))
+      // Selecting an ad advances campaign.status to PENDING_APPROVAL on the
+      // backend — refresh so the Approve button appears without a reload.
+      await refresh()
+    } catch (err) {
+      setCreativeErrors((prev) => ({
+        ...prev,
+        [campaignId]: err instanceof ApiError ? err.message : 'Could not select ad.',
+      }))
+    } finally {
+      setSelectingId(null)
+    }
+  }
+
+  async function handleApprove(campaignId: string) {
+    setApprovingId(campaignId)
+    setApproveErrors((prev) => ({ ...prev, [campaignId]: '' }))
+    try {
+      await approveCampaign(businessId, campaignId)
+      await refresh()
+    } catch (err) {
+      setApproveErrors((prev) => ({
+        ...prev,
+        [campaignId]: err instanceof ApiError ? err.message : 'Could not approve campaign.',
+      }))
+    } finally {
+      setApprovingId(null)
+    }
+  }
+
   return (
     <>
       <section>
@@ -147,6 +235,11 @@ export function CampaignsSection({ businessId }: { businessId: string }) {
           {campaigns.map((campaign) => {
             const strategy = strategies[campaign.id]
             const strategyError = strategyErrors[campaign.id]
+            const campaignCreatives = creatives[campaign.id] ?? []
+            const creativeError = creativeErrors[campaign.id]
+            const approveError = approveErrors[campaign.id]
+            const readyForApproval =
+              campaign.status === 'PENDING_APPROVAL' || campaign.status === 'APPROVED'
             return (
               <li key={campaign.id}>
                 {campaign.name ? `${campaign.name} — ` : ''}
@@ -213,6 +306,100 @@ export function CampaignsSection({ businessId }: { businessId: string }) {
                       <strong>Budget:</strong> ${strategy.budgetRecommendation.daily}/day —{' '}
                       {strategy.budgetRecommendation.rationale}
                     </p>
+                  </div>
+                )}
+                {strategy && (
+                  <div>
+                    <button
+                      type="button"
+                      onClick={() => handleGenerateCreatives(campaign.id)}
+                      disabled={generatingCreativesId === campaign.id}
+                    >
+                      {generatingCreativesId === campaign.id
+                        ? 'Generating…'
+                        : campaignCreatives.length > 0
+                          ? 'Regenerate ads'
+                          : 'Generate ads'}
+                    </button>
+                    {creativeError && (
+                      <p className="form-error" role="alert">
+                        {creativeError}
+                      </p>
+                    )}
+                    {campaignCreatives.length > 0 && (
+                      <ul aria-label={`Ad creatives for ${campaign.name ?? campaign.id}`}>
+                        {campaignCreatives.map((c, index) => (
+                          <li key={c.id}>
+                            <p>
+                              <strong>
+                                Creative {VARIANT_LETTERS[index] ?? index + 1} —{' '}
+                                {c.status}
+                              </strong>
+                            </p>
+                            <p>
+                              <strong>Headline:</strong> {c.headline}
+                            </p>
+                            <p>
+                              <strong>Primary text:</strong> {c.bodyText}
+                            </p>
+                            <p>
+                              <strong>Description:</strong> {c.description}
+                            </p>
+                            <p>
+                              <strong>CTA:</strong> {c.cta}
+                            </p>
+                            {c.creativeAngle && (
+                              <p>
+                                <strong>Angle:</strong> {c.creativeAngle}
+                              </p>
+                            )}
+                            {c.imagePrompt && (
+                              <p>
+                                <strong>Image prompt:</strong> {c.imagePrompt}
+                              </p>
+                            )}
+                            {c.videoPrompt && (
+                              <p>
+                                <strong>Video prompt:</strong> {c.videoPrompt}
+                              </p>
+                            )}
+                            <button
+                              type="button"
+                              onClick={() => handleSelectCreative(campaign.id, c.id)}
+                              disabled={c.status === 'SELECTED' || selectingId === c.id}
+                            >
+                              {c.status === 'SELECTED'
+                                ? 'Selected'
+                                : selectingId === c.id
+                                  ? 'Selecting…'
+                                  : 'Select this ad'}
+                            </button>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </div>
+                )}
+                {readyForApproval && (
+                  <div>
+                    <button
+                      type="button"
+                      onClick={() => handleApprove(campaign.id)}
+                      disabled={
+                        campaign.status === 'APPROVED' || approvingId === campaign.id
+                      }
+                    >
+                      {campaign.status === 'APPROVED'
+                        ? 'Approved'
+                        : approvingId === campaign.id
+                          ? 'Approving…'
+                          : 'Approve campaign'}
+                    </button>
+                    {approveError && (
+                      <p className="form-error" role="alert">
+                        {approveError}
+                      </p>
+                    )}
                   </div>
                 )}
               </li>

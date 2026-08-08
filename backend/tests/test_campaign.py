@@ -217,3 +217,36 @@ def test_list_campaigns_returns_only_this_businesss_campaigns(
     assert response.status_code == 200
     objectives = [c["objective"] for c in response.json()]
     assert objectives == ["SALES"]
+
+
+def test_approve_campaign_requires_a_session(client: TestClient) -> None:
+    """Approving with no session cookie returns 401."""
+    response = client.post("/businesses/some-id/campaigns/some-id/approve")
+
+    assert response.status_code == 401
+
+
+def test_approve_campaign_404s_for_a_nonexistent_campaign(client: TestClient) -> None:
+    """Approving a nonexistent campaign returns 404."""
+    _signed_up_client(client)
+    business_id = _create_business(client)
+
+    response = client.post(
+        f"/businesses/{business_id}/campaigns/does-not-exist/approve"
+    )
+
+    assert response.status_code == 404
+
+
+def test_approve_campaign_400s_before_an_ad_is_selected(client: TestClient) -> None:
+    """A freshly created (DRAFT) campaign can't be approved yet."""
+    _signed_up_client(client)
+    business_id = _create_business(client)
+    campaign_id = client.post(
+        f"/businesses/{business_id}/campaigns", json={"objective": "SALES"}
+    ).json()["id"]
+
+    response = client.post(f"/businesses/{business_id}/campaigns/{campaign_id}/approve")
+
+    assert response.status_code == 400
+    assert "ad creative" in response.json()["detail"].lower()

@@ -219,6 +219,12 @@ export function listCampaigns(businessId: string): Promise<Campaign[]> {
   return request<Campaign[]>(`/businesses/${businessId}/campaigns`)
 }
 
+export function approveCampaign(businessId: string, campaignId: string): Promise<Campaign> {
+  return request<Campaign>(`/businesses/${businessId}/campaigns/${campaignId}/approve`, {
+    method: 'POST',
+  })
+}
+
 export interface TargetAudience {
   ageMin: number | null
   ageMax: number | null
@@ -258,4 +264,53 @@ export function createStrategy(businessId: string, campaignId: string): Promise<
 
 export function getStrategy(businessId: string, campaignId: string): Promise<Strategy> {
   return request<Strategy>(`/businesses/${businessId}/campaigns/${campaignId}/strategy`)
+}
+
+export type Cta =
+  | 'SHOP_NOW'
+  | 'LEARN_MORE'
+  | 'SIGN_UP'
+  | 'SUBSCRIBE'
+  | 'CONTACT_US'
+  | 'MESSAGE_PAGE'
+  | 'GET_OFFER'
+  | 'DOWNLOAD'
+  | 'BOOK_NOW'
+
+export type CreativeStatus = 'GENERATED' | 'SELECTED' | 'REJECTED'
+
+export interface Creative {
+  id: string
+  campaignId: string
+  adId: string | null
+  headline: string
+  bodyText: string
+  description: string
+  cta: Cta
+  creativeAngle: string | null
+  imagePrompt: string | null
+  videoPrompt: string | null
+  status: CreativeStatus
+  createdAt: string
+}
+
+export function createCreatives(businessId: string, campaignId: string): Promise<Creative[]> {
+  return request<Creative[]>(`/businesses/${businessId}/campaigns/${campaignId}/creatives`, {
+    method: 'POST',
+  })
+}
+
+export function listCreatives(businessId: string, campaignId: string): Promise<Creative[]> {
+  return request<Creative[]>(`/businesses/${businessId}/campaigns/${campaignId}/creatives`)
+}
+
+export function selectCreative(
+  businessId: string,
+  campaignId: string,
+  creativeId: string,
+): Promise<Creative> {
+  return request<Creative>(
+    `/businesses/${businessId}/campaigns/${campaignId}/creatives/${creativeId}/select`,
+    { method: 'POST' },
+  )
 }

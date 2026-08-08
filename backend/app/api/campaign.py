@@ -8,7 +8,7 @@ Meta; that connection only matters at publish time (step 8).
 from fastapi import APIRouter, Depends, HTTPException, status
 from prisma.models import Business, Campaign
 
-from app.core.authz import get_owned_business
+from app.core.authz import get_owned_business, get_owned_campaign
 from app.core.db import db
 from app.schemas.campaign import CampaignCreateRequest, CampaignResponse
 
@@ -16,6 +16,7 @@ router = APIRouter(prefix="/businesses/{business_id}/campaigns", tags=["campaign
 
 _PRODUCT_NOT_FOUND = "Product not found"
 _AUDIENCE_NOT_FOUND = "Audience not found"
+_NOT_READY_FOR_APPROVAL = "Select an ad creative before approving this campaign"
 
 
 def _to_response(campaign: Campaign) -> CampaignResponse:
@@ -133,3 +134,38 @@ async def list_campaigns(
     """
     campaigns = await db.campaign.find_many(where={"businessId": business.id})
     return [_to_response(c) for c in campaigns]
+
+
+@router.post("/{campaign_id}/approve", response_model=CampaignResponse)
+async def approve_campaign(
+    campaign: Campaign = Depends(get_owned_campaign),
+) -> CampaignResponse:
+    """Approve a campaign — the explicit gate before publish (PRD.md build step 7).
+
+    Idempotent once approved (re-approving an already-APPROVED campaign just
+    returns it), but requires PENDING_APPROVAL to have been reached first —
+    that only happens once an ad creative has been selected (see
+    app/api/creative.py's select_creative), so there's always something
+    concrete being approved.
+
+    Args:
+        campaign: The campaign, resolved and ownership-checked by
+            get_owned_campaign.
+
+    Returns:
+        The now-approved campaign.
+
+    Raises:
+        HTTPException: 400 if no ad creative has been selected yet.
+    """
+    if campaign.status not in ("PENDING_APPROVAL", "APPROVED"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=_NOT_READY_FOR_APPROVAL
+        )
+
+    updated = await db.campaign.update(
+        where={"id": campaign.id}, data={"status": "APPROVED"}
+    )
+    assert updated is not None  # just fetched above, can't vanish mid-request
+
+    return _to_response(updated)

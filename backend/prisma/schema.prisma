@@ -158,22 +158,23 @@ model MetaConnection {
 // objective+product+audience, and two campaigns with the same objective
 // would look identical in any list.
 model Campaign {
-  id             String    @id @default(cuid())
-  business       Business  @relation(fields: [businessId], references: [id])
+  id             String     @id @default(cuid())
+  business       Business   @relation(fields: [businessId], references: [id])
   businessId     String
-  product        Product?  @relation(fields: [productId], references: [id])
+  product        Product?   @relation(fields: [productId], references: [id])
   productId      String?
-  audience       Audience? @relation(fields: [audienceId], references: [id])
+  audience       Audience?  @relation(fields: [audienceId], references: [id])
   audienceId     String?
   name           String?
   objective      String
-  status         String    @default("DRAFT")
+  status         String     @default("DRAFT")
   strategy       Strategy?
   adSets         AdSet[]
+  creatives      Creative[]
   metrics        Metric[]
   metaCampaignId String?
-  createdAt      DateTime  @default(now())
-  updatedAt      DateTime  @updatedAt
+  createdAt      DateTime   @default(now())
+  updatedAt      DateTime   @updatedAt
 }
 
 // content holds the full structured Marketing Strategist Agent output
@@ -218,7 +219,10 @@ model Ad {
   updatedAt DateTime   @updatedAt
 }
 
-// Creative.status: GENERATED | APPROVED | REJECTED
+// Creative.status: GENERATED | SELECTED | REJECTED — one Creative per
+// campaign moves to SELECTED (the rest REJECTED) when the user picks a
+// variant (PRD.md build step 6/7); no per-creative APPROVED state, that
+// term is reserved for the campaign-level approval gate (step 7).
 // Creative.cta: a curated MVP subset of Meta's real call-to-action button
 // enum (Meta has 40+ values; not replicating all of them until publish,
 // step 8, actually needs to) — SHOP_NOW | LEARN_MORE | SIGN_UP | SUBSCRIBE |
@@ -228,20 +232,30 @@ model Ad {
 // description is Meta's separate, distinct secondary line — these are two
 // different fields on Meta's own ad creative, not one.
 //
+// campaignId is the generation-time link — the Creative Agent runs off a
+// Campaign's Strategy (build step 6), before any AdSet/Ad exists (those
+// are pure publish-time constructs, step 8, needing real budget/Meta IDs
+// that don't exist yet here). adId stays nullable until the selected
+// Creative is actually attached to a real Ad at publish time.
+//
 // creativeAngle records which of the parent Strategy's creativeAngles this
 // variant was built around, for traceability in the approval UI.
-// imagePrompt is the generation recipe, kept distinct from imageUrl (the
-// resulting asset) so a variant can be regenerated/tweaked from its prompt.
+// imagePrompt/videoPrompt are the generation recipes, kept distinct from
+// imageUrl (the resulting asset) so a variant can be regenerated/tweaked
+// from its prompt.
 model Creative {
   id             String   @id @default(cuid())
-  ad             Ad       @relation(fields: [adId], references: [id])
-  adId           String
+  campaign       Campaign @relation(fields: [campaignId], references: [id])
+  campaignId     String
+  ad             Ad?      @relation(fields: [adId], references: [id])
+  adId           String?
   headline       String
   bodyText       String
   description    String
   cta            String
   creativeAngle  String?
   imagePrompt    String?
+  videoPrompt    String?
   imageUrl       String?
   status         String   @default("GENERATED")
   metaCreativeId String?
