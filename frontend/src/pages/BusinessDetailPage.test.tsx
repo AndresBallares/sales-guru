@@ -17,6 +17,7 @@ vi.mock('../lib/api', async (importOriginal) => {
     listProducts: vi.fn<typeof actual.listProducts>(),
     listAudiences: vi.fn<typeof actual.listAudiences>(),
     listCampaigns: vi.fn<typeof actual.listCampaigns>(),
+    getMetaConnection: vi.fn<typeof actual.getMetaConnection>(),
   }
 })
 const mockedApi = vi.mocked(api)
@@ -37,6 +38,9 @@ beforeEach(() => {
   mockedApi.listProducts.mockResolvedValue([])
   mockedApi.listAudiences.mockResolvedValue([])
   mockedApi.listCampaigns.mockResolvedValue([])
+  mockedApi.getMetaConnection.mockRejectedValue(
+    new api.ApiError(404, 'Meta connection not found'),
+  )
 })
 
 function renderPage() {
@@ -58,6 +62,7 @@ describe('BusinessDetailPage', () => {
     expect(await screen.findByRole('heading', { name: 'Acme Widgets' })).toBeInTheDocument()
     expect(await screen.findByRole('heading', { name: 'Products' })).toBeInTheDocument()
     expect(await screen.findByRole('heading', { name: 'Audiences' })).toBeInTheDocument()
+    expect(await screen.findByRole('heading', { name: 'Meta Ads' })).toBeInTheDocument()
     expect(await screen.findByRole('heading', { name: 'Campaigns' })).toBeInTheDocument()
   })
 

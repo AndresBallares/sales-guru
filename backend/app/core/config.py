@@ -22,6 +22,16 @@ class Settings(BaseSettings):
         anthropic_api_key: Key for the Marketing Strategist Agent's LLM
             calls (PRD.md §6). None until set — endpoints that need it
             raise a clear error rather than the app failing to start.
+        frontend_url: Base URL of the SPA. Only used to build the browser
+            redirect target at the end of the Meta OAuth callback (the
+            callback is hit directly by Meta, not via the frontend's own
+            API client, so it can't rely on CORS_ORIGINS for this).
+        meta_app_id: Meta App ID for the OAuth connection (PRD.md build
+            step 6). None until set — the connect endpoint raises a clear
+            error rather than the app failing to start.
+        meta_app_secret: Meta App Secret, paired with meta_app_id.
+        meta_redirect_uri: Callback URL registered in the Meta App's OAuth
+            settings, e.g. "http://localhost:8000/meta/callback" in dev.
     """
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
@@ -31,6 +41,10 @@ class Settings(BaseSettings):
     database_url: str = "file:./dev.db"
     cors_origins: str = "http://localhost:5173"
     anthropic_api_key: str | None = None
+    frontend_url: str = "http://localhost:5173"
+    meta_app_id: str | None = None
+    meta_app_secret: str | None = None
+    meta_redirect_uri: str | None = None
 
     @property
     def cors_origins_list(self) -> list[str]:

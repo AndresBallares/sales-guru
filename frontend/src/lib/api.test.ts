@@ -1,15 +1,21 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   ApiError,
+  connectMeta,
   createAudience,
   createBusiness,
   createCampaign,
   createProduct,
+  disconnectMeta,
+  finalizeMetaConnection,
   getBusiness,
   getMe,
+  getMetaConnection,
   listAudiences,
   listBusinesses,
   listCampaigns,
+  listMetaAdAccounts,
+  listMetaPages,
   listProducts,
   login,
   logout,
@@ -290,5 +296,120 @@ describe('listCampaigns', () => {
     await expect(listCampaigns('biz-1')).resolves.toEqual([])
     const [url] = fetchMock.mock.calls[0]
     expect(url).toContain('/businesses/biz-1/campaigns')
+  })
+})
+
+describe('connectMeta', () => {
+  it('returns the authorization URL for a business', async () => {
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(jsonResponse({ authorizationUrl: 'https://meta.example/oauth' }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(connectMeta('biz-1')).resolves.toEqual({
+      authorizationUrl: 'https://meta.example/oauth',
+    })
+    const [url] = fetchMock.mock.calls[0]
+    expect(url).toContain('/businesses/biz-1/meta/connect')
+  })
+})
+
+describe('getMetaConnection', () => {
+  it('returns the connection for a business', async () => {
+    const connection = {
+      id: 'conn-1',
+      businessId: 'biz-1',
+      metaUserId: 'meta-user-1',
+      adAccountId: null,
+      pageId: null,
+      tokenExpiresAt: '2026-10-01T00:00:00Z',
+      createdAt: '2026-08-08T00:00:00Z',
+    }
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(jsonResponse(connection))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(getMetaConnection('biz-1')).resolves.toEqual(connection)
+    const [url] = fetchMock.mock.calls[0]
+    expect(url).toContain('/businesses/biz-1/meta')
+  })
+
+  it('throws ApiError when no connection exists yet', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn<typeof fetch>().mockResolvedValue(jsonResponse({ detail: 'Meta connection not found' }, 404)),
+    )
+
+    await expect(getMetaConnection('biz-1')).rejects.toMatchObject({
+      status: 404,
+      message: 'Meta connection not found',
+    })
+  })
+})
+
+describe('listMetaAdAccounts', () => {
+  it('returns the ad accounts for a business', async () => {
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(jsonResponse([{ id: 'act_1', name: 'Acme Ads' }]))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(listMetaAdAccounts('biz-1')).resolves.toEqual([
+      { id: 'act_1', name: 'Acme Ads' },
+    ])
+    const [url] = fetchMock.mock.calls[0]
+    expect(url).toContain('/businesses/biz-1/meta/ad-accounts')
+  })
+})
+
+describe('listMetaPages', () => {
+  it('returns the Pages for a business', async () => {
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(jsonResponse([{ id: 'page_1', name: 'Acme Jewelry' }]))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(listMetaPages('biz-1')).resolves.toEqual([
+      { id: 'page_1', name: 'Acme Jewelry' },
+    ])
+    const [url] = fetchMock.mock.calls[0]
+    expect(url).toContain('/businesses/biz-1/meta/pages')
+  })
+})
+
+describe('finalizeMetaConnection', () => {
+  it('sends the chosen ad account and Page, returns the updated connection', async () => {
+    const connection = {
+      id: 'conn-1',
+      businessId: 'biz-1',
+      metaUserId: 'meta-user-1',
+      adAccountId: 'act_1',
+      pageId: 'page_1',
+      tokenExpiresAt: '2026-10-01T00:00:00Z',
+      createdAt: '2026-08-08T00:00:00Z',
+    }
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(jsonResponse(connection))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(
+      finalizeMetaConnection('biz-1', { adAccountId: 'act_1', pageId: 'page_1' }),
+    ).resolves.toEqual(connection)
+    const [url, options] = fetchMock.mock.calls[0]
+    expect(url).toContain('/businesses/biz-1/meta/finalize')
+    expect(JSON.parse(options?.body as string)).toEqual({
+      adAccountId: 'act_1',
+      pageId: 'page_1',
+    })
+  })
+})
+
+describe('disconnectMeta', () => {
+  it('sends a DELETE request for the business', async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(new Response(null, { status: 204 }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(disconnectMeta('biz-1')).resolves.toBeUndefined()
+    const [url, options] = fetchMock.mock.calls[0]
+    expect(url).toContain('/businesses/biz-1/meta')
+    expect(options?.method).toBe('DELETE')
   })
 })

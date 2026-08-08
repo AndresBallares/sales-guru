@@ -37,6 +37,7 @@ _ALL_TABLES = (
     "productimage",
     "product",
     "audience",
+    "metaoauthstate",
     "metaconnection",
     "business",
     "subscription",

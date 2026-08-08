@@ -135,17 +135,41 @@ model Audience {
   updatedAt   DateTime   @updatedAt
 }
 
+// adAccountId/pageId start null — a row is created once the OAuth code
+// exchange succeeds (so accessToken/tokenExpiresAt/metaUserId are always
+// set), but the user still has to pick which ad account and Page to use
+// (one Meta identity can have several of each), via a separate finalize
+// step (PRD.md build step 6, app/api/meta.py). Same "exists before it's
+// complete" shape already used for Strategy before objective was known to
+// be fixed, and for Creative before one variant is SELECTED.
+//
+// accessToken is stored in plaintext, not hashed — unlike Session/User,
+// this token has to be usable later for real Marketing API calls, not just
+// verified. Known gap, not addressed yet (PRD.md §4): revisit encryption
+// at rest before production, same bucket as the samesite=lax cookie gap.
 model MetaConnection {
   id             String   @id @default(cuid())
   business       Business @relation(fields: [businessId], references: [id])
   businessId     String   @unique
   metaUserId     String
   accessToken    String
-  adAccountId    String
-  pageId         String
+  adAccountId    String?
+  pageId         String?
   tokenExpiresAt DateTime
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
+}
+
+// Short-lived, one-time-use CSRF state for the Meta OAuth redirect
+// round-trip — id itself (an unguessable cuid) is passed as the OAuth
+// `state` param. Looked up and deleted at the callback (app/api/meta.py),
+// with a TTL check (see _STATE_TTL) so an old, unused row can't be replayed.
+// A dedicated table rather than a signed token because the callback also
+// needs to recover which business the flow was started for.
+model MetaOAuthState {
+  id         String   @id @default(cuid())
+  businessId String
+  createdAt  DateTime @default(now())
 }
 
 // Campaign.objective: SALES | LEADS | TRAFFIC | MESSAGES | AWARENESS

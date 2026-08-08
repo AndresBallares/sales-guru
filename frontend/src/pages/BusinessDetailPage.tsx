@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { AudiencesSection } from '../components/AudiencesSection'
 import { CampaignsSection } from '../components/CampaignsSection'
+import { MetaConnectionSection } from '../components/MetaConnectionSection'
 import { ProductsSection } from '../components/ProductsSection'
 import { ApiError, getBusiness, type Business } from '../lib/api'
 
@@ -38,6 +39,7 @@ export function BusinessDetailPage() {
         <>
           <ProductsSection businessId={businessId} />
           <AudiencesSection businessId={businessId} />
+          <MetaConnectionSection businessId={businessId} />
           <CampaignsSection businessId={businessId} />
         </>
       )}

@@ -314,3 +314,62 @@ export function selectCreative(
     { method: 'POST' },
   )
 }
+
+export interface MetaConnectResponse {
+  authorizationUrl: string
+}
+
+export interface MetaAdAccount {
+  id: string
+  name: string
+}
+
+export interface MetaPage {
+  id: string
+  name: string
+}
+
+export interface MetaConnection {
+  id: string
+  businessId: string
+  metaUserId: string
+  adAccountId: string | null
+  pageId: string | null
+  tokenExpiresAt: string
+  createdAt: string
+}
+
+export function connectMeta(businessId: string): Promise<MetaConnectResponse> {
+  return request<MetaConnectResponse>(`/businesses/${businessId}/meta/connect`)
+}
+
+export function getMetaConnection(businessId: string): Promise<MetaConnection> {
+  return request<MetaConnection>(`/businesses/${businessId}/meta`)
+}
+
+export function listMetaAdAccounts(businessId: string): Promise<MetaAdAccount[]> {
+  return request<MetaAdAccount[]>(`/businesses/${businessId}/meta/ad-accounts`)
+}
+
+export function listMetaPages(businessId: string): Promise<MetaPage[]> {
+  return request<MetaPage[]>(`/businesses/${businessId}/meta/pages`)
+}
+
+export interface MetaFinalizeInput {
+  adAccountId: string
+  pageId: string
+}
+
+export function finalizeMetaConnection(
+  businessId: string,
+  input: MetaFinalizeInput,
+): Promise<MetaConnection> {
+  return request<MetaConnection>(`/businesses/${businessId}/meta/finalize`, {
+    method: 'POST',
+    body: JSON.stringify(input),
+  })
+}
+
+export function disconnectMeta(businessId: string): Promise<void> {
+  return request<void>(`/businesses/${businessId}/meta`, { method: 'DELETE' })
+}

@@ -46,16 +46,18 @@ Credits are the unit that meters AI generation (strategy + copy + image) usage; 
 
 **Known gap, not addressed yet:** the session cookie is currently `samesite=lax`, which works locally (frontend/backend share `localhost`) but frontend and backend will be separate Render services on different subdomains in production — a genuinely cross-site relationship. `samesite=lax` may not survive that; likely needs `samesite=none; secure` plus verifying the cookie's `domain` scoping at actual deploy time. Revisit when deploying to Render, not before.
 
+**Known gap, not addressed yet:** `MetaConnection.accessToken` (build step 6) is stored in plaintext, not hashed or encrypted — unlike `User.hashedPassword`/`Session.tokenHash`, this token has to be usable later for real Marketing API calls, not just verified, so it can't be a one-way hash. Revisit encryption at rest before production, same bucket as the `samesite=lax` gap above.
+
 ## 5. Build order (one component at a time, each fully working before the next)
 
 1. **Foundation** — React 19 + TS + Vite frontend, Python (uv) + FastAPI backend, Prisma schema (SQLite dev → Postgres prod) via `prisma-client-py`, test/lint/CI tooling. *(done)*
 2. **Auth** — `POST /auth/signup` (auto-provisions Organization, auto-logs in), `/login`, `/logout`, `/me`; DB-backed sessions via httpOnly cookie, tokens hashed at rest. Frontend: `/login`, `/signup` pages, `AuthProvider`/`useAuth`, route guards. *(done)*
 3. **Business + product + audience onboarding** — Business (dashboard: list + create form), Product, and Audience (both on a `/businesses/:id` detail page, via `ProductsSection`/`AudiencesSection`) all done, backend + frontend. `GET /businesses/{id}` added for the detail page. Only image upload remains pending from this step.
-4. **Objective + Meta Ads connection** — objective selector done: `POST/GET /businesses/{id}/campaigns` (`CampaignsSection`), objective is one of the fixed PRD.md §7 values, campaign optionally references a product/audience from the same business (cross-business references 404, scoped lookup). Meta OAuth + ad account/Page selection still pending — deliberately deferred to step 8 (publish), per §6.
-5. **AI strategy generation** — LLM call grounded in business/product/objective, stored strategy record
-6. **AI ad generation** — ad copy + creative generation grounded in the strategy
-7. **Approval flow** — review/edit UI, explicit user approval gate before publish
-8. **Campaign publish** — Meta Marketing API integration to create live campaign/ad set/ad from approved content
+4. **Objective + Meta Ads connection** — objective selector done: `POST/GET /businesses/{id}/campaigns` (`CampaignsSection`), objective is one of the fixed PRD.md §7 values, campaign optionally references a product/audience from the same business (cross-business references 404, scoped lookup). *(done)*
+5. **AI strategy generation** — LLM call grounded in business/product/objective, stored strategy record *(done)*
+6. **AI ad generation** — ad copy + creative generation grounded in the strategy *(done)*. Also where the Meta Ads OAuth connection itself lives (`app/api/meta.py`, `MetaConnectionSection`): connect → pick ad account + Page → `MetaConnection` stored, scoped per business. Built as its own component ahead of schedule (originally deferred to step 8 per an earlier version of §6) — actual campaign publishing (create campaign/ad set/ad on Meta) is still step 8, separate from this connection step.
+7. **Approval flow** — review/edit UI, explicit user approval gate before publish *(done)*
+8. **Campaign publish** — Meta Marketing API integration to create live campaign/ad set/ad from approved content, using the ad account/Page selected in step 6
 9. **Results dashboard** — Meta Insights API integration, campaign performance view
 10. **(Post-MVP) Billing** — Stripe plans, checkout, credit balance sync per §3
 11. **(Post-MVP) Google/TikTok Ads, auto-optimizer, agency tier, team seats**
