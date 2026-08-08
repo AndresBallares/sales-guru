@@ -1,0 +1,144 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Detects which package(s) changed so backend/frontend jobs only run when
+  # relevant, and docs-only changes run neither (mirrors the Render
+  # deploy-gating split in .github/workflows/deploy.yml).
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      backend: ${{ steps.filter.outputs.backend }}
+      frontend: ${{ steps.filter.outputs.frontend }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            backend:
+              - 'backend/**'
+            frontend:
+              - 'frontend/**'
+
+  backend-ci:
+    needs: changes
+    if: needs.changes.outputs.backend == 'true'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    env:
+      DATABASE_URL: "file:./dev.db"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          cache-dependency-glob: backend/uv.lock
+
+      - name: Install dependencies
+        run: uv sync --locked
+
+      - name: Lint (ruff)
+        run: uv run ruff check .
+
+      - name: Format check (ruff)
+        run: uv run ruff format --check .
+
+      - name: Type check (mypy)
+        run: uv run mypy .
+
+      - name: Type check (ty)
+        run: uv run ty check
+
+      - name: Generate Prisma client
+        run: uv run prisma generate
+
+      - name: Apply Prisma migrations
+        run: uv run prisma migrate deploy
+
+      - name: Test (pytest, coverage >=90%)
+        run: uv run pytest
+
+  frontend-ci:
+    needs: changes
+    if: needs.changes.outputs.frontend == 'true'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    env:
+      CI: "true"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Lint (oxlint, incl. jsx-a11y)
+        run: npm run lint
+
+      - name: Type check
+        run: npx tsc -b
+
+      - name: Test (vitest, coverage >=90%)
+        run: npm run test:coverage
+
+      - name: Build
+        run: npm run build
+
+      - name: Install Playwright browsers
+        run: npx playwright install --with-deps chromium
+
+      - name: E2E test (Playwright + axe-core a11y checks)
+        run: npm run test:e2e
+
+      - name: Upload Playwright report
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: frontend/playwright-report/
+          retention-days: 14
+
+  # Single aggregate job to set as the required status check in GitHub
+  # branch protection. Individual jobs above are conditional (skipped on
+  # docs-only changes), and GitHub branch protection cannot reliably require
+  # a job that sometimes never runs — this job always runs and fails if any
+  # job that *did* run failed, so it's a stable, always-present check name.
+  ci-status:
+    if: always()
+    needs: [changes, backend-ci, frontend-ci]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify no required job failed
+        run: |
+          backend_result="${{ needs.backend-ci.result }}"
+          frontend_result="${{ needs.frontend-ci.result }}"
+          echo "backend-ci: $backend_result"
+          echo "frontend-ci: $frontend_result"
+          if [[ "$backend_result" == "failure" || "$backend_result" == "cancelled" ]]; then
+            echo "backend-ci did not pass" >&2
+            exit 1
+          fi
+          if [[ "$frontend_result" == "failure" || "$frontend_result" == "cancelled" ]]; then
+            echo "frontend-ci did not pass" >&2
+            exit 1
+          fi
+          echo "All required checks passed (or were correctly skipped)."

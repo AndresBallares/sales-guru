@@ -1,0 +1,199 @@
+// Sales Guru database schema.
+//
+// Hierarchy: User -> Organization -> Business -> {Product, Audience, Campaign}
+// Campaign -> AdSet -> Ad -> Creative mirrors the Meta Marketing API's own
+// object hierarchy (Campaign / AdSet / Ad / AdCreative), since MVP build
+// step 8 publishes directly into that structure (PRD.md §5).
+//
+// Scope: MVP core loop only (PRD.md §2, §5). Subscription is a thin stub —
+// no billing logic reads/writes it until the post-MVP billing step.
+//
+// SQLite has no native enum support, so status/objective fields below are
+// plain strings, validated as enums at the application layer (app/schemas)
+// so behavior stays identical once swapped to Postgres.
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider             = "prisma-client-py"
+  interface            = "asyncio"
+  recursive_type_depth = 5
+}
+
+model User {
+  id             String         @id @default(cuid())
+  email          String         @unique
+  hashedPassword String
+  organizations  Organization[]
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+}
+
+model Organization {
+  id           String        @id @default(cuid())
+  owner        User          @relation(fields: [ownerId], references: [id])
+  ownerId      String
+  name         String
+  businesses   Business[]
+  subscription Subscription?
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+}
+
+// Subscription: DRAFT | ACTIVE | PAST_DUE | CANCELED (unused until the
+// post-MVP billing step — see PRD.md §4, §5).
+model Subscription {
+  id             String       @id @default(cuid())
+  organization   Organization @relation(fields: [organizationId], references: [id])
+  organizationId String       @unique
+  plan           String?
+  status         String       @default("DRAFT")
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+}
+
+model Business {
+  id             String          @id @default(cuid())
+  organization   Organization    @relation(fields: [organizationId], references: [id])
+  organizationId String
+  name           String
+  industry       String?
+  toneOfVoice    String?
+  products       Product[]
+  audiences      Audience[]
+  metaConnection MetaConnection?
+  campaigns      Campaign[]
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
+}
+
+model Product {
+  id          String         @id @default(cuid())
+  business    Business       @relation(fields: [businessId], references: [id])
+  businessId  String
+  name        String
+  description String?
+  images      ProductImage[]
+  campaigns   Campaign[]
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+}
+
+model ProductImage {
+  id        String   @id @default(cuid())
+  product   Product  @relation(fields: [productId], references: [id])
+  productId String
+  url       String
+  createdAt DateTime @default(now())
+}
+
+model Audience {
+  id          String     @id @default(cuid())
+  business    Business   @relation(fields: [businessId], references: [id])
+  businessId  String
+  name        String
+  description String?
+  campaigns   Campaign[]
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
+}
+
+model MetaConnection {
+  id             String   @id @default(cuid())
+  business       Business @relation(fields: [businessId], references: [id])
+  businessId     String   @unique
+  metaUserId     String
+  accessToken    String
+  adAccountId    String
+  pageId         String
+  tokenExpiresAt DateTime
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+}
+
+// Campaign.objective: AWARENESS | TRAFFIC | CONVERSIONS
+// Campaign.status: DRAFT | STRATEGY_GENERATED | ADS_GENERATED |
+//                  PENDING_APPROVAL | APPROVED | LIVE | PAUSED | FAILED
+model Campaign {
+  id             String     @id @default(cuid())
+  business       Business   @relation(fields: [businessId], references: [id])
+  businessId     String
+  product        Product?   @relation(fields: [productId], references: [id])
+  productId      String?
+  audience       Audience?  @relation(fields: [audienceId], references: [id])
+  audienceId     String?
+  objective      String
+  status         String     @default("DRAFT")
+  strategy       Strategy?
+  adSets         AdSet[]
+  metrics        Metric[]
+  metaCampaignId String?
+  createdAt      DateTime   @default(now())
+  updatedAt      DateTime   @updatedAt
+}
+
+model Strategy {
+  id                   String   @id @default(cuid())
+  campaign             Campaign @relation(fields: [campaignId], references: [id])
+  campaignId           String   @unique
+  targeting            String
+  budgetRecommendation String
+  rationale            String
+  createdAt            DateTime @default(now())
+}
+
+// AdSet.status: DRAFT | READY | LIVE | PAUSED
+model AdSet {
+  id               String   @id @default(cuid())
+  campaign         Campaign @relation(fields: [campaignId], references: [id])
+  campaignId       String
+  name             String
+  budget           Float
+  optimizationGoal String
+  status           String   @default("DRAFT")
+  ads              Ad[]
+  metaAdSetId      String?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+}
+
+// Ad.status: DRAFT | READY | LIVE | PAUSED
+model Ad {
+  id         String     @id @default(cuid())
+  adSet      AdSet      @relation(fields: [adSetId], references: [id])
+  adSetId    String
+  name       String
+  status     String     @default("DRAFT")
+  creatives  Creative[]
+  metaAdId   String?
+  createdAt  DateTime   @default(now())
+  updatedAt  DateTime   @updatedAt
+}
+
+// Creative.status: GENERATED | APPROVED | REJECTED
+model Creative {
+  id             String   @id @default(cuid())
+  ad             Ad       @relation(fields: [adId], references: [id])
+  adId           String
+  headline       String
+  bodyText       String
+  imageUrl       String?
+  status         String   @default("GENERATED")
+  metaCreativeId String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+}
+
+model Metric {
+  id          String   @id @default(cuid())
+  campaign    Campaign @relation(fields: [campaignId], references: [id])
+  campaignId  String
+  impressions Int
+  clicks      Int
+  spend       Float
+  conversions Int
+  fetchedAt   DateTime @default(now())
+}

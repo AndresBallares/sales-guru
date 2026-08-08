@@ -1,0 +1,13 @@
+# Enforce LF line endings for all text files, regardless of platform/editor.
+* text=auto eol=lf
+
+# Explicitly binary — never touched for line endings or diffed as text.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.woff binary
+*.woff2 binary
+*.db binary
+*.pdf binary

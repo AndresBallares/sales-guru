@@ -1,0 +1,77 @@
+# Pre-commit hooks mirror the CI checks (.github/workflows/ci.yml) so a
+# failure can never reach a pushed branch. Full Playwright e2e is
+# intentionally excluded here (too slow for commit-time) — it stays
+# CI-only.
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-merge-conflict
+      - id: check-added-large-files
+        args: ["--maxkb=1000"]
+      - id: mixed-line-ending
+        args: ["--fix=lf"]
+      - id: check-yaml
+      - id: check-toml
+      - id: check-json
+        exclude: ^frontend/tsconfig.*\.json$
+
+  - repo: local
+    hooks:
+      - id: backend-ruff-check
+        name: backend · ruff check
+        entry: bash -c 'cd backend && uv run ruff check .'
+        language: system
+        files: ^backend/.*\.py$
+        pass_filenames: false
+
+      - id: backend-ruff-format
+        name: backend · ruff format --check
+        entry: bash -c 'cd backend && uv run ruff format --check .'
+        language: system
+        files: ^backend/.*\.py$
+        pass_filenames: false
+
+      - id: backend-mypy
+        name: backend · mypy
+        entry: bash -c 'cd backend && uv run mypy .'
+        language: system
+        files: ^backend/.*\.py$
+        pass_filenames: false
+
+      - id: backend-ty
+        name: backend · ty check
+        entry: bash -c 'cd backend && uv run ty check'
+        language: system
+        files: ^backend/.*\.py$
+        pass_filenames: false
+
+      - id: backend-pytest
+        name: backend · pytest (coverage >=90%)
+        entry: bash -c 'cd backend && uv run pytest'
+        language: system
+        files: ^backend/.*\.py$
+        pass_filenames: false
+
+      - id: frontend-oxlint
+        name: frontend · oxlint
+        entry: bash -c 'cd frontend && npm run lint'
+        language: system
+        files: ^frontend/.*\.(ts|tsx|js|jsx)$
+        pass_filenames: false
+
+      - id: frontend-typecheck
+        name: frontend · tsc -b
+        entry: bash -c 'cd frontend && npx tsc -b'
+        language: system
+        files: ^frontend/.*\.(ts|tsx)$
+        pass_filenames: false
+
+      - id: frontend-vitest
+        name: frontend · vitest (coverage >=90%)
+        entry: bash -c 'cd frontend && npm run test:coverage'
+        language: system
+        files: ^frontend/.*\.(ts|tsx)$
+        pass_filenames: false

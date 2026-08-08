@@ -1,0 +1,50 @@
+# Render Blueprint — https://render.com/docs/blueprint-spec
+#
+# Deploy gating: autoDeployTrigger: checksPass makes Render wait for the
+# GitHub Actions check run on a commit (.github/workflows/ci.yml) to
+# succeed before deploying — no build is attempted if CI hasn't passed or
+# hasn't run at all. This is native Render behavior, not something wired up
+# through GitHub Actions.
+#
+# Path splitting: each service's buildFilter.paths scopes it to its own
+# directory, so a frontend-only change never triggers a backend build and
+# vice versa. Because docs/** and root-level *.md changes match neither
+# service's filter, docs-only commits trigger no deploy at all.
+#
+# Setup (manual, one-time, do this yourself in the Render dashboard):
+#   1. New > Blueprint, point it at this repo.
+#   2. Render creates both services below and assigns them URLs.
+#   3. Set the real DATABASE_URL secret on sales-guru-backend (a managed
+#      Postgres instance — see PRD.md §6, SQLite is dev-only).
+#   4. No deploy hooks or GitHub secrets are needed for CI-gating; checksPass
+#      reads GitHub check runs directly.
+
+services:
+  - type: web
+    name: sales-guru-backend
+    runtime: python
+    rootDir: backend
+    region: oregon
+    plan: starter
+    autoDeployTrigger: checksPass
+    buildFilter:
+      paths:
+        - backend/**
+    buildCommand: "uv sync --locked && uv run prisma generate && uv run prisma migrate deploy"
+    startCommand: "uv run uvicorn app.main:app --host 0.0.0.0 --port $PORT"
+    envVars:
+      - key: ENVIRONMENT
+        value: production
+      - key: DATABASE_URL
+        sync: false
+
+  - type: web
+    runtime: static
+    name: sales-guru-frontend
+    rootDir: frontend
+    autoDeployTrigger: checksPass
+    buildFilter:
+      paths:
+        - frontend/**
+    buildCommand: "npm ci && npm run build"
+    staticPublishPath: dist
