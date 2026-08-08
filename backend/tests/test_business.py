@@ -89,3 +89,42 @@ def test_list_businesses_returns_only_the_current_users_businesses(
     assert response.status_code == 200
     names = [b["name"] for b in response.json()]
     assert names == ["Bob's Business"]
+
+
+def test_get_business_requires_a_session(client: TestClient) -> None:
+    """Fetching a business with no session cookie returns 401."""
+    response = client.get("/businesses/some-id")
+
+    assert response.status_code == 401
+
+
+def test_get_business_returns_the_business(client: TestClient) -> None:
+    """Fetching a business by id returns its full representation."""
+    _signed_up_client(client)
+    created = client.post("/businesses", json={"name": "Acme Widgets"}).json()
+
+    response = client.get(f"/businesses/{created['id']}")
+
+    assert response.status_code == 200
+    assert response.json() == created
+
+
+def test_get_business_404s_for_a_nonexistent_business(client: TestClient) -> None:
+    """Fetching a business that doesn't exist returns 404."""
+    _signed_up_client(client)
+
+    response = client.get("/businesses/does-not-exist")
+
+    assert response.status_code == 404
+
+
+def test_get_business_404s_for_another_users_business(client: TestClient) -> None:
+    """A user can't fetch a business they don't own."""
+    _signed_up_client(client, email="alice@example.com")
+    created = client.post("/businesses", json={"name": "Alice's Business"}).json()
+    client.post("/auth/logout")
+
+    _signed_up_client(client, email="bob@example.com")
+    response = client.get(f"/businesses/{created['id']}")
+
+    assert response.status_code == 404

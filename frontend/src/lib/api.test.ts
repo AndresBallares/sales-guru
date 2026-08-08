@@ -1,5 +1,18 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { ApiError, createBusiness, getMe, listBusinesses, login, logout, signup } from './api'
+import {
+  ApiError,
+  createAudience,
+  createBusiness,
+  createProduct,
+  getBusiness,
+  getMe,
+  listAudiences,
+  listBusinesses,
+  listProducts,
+  login,
+  logout,
+  signup,
+} from './api'
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -153,5 +166,93 @@ describe('listBusinesses', () => {
     vi.stubGlobal('fetch', vi.fn<typeof fetch>().mockResolvedValue(jsonResponse([])))
 
     await expect(listBusinesses()).resolves.toEqual([])
+  })
+})
+
+describe('getBusiness', () => {
+  it('fetches a single business by id', async () => {
+    const business = {
+      id: '1',
+      name: 'Acme',
+      website: null,
+      industry: null,
+      location: null,
+      description: null,
+    }
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(jsonResponse(business))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(getBusiness('1')).resolves.toEqual(business)
+    const [url] = fetchMock.mock.calls[0]
+    expect(url).toContain('/businesses/1')
+  })
+})
+
+describe('createProduct', () => {
+  it('sends only the provided fields and returns the created product', async () => {
+    const product = {
+      id: '1',
+      description: 'Widgets',
+      price: null,
+      margin: null,
+      features: null,
+      benefits: null,
+      url: null,
+    }
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(jsonResponse(product, 201))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(createProduct('biz-1', { description: 'Widgets' })).resolves.toEqual(
+      product,
+    )
+    const [url, options] = fetchMock.mock.calls[0]
+    expect(url).toContain('/businesses/biz-1/products')
+    expect(JSON.parse(options?.body as string)).toEqual({ description: 'Widgets' })
+  })
+})
+
+describe('listProducts', () => {
+  it('returns the list of products for a business', async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(jsonResponse([]))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(listProducts('biz-1')).resolves.toEqual([])
+    const [url] = fetchMock.mock.calls[0]
+    expect(url).toContain('/businesses/biz-1/products')
+  })
+})
+
+describe('createAudience', () => {
+  it('sends only the provided fields and returns the created audience', async () => {
+    const audience = {
+      id: '1',
+      description: 'Busy parents',
+      ageMin: null,
+      ageMax: null,
+      location: null,
+      interests: null,
+      problem: null,
+      desire: null,
+    }
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(jsonResponse(audience, 201))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(
+      createAudience('biz-1', { description: 'Busy parents' }),
+    ).resolves.toEqual(audience)
+    const [url, options] = fetchMock.mock.calls[0]
+    expect(url).toContain('/businesses/biz-1/audiences')
+    expect(JSON.parse(options?.body as string)).toEqual({ description: 'Busy parents' })
+  })
+})
+
+describe('listAudiences', () => {
+  it('returns the list of audiences for a business', async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(jsonResponse([]))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(listAudiences('biz-1')).resolves.toEqual([])
+    const [url] = fetchMock.mock.calls[0]
+    expect(url).toContain('/businesses/biz-1/audiences')
   })
 })

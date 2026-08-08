@@ -6,8 +6,10 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.api.audience import router as audience_router
 from app.api.auth import router as auth_router
 from app.api.business import router as business_router
+from app.api.product import router as product_router
 from app.core.config import get_settings
 from app.core.db import db
 
@@ -40,6 +42,8 @@ app.add_middleware(
 )
 app.include_router(auth_router)
 app.include_router(business_router)
+app.include_router(product_router)
+app.include_router(audience_router)
 
 
 @app.get("/health")

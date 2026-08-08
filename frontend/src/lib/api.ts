@@ -20,6 +20,46 @@ export interface BusinessCreateInput {
   description?: string
 }
 
+export interface Product {
+  id: string
+  description: string
+  price: number | null
+  margin: number | null
+  features: string | null
+  benefits: string | null
+  url: string | null
+}
+
+export interface ProductCreateInput {
+  description: string
+  price?: number
+  margin?: number
+  features?: string
+  benefits?: string
+  url?: string
+}
+
+export interface Audience {
+  id: string
+  description: string
+  ageMin: number | null
+  ageMax: number | null
+  location: string | null
+  interests: string | null
+  problem: string | null
+  desire: string | null
+}
+
+export interface AudienceCreateInput {
+  description: string
+  ageMin?: number
+  ageMax?: number
+  location?: string
+  interests?: string
+  problem?: string
+  desire?: string
+}
+
 const API_URL: string = import.meta.env.VITE_API_URL ?? 'http://localhost:8000'
 
 export class ApiError extends Error {
@@ -112,4 +152,36 @@ export function createBusiness(input: BusinessCreateInput): Promise<Business> {
 
 export function listBusinesses(): Promise<Business[]> {
   return request<Business[]>('/businesses')
+}
+
+export function getBusiness(businessId: string): Promise<Business> {
+  return request<Business>(`/businesses/${businessId}`)
+}
+
+export function createProduct(
+  businessId: string,
+  input: ProductCreateInput,
+): Promise<Product> {
+  return request<Product>(`/businesses/${businessId}/products`, {
+    method: 'POST',
+    body: JSON.stringify(input),
+  })
+}
+
+export function listProducts(businessId: string): Promise<Product[]> {
+  return request<Product[]>(`/businesses/${businessId}/products`)
+}
+
+export function createAudience(
+  businessId: string,
+  input: AudienceCreateInput,
+): Promise<Audience> {
+  return request<Audience>(`/businesses/${businessId}/audiences`, {
+    method: 'POST',
+    body: JSON.stringify(input),
+  })
+}
+
+export function listAudiences(businessId: string): Promise<Audience[]> {
+  return request<Audience[]>(`/businesses/${businessId}/audiences`)
 }

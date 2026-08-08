@@ -1,9 +1,9 @@
 """Schemas for business onboarding endpoints."""
 
-from pydantic import BaseModel
+from app.schemas.base import CamelCaseModel
 
 
-class BusinessCreateRequest(BaseModel):
+class BusinessCreateRequest(CamelCaseModel):
     """Payload for creating a business (PRD.md §7)."""
 
     name: str
@@ -13,7 +13,7 @@ class BusinessCreateRequest(BaseModel):
     description: str | None = None
 
 
-class BusinessResponse(BaseModel):
+class BusinessResponse(CamelCaseModel):
     """Public-facing representation of a Business."""
 
     id: str

@@ -38,6 +38,31 @@ test('sign up, create a business, log out, log back in', async ({ page }) => {
   const dashboardResults = await new AxeBuilder({ page }).analyze()
   expect(dashboardResults.violations).toEqual([])
 
+  await page.getByRole('link', { name: 'Acme Widgets' }).click()
+  await expect(page.getByRole('heading', { name: 'Acme Widgets' })).toBeVisible()
+  await expect(page.getByText('No products yet')).toBeVisible()
+
+  await page.getByLabel('What do you sell?').fill('Handmade leather wallets')
+  await page.getByLabel('Price').fill('49.99')
+  await page.getByRole('button', { name: 'Add product' }).click()
+
+  await expect(page.getByText('Handmade leather wallets')).toBeVisible()
+
+  await expect(page.getByText('No audiences yet')).toBeVisible()
+  await page.getByLabel('Who buys?').fill('Busy professionals, 30-55')
+  await page.getByLabel('Age min').fill('30')
+  await page.getByLabel('Age max').fill('55')
+  await page.getByLabel('Location').fill('New York')
+  await page.getByRole('button', { name: 'Add audience' }).click()
+
+  await expect(page.getByText('Busy professionals, 30-55')).toBeVisible()
+
+  const businessDetailResults = await new AxeBuilder({ page }).analyze()
+  expect(businessDetailResults.violations).toEqual([])
+
+  await page.getByRole('link', { name: '← Back to dashboard' }).click()
+  await expect(page.getByRole('heading', { name: 'Sales Guru' })).toBeVisible()
+
   await page.getByRole('button', { name: 'Log out' }).click()
   await expect(page.getByRole('heading', { name: 'Log in' })).toBeVisible()
 

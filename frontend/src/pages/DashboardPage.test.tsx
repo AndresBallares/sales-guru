@@ -1,5 +1,6 @@
 import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
+import { MemoryRouter } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { DashboardPage } from './DashboardPage'
 import { AuthProvider } from '../context/AuthContext'
@@ -26,9 +27,11 @@ beforeEach(() => {
 
 function renderDashboard() {
   render(
-    <AuthProvider>
-      <DashboardPage />
-    </AuthProvider>,
+    <MemoryRouter>
+      <AuthProvider>
+        <DashboardPage />
+      </AuthProvider>
+    </MemoryRouter>,
   )
 }
 

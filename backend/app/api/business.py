@@ -1,36 +1,13 @@
 """Business onboarding endpoints (PRD.md §2 step 2, §7)."""
 
-from fastapi import APIRouter, Depends, HTTPException, status
-from prisma.models import Business, User
+from fastapi import APIRouter, Depends, status
+from prisma.models import Business
 
+from app.core.authz import get_owned_business, get_owned_organization_id
 from app.core.db import db
-from app.core.session import get_current_user
 from app.schemas.business import BusinessCreateRequest, BusinessResponse
 
 router = APIRouter(prefix="/businesses", tags=["businesses"])
-
-
-async def _get_owned_organization_id(user_id: str) -> str:
-    """Look up the organization auto-provisioned for a user at signup.
-
-    Args:
-        user_id: The id of the user.
-
-    Returns:
-        The id of the user's organization.
-
-    Raises:
-        HTTPException: 500 if the user has no organization — this should be
-            impossible (signup always creates exactly one, PRD.md §7) so
-            hitting this means the invariant broke, not a user-facing error.
-    """
-    organization = await db.organization.find_first(where={"ownerId": user_id})
-    if organization is None:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="User has no organization",
-        )
-    return organization.id
 
 
 def _to_response(business: Business) -> BusinessResponse:
@@ -54,20 +31,21 @@ def _to_response(business: Business) -> BusinessResponse:
 
 @router.post("", response_model=BusinessResponse, status_code=status.HTTP_201_CREATED)
 async def create_business(
-    payload: BusinessCreateRequest, current_user: User = Depends(get_current_user)
+    payload: BusinessCreateRequest,
+    organization_id: str = Depends(get_owned_organization_id),
 ) -> BusinessResponse:
     """Create a business under the current user's organization.
 
     Args:
         payload: The business fields (PRD.md §7 — name required, rest
             optional).
-        current_user: Resolved from the session cookie.
+        organization_id: The current user's organization id (this dependency
+            chain resolves get_current_user first, so this 401s before
+            touching the DB when unauthenticated).
 
     Returns:
         The newly created business.
     """
-    organization_id = await _get_owned_organization_id(current_user.id)
-
     business = await db.business.create(
         data={
             "organizationId": organization_id,
@@ -83,17 +61,32 @@ async def create_business(
 
 @router.get("", response_model=list[BusinessResponse])
 async def list_businesses(
-    current_user: User = Depends(get_current_user),
+    organization_id: str = Depends(get_owned_organization_id),
 ) -> list[BusinessResponse]:
     """List the current user's businesses.
 
     Args:
-        current_user: Resolved from the session cookie.
+        organization_id: The current user's organization id.
 
     Returns:
         All businesses under the current user's organization.
     """
-    organization_id = await _get_owned_organization_id(current_user.id)
-
     businesses = await db.business.find_many(where={"organizationId": organization_id})
     return [_to_response(b) for b in businesses]
+
+
+@router.get("/{business_id}", response_model=BusinessResponse)
+async def get_business(
+    business: Business = Depends(get_owned_business),
+) -> BusinessResponse:
+    """Fetch a single business owned by the current user.
+
+    Args:
+        business: The business, resolved and ownership-checked by
+            get_owned_business (404s if it doesn't exist or isn't the
+            current user's).
+
+    Returns:
+        The business.
+    """
+    return _to_response(business)

@@ -1,4 +1,5 @@
 import { useEffect, useState, type FormEvent } from 'react'
+import { Link } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import { ApiError, createBusiness, listBusinesses, type Business } from '../lib/api'
 
@@ -82,7 +83,7 @@ export function DashboardPage() {
         <ul>
           {businesses.map((business) => (
             <li key={business.id}>
-              <strong>{business.name}</strong>
+              <Link to={`/businesses/${business.id}`}>{business.name}</Link>
               {business.industry && <span> — {business.industry}</span>}
               {business.location && <span> · {business.location}</span>}
             </li>
