@@ -13,6 +13,12 @@ jobs:
   # Detects which package(s) changed so backend/frontend jobs only run when
   # relevant, and docs-only changes run neither (mirrors the Render
   # deploy-gating split in .github/workflows/deploy.yml).
+  #
+  # frontend-ci also triggers on backend/** changes: its e2e suite runs
+  # Playwright against BOTH a real frontend build and a real backend
+  # (playwright.config.ts's webServer starts both), so it's a genuine
+  # frontend+backend integration test — a backend-only change that breaks
+  # that integration needs to fail this job, not slip through unchecked.
   changes:
     runs-on: ubuntu-latest
     outputs:
@@ -28,6 +34,7 @@ jobs:
               - 'backend/**'
             frontend:
               - 'frontend/**'
+              - 'backend/**'
 
   # Backstop for the local commit-msg hook (scripts/check-no-ai-coauthor.sh)
   # — catches commits pushed with --no-verify or from a machine that never
@@ -143,7 +150,23 @@ jobs:
       - name: Install Playwright browsers
         run: npx playwright install --with-deps chromium
 
-      - name: E2E test (Playwright + axe-core a11y checks)
+      # e2e's webServer config runs a real backend (uv run uvicorn ...)
+      # alongside the built frontend — needs uv + backend deps + a
+      # generated Prisma client before Playwright shells out to it.
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          cache-dependency-glob: backend/uv.lock
+
+      - name: Install backend dependencies (for e2e's real backend)
+        working-directory: backend
+        run: uv sync --locked
+
+      - name: Generate Prisma client (for e2e's real backend)
+        working-directory: backend
+        run: uv run prisma generate
+
+      - name: E2E test (Playwright + axe-core a11y checks, real backend)
         run: npm run test:e2e
 
       - name: Upload Playwright report

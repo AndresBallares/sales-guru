@@ -44,11 +44,13 @@ Credits are the unit that meters AI generation (strategy + copy + image) usage; 
 
 **Known external dependency / risk:** Meta Marketing API access requires Meta App Review and Business Verification before the app can create live campaigns on a user's behalf beyond a small set of test users. This is an external approval process outside our control — build the integration against Meta's sandbox/test mode first, and treat App Review as a launch blocker to track separately, not an engineering task we can shortcut.
 
+**Known gap, not addressed yet:** the session cookie is currently `samesite=lax`, which works locally (frontend/backend share `localhost`) but frontend and backend will be separate Render services on different subdomains in production — a genuinely cross-site relationship. `samesite=lax` may not survive that; likely needs `samesite=none; secure` plus verifying the cookie's `domain` scoping at actual deploy time. Revisit when deploying to Render, not before.
+
 ## 5. Build order (one component at a time, each fully working before the next)
 
 1. **Foundation** — React 19 + TS + Vite frontend, Python (uv) + FastAPI backend, Prisma schema (SQLite dev → Postgres prod) via `prisma-client-py`, test/lint/CI tooling. *(done)*
-2. **Auth** — `POST /auth/signup` (auto-provisions Organization, auto-logs in), `/login`, `/logout`, `/me`; DB-backed sessions via httpOnly cookie, tokens hashed at rest. *(backend done — no frontend UI yet)*
-3. **Business + product onboarding** — `POST /businesses` + `GET /businesses` done (backend only, no frontend UI yet). Product/Audience/image upload endpoints still pending.
+2. **Auth** — `POST /auth/signup` (auto-provisions Organization, auto-logs in), `/login`, `/logout`, `/me`; DB-backed sessions via httpOnly cookie, tokens hashed at rest. Frontend: `/login`, `/signup` pages, `AuthProvider`/`useAuth`, route guards. *(done)*
+3. **Business + product onboarding** — `POST /businesses` + `GET /businesses` and a dashboard page (business list + create form) done. Product/Audience/image upload — backend and frontend both still pending.
 4. **Objective + Meta Ads connection** — objective selector, Meta OAuth, ad account/Page selection
 5. **AI strategy generation** — LLM call grounded in business/product/objective, stored strategy record
 6. **AI ad generation** — ad copy + creative generation grounded in the strategy
@@ -60,8 +62,8 @@ Credits are the unit that meters AI generation (strategy + copy + image) usage; 
 
 ## 6. Tech defaults (confirmed 2026-08-07)
 
-- Frontend: React 19 + TypeScript + Vite (SPA), accessibility linting (oxlint jsx-a11y plugin) + Playwright e2e with axe-core
-- Backend: Python, managed by `uv`, FastAPI; ruff + mypy + ty for lint/type-check; pytest + pytest-cov (≥90% coverage gate, both frontend and backend)
+- Frontend: React 19 + TypeScript + Vite (SPA), `react-router-dom` for routing, React Context for auth state (no Redux/Zustand — reconsider only if state needs grow past this), plain controlled forms (no form library yet), accessibility linting (oxlint jsx-a11y plugin) + Playwright e2e with axe-core. Playwright's e2e suite runs a real backend alongside the built frontend (see `frontend/playwright.config.ts`) — it's a genuine integration test, not mocked.
+- Backend: Python, managed by `uv`, FastAPI; ruff + mypy (with the `pydantic.mypy` plugin) + ty for lint/type-check; pytest + pytest-cov (≥90% coverage gate, both frontend and backend). CORS via `CORSMiddleware`, origins configured through `CORS_ORIGINS` (comma-separated).
 - Data layer: `schema.prisma` (SQLite dev → Postgres prod) with `prisma-client-py` generating the Python client
 - LLM provider: Anthropic (Claude) for strategy + copy generation
 - Image provider: TBD at step 6 (evaluate at implementation time)

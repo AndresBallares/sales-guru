@@ -22,8 +22,9 @@ uv --version && node --version && npm --version && gh --version
 # 2. GitHub CLI authenticated? (needed to sync with GitHub per README.md)
 gh auth status
 
-# 3. Backend env file present?
+# 3. Env files present?
 test -f backend/.env && echo "backend/.env OK" || echo "MISSING: cp backend/.env.example backend/.env"
+test -f frontend/.env && echo "frontend/.env OK" || echo "MISSING: cp frontend/.env.example frontend/.env"
 
 # 4. Backend deps in sync with the lockfile?
 (cd backend && uv sync --locked) && echo "backend deps OK"

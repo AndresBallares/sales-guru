@@ -75,6 +75,7 @@ uv run prisma migrate deploy   # applies committed migrations to local SQLite
 
 # Frontend
 cd ../frontend
+cp .env.example .env
 npm install
 npx playwright install --with-deps chromium   # only needed for e2e tests
 
@@ -118,6 +119,12 @@ npm run test:coverage        # vitest + coverage gate (fails under 90%)
 npm run test:e2e             # Playwright e2e, incl. axe-core a11y scan
 npm run build                # production build (also type-checks via tsc -b)
 ```
+
+`test:e2e` starts a *real* backend itself (see `frontend/playwright.config.ts`'s
+`webServer` config) against a dedicated `backend/prisma/e2e.db` — never your
+`dev.db` — so it needs `uv` on PATH and backend deps already installed
+(`cd backend && uv sync --locked`). It's a genuine frontend+backend
+integration test, not a mocked one.
 
 Working TDD-style: write the failing test first (`pytest` / `vitest --watch`),
 then implement until it passes. This is the expected workflow for this repo,

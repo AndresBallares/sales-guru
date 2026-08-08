@@ -1,9 +1,26 @@
+import { BrowserRouter, Route, Routes } from 'react-router-dom'
+import { GuestRoute } from './components/GuestRoute'
+import { ProtectedRoute } from './components/ProtectedRoute'
+import { AuthProvider } from './context/AuthContext'
+import { DashboardPage } from './pages/DashboardPage'
+import { LoginPage } from './pages/LoginPage'
+import { SignupPage } from './pages/SignupPage'
+
 function App() {
   return (
-    <main>
-      <h1>Sales Guru</h1>
-      <p>Foundation scaffold — features land per PRD.md build order.</p>
-    </main>
+    <BrowserRouter>
+      <AuthProvider>
+        <Routes>
+          <Route element={<GuestRoute />}>
+            <Route path="/login" element={<LoginPage />} />
+            <Route path="/signup" element={<SignupPage />} />
+          </Route>
+          <Route element={<ProtectedRoute />}>
+            <Route path="/" element={<DashboardPage />} />
+          </Route>
+        </Routes>
+      </AuthProvider>
+    </BrowserRouter>
   )
 }
 

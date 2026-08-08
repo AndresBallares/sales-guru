@@ -74,6 +74,7 @@ indent-style = "space"
 
 [tool.mypy]
 python_version = "3.12"
+plugins = ["pydantic.mypy"]
 strict = true
 warn_unused_ignores = true
 warn_redundant_casts = true
