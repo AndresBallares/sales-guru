@@ -485,3 +485,39 @@ async def fetch_campaign_insights(
         spend=float(row.get("spend", 0.0)),
         conversions=conversions,
     )
+
+
+async def pause_meta_ad(*, access_token: str, meta_ad_id: str) -> None:
+    """Pause a live ad on Meta (PRD.md build step 10, PAUSE_AD recommendations).
+
+    Args:
+        access_token: The business's Meta access token.
+        meta_ad_id: The Meta ad id to pause (Ad.metaAdId).
+
+    Raises:
+        MetaConnectionError: If the call fails.
+    """
+    await _post_json(
+        f"{_GRAPH_BASE_URL}/{meta_ad_id}",
+        {"access_token": access_token, "status": "PAUSED"},
+    )
+
+
+async def update_meta_ad_set_budget(
+    *, access_token: str, meta_ad_set_id: str, daily_budget_cents: int
+) -> None:
+    """Update a live ad set's daily budget on Meta (INCREASE_BUDGET recommendations).
+
+    Args:
+        access_token: The business's Meta access token.
+        meta_ad_set_id: The Meta ad set id to update (AdSet.metaAdSetId).
+        daily_budget_cents: The new daily budget, in the ad account's minor
+            currency unit (cents for USD) — same unit as create_meta_ad_set.
+
+    Raises:
+        MetaConnectionError: If the call fails.
+    """
+    await _post_json(
+        f"{_GRAPH_BASE_URL}/{meta_ad_set_id}",
+        {"access_token": access_token, "daily_budget": str(daily_budget_cents)},
+    )

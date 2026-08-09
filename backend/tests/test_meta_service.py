@@ -462,3 +462,59 @@ async def test_fetch_campaign_insights_raises_on_failure(
         await meta.fetch_campaign_insights(
             access_token="token", meta_campaign_id="campaign_123"
         )
+
+
+@pytest.mark.asyncio
+async def test_pause_meta_ad_sends_the_paused_status(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Pausing an ad POSTs status=PAUSED to the ad's own node."""
+    client = _mock_client_returning(monkeypatch, _FakeResponse({"success": True}))
+
+    await meta.pause_meta_ad(access_token="token", meta_ad_id="ad_123")
+
+    url, data = client.calls[0]
+    assert url == "https://graph.facebook.com/v21.0/ad_123"
+    assert data["status"] == "PAUSED"
+    assert data["access_token"] == "token"
+
+
+@pytest.mark.asyncio
+async def test_pause_meta_ad_raises_on_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A Graph API failure surfaces as MetaConnectionError."""
+    fake_client = _FakeAsyncClient(error=httpx.ConnectError("boom"))
+    monkeypatch.setattr(httpx, "AsyncClient", lambda: fake_client)
+
+    with pytest.raises(meta.MetaConnectionError, match="Meta API call failed"):
+        await meta.pause_meta_ad(access_token="token", meta_ad_id="ad_123")
+
+
+@pytest.mark.asyncio
+async def test_update_meta_ad_set_budget_sends_the_new_budget(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Updating the budget POSTs the new daily_budget to the ad set's own node."""
+    client = _mock_client_returning(monkeypatch, _FakeResponse({"success": True}))
+
+    await meta.update_meta_ad_set_budget(
+        access_token="token", meta_ad_set_id="adset_123", daily_budget_cents=4000
+    )
+
+    url, data = client.calls[0]
+    assert url == "https://graph.facebook.com/v21.0/adset_123"
+    assert data["daily_budget"] == "4000"
+    assert data["access_token"] == "token"
+
+
+@pytest.mark.asyncio
+async def test_update_meta_ad_set_budget_raises_on_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A Graph API failure surfaces as MetaConnectionError."""
+    fake_client = _FakeAsyncClient(error=httpx.ConnectError("boom"))
+    monkeypatch.setattr(httpx, "AsyncClient", lambda: fake_client)
+
+    with pytest.raises(meta.MetaConnectionError, match="Meta API call failed"):
+        await meta.update_meta_ad_set_budget(
+            access_token="token", meta_ad_set_id="adset_123", daily_budget_cents=4000
+        )

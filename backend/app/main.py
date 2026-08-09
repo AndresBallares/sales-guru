@@ -14,17 +14,19 @@ from app.api.creative import router as creative_router
 from app.api.meta import callback_router as meta_callback_router
 from app.api.meta import router as meta_router
 from app.api.metric import router as metric_router
+from app.api.optimization import router as optimization_router
 from app.api.product import router as product_router
 from app.api.strategy import router as strategy_router
 from app.core.config import get_settings
 from app.core.db import db
+from app.core.scheduler import start_scheduler, stop_scheduler
 
 settings = get_settings()
 
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
-    """Connect the database on startup and disconnect on shutdown.
+    """Connect the database and start the scheduler on startup, reverse on shutdown.
 
     Args:
         _app: The FastAPI application instance (unused, required by the
@@ -34,7 +36,11 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         Control to the running application.
     """
     await db.connect()
+    if settings.enable_scheduler:
+        start_scheduler()
     yield
+    if settings.enable_scheduler:
+        stop_scheduler()
     await db.disconnect()
 
 
@@ -56,6 +62,7 @@ app.include_router(creative_router)
 app.include_router(meta_router)
 app.include_router(meta_callback_router)
 app.include_router(metric_router)
+app.include_router(optimization_router)
 
 
 @app.get("/health")

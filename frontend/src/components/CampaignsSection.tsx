@@ -2,8 +2,10 @@ import { useCallback, useEffect, useState, type FormEvent } from 'react'
 import {
   ApiError,
   approveCampaign,
+  approveRecommendation,
   createCampaign,
   createCreatives,
+  createRecommendation,
   createStrategy,
   getStrategy,
   listAudiences,
@@ -11,15 +13,19 @@ import {
   listCreatives,
   listMetrics,
   listProducts,
+  listRecommendations,
   publishCampaign,
   refreshMetrics,
+  rejectRecommendation,
   selectCreative,
+  type ActionType,
   type Audience,
   type Campaign,
   type Creative,
   type Metric,
   type Objective,
   type Product,
+  type Recommendation,
   type StrategyContent,
 } from '../lib/api'
 
@@ -29,6 +35,12 @@ const OBJECTIVE_LABELS: Record<Objective, string> = {
   TRAFFIC: 'Tráfico',
   MESSAGES: 'Mensajes',
   AWARENESS: 'Reconocimiento',
+}
+
+const ACTION_LABELS: Record<ActionType, string> = {
+  PAUSE_AD: 'Pause ad',
+  INCREASE_BUDGET: 'Increase budget',
+  DECREASE_BUDGET: 'Decrease budget',
 }
 
 const VARIANT_LETTERS = ['A', 'B', 'C', 'D']
@@ -62,6 +74,15 @@ export function CampaignsSection({ businessId }: { businessId: string }) {
   const [metrics, setMetrics] = useState<Record<string, Metric[]>>({})
   const [refreshingMetricsId, setRefreshingMetricsId] = useState<string | null>(null)
   const [metricErrors, setMetricErrors] = useState<Record<string, string>>({})
+
+  const [recommendations, setRecommendations] = useState<Record<string, Recommendation[]>>({})
+  const [analyzingId, setAnalyzingId] = useState<string | null>(null)
+  const [analyzeErrors, setAnalyzeErrors] = useState<Record<string, string>>({})
+  const [actingRecommendation, setActingRecommendation] = useState<{
+    id: string
+    action: 'approve' | 'reject'
+  } | null>(null)
+  const [recommendationErrors, setRecommendationErrors] = useState<Record<string, string>>({})
 
   const refresh = useCallback(async () => {
     setLoading(true)
@@ -126,6 +147,23 @@ export function CampaignsSection({ businessId }: { businessId: string }) {
       setMetrics((prev) => {
         const next = { ...prev }
         for (const entry of fetchedMetrics) {
+          if (entry && entry[1].length > 0) next[entry[0]] = entry[1]
+        }
+        return next
+      })
+
+      // Same reasoning again — only LIVE campaigns can have recommendations,
+      // and the campaign list itself doesn't include them.
+      const fetchedRecommendations = await Promise.all(
+        live.map((c) =>
+          listRecommendations(businessId, c.id)
+            .then((list) => [c.id, list] as const)
+            .catch(() => null),
+        ),
+      )
+      setRecommendations((prev) => {
+        const next = { ...prev }
+        for (const entry of fetchedRecommendations) {
           if (entry && entry[1].length > 0) next[entry[0]] = entry[1]
         }
         return next
@@ -268,6 +306,68 @@ export function CampaignsSection({ businessId }: { businessId: string }) {
     }
   }
 
+  async function handleAnalyze(campaignId: string) {
+    setAnalyzingId(campaignId)
+    setAnalyzeErrors((prev) => ({ ...prev, [campaignId]: '' }))
+    try {
+      const recommendation = await createRecommendation(businessId, campaignId)
+      setRecommendations((prev) => ({
+        ...prev,
+        [campaignId]: [recommendation, ...(prev[campaignId] ?? [])],
+      }))
+    } catch (err) {
+      setAnalyzeErrors((prev) => ({
+        ...prev,
+        [campaignId]: err instanceof ApiError ? err.message : 'Could not analyze campaign.',
+      }))
+    } finally {
+      setAnalyzingId(null)
+    }
+  }
+
+  // Approving applies the recommendation to Meta immediately — one explicit
+  // click both approves and acts, same "approve = act" shape as
+  // "Approve & Publish" (PRD.md §5 step 10's checkpoint requirement).
+  async function handleApproveRecommendation(campaignId: string, recommendationId: string) {
+    setActingRecommendation({ id: recommendationId, action: 'approve' })
+    setRecommendationErrors((prev) => ({ ...prev, [recommendationId]: '' }))
+    try {
+      const updated = await approveRecommendation(businessId, campaignId, recommendationId)
+      setRecommendations((prev) => ({
+        ...prev,
+        [campaignId]: (prev[campaignId] ?? []).map((r) => (r.id === updated.id ? updated : r)),
+      }))
+    } catch (err) {
+      setRecommendationErrors((prev) => ({
+        ...prev,
+        [recommendationId]:
+          err instanceof ApiError ? err.message : 'Could not approve recommendation.',
+      }))
+    } finally {
+      setActingRecommendation(null)
+    }
+  }
+
+  async function handleRejectRecommendation(campaignId: string, recommendationId: string) {
+    setActingRecommendation({ id: recommendationId, action: 'reject' })
+    setRecommendationErrors((prev) => ({ ...prev, [recommendationId]: '' }))
+    try {
+      const updated = await rejectRecommendation(businessId, campaignId, recommendationId)
+      setRecommendations((prev) => ({
+        ...prev,
+        [campaignId]: (prev[campaignId] ?? []).map((r) => (r.id === updated.id ? updated : r)),
+      }))
+    } catch (err) {
+      setRecommendationErrors((prev) => ({
+        ...prev,
+        [recommendationId]:
+          err instanceof ApiError ? err.message : 'Could not reject recommendation.',
+      }))
+    } finally {
+      setActingRecommendation(null)
+    }
+  }
+
   return (
     <>
       <section>
@@ -295,6 +395,8 @@ export function CampaignsSection({ businessId }: { businessId: string }) {
             const campaignMetrics = metrics[campaign.id] ?? []
             const metricError = metricErrors[campaign.id]
             const latestMetric = campaignMetrics[0]
+            const campaignRecommendations = recommendations[campaign.id] ?? []
+            const analyzeError = analyzeErrors[campaign.id]
             return (
               <li key={campaign.id}>
                 {campaign.name ? `${campaign.name} — ` : ''}
@@ -498,6 +600,78 @@ export function CampaignsSection({ businessId }: { businessId: string }) {
                           </ul>
                         )}
                       </div>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => handleAnalyze(campaign.id)}
+                      disabled={analyzingId === campaign.id}
+                    >
+                      {analyzingId === campaign.id ? 'Analyzing…' : 'Analyze now'}
+                    </button>
+                    {analyzeError && (
+                      <p className="form-error" role="alert">
+                        {analyzeError}
+                      </p>
+                    )}
+                    {campaignRecommendations.length > 0 && (
+                      <ul aria-label={`Recommendations for ${campaign.name ?? campaign.id}`}>
+                        {campaignRecommendations.map((recommendation) => {
+                          const recommendationError = recommendationErrors[recommendation.id]
+                          const approving =
+                            actingRecommendation?.id === recommendation.id &&
+                            actingRecommendation.action === 'approve'
+                          const rejecting =
+                            actingRecommendation?.id === recommendation.id &&
+                            actingRecommendation.action === 'reject'
+                          const acting = approving || rejecting
+                          return (
+                            <li key={recommendation.id}>
+                              <p>
+                                <strong>{ACTION_LABELS[recommendation.actionType]}</strong>
+                                {' — '}
+                                {recommendation.status}
+                                {' — '}
+                                confidence {Math.round(recommendation.confidence * 100)}%,{' '}
+                                {recommendation.risk.toLowerCase()} risk
+                              </p>
+                              <p>{recommendation.reasoning}</p>
+                              {recommendation.suggestedBudget != null && (
+                                <p>
+                                  <strong>Suggested budget:</strong> $
+                                  {recommendation.suggestedBudget}/day
+                                </p>
+                              )}
+                              {recommendation.status === 'PENDING' && (
+                                <>
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      handleApproveRecommendation(campaign.id, recommendation.id)
+                                    }
+                                    disabled={acting}
+                                  >
+                                    {approving ? 'Approving…' : 'Approve'}
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      handleRejectRecommendation(campaign.id, recommendation.id)
+                                    }
+                                    disabled={acting}
+                                  >
+                                    {rejecting ? 'Rejecting…' : 'Reject'}
+                                  </button>
+                                </>
+                              )}
+                              {recommendationError && (
+                                <p className="form-error" role="alert">
+                                  {recommendationError}
+                                </p>
+                              )}
+                            </li>
+                          )
+                        })}
+                      </ul>
                     )}
                   </div>
                 )}

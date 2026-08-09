@@ -5,6 +5,7 @@ description = "Sales Guru API"
 requires-python = ">=3.12"
 dependencies = [
     "anthropic>=0.121.0",
+    "apscheduler>=3.11.3",
     "argon2-cffi>=25.1.0",
     "fastapi>=0.141.1",
     "httpx>=0.28.1",
@@ -83,6 +84,13 @@ warn_redundant_casts = true
 [[tool.mypy.overrides]]
 module = "tests.*"
 disallow_untyped_defs = false
+
+[[tool.mypy.overrides]]
+# apscheduler ships no py.typed marker / stubs as of the version pinned
+# here — same "third-party lib, no types available" situation as any
+# other untyped dependency, not something this project's code can fix.
+module = "apscheduler.*"
+ignore_missing_imports = true
 
 [tool.ty.environment]
 python-version = "3.12"

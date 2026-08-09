@@ -32,6 +32,11 @@ class Settings(BaseSettings):
         meta_app_secret: Meta App Secret, paired with meta_app_id.
         meta_redirect_uri: Callback URL registered in the Meta App's OAuth
             settings, e.g. "http://localhost:8000/meta/callback" in dev.
+        enable_scheduler: Whether the in-process APScheduler jobs
+            (metrics collection + optimization evaluation, PRD.md build
+            step 10) start with the app. Defaults on; the test suite
+            turns it off (conftest.py) so background jobs never fire
+            mid-test-run against a database tests are actively resetting.
     """
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
@@ -45,6 +50,7 @@ class Settings(BaseSettings):
     meta_app_id: str | None = None
     meta_app_secret: str | None = None
     meta_redirect_uri: str | None = None
+    enable_scheduler: bool = True
 
     @property
     def cors_origins_list(self) -> list[str]:

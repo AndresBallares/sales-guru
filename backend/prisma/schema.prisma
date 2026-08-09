@@ -182,23 +182,30 @@ model MetaOAuthState {
 // objective+product+audience, and two campaigns with the same objective
 // would look identical in any list.
 model Campaign {
-  id             String     @id @default(cuid())
-  business       Business   @relation(fields: [businessId], references: [id])
-  businessId     String
-  product        Product?   @relation(fields: [productId], references: [id])
-  productId      String?
-  audience       Audience?  @relation(fields: [audienceId], references: [id])
-  audienceId     String?
-  name           String?
-  objective      String
-  status         String     @default("DRAFT")
-  strategy       Strategy?
-  adSets         AdSet[]
-  creatives      Creative[]
-  metrics        Metric[]
-  metaCampaignId String?
-  createdAt      DateTime   @default(now())
-  updatedAt      DateTime   @updatedAt
+  id                      String                       @id @default(cuid())
+  business                Business                     @relation(fields: [businessId], references: [id])
+  businessId              String
+  product                 Product?                     @relation(fields: [productId], references: [id])
+  productId               String?
+  audience                Audience?                    @relation(fields: [audienceId], references: [id])
+  audienceId              String?
+  name                    String?
+  objective               String
+  status                  String                       @default("DRAFT")
+  strategy                Strategy?
+  adSets                  AdSet[]
+  creatives               Creative[]
+  metrics                 Metric[]
+  optimizations           OptimizationRecommendation[]
+  metaCampaignId          String?
+  // Last time the scheduled optimization job evaluated this campaign at
+  // all (app/services/optimizer.py's evaluate_all_live_campaigns) —
+  // updated on every evaluation regardless of outcome (WAIT or an actual
+  // recommendation), so the data-sufficiency gate's "time elapsed" leg
+  // has something to measure even on runs that produce nothing.
+  lastOptimizationCheckAt DateTime?
+  createdAt               DateTime                     @default(now())
+  updatedAt               DateTime                     @updatedAt
 }
 
 // content holds the full structured Marketing Strategist Agent output
@@ -296,4 +303,51 @@ model Metric {
   spend       Float
   conversions Int
   fetchedAt   DateTime @default(now())
+}
+
+// OptimizationRecommendation.actionType: PAUSE_AD | INCREASE_BUDGET |
+//                                        DECREASE_BUDGET
+// OptimizationRecommendation.status: PENDING | APPLIED | REJECTED | SUPERSEDED
+// — no separate APPROVED state: approving IS applying, one explicit click
+// (PRD.md build step 10's checkpoint), same "approve = act" shape as
+// Campaign's own PENDING_APPROVAL -> APPROVED -> LIVE, just collapsed to
+// one step here since there's nothing further to gate after approval.
+// Generating a new recommendation moves any still-PENDING one for the
+// same campaign to SUPERSEDED rather than deleting it, so the decision
+// history (including recommendations nobody acted on) stays queryable —
+// unlike Strategy/Creative, past recommendations are meaningful history,
+// not stale drafts.
+//
+// targetAdId records which local Ad a PAUSE_AD recommendation targets
+// (the campaign's only Ad today, since publish creates exactly one — see
+// app/services/publish.py — but the field models Meta's real shape:
+// per-ad pausing, not per-campaign). currentBudget/suggestedBudget are
+// only meaningful for INCREASE_BUDGET/DECREASE_BUDGET; suggestedBudget is
+// already guardrail-capped (see app/services/optimizer.py) by the time
+// it's stored, not the LLM's raw, unbounded suggestion.
+//
+// OptimizationRecommendation.risk: LOW | MEDIUM | HIGH — the LLM's own
+// self-assessment, part of its forced tool call (confidence too).
+// requiresApproval is deliberately NOT taken from the LLM — it's computed
+// by app/services/optimizer.py's compute_requires_approval from
+// risk/confidence/guardrails, so a future auto-apply capability is a rule
+// change there, not a schema or LLM-trust change. Always true today
+// (PRD.md build step 10's checkpoint requirement — every recommendation
+// requires a human click, regardless of computed risk, until auto-apply
+// for LOW risk is explicitly built).
+model OptimizationRecommendation {
+  id               String   @id @default(cuid())
+  campaign         Campaign @relation(fields: [campaignId], references: [id])
+  campaignId       String
+  actionType       String
+  targetAdId       String?
+  currentBudget    Float?
+  suggestedBudget  Float?
+  reasoning        String
+  confidence       Float
+  risk             String
+  requiresApproval Boolean  @default(true)
+  status           String   @default("PENDING")
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
 }

@@ -400,3 +400,63 @@ export function refreshMetrics(businessId: string, campaignId: string): Promise<
 export function listMetrics(businessId: string, campaignId: string): Promise<Metric[]> {
   return request<Metric[]>(`/businesses/${businessId}/campaigns/${campaignId}/metrics`)
 }
+
+export type ActionType = 'PAUSE_AD' | 'INCREASE_BUDGET' | 'DECREASE_BUDGET'
+export type RiskLevel = 'LOW' | 'MEDIUM' | 'HIGH'
+export type RecommendationStatus = 'PENDING' | 'APPLIED' | 'REJECTED' | 'SUPERSEDED'
+
+export interface Recommendation {
+  id: string
+  campaignId: string
+  actionType: ActionType
+  targetAdId: string | null
+  currentBudget: number | null
+  suggestedBudget: number | null
+  reasoning: string
+  confidence: number
+  risk: RiskLevel
+  requiresApproval: boolean
+  status: RecommendationStatus
+  createdAt: string
+}
+
+export function createRecommendation(
+  businessId: string,
+  campaignId: string,
+): Promise<Recommendation> {
+  return request<Recommendation>(
+    `/businesses/${businessId}/campaigns/${campaignId}/optimize`,
+    { method: 'POST' },
+  )
+}
+
+export function listRecommendations(
+  businessId: string,
+  campaignId: string,
+): Promise<Recommendation[]> {
+  return request<Recommendation[]>(
+    `/businesses/${businessId}/campaigns/${campaignId}/optimize`,
+  )
+}
+
+export function approveRecommendation(
+  businessId: string,
+  campaignId: string,
+  recommendationId: string,
+): Promise<Recommendation> {
+  return request<Recommendation>(
+    `/businesses/${businessId}/campaigns/${campaignId}/optimize/${recommendationId}/approve`,
+    { method: 'POST' },
+  )
+}
+
+export function rejectRecommendation(
+  businessId: string,
+  campaignId: string,
+  recommendationId: string,
+): Promise<Recommendation> {
+  return request<Recommendation>(
+    `/businesses/${businessId}/campaigns/${campaignId}/optimize/${recommendationId}/reject`,
+    { method: 'POST' },
+  )
+}

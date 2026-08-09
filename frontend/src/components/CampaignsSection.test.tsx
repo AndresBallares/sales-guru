@@ -21,6 +21,10 @@ vi.mock('../lib/api', async (importOriginal) => {
     publishCampaign: vi.fn<typeof actual.publishCampaign>(),
     listMetrics: vi.fn<typeof actual.listMetrics>(),
     refreshMetrics: vi.fn<typeof actual.refreshMetrics>(),
+    createRecommendation: vi.fn<typeof actual.createRecommendation>(),
+    listRecommendations: vi.fn<typeof actual.listRecommendations>(),
+    approveRecommendation: vi.fn<typeof actual.approveRecommendation>(),
+    rejectRecommendation: vi.fn<typeof actual.rejectRecommendation>(),
   }
 })
 const mockedApi = vi.mocked(api)
@@ -72,7 +76,26 @@ beforeEach(() => {
   mockedApi.getStrategy.mockRejectedValue(new api.ApiError(404, 'Strategy not found'))
   mockedApi.listCreatives.mockResolvedValue([])
   mockedApi.listMetrics.mockResolvedValue([])
+  mockedApi.listRecommendations.mockResolvedValue([])
 })
+
+function fakeRecommendation(overrides: Partial<api.Recommendation> = {}): api.Recommendation {
+  return {
+    id: 'rec-1',
+    campaignId: 'camp-1',
+    actionType: 'INCREASE_BUDGET',
+    targetAdId: null,
+    currentBudget: 25,
+    suggestedBudget: 30,
+    reasoning: 'CPA decreased 24% over the last 3 days.',
+    confidence: 0.91,
+    risk: 'MEDIUM',
+    requiresApproval: true,
+    status: 'PENDING',
+    createdAt: '2026-08-08T00:00:00Z',
+    ...overrides,
+  }
+}
 
 describe('CampaignsSection', () => {
   it('shows the campaigns for a business, with a human-readable objective', async () => {
@@ -467,6 +490,31 @@ describe('CampaignsSection', () => {
     ).toBeInTheDocument()
   })
 
+  it('shows an error if selecting a creative fails', async () => {
+    mockedApi.listCampaigns.mockResolvedValue([
+      {
+        id: 'camp-1',
+        name: null,
+        objective: 'SALES',
+        status: 'ADS_GENERATED',
+        productId: null,
+        audienceId: null,
+        metaCampaignId: null,
+      },
+    ])
+    mockedApi.getStrategy.mockResolvedValue(FAKE_STRATEGY)
+    mockedApi.listCreatives.mockResolvedValue([fakeCreative()])
+    mockedApi.selectCreative.mockRejectedValue(new Error('Network error'))
+    const user = userEvent.setup()
+
+    render(<CampaignsSection businessId="biz-1" />)
+    await screen.findByText('Emeralds With a Story')
+
+    await user.click(screen.getByRole('button', { name: 'Select this ad' }))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Could not select ad.')
+  })
+
   it('approves and publishes a pending campaign from a single click', async () => {
     mockedApi.listCampaigns.mockResolvedValueOnce([
       {
@@ -759,5 +807,233 @@ describe('CampaignsSection', () => {
     expect(
       screen.queryByRole('button', { name: 'Refresh results' }),
     ).not.toBeInTheDocument()
+  })
+
+  it('loads and shows previously fetched recommendations for a live campaign', async () => {
+    mockedApi.listCampaigns.mockResolvedValue([
+      {
+        id: 'camp-1',
+        name: null,
+        objective: 'SALES',
+        status: 'LIVE',
+        productId: null,
+        audienceId: null,
+        metaCampaignId: 'meta_campaign_1',
+      },
+    ])
+    mockedApi.listRecommendations.mockResolvedValue([fakeRecommendation()])
+
+    render(<CampaignsSection businessId="biz-1" />)
+
+    expect(await screen.findByText('Increase budget')).toBeInTheDocument()
+    expect(mockedApi.listRecommendations).toHaveBeenCalledWith('biz-1', 'camp-1')
+    expect(
+      screen.getByText('CPA decreased 24% over the last 3 days.'),
+    ).toBeInTheDocument()
+    expect(screen.getByText(/confidence 91%/)).toBeInTheDocument()
+    expect(screen.getByText(/Suggested budget:/)).toBeInTheDocument()
+  })
+
+  it('analyzes a live campaign and shows the new recommendation', async () => {
+    mockedApi.listCampaigns.mockResolvedValue([
+      {
+        id: 'camp-1',
+        name: null,
+        objective: 'SALES',
+        status: 'LIVE',
+        productId: null,
+        audienceId: null,
+        metaCampaignId: 'meta_campaign_1',
+      },
+    ])
+    mockedApi.createRecommendation.mockResolvedValue(fakeRecommendation())
+    const user = userEvent.setup()
+
+    render(<CampaignsSection businessId="biz-1" />)
+    await screen.findByText(/Live on Meta/)
+
+    await user.click(screen.getByRole('button', { name: 'Analyze now' }))
+
+    expect(mockedApi.createRecommendation).toHaveBeenCalledWith('biz-1', 'camp-1')
+    expect(await screen.findByText('Increase budget')).toBeInTheDocument()
+  })
+
+  it('shows an error if analyzing a campaign fails', async () => {
+    mockedApi.listCampaigns.mockResolvedValue([
+      {
+        id: 'camp-1',
+        name: null,
+        objective: 'SALES',
+        status: 'LIVE',
+        productId: null,
+        audienceId: null,
+        metaCampaignId: 'meta_campaign_1',
+      },
+    ])
+    mockedApi.createRecommendation.mockRejectedValue(
+      new api.ApiError(400, 'Not enough historical data yet'),
+    )
+    const user = userEvent.setup()
+
+    render(<CampaignsSection businessId="biz-1" />)
+    await screen.findByText(/Live on Meta/)
+
+    await user.click(screen.getByRole('button', { name: 'Analyze now' }))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Not enough historical data yet')
+  })
+
+  it('approves a pending recommendation', async () => {
+    mockedApi.listCampaigns.mockResolvedValue([
+      {
+        id: 'camp-1',
+        name: null,
+        objective: 'SALES',
+        status: 'LIVE',
+        productId: null,
+        audienceId: null,
+        metaCampaignId: 'meta_campaign_1',
+      },
+    ])
+    mockedApi.listRecommendations.mockResolvedValue([fakeRecommendation()])
+    mockedApi.approveRecommendation.mockResolvedValue(
+      fakeRecommendation({ status: 'APPLIED' }),
+    )
+    const user = userEvent.setup()
+
+    render(<CampaignsSection businessId="biz-1" />)
+    await screen.findByText('Increase budget')
+
+    await user.click(screen.getByRole('button', { name: 'Approve' }))
+
+    expect(mockedApi.approveRecommendation).toHaveBeenCalledWith('biz-1', 'camp-1', 'rec-1')
+    await waitFor(() =>
+      expect(screen.queryByRole('button', { name: 'Approve' })).not.toBeInTheDocument(),
+    )
+    expect(screen.getByText(/APPLIED/)).toBeInTheDocument()
+  })
+
+  it('rejects a pending recommendation', async () => {
+    mockedApi.listCampaigns.mockResolvedValue([
+      {
+        id: 'camp-1',
+        name: null,
+        objective: 'SALES',
+        status: 'LIVE',
+        productId: null,
+        audienceId: null,
+        metaCampaignId: 'meta_campaign_1',
+      },
+    ])
+    mockedApi.listRecommendations.mockResolvedValue([fakeRecommendation()])
+    mockedApi.rejectRecommendation.mockResolvedValue(
+      fakeRecommendation({ status: 'REJECTED' }),
+    )
+    const user = userEvent.setup()
+
+    render(<CampaignsSection businessId="biz-1" />)
+    await screen.findByText('Increase budget')
+
+    await user.click(screen.getByRole('button', { name: 'Reject' }))
+
+    expect(mockedApi.rejectRecommendation).toHaveBeenCalledWith('biz-1', 'camp-1', 'rec-1')
+    await waitFor(() =>
+      expect(screen.queryByRole('button', { name: 'Reject' })).not.toBeInTheDocument(),
+    )
+    expect(screen.getByText(/REJECTED/)).toBeInTheDocument()
+  })
+
+  it('shows an error if approving a recommendation fails', async () => {
+    mockedApi.listCampaigns.mockResolvedValue([
+      {
+        id: 'camp-1',
+        name: null,
+        objective: 'SALES',
+        status: 'LIVE',
+        productId: null,
+        audienceId: null,
+        metaCampaignId: 'meta_campaign_1',
+      },
+    ])
+    mockedApi.listRecommendations.mockResolvedValue([fakeRecommendation()])
+    mockedApi.approveRecommendation.mockRejectedValue(
+      new api.ApiError(500, 'Invalid OAuth access token'),
+    )
+    const user = userEvent.setup()
+
+    render(<CampaignsSection businessId="biz-1" />)
+    await screen.findByText('Increase budget')
+
+    await user.click(screen.getByRole('button', { name: 'Approve' }))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Invalid OAuth access token')
+  })
+
+  it('shows an error if rejecting a recommendation fails', async () => {
+    mockedApi.listCampaigns.mockResolvedValue([
+      {
+        id: 'camp-1',
+        name: null,
+        objective: 'SALES',
+        status: 'LIVE',
+        productId: null,
+        audienceId: null,
+        metaCampaignId: 'meta_campaign_1',
+      },
+    ])
+    mockedApi.listRecommendations.mockResolvedValue([fakeRecommendation()])
+    mockedApi.rejectRecommendation.mockRejectedValue(new Error('Network error'))
+    const user = userEvent.setup()
+
+    render(<CampaignsSection businessId="biz-1" />)
+    await screen.findByText('Increase budget')
+
+    await user.click(screen.getByRole('button', { name: 'Reject' }))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'Could not reject recommendation.',
+    )
+  })
+
+  it('does not show approve/reject buttons for a recommendation that is not pending', async () => {
+    mockedApi.listCampaigns.mockResolvedValue([
+      {
+        id: 'camp-1',
+        name: null,
+        objective: 'SALES',
+        status: 'LIVE',
+        productId: null,
+        audienceId: null,
+        metaCampaignId: 'meta_campaign_1',
+      },
+    ])
+    mockedApi.listRecommendations.mockResolvedValue([
+      fakeRecommendation({ status: 'APPLIED' }),
+    ])
+
+    render(<CampaignsSection businessId="biz-1" />)
+    await screen.findByText('Increase budget')
+
+    expect(screen.queryByRole('button', { name: 'Approve' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Reject' })).not.toBeInTheDocument()
+  })
+
+  it('does not show a recommendations block for a campaign that is not live', async () => {
+    mockedApi.listCampaigns.mockResolvedValue([
+      {
+        id: 'camp-1',
+        name: null,
+        objective: 'SALES',
+        status: 'APPROVED',
+        productId: null,
+        audienceId: null,
+        metaCampaignId: null,
+      },
+    ])
+
+    render(<CampaignsSection businessId="biz-1" />)
+    await screen.findByText('Ventas — APPROVED')
+
+    expect(screen.queryByRole('button', { name: 'Analyze now' })).not.toBeInTheDocument()
   })
 })

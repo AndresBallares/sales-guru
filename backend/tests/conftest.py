@@ -12,6 +12,10 @@ from collections.abc import AsyncIterator, Iterator
 from pathlib import Path
 
 os.environ["DATABASE_URL"] = "file:./test.db"
+# The APScheduler jobs (metrics collection + optimization evaluation,
+# PRD.md build step 10) must never fire during the test suite — they'd
+# run against a database individual tests are actively resetting mid-run.
+os.environ["ENABLE_SCHEDULER"] = "false"
 
 import pytest
 import pytest_asyncio
@@ -29,6 +33,7 @@ _BACKEND_ROOT = Path(__file__).resolve().parent.parent
 _ALL_TABLES = (
     "session",
     "metric",
+    "optimizationrecommendation",
     "creative",
     "ad",
     "adset",

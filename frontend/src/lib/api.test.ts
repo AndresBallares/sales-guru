@@ -2,11 +2,13 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   ApiError,
   approveCampaign,
+  approveRecommendation,
   connectMeta,
   createAudience,
   createBusiness,
   createCampaign,
   createProduct,
+  createRecommendation,
   disconnectMeta,
   finalizeMetaConnection,
   getBusiness,
@@ -19,10 +21,12 @@ import {
   listMetaPages,
   listMetrics,
   listProducts,
+  listRecommendations,
   login,
   logout,
   publishCampaign,
   refreshMetrics,
+  rejectRecommendation,
   signup,
 } from './api'
 
@@ -517,5 +521,91 @@ describe('listMetrics', () => {
     await expect(listMetrics('biz-1', 'camp-1')).resolves.toEqual([])
     const [url] = fetchMock.mock.calls[0]
     expect(url).toContain('/businesses/biz-1/campaigns/camp-1/metrics')
+  })
+})
+
+const FAKE_RECOMMENDATION = {
+  id: 'rec-1',
+  campaignId: 'camp-1',
+  actionType: 'INCREASE_BUDGET',
+  targetAdId: null,
+  currentBudget: 25,
+  suggestedBudget: 30,
+  reasoning: 'CPA decreased 24% over the last 3 days.',
+  confidence: 0.91,
+  risk: 'MEDIUM',
+  requiresApproval: true,
+  status: 'PENDING',
+  createdAt: '2026-08-08T00:00:00Z',
+}
+
+describe('createRecommendation', () => {
+  it('returns the newly generated recommendation', async () => {
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(jsonResponse(FAKE_RECOMMENDATION, 201))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(createRecommendation('biz-1', 'camp-1')).resolves.toEqual(
+      FAKE_RECOMMENDATION,
+    )
+    const [url, options] = fetchMock.mock.calls[0]
+    expect(url).toContain('/businesses/biz-1/campaigns/camp-1/optimize')
+    expect(options?.method).toBe('POST')
+  })
+
+  it('throws ApiError when there is not enough historical data yet', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi
+        .fn<typeof fetch>()
+        .mockResolvedValue(jsonResponse({ detail: 'Not enough historical data yet' }, 400)),
+    )
+
+    await expect(createRecommendation('biz-1', 'camp-1')).rejects.toMatchObject({
+      status: 400,
+      message: 'Not enough historical data yet',
+    })
+  })
+})
+
+describe('listRecommendations', () => {
+  it('returns the list of recommendations for a campaign', async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(jsonResponse([]))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(listRecommendations('biz-1', 'camp-1')).resolves.toEqual([])
+    const [url] = fetchMock.mock.calls[0]
+    expect(url).toContain('/businesses/biz-1/campaigns/camp-1/optimize')
+  })
+})
+
+describe('approveRecommendation', () => {
+  it('returns the now-applied recommendation', async () => {
+    const applied = { ...FAKE_RECOMMENDATION, status: 'APPLIED' }
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(jsonResponse(applied))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(
+      approveRecommendation('biz-1', 'camp-1', 'rec-1'),
+    ).resolves.toEqual(applied)
+    const [url, options] = fetchMock.mock.calls[0]
+    expect(url).toContain('/businesses/biz-1/campaigns/camp-1/optimize/rec-1/approve')
+    expect(options?.method).toBe('POST')
+  })
+})
+
+describe('rejectRecommendation', () => {
+  it('returns the now-rejected recommendation', async () => {
+    const rejected = { ...FAKE_RECOMMENDATION, status: 'REJECTED' }
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(jsonResponse(rejected))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(
+      rejectRecommendation('biz-1', 'camp-1', 'rec-1'),
+    ).resolves.toEqual(rejected)
+    const [url, options] = fetchMock.mock.calls[0]
+    expect(url).toContain('/businesses/biz-1/campaigns/camp-1/optimize/rec-1/reject')
+    expect(options?.method).toBe('POST')
   })
 })
