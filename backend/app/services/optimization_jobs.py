@@ -25,6 +25,14 @@ generate_and_store_recommendation is also called directly by the manual
 requesting analysis bypasses the gate (they're asking right now, on
 purpose), but still goes through the same trend-window computation,
 guardrail capping, and storage as the scheduled path.
+
+apply_recommendation is the one place that actually pushes a
+recommendation's action to Meta — shared by the manual approve endpoint
+(app/api/optimization.py) and generate_and_store_recommendation's own
+auto-apply path below, so there's a single implementation of "what does
+approving this recommendation actually do" regardless of whether a human
+clicked Approve or compute_requires_approval decided a click wasn't
+needed.
 """
 
 import logging
@@ -34,7 +42,12 @@ from prisma.models import Campaign, OptimizationRecommendation
 
 from app.core.db import db
 from app.services import optimizer
-from app.services.meta import MetaConnectionError, fetch_campaign_insights
+from app.services.meta import (
+    MetaConnectionError,
+    fetch_campaign_insights,
+    pause_meta_ad,
+    update_meta_ad_set_budget,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -76,6 +89,62 @@ async def collect_metrics_for_all_live_campaigns() -> None:
         )
 
 
+async def apply_recommendation(
+    recommendation: OptimizationRecommendation,
+) -> OptimizationRecommendation:
+    """Push a recommendation's action to Meta, mirror it locally, and mark it APPLIED.
+
+    The one place that actually calls Meta for a recommendation — used
+    both by a human's explicit Approve click and by
+    generate_and_store_recommendation's auto-apply path, so there's a
+    single implementation of what "applying" a recommendation means.
+
+    Args:
+        recommendation: The recommendation to apply. Caller is
+            responsible for confirming it's still PENDING.
+
+    Returns:
+        The now-APPLIED recommendation.
+
+    Raises:
+        MetaConnectionError: If the Graph API call fails.
+    """
+    campaign = await db.campaign.find_unique(where={"id": recommendation.campaignId})
+    assert campaign is not None  # guaranteed by the FK, not user input
+    connection = await db.metaconnection.find_unique(
+        where={"businessId": campaign.businessId}
+    )
+    assert connection is not None  # guaranteed by LIVE status (publish requires it)
+    ad_set = await db.adset.find_first(where={"campaignId": campaign.id})
+    assert ad_set is not None  # guaranteed by LIVE status (publish creates it)
+
+    if recommendation.actionType == "PAUSE_AD":
+        assert recommendation.targetAdId is not None
+        ad = await db.ad.find_unique(where={"id": recommendation.targetAdId})
+        assert ad is not None and ad.metaAdId is not None
+        await pause_meta_ad(access_token=connection.accessToken, meta_ad_id=ad.metaAdId)
+        await db.ad.update(where={"id": ad.id}, data={"status": "PAUSED"})
+    else:
+        assert (
+            recommendation.suggestedBudget is not None
+            and ad_set.metaAdSetId is not None
+        )
+        await update_meta_ad_set_budget(
+            access_token=connection.accessToken,
+            meta_ad_set_id=ad_set.metaAdSetId,
+            daily_budget_cents=round(recommendation.suggestedBudget * 100),
+        )
+        await db.adset.update(
+            where={"id": ad_set.id}, data={"budget": recommendation.suggestedBudget}
+        )
+
+    updated = await db.optimizationrecommendation.update(
+        where={"id": recommendation.id}, data={"status": "APPLIED"}
+    )
+    assert updated is not None  # just fetched by the caller, can't vanish mid-request
+    return updated
+
+
 async def generate_and_store_recommendation(
     campaign: Campaign,
 ) -> OptimizationRecommendation | None:
@@ -86,7 +155,10 @@ async def generate_and_store_recommendation(
             for confirming it's LIVE and has at least one Metric row.
 
     Returns:
-        The newly stored (PENDING) recommendation, or None if there
+        The newly stored recommendation — already APPLIED if
+        compute_requires_approval decided it didn't need a human click
+        and applying it to Meta succeeded, PENDING otherwise (including
+        when auto-apply itself failed, see below). Returns None if there
         isn't enough historical spread yet to compute even a single
         trend window (e.g. a campaign whose only Metric snapshot was
         just taken minutes ago has no 24h-old baseline to diff against)
@@ -115,9 +187,10 @@ async def generate_and_store_recommendation(
     if not windows:
         return None
 
-    generated = await optimizer.generate_recommendation(
+    result = await optimizer.generate_recommendation(
         business=business, campaign=campaign, ad_set=ad_set, windows=windows
     )
+    generated = result.recommendation
 
     await db.optimizationrecommendation.update_many(
         where={"campaignId": campaign.id, "status": "PENDING"},
@@ -131,12 +204,13 @@ async def generate_and_store_recommendation(
         target_ad_id = ad.id
 
     requires_approval = optimizer.compute_requires_approval(
+        action_type=generated.action_type,
         risk=generated.risk,
         confidence=generated.confidence,
-        capped_by_guardrail=False,
+        capped_by_guardrail=result.capped_by_guardrail,
     )
 
-    return await db.optimizationrecommendation.create(
+    created = await db.optimizationrecommendation.create(
         data={
             "campaignId": campaign.id,
             "actionType": generated.action_type,
@@ -149,6 +223,26 @@ async def generate_and_store_recommendation(
             "requiresApproval": requires_approval,
         }
     )
+
+    if not requires_approval:
+        try:
+            created = await apply_recommendation(created)
+        except MetaConnectionError:
+            # Auto-apply itself failing (expired token, transient Graph
+            # API error, ...) shouldn't lose the recommendation — fall
+            # back to requiring a human click rather than leaving it
+            # silently un-applied with requiresApproval still False.
+            logger.warning(
+                "Auto-apply failed for recommendation %s — leaving for manual approval",
+                created.id,
+            )
+            fallback = await db.optimizationrecommendation.update(
+                where={"id": created.id}, data={"requiresApproval": True}
+            )
+            assert fallback is not None
+            created = fallback
+
+    return created
 
 
 async def _evaluate_campaign(campaign: Campaign) -> None:

@@ -265,14 +265,68 @@ def test_apply_budget_guardrail_passes_through_a_suggestion_within_range() -> No
     assert capped == pytest.approx(55.0)
 
 
-def test_compute_requires_approval_is_always_true_today() -> None:
-    """Every recommendation requires the checkpoint right now, regardless of
-    risk/confidence/guardrail — see the function's own docstring for why."""
-    assert optimizer.compute_requires_approval(
-        risk="LOW", confidence=0.99, capped_by_guardrail=False
+def test_compute_requires_approval_auto_applies_a_confident_low_risk_change() -> None:
+    """LOW risk + confidence >= the threshold, on a budget action, skips the click."""
+    assert not optimizer.compute_requires_approval(
+        action_type="INCREASE_BUDGET",
+        risk="LOW",
+        confidence=optimizer.AUTO_APPLY_CONFIDENCE_THRESHOLD,
+        capped_by_guardrail=False,
     )
+    assert not optimizer.compute_requires_approval(
+        action_type="DECREASE_BUDGET",
+        risk="LOW",
+        confidence=0.99,
+        capped_by_guardrail=False,
+    )
+
+
+def test_compute_requires_approval_high_risk_is_always_a_mandatory_checkpoint() -> None:
+    """HIGH risk requires approval no matter how confident the model is."""
     assert optimizer.compute_requires_approval(
-        risk="HIGH", confidence=0.1, capped_by_guardrail=True
+        action_type="INCREASE_BUDGET",
+        risk="HIGH",
+        confidence=0.99,
+        capped_by_guardrail=False,
+    )
+
+
+def test_compute_requires_approval_medium_risk_always_requires_approval() -> None:
+    """MEDIUM risk never auto-applies, regardless of confidence."""
+    assert optimizer.compute_requires_approval(
+        action_type="INCREASE_BUDGET",
+        risk="MEDIUM",
+        confidence=0.99,
+        capped_by_guardrail=False,
+    )
+
+
+def test_compute_requires_approval_below_the_confidence_cutoff_requires_approval() -> (
+    None
+):
+    """LOW risk below the confidence cutoff still needs a human click."""
+    assert optimizer.compute_requires_approval(
+        action_type="INCREASE_BUDGET",
+        risk="LOW",
+        confidence=optimizer.AUTO_APPLY_CONFIDENCE_THRESHOLD - 0.01,
+        capped_by_guardrail=False,
+    )
+
+
+def test_compute_requires_approval_pause_ad_is_never_auto_apply_eligible() -> None:
+    """Auto-apply is scoped to budget actions — PAUSE_AD always requires approval."""
+    assert optimizer.compute_requires_approval(
+        action_type="PAUSE_AD", risk="LOW", confidence=0.99, capped_by_guardrail=False
+    )
+
+
+def test_compute_requires_approval_a_capped_suggestion_requires_approval() -> None:
+    """A suggestion the guardrail had to rein in disqualifies auto-apply on its own."""
+    assert optimizer.compute_requires_approval(
+        action_type="INCREASE_BUDGET",
+        risk="LOW",
+        confidence=0.99,
+        capped_by_guardrail=True,
     )
 
 
@@ -348,10 +402,12 @@ async def test_generate_recommendation_returns_the_parsed_and_capped_recommendat
         windows=[],
     )
 
-    assert result.action_type == "INCREASE_BUDGET"
-    assert result.confidence == 0.91
-    assert result.risk == "MEDIUM"
-    assert result.suggested_budget == pytest.approx(60.0)
+    assert result.recommendation.action_type == "INCREASE_BUDGET"
+    assert result.recommendation.confidence == 0.91
+    assert result.recommendation.risk == "MEDIUM"
+    assert result.recommendation.suggested_budget == pytest.approx(60.0)
+    # 60 from a $50 base is exactly the +20% cap, not beyond it.
+    assert result.capped_by_guardrail is False
 
 
 @pytest.mark.asyncio
@@ -375,7 +431,38 @@ async def test_generate_recommendation_actually_caps_an_excessive_suggestion(
         windows=[],
     )
 
-    assert result.suggested_budget == pytest.approx(60.0)
+    assert result.recommendation.suggested_budget == pytest.approx(60.0)
+    assert result.capped_by_guardrail is True
+
+
+@pytest.mark.asyncio
+async def test_generate_recommendation_pause_ad_is_never_capped_by_guardrail(
+    anthropic_api_key: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A PAUSE_AD recommendation has no suggested_budget, so nothing to cap."""
+    _mock_client_returning(
+        monkeypatch,
+        [
+            SimpleNamespace(
+                type="tool_use",
+                input={
+                    **_VALID_TOOL_INPUT,
+                    "actionType": "PAUSE_AD",
+                    "suggestedBudget": None,
+                },
+            )
+        ],
+    )
+
+    result = await optimizer.generate_recommendation(
+        business=_fake_business(),
+        campaign=_fake_campaign(),
+        ad_set=_fake_ad_set(budget=50.0),
+        windows=[],
+    )
+
+    assert result.recommendation.suggested_budget is None
+    assert result.capped_by_guardrail is False
 
 
 @pytest.mark.asyncio

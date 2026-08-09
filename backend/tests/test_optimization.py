@@ -1,11 +1,13 @@
 """Tests for the Campaign Optimization Agent endpoints (PRD.md build step 10).
 
 app/api/optimization.py imports generate_and_store_recommendation,
-pause_meta_ad, update_meta_ad_set_budget, and OptimizerError directly, so
-those are what get mocked here — mocking the underlying service modules
-(app.services.optimization_jobs / app.services.meta) wouldn't intercept
-calls made from this API module. Same "mock where it's imported" rule
-already established for test_metric.py / test_publish.py.
+apply_recommendation, and OptimizerError directly, so those are what get
+mocked on this API module. apply_recommendation itself (the thing that
+actually calls Meta) lives in app.services.optimization_jobs, which
+imports pause_meta_ad/update_meta_ad_set_budget directly from
+app.services.meta — so those two are mocked on optimization_jobs, not on
+this API module or on app.services.meta itself. Same "mock where it's
+imported" rule already established for test_metric.py / test_publish.py.
 """
 
 from datetime import UTC, datetime, timedelta
@@ -20,6 +22,7 @@ from app.api import strategy as strategy_module
 from app.schemas.creative import GeneratedCreativeVariant
 from app.schemas.strategy import BudgetRecommendation, StrategyContent, TargetAudience
 from app.services import meta as meta_service_module
+from app.services import optimization_jobs
 from app.services.meta import MetaConnectionError
 from app.services.optimizer import OptimizerError
 from fastapi.testclient import TestClient
@@ -200,8 +203,8 @@ def mock_services(monkeypatch: pytest.MonkeyPatch) -> dict[str, AsyncMock]:
     monkeypatch.setattr(
         optimization_module, "generate_and_store_recommendation", generate
     )
-    monkeypatch.setattr(optimization_module, "pause_meta_ad", pause)
-    monkeypatch.setattr(optimization_module, "update_meta_ad_set_budget", update_budget)
+    monkeypatch.setattr(optimization_jobs, "pause_meta_ad", pause)
+    monkeypatch.setattr(optimization_jobs, "update_meta_ad_set_budget", update_budget)
     return {"generate": generate, "pause": pause, "update_budget": update_budget}
 
 

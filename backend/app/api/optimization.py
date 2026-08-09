@@ -6,12 +6,11 @@ from prisma.models import Campaign, OptimizationRecommendation
 from app.core.authz import get_owned_campaign
 from app.core.db import db
 from app.schemas.optimization import RecommendationResponse
-from app.services.meta import (
-    MetaConnectionError,
-    pause_meta_ad,
-    update_meta_ad_set_budget,
+from app.services.meta import MetaConnectionError
+from app.services.optimization_jobs import (
+    apply_recommendation,
+    generate_and_store_recommendation,
 )
-from app.services.optimization_jobs import generate_and_store_recommendation
 from app.services.optimizer import OptimizerError
 
 router = APIRouter(
@@ -171,10 +170,9 @@ async def approve_recommendation(
 
     One explicit click both approves and applies (same "approve = act"
     shape as "Approve & Publish", PRD.md build step 8) — there's no
-    separate APPROVED-but-not-yet-applied state to sit in. Applies
-    equally to INCREASE_BUDGET and DECREASE_BUDGET (both just push
-    rec.suggestedBudget to Meta) — PAUSE_AD is the only action type that
-    branches differently.
+    separate APPROVED-but-not-yet-applied state to sit in. The actual
+    Meta call is shared with the scheduled job's auto-apply path — see
+    app/services/optimization_jobs.py's apply_recommendation.
 
     Args:
         recommendation_id: The recommendation to approve.
@@ -191,42 +189,13 @@ async def approve_recommendation(
     """
     rec = await _get_pending_recommendation(recommendation_id, campaign.id)
 
-    business = await db.business.find_unique(where={"id": campaign.businessId})
-    assert business is not None  # guaranteed by the FK, not user input
-    connection = await db.metaconnection.find_unique(where={"businessId": business.id})
-    assert connection is not None  # guaranteed by LIVE status (publish requires it)
-
-    ad_set = await db.adset.find_first(where={"campaignId": campaign.id})
-    assert ad_set is not None  # guaranteed by LIVE status
-
     try:
-        if rec.actionType == "PAUSE_AD":
-            assert rec.targetAdId is not None
-            ad = await db.ad.find_unique(where={"id": rec.targetAdId})
-            assert ad is not None and ad.metaAdId is not None
-            await pause_meta_ad(
-                access_token=connection.accessToken, meta_ad_id=ad.metaAdId
-            )
-            await db.ad.update(where={"id": ad.id}, data={"status": "PAUSED"})
-        else:
-            assert rec.suggestedBudget is not None and ad_set.metaAdSetId is not None
-            await update_meta_ad_set_budget(
-                access_token=connection.accessToken,
-                meta_ad_set_id=ad_set.metaAdSetId,
-                daily_budget_cents=round(rec.suggestedBudget * 100),
-            )
-            await db.adset.update(
-                where={"id": ad_set.id}, data={"budget": rec.suggestedBudget}
-            )
+        updated = await apply_recommendation(rec)
     except MetaConnectionError as exc:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)
         ) from exc
 
-    updated = await db.optimizationrecommendation.update(
-        where={"id": rec.id}, data={"status": "APPLIED"}
-    )
-    assert updated is not None  # just fetched above, can't vanish mid-request
     return _to_response(updated)
 
 

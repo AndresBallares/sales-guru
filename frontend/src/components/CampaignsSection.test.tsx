@@ -1018,6 +1018,49 @@ describe('CampaignsSection', () => {
     expect(screen.queryByRole('button', { name: 'Reject' })).not.toBeInTheDocument()
   })
 
+  it('labels an auto-applied recommendation distinctly from a human-approved one', async () => {
+    mockedApi.listCampaigns.mockResolvedValue([
+      {
+        id: 'camp-1',
+        name: null,
+        objective: 'SALES',
+        status: 'LIVE',
+        productId: null,
+        audienceId: null,
+        metaCampaignId: 'meta_campaign_1',
+      },
+    ])
+    mockedApi.listRecommendations.mockResolvedValue([
+      fakeRecommendation({ status: 'APPLIED', requiresApproval: false }),
+    ])
+
+    render(<CampaignsSection businessId="biz-1" />)
+
+    expect(await screen.findByText(/Applied automatically/)).toBeInTheDocument()
+  })
+
+  it('labels a human-approved recommendation as APPLIED, not automatic', async () => {
+    mockedApi.listCampaigns.mockResolvedValue([
+      {
+        id: 'camp-1',
+        name: null,
+        objective: 'SALES',
+        status: 'LIVE',
+        productId: null,
+        audienceId: null,
+        metaCampaignId: 'meta_campaign_1',
+      },
+    ])
+    mockedApi.listRecommendations.mockResolvedValue([
+      fakeRecommendation({ status: 'APPLIED', requiresApproval: true }),
+    ])
+
+    render(<CampaignsSection businessId="biz-1" />)
+
+    expect(await screen.findByText(/APPLIED/)).toBeInTheDocument()
+    expect(screen.queryByText(/Applied automatically/)).not.toBeInTheDocument()
+  })
+
   it('does not show a recommendations block for a campaign that is not live', async () => {
     mockedApi.listCampaigns.mockResolvedValue([
       {

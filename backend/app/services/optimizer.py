@@ -21,10 +21,13 @@ something app code re-derives from vague terms). Trend windows (24h / 3d
 deep, ~daily analysis actually reasons over — see compute_trend_windows.
 
 Same forced-tool-use approach as the Marketing Strategist Agent
-(app/services/strategist.py) for guaranteed-structured output, and the
-same "generate, don't auto-apply" boundary as every other agent here —
-approving a recommendation (app/api/optimization.py) is a separate,
-explicit step that actually calls Meta.
+(app/services/strategist.py) for guaranteed-structured output. This
+agent never calls Meta itself — it only decides what to recommend and,
+via compute_requires_approval, whether that recommendation is trusted
+enough to apply on its own. A LOW-risk, high-confidence budget nudge can
+auto-apply (confirmed with the user 2026-08-09); everything else still
+waits for an explicit human approval click (app/api/optimization.py) or
+the scheduled job's own auto-apply path (app/services/optimization_jobs.py).
 """
 
 from datetime import UTC, datetime, timedelta
@@ -58,6 +61,19 @@ MIN_HOURS_BETWEEN_RECOMMENDATIONS = 24.0
 # more than 20% at once, same reasoning: bound the blast radius of any
 # single recommendation regardless of direction).
 MAX_BUDGET_CHANGE_FRACTION = 0.20
+
+# Auto-apply tiering (confirmed with the user 2026-08-09): LOW risk +
+# confidence at or above this threshold, on a budget action that wasn't
+# capped by the guardrail above, applies to Meta immediately with no
+# human click. Everything else — MEDIUM/HIGH risk, low confidence,
+# PAUSE_AD, or a suggestion the guardrail had to rein in — still requires
+# the checkpoint. See compute_requires_approval.
+AUTO_APPLY_CONFIDENCE_THRESHOLD = 0.90
+
+# Auto-apply is scoped to budget nudges only — PAUSE_AD always requires
+# approval, since stopping an ad's delivery is a harder action to walk
+# back cheaply than a budget change that's already guardrail-capped.
+_AUTO_APPLY_ELIGIBLE_ACTIONS = frozenset({"INCREASE_BUDGET", "DECREASE_BUDGET"})
 
 _TREND_WINDOWS = (
     ("24h", timedelta(hours=24)),
@@ -96,6 +112,21 @@ class TrendWindow(NamedTuple):
     spend: float
     conversions: int
     derived: DerivedMetrics
+
+
+class RecommendationResult(NamedTuple):
+    """generate_recommendation's return: the recommendation plus guardrail metadata.
+
+    capped_by_guardrail is kept out of GeneratedRecommendation itself
+    (rather than added as a field there) because that schema also doubles
+    as the forced tool-use input_schema handed to Claude — adding a field
+    the model shouldn't be asked to fill in would leak into what we're
+    asking it to submit. It's computed here, after the fact, and fed to
+    compute_requires_approval instead.
+    """
+
+    recommendation: GeneratedRecommendation
+    capped_by_guardrail: bool
 
 
 def _derive_metrics(
@@ -255,33 +286,40 @@ def apply_budget_guardrail(*, current_budget: float, suggested_budget: float) ->
 
 
 def compute_requires_approval(
-    *, risk: str, confidence: float, capped_by_guardrail: bool
+    *, action_type: str, risk: str, confidence: float, capped_by_guardrail: bool
 ) -> bool:
     """Decide whether a recommendation needs a human checkpoint before applying.
 
-    Always True today — PRD.md build step 10's checkpoint requirement is
-    that every recommendation requires an explicit human approval click,
-    regardless of computed risk, until a LOW-risk auto-apply capability
-    is explicitly built. Kept as its own function (not a literal `True`
-    inline at the call site) precisely so that becomes a rule change
-    here, not a rewrite of the callers or a re-litigation of whether the
-    LLM's output can be trusted directly (it still won't be — see
-    apply_budget_guardrail).
+    Risk is a hard gate, not something confidence can override: HIGH risk
+    always requires the checkpoint no matter how confident the model is
+    (e.g. a $50/day -> $500/day jump stays mandatory even at 87%
+    confidence). Below that, only LOW risk + confidence at or above
+    AUTO_APPLY_CONFIDENCE_THRESHOLD on a budget action skips the
+    checkpoint — MEDIUM risk always requires approval regardless of
+    confidence, same as PAUSE_AD and any suggestion the guardrail had to
+    cap (a capped suggestion means the LLM's raw ask exceeded what we
+    consider safe, which disqualifies it from auto-apply on its own).
 
     Args:
-        risk: The LLM's self-assessed risk (LOW/MEDIUM/HIGH) — unused
-            today, threaded through for when this stops always
-            returning True.
-        confidence: The LLM's self-assessed confidence (0-1) — unused
-            today, same reason.
+        action_type: The recommendation's action type (PAUSE_AD/
+            INCREASE_BUDGET/DECREASE_BUDGET) — only budget actions are
+            ever auto-apply eligible.
+        risk: The LLM's self-assessed risk (LOW/MEDIUM/HIGH).
+        confidence: The LLM's self-assessed confidence (0-1).
         capped_by_guardrail: Whether apply_budget_guardrail actually
-            reduced the LLM's suggestion — unused today, same reason.
+            reduced the LLM's suggestion.
 
     Returns:
-        True, unconditionally, for now.
+        False only for a LOW-risk, high-confidence, uncapped budget
+        action — True otherwise.
     """
-    del risk, confidence, capped_by_guardrail  # not used yet, see docstring
-    return True
+    if risk == "HIGH":
+        return True
+    if action_type not in _AUTO_APPLY_ELIGIBLE_ACTIONS:
+        return True
+    if capped_by_guardrail:
+        return True
+    return not (risk == "LOW" and confidence >= AUTO_APPLY_CONFIDENCE_THRESHOLD)
 
 
 def _format_ratio(value: float | None, *, as_percent: bool = False) -> str:
@@ -354,7 +392,7 @@ async def generate_recommendation(
     campaign: Campaign,
     ad_set: AdSet,
     windows: list[TrendWindow],
-) -> GeneratedRecommendation:
+) -> RecommendationResult:
     """Call the Optimization Agent and return one guardrail-capped recommendation.
 
     Args:
@@ -365,9 +403,9 @@ async def generate_recommendation(
             checked by the caller).
 
     Returns:
-        The generated recommendation, with suggested_budget already
-        passed through apply_budget_guardrail if the action is a budget
-        change.
+        The generated recommendation (suggested_budget already passed
+        through apply_budget_guardrail if the action is a budget change)
+        plus whether that capping actually changed the value.
 
     Raises:
         OptimizerError: If no API key is configured, the API call fails,
@@ -404,9 +442,13 @@ async def generate_recommendation(
         raise OptimizerError("Model did not return a tool call")
 
     generated = GeneratedRecommendation.model_validate(tool_use.input)
+    capped_by_guardrail = False
     if generated.suggested_budget is not None:
         capped = apply_budget_guardrail(
             current_budget=ad_set.budget, suggested_budget=generated.suggested_budget
         )
+        capped_by_guardrail = capped != generated.suggested_budget
         generated = generated.model_copy(update={"suggested_budget": capped})
-    return generated
+    return RecommendationResult(
+        recommendation=generated, capped_by_guardrail=capped_by_guardrail
+    )

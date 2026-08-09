@@ -624,12 +624,20 @@ export function CampaignsSection({ businessId }: { businessId: string }) {
                             actingRecommendation?.id === recommendation.id &&
                             actingRecommendation.action === 'reject'
                           const acting = approving || rejecting
+                          // A LOW-risk, high-confidence budget nudge can apply itself
+                          // with no human click (PRD.md §5 step 10's auto-apply tier) —
+                          // shown distinctly so it isn't mistaken for something a human
+                          // approved.
+                          const statusLabel =
+                            recommendation.status === 'APPLIED' && !recommendation.requiresApproval
+                              ? 'Applied automatically'
+                              : recommendation.status
                           return (
                             <li key={recommendation.id}>
                               <p>
                                 <strong>{ACTION_LABELS[recommendation.actionType]}</strong>
                                 {' — '}
-                                {recommendation.status}
+                                {statusLabel}
                                 {' — '}
                                 confidence {Math.round(recommendation.confidence * 100)}%,{' '}
                                 {recommendation.risk.toLowerCase()} risk

@@ -85,6 +85,17 @@ _FAKE_RECOMMENDATION = GeneratedRecommendation(
 )
 
 
+def _fake_result(
+    recommendation: GeneratedRecommendation = _FAKE_RECOMMENDATION,
+    *,
+    capped_by_guardrail: bool = False,
+) -> optimizer_module.RecommendationResult:
+    """Wrap a GeneratedRecommendation as generate_recommendation's real return shape."""
+    return optimizer_module.RecommendationResult(
+        recommendation=recommendation, capped_by_guardrail=capped_by_guardrail
+    )
+
+
 def _signed_up_client(
     client: TestClient, email: str = "owner@example.com"
 ) -> TestClient:
@@ -333,7 +344,7 @@ async def test_generate_and_store_recommendation_stores_a_pending_recommendation
     monkeypatch.setattr(
         optimizer_module,
         "generate_recommendation",
-        AsyncMock(return_value=_FAKE_RECOMMENDATION),
+        AsyncMock(return_value=_fake_result()),
     )
 
     seeder = Prisma()
@@ -370,8 +381,10 @@ async def test_generate_and_store_recommendation_sets_target_ad_id_for_pause(
         optimizer_module,
         "generate_recommendation",
         AsyncMock(
-            return_value=_FAKE_RECOMMENDATION.model_copy(
-                update={"action_type": "PAUSE_AD", "suggested_budget": None}
+            return_value=_fake_result(
+                _FAKE_RECOMMENDATION.model_copy(
+                    update={"action_type": "PAUSE_AD", "suggested_budget": None}
+                )
             )
         ),
     )
@@ -394,6 +407,91 @@ async def test_generate_and_store_recommendation_sets_target_ad_id_for_pause(
 
 
 @pytest.mark.asyncio
+async def test_generate_and_store_recommendation_auto_applies_when_eligible(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """LOW risk + high confidence budget change applies to Meta with no click."""
+    _, campaign_id = _live_campaign(client)
+    now = datetime.now(UTC)
+    await _seed_metric(campaign_id, fetched_at=now - timedelta(hours=25), spend=10.0)
+    await _seed_metric(campaign_id, fetched_at=now, spend=25.0)
+    auto_eligible = GeneratedRecommendation(
+        action_type="INCREASE_BUDGET",
+        reasoning="Strong, consistent performance across all windows.",
+        confidence=0.95,
+        risk="LOW",
+        suggested_budget=27.0,
+    )
+    monkeypatch.setattr(
+        optimizer_module,
+        "generate_recommendation",
+        AsyncMock(return_value=_fake_result(auto_eligible)),
+    )
+    update_budget = AsyncMock()
+    monkeypatch.setattr(optimization_jobs, "update_meta_ad_set_budget", update_budget)
+
+    seeder = Prisma()
+    await seeder.connect()
+    campaign = await seeder.campaign.find_unique(where={"id": campaign_id})
+    await seeder.disconnect()
+    assert campaign is not None
+
+    result = _run(client, optimization_jobs.generate_and_store_recommendation, campaign)
+
+    assert result is not None
+    assert result.status == "APPLIED"
+    assert result.requiresApproval is False
+    update_budget.assert_awaited_once()
+
+    seeder = Prisma()
+    await seeder.connect()
+    ad_set = await seeder.adset.find_first(where={"campaignId": campaign_id})
+    await seeder.disconnect()
+    assert ad_set is not None
+    assert ad_set.budget == pytest.approx(27.0)
+
+
+@pytest.mark.asyncio
+async def test_generate_and_store_recommendation_falls_back_when_auto_apply_fails(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A Meta failure during auto-apply falls back to manual approval."""
+    _, campaign_id = _live_campaign(client)
+    now = datetime.now(UTC)
+    await _seed_metric(campaign_id, fetched_at=now - timedelta(hours=25), spend=10.0)
+    await _seed_metric(campaign_id, fetched_at=now, spend=25.0)
+    auto_eligible = GeneratedRecommendation(
+        action_type="INCREASE_BUDGET",
+        reasoning="Strong, consistent performance across all windows.",
+        confidence=0.95,
+        risk="LOW",
+        suggested_budget=27.0,
+    )
+    monkeypatch.setattr(
+        optimizer_module,
+        "generate_recommendation",
+        AsyncMock(return_value=_fake_result(auto_eligible)),
+    )
+    monkeypatch.setattr(
+        optimization_jobs,
+        "update_meta_ad_set_budget",
+        AsyncMock(side_effect=MetaConnectionError("Invalid OAuth access token")),
+    )
+
+    seeder = Prisma()
+    await seeder.connect()
+    campaign = await seeder.campaign.find_unique(where={"id": campaign_id})
+    await seeder.disconnect()
+    assert campaign is not None
+
+    result = _run(client, optimization_jobs.generate_and_store_recommendation, campaign)
+
+    assert result is not None
+    assert result.status == "PENDING"
+    assert result.requiresApproval is True
+
+
+@pytest.mark.asyncio
 async def test_generate_and_store_recommendation_supersedes_a_prior_pending_one(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -405,7 +503,7 @@ async def test_generate_and_store_recommendation_supersedes_a_prior_pending_one(
     monkeypatch.setattr(
         optimizer_module,
         "generate_recommendation",
-        AsyncMock(return_value=_FAKE_RECOMMENDATION),
+        AsyncMock(return_value=_fake_result()),
     )
 
     seeder = Prisma()
@@ -518,7 +616,7 @@ async def test_evaluate_generates_a_recommendation_when_the_gate_passes(
     monkeypatch.setattr(
         optimizer_module,
         "generate_recommendation",
-        AsyncMock(return_value=_FAKE_RECOMMENDATION),
+        AsyncMock(return_value=_fake_result()),
     )
 
     _run(client, optimization_jobs.evaluate_all_live_campaigns)
@@ -559,7 +657,7 @@ async def test_evaluate_respects_the_minimum_gap_between_recommendations(
     monkeypatch.setattr(
         optimizer_module,
         "generate_recommendation",
-        AsyncMock(return_value=_FAKE_RECOMMENDATION),
+        AsyncMock(return_value=_fake_result()),
     )
 
     seeder = Prisma()
@@ -619,7 +717,7 @@ async def test_evaluate_isolates_failures_between_campaigns(
         AsyncMock(
             side_effect=[
                 optimizer_module.OptimizerError("boom"),
-                _FAKE_RECOMMENDATION,
+                _fake_result(),
             ]
         ),
     )
