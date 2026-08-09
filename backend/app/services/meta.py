@@ -1,16 +1,16 @@
-"""Meta Ads integration: OAuth connection (build step 6) and publishing (build step 8).
+"""Meta Ads integration: OAuth (step 6), publishing (step 8), insights (step 9).
 
 Handles the OAuth dialog URL, the authorization-code exchange, the Graph
-API calls needed to let a user pick an ad account + Page, and — once a
-campaign is approved — the actual Campaign/AdSet/AdCreative/Ad creation
-calls that put it live on Meta. Orchestrating those calls against our own
-data model (validation, local AdSet/Ad/Creative rows) lives in
+API calls needed to let a user pick an ad account + Page, the
+Campaign/AdSet/AdCreative/Ad creation calls that put an approved campaign
+live on Meta, and pulling performance numbers back for a live one.
+Orchestrating the publish calls against our own data model lives in
 app/services/publish.py; this module only wraps the raw Graph API.
 """
 
 import json
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import Any, NamedTuple
 
 import httpx
 
@@ -435,3 +435,53 @@ async def create_meta_ad(
     )
     ad_id: str = body["id"]
     return ad_id
+
+
+class CampaignInsights(NamedTuple):
+    """Lifetime performance numbers for a Meta campaign."""
+
+    impressions: int
+    clicks: int
+    spend: float
+    conversions: int
+
+
+async def fetch_campaign_insights(
+    *, access_token: str, meta_campaign_id: str
+) -> CampaignInsights:
+    """Fetch lifetime performance numbers for a live Meta campaign.
+
+    Args:
+        access_token: The business's Meta access token.
+        meta_campaign_id: The Meta campaign id (Campaign.metaCampaignId).
+
+    Returns:
+        All zero if Meta has no delivery data yet (e.g. a campaign
+        published moments ago) — not an error.
+
+        conversions is the sum of every entry in Meta's own "actions"
+        breakdown (link clicks, purchases, leads, etc. all mixed
+        together), not a single specific conversion type — resolving
+        that properly means mapping each Campaign.objective to the one
+        or two action_types that actually count as "the" conversion for
+        it, which isn't done yet (known simplification, PRD.md §5 step 9).
+
+    Raises:
+        MetaConnectionError: If the call fails.
+    """
+    body = await _get_json(
+        f"{_GRAPH_BASE_URL}/{meta_campaign_id}/insights",
+        {"fields": "impressions,clicks,spend,actions", "access_token": access_token},
+    )
+    rows = body.get("data", [])
+    if not rows:
+        return CampaignInsights(impressions=0, clicks=0, spend=0.0, conversions=0)
+
+    row = rows[0]
+    conversions = sum(int(action["value"]) for action in row.get("actions", []))
+    return CampaignInsights(
+        impressions=int(row.get("impressions", 0)),
+        clicks=int(row.get("clicks", 0)),
+        spend=float(row.get("spend", 0.0)),
+        conversions=conversions,
+    )

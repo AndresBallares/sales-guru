@@ -379,3 +379,24 @@ export function finalizeMetaConnection(
 export function disconnectMeta(businessId: string): Promise<void> {
   return request<void>(`/businesses/${businessId}/meta`, { method: 'DELETE' })
 }
+
+export interface Metric {
+  id: string
+  campaignId: string
+  impressions: number
+  clicks: number
+  spend: number
+  conversions: number
+  fetchedAt: string
+}
+
+export function refreshMetrics(businessId: string, campaignId: string): Promise<Metric> {
+  return request<Metric>(
+    `/businesses/${businessId}/campaigns/${campaignId}/metrics/refresh`,
+    { method: 'POST' },
+  )
+}
+
+export function listMetrics(businessId: string, campaignId: string): Promise<Metric[]> {
+  return request<Metric[]>(`/businesses/${businessId}/campaigns/${campaignId}/metrics`)
+}

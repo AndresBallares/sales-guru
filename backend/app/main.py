@@ -13,6 +13,7 @@ from app.api.campaign import router as campaign_router
 from app.api.creative import router as creative_router
 from app.api.meta import callback_router as meta_callback_router
 from app.api.meta import router as meta_router
+from app.api.metric import router as metric_router
 from app.api.product import router as product_router
 from app.api.strategy import router as strategy_router
 from app.core.config import get_settings
@@ -54,6 +55,7 @@ app.include_router(strategy_router)
 app.include_router(creative_router)
 app.include_router(meta_router)
 app.include_router(meta_callback_router)
+app.include_router(metric_router)
 
 
 @app.get("/health")

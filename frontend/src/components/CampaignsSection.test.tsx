@@ -19,6 +19,8 @@ vi.mock('../lib/api', async (importOriginal) => {
     selectCreative: vi.fn<typeof actual.selectCreative>(),
     approveCampaign: vi.fn<typeof actual.approveCampaign>(),
     publishCampaign: vi.fn<typeof actual.publishCampaign>(),
+    listMetrics: vi.fn<typeof actual.listMetrics>(),
+    refreshMetrics: vi.fn<typeof actual.refreshMetrics>(),
   }
 })
 const mockedApi = vi.mocked(api)
@@ -69,6 +71,7 @@ beforeEach(() => {
   mockedApi.listAudiences.mockResolvedValue([])
   mockedApi.getStrategy.mockRejectedValue(new api.ApiError(404, 'Strategy not found'))
   mockedApi.listCreatives.mockResolvedValue([])
+  mockedApi.listMetrics.mockResolvedValue([])
 })
 
 describe('CampaignsSection', () => {
@@ -646,5 +649,115 @@ describe('CampaignsSection', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent(
       'Connect Meta Ads and select an ad account and Page before publishing',
     )
+  })
+
+  it('loads and shows previously fetched results for a live campaign', async () => {
+    mockedApi.listCampaigns.mockResolvedValue([
+      {
+        id: 'camp-1',
+        name: null,
+        objective: 'SALES',
+        status: 'LIVE',
+        productId: null,
+        audienceId: null,
+        metaCampaignId: 'meta_campaign_1',
+      },
+    ])
+    mockedApi.listMetrics.mockResolvedValue([
+      {
+        id: 'metric-1',
+        campaignId: 'camp-1',
+        impressions: 1000,
+        clicks: 50,
+        spend: 12.5,
+        conversions: 3,
+        fetchedAt: '2026-08-08T00:00:00Z',
+      },
+    ])
+
+    render(<CampaignsSection businessId="biz-1" />)
+
+    expect(await screen.findByText(/Live on Meta/)).toBeInTheDocument()
+    expect(mockedApi.listMetrics).toHaveBeenCalledWith('biz-1', 'camp-1')
+    expect(screen.getByText(/1000/)).toBeInTheDocument()
+    expect(screen.getByText(/50/)).toBeInTheDocument()
+  })
+
+  it('refreshes results for a live campaign', async () => {
+    mockedApi.listCampaigns.mockResolvedValue([
+      {
+        id: 'camp-1',
+        name: null,
+        objective: 'SALES',
+        status: 'LIVE',
+        productId: null,
+        audienceId: null,
+        metaCampaignId: 'meta_campaign_1',
+      },
+    ])
+    mockedApi.refreshMetrics.mockResolvedValue({
+      id: 'metric-1',
+      campaignId: 'camp-1',
+      impressions: 2000,
+      clicks: 90,
+      spend: 30,
+      conversions: 8,
+      fetchedAt: '2026-08-08T00:00:00Z',
+    })
+    const user = userEvent.setup()
+
+    render(<CampaignsSection businessId="biz-1" />)
+    await screen.findByText(/Live on Meta/)
+
+    await user.click(screen.getByRole('button', { name: 'Refresh results' }))
+
+    expect(mockedApi.refreshMetrics).toHaveBeenCalledWith('biz-1', 'camp-1')
+    expect(await screen.findByText(/2000/)).toBeInTheDocument()
+  })
+
+  it('shows an error if refreshing results fails', async () => {
+    mockedApi.listCampaigns.mockResolvedValue([
+      {
+        id: 'camp-1',
+        name: null,
+        objective: 'SALES',
+        status: 'LIVE',
+        productId: null,
+        audienceId: null,
+        metaCampaignId: 'meta_campaign_1',
+      },
+    ])
+    mockedApi.refreshMetrics.mockRejectedValue(
+      new api.ApiError(500, 'Invalid OAuth access token'),
+    )
+    const user = userEvent.setup()
+
+    render(<CampaignsSection businessId="biz-1" />)
+    await screen.findByText(/Live on Meta/)
+
+    await user.click(screen.getByRole('button', { name: 'Refresh results' }))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Invalid OAuth access token')
+  })
+
+  it('does not show a results block for a campaign that is not live', async () => {
+    mockedApi.listCampaigns.mockResolvedValue([
+      {
+        id: 'camp-1',
+        name: null,
+        objective: 'SALES',
+        status: 'APPROVED',
+        productId: null,
+        audienceId: null,
+        metaCampaignId: null,
+      },
+    ])
+
+    render(<CampaignsSection businessId="biz-1" />)
+    await screen.findByText('Ventas — APPROVED')
+
+    expect(
+      screen.queryByRole('button', { name: 'Refresh results' }),
+    ).not.toBeInTheDocument()
   })
 })

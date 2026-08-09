@@ -379,3 +379,86 @@ async def test_create_meta_ad_returns_the_new_id(
     assert data["adset_id"] == "adset_123"
     assert '"creative_id": "creative_123"' in data["creative"]
     assert data["status"] == "ACTIVE"
+
+
+@pytest.mark.asyncio
+async def test_fetch_campaign_insights_parses_the_first_row(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Numeric fields (often strings from Meta) are parsed, actions summed."""
+    _mock_client_returning(
+        monkeypatch,
+        _FakeResponse(
+            {
+                "data": [
+                    {
+                        "impressions": "1000",
+                        "clicks": "50",
+                        "spend": "12.50",
+                        "actions": [
+                            {"action_type": "link_click", "value": "10"},
+                            {"action_type": "offsite_conversion", "value": "3"},
+                        ],
+                    }
+                ]
+            }
+        ),
+    )
+
+    insights = await meta.fetch_campaign_insights(
+        access_token="token", meta_campaign_id="campaign_123"
+    )
+
+    assert insights.impressions == 1000
+    assert insights.clicks == 50
+    assert insights.spend == 12.5
+    assert insights.conversions == 13
+
+
+@pytest.mark.asyncio
+async def test_fetch_campaign_insights_returns_zeros_with_no_delivery_yet(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A campaign with no delivery data yet returns zeros, not an error."""
+    _mock_client_returning(monkeypatch, _FakeResponse({"data": []}))
+
+    insights = await meta.fetch_campaign_insights(
+        access_token="token", meta_campaign_id="campaign_123"
+    )
+
+    assert insights == meta.CampaignInsights(
+        impressions=0, clicks=0, spend=0.0, conversions=0
+    )
+
+
+@pytest.mark.asyncio
+async def test_fetch_campaign_insights_handles_no_actions(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A row with impressions/clicks but no actions yet has zero conversions."""
+    _mock_client_returning(
+        monkeypatch,
+        _FakeResponse(
+            {"data": [{"impressions": "500", "clicks": "5", "spend": "1.00"}]}
+        ),
+    )
+
+    insights = await meta.fetch_campaign_insights(
+        access_token="token", meta_campaign_id="campaign_123"
+    )
+
+    assert insights.conversions == 0
+
+
+@pytest.mark.asyncio
+async def test_fetch_campaign_insights_raises_on_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A Graph API failure surfaces as MetaConnectionError."""
+    fake_client = _FakeAsyncClient(error=httpx.ConnectError("boom"))
+    monkeypatch.setattr(httpx, "AsyncClient", lambda: fake_client)
+
+    with pytest.raises(meta.MetaConnectionError, match="Meta API call failed"):
+        await meta.fetch_campaign_insights(
+            access_token="token", meta_campaign_id="campaign_123"
+        )

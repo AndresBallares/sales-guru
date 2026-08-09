@@ -17,10 +17,12 @@ import {
   listCampaigns,
   listMetaAdAccounts,
   listMetaPages,
+  listMetrics,
   listProducts,
   login,
   logout,
   publishCampaign,
+  refreshMetrics,
   signup,
 } from './api'
 
@@ -469,5 +471,51 @@ describe('disconnectMeta', () => {
     const [url, options] = fetchMock.mock.calls[0]
     expect(url).toContain('/businesses/biz-1/meta')
     expect(options?.method).toBe('DELETE')
+  })
+})
+
+describe('refreshMetrics', () => {
+  it('returns the newly stored snapshot', async () => {
+    const metric = {
+      id: 'metric-1',
+      campaignId: 'camp-1',
+      impressions: 1000,
+      clicks: 50,
+      spend: 12.5,
+      conversions: 3,
+      fetchedAt: '2026-08-08T00:00:00Z',
+    }
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(jsonResponse(metric, 201))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(refreshMetrics('biz-1', 'camp-1')).resolves.toEqual(metric)
+    const [url, options] = fetchMock.mock.calls[0]
+    expect(url).toContain('/businesses/biz-1/campaigns/camp-1/metrics/refresh')
+    expect(options?.method).toBe('POST')
+  })
+
+  it('throws ApiError when refreshing fails', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi
+        .fn<typeof fetch>()
+        .mockResolvedValue(jsonResponse({ detail: 'Publish this campaign before viewing results' }, 400)),
+    )
+
+    await expect(refreshMetrics('biz-1', 'camp-1')).rejects.toMatchObject({
+      status: 400,
+      message: 'Publish this campaign before viewing results',
+    })
+  })
+})
+
+describe('listMetrics', () => {
+  it('returns the list of stored snapshots for a campaign', async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(jsonResponse([]))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(listMetrics('biz-1', 'camp-1')).resolves.toEqual([])
+    const [url] = fetchMock.mock.calls[0]
+    expect(url).toContain('/businesses/biz-1/campaigns/camp-1/metrics')
   })
 })

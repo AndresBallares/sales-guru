@@ -9,12 +9,15 @@ import {
   listAudiences,
   listCampaigns,
   listCreatives,
+  listMetrics,
   listProducts,
   publishCampaign,
+  refreshMetrics,
   selectCreative,
   type Audience,
   type Campaign,
   type Creative,
+  type Metric,
   type Objective,
   type Product,
   type StrategyContent,
@@ -55,6 +58,10 @@ export function CampaignsSection({ businessId }: { businessId: string }) {
 
   const [approvingId, setApprovingId] = useState<string | null>(null)
   const [approveErrors, setApproveErrors] = useState<Record<string, string>>({})
+
+  const [metrics, setMetrics] = useState<Record<string, Metric[]>>({})
+  const [refreshingMetricsId, setRefreshingMetricsId] = useState<string | null>(null)
+  const [metricErrors, setMetricErrors] = useState<Record<string, string>>({})
 
   const refresh = useCallback(async () => {
     setLoading(true)
@@ -101,6 +108,24 @@ export function CampaignsSection({ businessId }: { businessId: string }) {
       setCreatives((prev) => {
         const next = { ...prev }
         for (const entry of fetchedCreatives) {
+          if (entry && entry[1].length > 0) next[entry[0]] = entry[1]
+        }
+        return next
+      })
+
+      // Same reasoning again — only LIVE campaigns can have results, and
+      // the campaign list itself doesn't include them.
+      const live = campaignList.filter((c) => c.status === 'LIVE')
+      const fetchedMetrics = await Promise.all(
+        live.map((c) =>
+          listMetrics(businessId, c.id)
+            .then((list) => [c.id, list] as const)
+            .catch(() => null),
+        ),
+      )
+      setMetrics((prev) => {
+        const next = { ...prev }
+        for (const entry of fetchedMetrics) {
           if (entry && entry[1].length > 0) next[entry[0]] = entry[1]
         }
         return next
@@ -227,6 +252,22 @@ export function CampaignsSection({ businessId }: { businessId: string }) {
     }
   }
 
+  async function handleRefreshMetrics(campaignId: string) {
+    setRefreshingMetricsId(campaignId)
+    setMetricErrors((prev) => ({ ...prev, [campaignId]: '' }))
+    try {
+      const metric = await refreshMetrics(businessId, campaignId)
+      setMetrics((prev) => ({ ...prev, [campaignId]: [metric, ...(prev[campaignId] ?? [])] }))
+    } catch (err) {
+      setMetricErrors((prev) => ({
+        ...prev,
+        [campaignId]: err instanceof ApiError ? err.message : 'Could not refresh results.',
+      }))
+    } finally {
+      setRefreshingMetricsId(null)
+    }
+  }
+
   return (
     <>
       <section>
@@ -251,6 +292,9 @@ export function CampaignsSection({ businessId }: { businessId: string }) {
               campaign.status,
             )
             const isLive = campaign.status === 'LIVE'
+            const campaignMetrics = metrics[campaign.id] ?? []
+            const metricError = metricErrors[campaign.id]
+            const latestMetric = campaignMetrics[0]
             return (
               <li key={campaign.id}>
                 {campaign.name ? `${campaign.name} — ` : ''}
@@ -412,10 +456,50 @@ export function CampaignsSection({ businessId }: { businessId: string }) {
                   </div>
                 )}
                 {isLive && (
-                  <p>
-                    Live on Meta
-                    {campaign.metaCampaignId ? ` (id: ${campaign.metaCampaignId})` : ''}
-                  </p>
+                  <div>
+                    <p>
+                      Live on Meta
+                      {campaign.metaCampaignId ? ` (id: ${campaign.metaCampaignId})` : ''}
+                    </p>
+                    <button
+                      type="button"
+                      onClick={() => handleRefreshMetrics(campaign.id)}
+                      disabled={refreshingMetricsId === campaign.id}
+                    >
+                      {refreshingMetricsId === campaign.id
+                        ? 'Refreshing…'
+                        : 'Refresh results'}
+                    </button>
+                    {metricError && (
+                      <p className="form-error" role="alert">
+                        {metricError}
+                      </p>
+                    )}
+                    {latestMetric && (
+                      <div aria-label={`Results for ${campaign.name ?? campaign.id}`}>
+                        <p>
+                          <strong>Impressions:</strong> {latestMetric.impressions}
+                          {' — '}
+                          <strong>Clicks:</strong> {latestMetric.clicks}
+                          {' — '}
+                          <strong>Spend:</strong> ${latestMetric.spend}
+                          {' — '}
+                          <strong>Conversions:</strong> {latestMetric.conversions}
+                        </p>
+                        {campaignMetrics.length > 1 && (
+                          <ul>
+                            {campaignMetrics.slice(1).map((metric) => (
+                              <li key={metric.id}>
+                                {new Date(metric.fetchedAt).toLocaleString()} —{' '}
+                                {metric.impressions} impressions, {metric.clicks} clicks,
+                                ${metric.spend} spend, {metric.conversions} conversions
+                              </li>
+                            ))}
+                          </ul>
+                        )}
+                      </div>
+                    )}
+                  </div>
                 )}
               </li>
             )
