@@ -52,6 +52,13 @@ class _FakeAsyncClient:
         assert self._response is not None
         return self._response
 
+    async def post(self, url: str, data: dict[str, str]) -> _FakeResponse:
+        self.calls.append((url, data))
+        if self._error is not None:
+            raise self._error
+        assert self._response is not None
+        return self._response
+
 
 def _mock_client_returning(
     monkeypatch: pytest.MonkeyPatch, response: _FakeResponse
@@ -215,3 +222,160 @@ async def test_get_json_raises_on_error_response_body(
 
     with pytest.raises(meta.MetaConnectionError, match="Invalid OAuth access token"):
         await meta.list_pages("some-token")
+
+
+@pytest.mark.asyncio
+async def test_post_json_raises_on_network_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A network failure on a POST call also surfaces as MetaConnectionError."""
+    fake_client = _FakeAsyncClient(error=httpx.ConnectError("boom"))
+    monkeypatch.setattr(httpx, "AsyncClient", lambda: fake_client)
+
+    with pytest.raises(meta.MetaConnectionError, match="Meta API call failed"):
+        await meta.create_meta_campaign(
+            access_token="token",
+            ad_account_id="act_1",
+            name="Campaign",
+            objective="SALES",
+        )
+
+
+@pytest.mark.asyncio
+async def test_post_json_raises_on_error_response_body(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A Meta {"error": ...} body on a POST call also surfaces with its message."""
+    _mock_client_returning(
+        monkeypatch,
+        _FakeResponse({"error": {"message": "Invalid parameter"}}, is_error=True),
+    )
+
+    with pytest.raises(meta.MetaConnectionError, match="Invalid parameter"):
+        await meta.create_meta_campaign(
+            access_token="token",
+            ad_account_id="act_1",
+            name="Campaign",
+            objective="SALES",
+        )
+
+
+@pytest.mark.asyncio
+async def test_create_meta_campaign_returns_the_new_id(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A successful call returns the new campaign id, objective mapped correctly."""
+    client = _mock_client_returning(monkeypatch, _FakeResponse({"id": "campaign_123"}))
+
+    campaign_id = await meta.create_meta_campaign(
+        access_token="token",
+        ad_account_id="act_1",
+        name="Custom Colombian Emerald Ring",
+        objective="SALES",
+    )
+
+    assert campaign_id == "campaign_123"
+    url, data = client.calls[0]
+    assert url == "https://graph.facebook.com/v21.0/act_act_1/campaigns"
+    assert data["objective"] == "OUTCOME_SALES"
+    assert data["status"] == "ACTIVE"
+    assert data["access_token"] == "token"
+
+
+@pytest.mark.asyncio
+async def test_create_meta_ad_set_returns_the_new_id(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A successful call returns the new Meta ad set id, targeting encoded as JSON."""
+    client = _mock_client_returning(monkeypatch, _FakeResponse({"id": "adset_123"}))
+
+    ad_set_id = await meta.create_meta_ad_set(
+        access_token="token",
+        ad_account_id="act_1",
+        name="Custom Colombian Emerald Ring",
+        meta_campaign_id="campaign_123",
+        daily_budget_cents=2500,
+        optimization_goal="OFFSITE_CONVERSIONS",
+        age_min=30,
+        age_max=55,
+    )
+
+    assert ad_set_id == "adset_123"
+    _url, data = client.calls[0]
+    assert data["campaign_id"] == "campaign_123"
+    assert data["daily_budget"] == "2500"
+    assert data["optimization_goal"] == "OFFSITE_CONVERSIONS"
+    assert '"age_min": 30' in data["targeting"]
+    assert '"age_max": 55' in data["targeting"]
+
+
+@pytest.mark.asyncio
+async def test_create_meta_ad_creative_includes_the_image_when_present(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A creative with an image URL includes it in link_data.picture."""
+    client = _mock_client_returning(monkeypatch, _FakeResponse({"id": "creative_123"}))
+
+    creative_id = await meta.create_meta_ad_creative(
+        access_token="token",
+        ad_account_id="act_1",
+        page_id="page_1",
+        name="Creative A",
+        headline="As Unique As Your Story",
+        body_text="No two stories are the same",
+        description="Custom handmade emerald jewelry",
+        cta="SHOP_NOW",
+        link="https://acme.example/rings",
+        image_url="https://acme.example/ring.jpg",
+    )
+
+    assert creative_id == "creative_123"
+    _url, data = client.calls[0]
+    assert '"picture": "https://acme.example/ring.jpg"' in data["object_story_spec"]
+    assert '"page_id": "page_1"' in data["object_story_spec"]
+
+
+@pytest.mark.asyncio
+async def test_create_meta_ad_creative_omits_picture_without_an_image(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """No image generated yet (PRD.md §2 step 4) still gives a valid creative call."""
+    client = _mock_client_returning(monkeypatch, _FakeResponse({"id": "creative_123"}))
+
+    await meta.create_meta_ad_creative(
+        access_token="token",
+        ad_account_id="act_1",
+        page_id="page_1",
+        name="Creative A",
+        headline="As Unique As Your Story",
+        body_text="No two stories are the same",
+        description="Custom handmade emerald jewelry",
+        cta="SHOP_NOW",
+        link="https://acme.example/rings",
+        image_url=None,
+    )
+
+    _url, data = client.calls[0]
+    assert "picture" not in data["object_story_spec"]
+
+
+@pytest.mark.asyncio
+async def test_create_meta_ad_returns_the_new_id(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A successful call returns the new Meta ad id, referencing the creative."""
+    client = _mock_client_returning(monkeypatch, _FakeResponse({"id": "ad_123"}))
+
+    ad_id = await meta.create_meta_ad(
+        access_token="token",
+        ad_account_id="act_1",
+        name="Creative A",
+        meta_ad_set_id="adset_123",
+        meta_creative_id="creative_123",
+    )
+
+    assert ad_id == "ad_123"
+    _url, data = client.calls[0]
+    assert data["adset_id"] == "adset_123"
+    assert '"creative_id": "creative_123"' in data["creative"]
+    assert data["status"] == "ACTIVE"

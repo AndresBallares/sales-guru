@@ -18,6 +18,7 @@ vi.mock('../lib/api', async (importOriginal) => {
     listCreatives: vi.fn<typeof actual.listCreatives>(),
     selectCreative: vi.fn<typeof actual.selectCreative>(),
     approveCampaign: vi.fn<typeof actual.approveCampaign>(),
+    publishCampaign: vi.fn<typeof actual.publishCampaign>(),
   }
 })
 const mockedApi = vi.mocked(api)
@@ -456,13 +457,14 @@ describe('CampaignsSection', () => {
     expect(mockedApi.selectCreative).toHaveBeenCalledWith('biz-1', 'camp-1', 'creative-1')
     expect(await screen.findByRole('button', { name: 'Selected' })).toBeInTheDocument()
     // Selecting an ad must refresh the campaign list so its now-current
-    // PENDING_APPROVAL status unlocks the Approve button without a reload.
+    // PENDING_APPROVAL status unlocks the Approve & Publish button without
+    // a reload.
     expect(
-      await screen.findByRole('button', { name: 'Approve campaign' }),
+      await screen.findByRole('button', { name: 'Approve & Publish' }),
     ).toBeInTheDocument()
   })
 
-  it('shows an approve button once a campaign is pending approval, and approves it', async () => {
+  it('approves and publishes a pending campaign from a single click', async () => {
     mockedApi.listCampaigns.mockResolvedValueOnce([
       {
         id: 'camp-1',
@@ -479,10 +481,10 @@ describe('CampaignsSection', () => {
         id: 'camp-1',
         name: null,
         objective: 'SALES',
-        status: 'APPROVED',
+        status: 'LIVE',
         productId: null,
         audienceId: null,
-        metaCampaignId: null,
+        metaCampaignId: 'meta_campaign_1',
       },
     ])
     mockedApi.getStrategy.mockResolvedValue(FAKE_STRATEGY)
@@ -496,18 +498,66 @@ describe('CampaignsSection', () => {
       audienceId: null,
       metaCampaignId: null,
     })
+    mockedApi.publishCampaign.mockResolvedValue({
+      id: 'camp-1',
+      name: null,
+      objective: 'SALES',
+      status: 'LIVE',
+      productId: null,
+      audienceId: null,
+      metaCampaignId: 'meta_campaign_1',
+    })
     const user = userEvent.setup()
 
     render(<CampaignsSection businessId="biz-1" />)
     await screen.findByText('Ventas — PENDING_APPROVAL')
 
-    await user.click(screen.getByRole('button', { name: 'Approve campaign' }))
+    await user.click(screen.getByRole('button', { name: 'Approve & Publish' }))
 
     expect(mockedApi.approveCampaign).toHaveBeenCalledWith('biz-1', 'camp-1')
-    expect(await screen.findByRole('button', { name: 'Approved' })).toBeInTheDocument()
+    await waitFor(() =>
+      expect(mockedApi.publishCampaign).toHaveBeenCalledWith('biz-1', 'camp-1'),
+    )
+    expect(await screen.findByText(/Live on Meta/)).toBeInTheDocument()
+    expect(screen.getByText(/meta_campaign_1/)).toBeInTheDocument()
   })
 
-  it('does not show an approve button for a campaign that is not yet ready', async () => {
+  it('retries publishing a failed campaign without re-approving', async () => {
+    mockedApi.listCampaigns.mockResolvedValue([
+      {
+        id: 'camp-1',
+        name: null,
+        objective: 'SALES',
+        status: 'FAILED',
+        productId: null,
+        audienceId: null,
+        metaCampaignId: null,
+      },
+    ])
+    mockedApi.getStrategy.mockResolvedValue(FAKE_STRATEGY)
+    mockedApi.listCreatives.mockResolvedValue([fakeCreative({ status: 'SELECTED' })])
+    mockedApi.publishCampaign.mockResolvedValue({
+      id: 'camp-1',
+      name: null,
+      objective: 'SALES',
+      status: 'LIVE',
+      productId: null,
+      audienceId: null,
+      metaCampaignId: 'meta_campaign_1',
+    })
+    const user = userEvent.setup()
+
+    render(<CampaignsSection businessId="biz-1" />)
+
+    await user.click(await screen.findByRole('button', { name: 'Retry publish' }))
+
+    expect(mockedApi.approveCampaign).not.toHaveBeenCalled()
+    await waitFor(() =>
+      expect(mockedApi.publishCampaign).toHaveBeenCalledWith('biz-1', 'camp-1'),
+    )
+  })
+
+  it('does not show a publish button for a campaign that is not yet ready', async () => {
     mockedApi.listCampaigns.mockResolvedValue([
       {
         id: 'camp-1',
@@ -526,7 +576,7 @@ describe('CampaignsSection', () => {
     await screen.findByText('Emeralds With a Story')
 
     expect(
-      screen.queryByRole('button', { name: 'Approve campaign' }),
+      screen.queryByRole('button', { name: 'Approve & Publish' }),
     ).not.toBeInTheDocument()
   })
 
@@ -552,10 +602,49 @@ describe('CampaignsSection', () => {
     render(<CampaignsSection businessId="biz-1" />)
     await screen.findByText('Ventas — PENDING_APPROVAL')
 
-    await user.click(screen.getByRole('button', { name: 'Approve campaign' }))
+    await user.click(screen.getByRole('button', { name: 'Approve & Publish' }))
 
     expect(await screen.findByRole('alert')).toHaveTextContent(
       'Select an ad creative before approving this campaign',
+    )
+    expect(mockedApi.publishCampaign).not.toHaveBeenCalled()
+  })
+
+  it('shows an error if publishing fails after a successful approval', async () => {
+    mockedApi.listCampaigns.mockResolvedValue([
+      {
+        id: 'camp-1',
+        name: null,
+        objective: 'SALES',
+        status: 'PENDING_APPROVAL',
+        productId: null,
+        audienceId: null,
+        metaCampaignId: null,
+      },
+    ])
+    mockedApi.getStrategy.mockResolvedValue(FAKE_STRATEGY)
+    mockedApi.listCreatives.mockResolvedValue([fakeCreative({ status: 'SELECTED' })])
+    mockedApi.approveCampaign.mockResolvedValue({
+      id: 'camp-1',
+      name: null,
+      objective: 'SALES',
+      status: 'APPROVED',
+      productId: null,
+      audienceId: null,
+      metaCampaignId: null,
+    })
+    mockedApi.publishCampaign.mockRejectedValue(
+      new api.ApiError(400, 'Connect Meta Ads and select an ad account and Page before publishing'),
+    )
+    const user = userEvent.setup()
+
+    render(<CampaignsSection businessId="biz-1" />)
+    await screen.findByText('Ventas — PENDING_APPROVAL')
+
+    await user.click(screen.getByRole('button', { name: 'Approve & Publish' }))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'Connect Meta Ads and select an ad account and Page before publishing',
     )
   })
 })

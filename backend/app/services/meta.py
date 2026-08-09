@@ -1,12 +1,14 @@
-"""Meta Ads OAuth connection (PRD.md build step 6).
+"""Meta Ads integration: OAuth connection (build step 6) and publishing (build step 8).
 
-Handles the OAuth dialog URL, the authorization-code exchange, and the
-Graph API calls needed to let a user pick an ad account + Page. Building a
-live campaign on Meta (create campaign/ad set/ad) is a separate, later
-step (PRD.md build step 8) — this module only gets a usable access token
-and the two ids (ad account, Page) that step will need.
+Handles the OAuth dialog URL, the authorization-code exchange, the Graph
+API calls needed to let a user pick an ad account + Page, and — once a
+campaign is approved — the actual Campaign/AdSet/AdCreative/Ad creation
+calls that put it live on Meta. Orchestrating those calls against our own
+data model (validation, local AdSet/Ad/Creative rows) lives in
+app/services/publish.py; this module only wraps the raw Graph API.
 """
 
+import json
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -19,6 +21,16 @@ _GRAPH_VERSION = "v21.0"
 _GRAPH_BASE_URL = f"https://graph.facebook.com/{_GRAPH_VERSION}"
 _AUTH_DIALOG_URL = f"https://www.facebook.com/{_GRAPH_VERSION}/dialog/oauth"
 _SCOPES = "ads_management,ads_read,pages_show_list,business_management"
+
+# Maps our Campaign.objective (PRD.md §7) to Meta's Outcome-Driven Ad
+# Experience objective enum.
+CAMPAIGN_OBJECTIVE_MAP = {
+    "SALES": "OUTCOME_SALES",
+    "LEADS": "OUTCOME_LEADS",
+    "TRAFFIC": "OUTCOME_TRAFFIC",
+    "MESSAGES": "OUTCOME_ENGAGEMENT",
+    "AWARENESS": "OUTCOME_AWARENESS",
+}
 
 
 class MetaConnectionError(RuntimeError):
@@ -61,6 +73,34 @@ async def _get_json(url: str, params: dict[str, str]) -> dict[str, Any]:
     try:
         async with httpx.AsyncClient() as client:
             response = await client.get(url, params=params)
+    except httpx.HTTPError as exc:
+        raise MetaConnectionError(f"Meta API call failed: {exc}") from exc
+
+    body: dict[str, Any] = response.json()
+    if response.is_error or "error" in body:
+        message = body.get("error", {}).get("message", response.text)
+        raise MetaConnectionError(f"Meta API call failed: {message}")
+    return body
+
+
+async def _post_json(url: str, data: dict[str, str]) -> dict[str, Any]:
+    """POST form-encoded data to a Graph API URL and return its parsed JSON body.
+
+    Args:
+        url: The full Graph API endpoint URL.
+        data: Form fields (including the access token) — Meta's object
+            -creation endpoints take form-encoded POST bodies, not JSON.
+
+    Returns:
+        The parsed JSON response body.
+
+    Raises:
+        MetaConnectionError: On a network failure, a non-2xx response, or
+            a response body containing Meta's own {"error": ...} shape.
+    """
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.post(url, data=data)
     except httpx.HTTPError as exc:
         raise MetaConnectionError(f"Meta API call failed: {exc}") from exc
 
@@ -204,3 +244,194 @@ async def list_pages(access_token: str) -> list[MetaPage]:
         {"fields": "id,name", "access_token": access_token},
     )
     return [MetaPage.model_validate(item) for item in body.get("data", [])]
+
+
+async def create_meta_campaign(
+    *, access_token: str, ad_account_id: str, name: str, objective: str
+) -> str:
+    """Create a live Campaign object on Meta (PRD.md build step 8).
+
+    Args:
+        access_token: The business's Meta access token.
+        ad_account_id: The connected ad account to create the campaign in.
+        name: The campaign's display name on Meta.
+        objective: Our Campaign.objective value — mapped to Meta's own
+            objective enum via CAMPAIGN_OBJECTIVE_MAP.
+
+    Returns:
+        The new Meta campaign id.
+
+    Raises:
+        MetaConnectionError: If the call fails.
+    """
+    body = await _post_json(
+        f"{_GRAPH_BASE_URL}/act_{ad_account_id}/campaigns",
+        {
+            "access_token": access_token,
+            "name": name,
+            "objective": CAMPAIGN_OBJECTIVE_MAP[objective],
+            "status": "ACTIVE",
+            "special_ad_categories": "[]",
+        },
+    )
+    campaign_id: str = body["id"]
+    return campaign_id
+
+
+async def create_meta_ad_set(
+    *,
+    access_token: str,
+    ad_account_id: str,
+    name: str,
+    meta_campaign_id: str,
+    daily_budget_cents: int,
+    optimization_goal: str,
+    age_min: int,
+    age_max: int,
+) -> str:
+    """Create a live AdSet object on Meta, under an already-created campaign.
+
+    Targeting is deliberately minimal — age range only, a single-country
+    geo default. PRD.md §7 already flags real location/interest
+    resolution (free text -> Meta's own targeting-search taxonomy) as a
+    known gap to close "at publish time" — this is that gap, still open;
+    interests aren't sent at all yet.
+
+    Args:
+        access_token: The business's Meta access token.
+        ad_account_id: The connected ad account.
+        name: The ad set's display name on Meta.
+        meta_campaign_id: The parent Meta campaign id.
+        daily_budget_cents: Daily budget in the ad account's minor
+            currency unit (cents for USD).
+        optimization_goal: A Meta optimization_goal value.
+        age_min: Minimum target age.
+        age_max: Maximum target age.
+
+    Returns:
+        The new Meta ad set id.
+
+    Raises:
+        MetaConnectionError: If the call fails.
+    """
+    targeting = json.dumps(
+        {
+            "age_min": age_min,
+            "age_max": age_max,
+            "geo_locations": {"countries": ["US"]},
+        }
+    )
+    body = await _post_json(
+        f"{_GRAPH_BASE_URL}/act_{ad_account_id}/adsets",
+        {
+            "access_token": access_token,
+            "name": name,
+            "campaign_id": meta_campaign_id,
+            "daily_budget": str(daily_budget_cents),
+            "billing_event": "IMPRESSIONS",
+            "optimization_goal": optimization_goal,
+            "targeting": targeting,
+            "status": "ACTIVE",
+        },
+    )
+    ad_set_id: str = body["id"]
+    return ad_set_id
+
+
+async def create_meta_ad_creative(
+    *,
+    access_token: str,
+    ad_account_id: str,
+    page_id: str,
+    name: str,
+    headline: str,
+    body_text: str,
+    description: str,
+    cta: str,
+    link: str,
+    image_url: str | None,
+) -> str:
+    """Create an ad creative object on Meta, ready to attach to an Ad.
+
+    image_url is optional — no image generation/upload is built yet
+    (PRD.md §2 step 4), so most creatives won't have one. Meta still
+    accepts a link-only creative; a real running ad will typically need a
+    real image to pass Meta's own ad review, which this doesn't handle.
+
+    Args:
+        access_token: The business's Meta access token.
+        ad_account_id: The connected ad account.
+        page_id: The connected Page the ad is posted as.
+        name: The creative's display name on Meta.
+        headline: The ad headline.
+        body_text: The primary text (Meta's link_data.message).
+        description: The secondary description line.
+        cta: A Meta call_to_action type value.
+        link: The destination URL.
+        image_url: A publicly-reachable image URL, if one exists.
+
+    Returns:
+        The new Meta ad creative id.
+
+    Raises:
+        MetaConnectionError: If the call fails.
+    """
+    link_data: dict[str, Any] = {
+        "message": body_text,
+        "name": headline,
+        "description": description,
+        "link": link,
+        "call_to_action": {"type": cta},
+    }
+    if image_url:
+        link_data["picture"] = image_url
+
+    object_story_spec = json.dumps({"page_id": page_id, "link_data": link_data})
+    body = await _post_json(
+        f"{_GRAPH_BASE_URL}/act_{ad_account_id}/adcreatives",
+        {
+            "access_token": access_token,
+            "name": name,
+            "object_story_spec": object_story_spec,
+        },
+    )
+    creative_id: str = body["id"]
+    return creative_id
+
+
+async def create_meta_ad(
+    *,
+    access_token: str,
+    ad_account_id: str,
+    name: str,
+    meta_ad_set_id: str,
+    meta_creative_id: str,
+) -> str:
+    """Create a live Ad object on Meta, attaching an ad set + creative.
+
+    Args:
+        access_token: The business's Meta access token.
+        ad_account_id: The connected ad account.
+        name: The ad's display name on Meta.
+        meta_ad_set_id: The parent Meta ad set id.
+        meta_creative_id: The Meta ad creative id to attach.
+
+    Returns:
+        The new Meta ad id.
+
+    Raises:
+        MetaConnectionError: If the call fails.
+    """
+    creative_ref = json.dumps({"creative_id": meta_creative_id})
+    body = await _post_json(
+        f"{_GRAPH_BASE_URL}/act_{ad_account_id}/ads",
+        {
+            "access_token": access_token,
+            "name": name,
+            "adset_id": meta_ad_set_id,
+            "creative": creative_ref,
+            "status": "ACTIVE",
+        },
+    )
+    ad_id: str = body["id"]
+    return ad_id

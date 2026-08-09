@@ -10,6 +10,7 @@ import {
   listCampaigns,
   listCreatives,
   listProducts,
+  publishCampaign,
   selectCreative,
   type Audience,
   type Campaign,
@@ -202,16 +203,24 @@ export function CampaignsSection({ businessId }: { businessId: string }) {
     }
   }
 
-  async function handleApprove(campaignId: string) {
+  // A single explicit user action does both steps — approving never
+  // silently triggers a publish on its own; this handler only runs from
+  // one deliberate click (PRD.md §5 step 8's checkpoint requirement).
+  // Skips the approve call when already APPROVED/FAILED, since retrying a
+  // publish shouldn't need re-approving first.
+  async function handleApproveAndPublish(campaignId: string, currentStatus: string) {
     setApprovingId(campaignId)
     setApproveErrors((prev) => ({ ...prev, [campaignId]: '' }))
     try {
-      await approveCampaign(businessId, campaignId)
+      if (currentStatus === 'PENDING_APPROVAL') {
+        await approveCampaign(businessId, campaignId)
+      }
+      await publishCampaign(businessId, campaignId)
       await refresh()
     } catch (err) {
       setApproveErrors((prev) => ({
         ...prev,
-        [campaignId]: err instanceof ApiError ? err.message : 'Could not approve campaign.',
+        [campaignId]: err instanceof ApiError ? err.message : 'Could not publish campaign.',
       }))
     } finally {
       setApprovingId(null)
@@ -238,8 +247,10 @@ export function CampaignsSection({ businessId }: { businessId: string }) {
             const campaignCreatives = creatives[campaign.id] ?? []
             const creativeError = creativeErrors[campaign.id]
             const approveError = approveErrors[campaign.id]
-            const readyForApproval =
-              campaign.status === 'PENDING_APPROVAL' || campaign.status === 'APPROVED'
+            const canPublish = ['PENDING_APPROVAL', 'APPROVED', 'FAILED'].includes(
+              campaign.status,
+            )
+            const isLive = campaign.status === 'LIVE'
             return (
               <li key={campaign.id}>
                 {campaign.name ? `${campaign.name} — ` : ''}
@@ -380,20 +391,18 @@ export function CampaignsSection({ businessId }: { businessId: string }) {
                     )}
                   </div>
                 )}
-                {readyForApproval && (
+                {canPublish && (
                   <div>
                     <button
                       type="button"
-                      onClick={() => handleApprove(campaign.id)}
-                      disabled={
-                        campaign.status === 'APPROVED' || approvingId === campaign.id
-                      }
+                      onClick={() => handleApproveAndPublish(campaign.id, campaign.status)}
+                      disabled={approvingId === campaign.id}
                     >
-                      {campaign.status === 'APPROVED'
-                        ? 'Approved'
-                        : approvingId === campaign.id
-                          ? 'Approving…'
-                          : 'Approve campaign'}
+                      {approvingId === campaign.id
+                        ? 'Publishing…'
+                        : campaign.status === 'FAILED'
+                          ? 'Retry publish'
+                          : 'Approve & Publish'}
                     </button>
                     {approveError && (
                       <p className="form-error" role="alert">
@@ -401,6 +410,12 @@ export function CampaignsSection({ businessId }: { businessId: string }) {
                       </p>
                     )}
                   </div>
+                )}
+                {isLive && (
+                  <p>
+                    Live on Meta
+                    {campaign.metaCampaignId ? ` (id: ${campaign.metaCampaignId})` : ''}
+                  </p>
                 )}
               </li>
             )

@@ -225,6 +225,12 @@ export function approveCampaign(businessId: string, campaignId: string): Promise
   })
 }
 
+export function publishCampaign(businessId: string, campaignId: string): Promise<Campaign> {
+  return request<Campaign>(`/businesses/${businessId}/campaigns/${campaignId}/publish`, {
+    method: 'POST',
+  })
+}
+
 export interface TargetAudience {
   ageMin: number | null
   ageMax: number | null

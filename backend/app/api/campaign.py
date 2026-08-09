@@ -11,12 +11,24 @@ from prisma.models import Business, Campaign
 from app.core.authz import get_owned_business, get_owned_campaign
 from app.core.db import db
 from app.schemas.campaign import CampaignCreateRequest, CampaignResponse
+from app.schemas.strategy import StrategyContent
+from app.services.meta import MetaConnectionError
+from app.services.publish import publish_campaign_to_meta
 
 router = APIRouter(prefix="/businesses/{business_id}/campaigns", tags=["campaigns"])
 
 _PRODUCT_NOT_FOUND = "Product not found"
 _AUDIENCE_NOT_FOUND = "Audience not found"
 _NOT_READY_FOR_APPROVAL = "Select an ad creative before approving this campaign"
+_NOT_READY_FOR_PUBLISH = "Approve this campaign before publishing"
+_META_NOT_CONNECTED = (
+    "Connect Meta Ads and select an ad account and Page before publishing"
+)
+_NO_CREATIVE_SELECTED = "Select an ad creative before publishing"
+_NO_DESTINATION_URL = (
+    "Set a product URL or business website before publishing — Meta requires "
+    "a destination link for the ad"
+)
 
 
 def _to_response(campaign: Campaign) -> CampaignResponse:
@@ -167,5 +179,90 @@ async def approve_campaign(
         where={"id": campaign.id}, data={"status": "APPROVED"}
     )
     assert updated is not None  # just fetched above, can't vanish mid-request
+
+    return _to_response(updated)
+
+
+@router.post("/{campaign_id}/publish", response_model=CampaignResponse)
+async def publish_campaign(
+    campaign: Campaign = Depends(get_owned_campaign),
+) -> CampaignResponse:
+    """Publish an approved campaign live to Meta (PRD.md build step 8).
+
+    This is the "Approve & Publish" checkpoint's actual publish half — the
+    frontend calls approve() then this in one user-triggered flow, never
+    automatically (PRD.md §5 step 8's checkpoint requirement). All
+    precondition checks below are plain 400s, same pattern as
+    app/api/creative.py's "strategy required" check; only an actual failed
+    Meta API call becomes a 500.
+
+    Args:
+        campaign: The campaign, resolved and ownership-checked by
+            get_owned_campaign.
+
+    Returns:
+        The now-LIVE campaign, with metaCampaignId set.
+
+    Raises:
+        HTTPException: 400 if the campaign isn't approved yet, Meta isn't
+            fully connected, no creative is selected, or there's no
+            destination URL to advertise; 500 if the Meta API call fails
+            (the campaign is moved to FAILED first, so it can be retried).
+    """
+    if campaign.status not in ("APPROVED", "FAILED"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=_NOT_READY_FOR_PUBLISH
+        )
+
+    business = await db.business.find_unique(where={"id": campaign.businessId})
+    assert business is not None  # guaranteed by the FK, not user input
+
+    connection = await db.metaconnection.find_unique(where={"businessId": business.id})
+    connection_incomplete = (
+        connection is None
+        or connection.adAccountId is None
+        or connection.pageId is None
+    )
+    if connection_incomplete:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=_META_NOT_CONNECTED
+        )
+    assert connection is not None  # narrowed by connection_incomplete above
+
+    creative = await db.creative.find_first(
+        where={"campaignId": campaign.id, "status": "SELECTED"}
+    )
+    if creative is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=_NO_CREATIVE_SELECTED
+        )
+
+    strategy = await db.strategy.find_unique(where={"campaignId": campaign.id})
+    assert strategy is not None  # guaranteed by the status flow (PENDING_APPROVAL+)
+
+    product = (
+        await db.product.find_unique(where={"id": campaign.productId})
+        if campaign.productId
+        else None
+    )
+    destination_url = (product.url if product else None) or business.website
+    if not destination_url:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=_NO_DESTINATION_URL
+        )
+
+    try:
+        updated = await publish_campaign_to_meta(
+            campaign=campaign,
+            connection=connection,
+            creative=creative,
+            strategy=StrategyContent.model_validate_json(strategy.content),
+            destination_url=destination_url,
+        )
+    except MetaConnectionError as exc:
+        await db.campaign.update(where={"id": campaign.id}, data={"status": "FAILED"})
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)
+        ) from exc
 
     return _to_response(updated)

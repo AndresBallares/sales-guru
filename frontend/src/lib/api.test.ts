@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   ApiError,
+  approveCampaign,
   connectMeta,
   createAudience,
   createBusiness,
@@ -19,6 +20,7 @@ import {
   listProducts,
   login,
   logout,
+  publishCampaign,
   signup,
 } from './api'
 
@@ -296,6 +298,62 @@ describe('listCampaigns', () => {
     await expect(listCampaigns('biz-1')).resolves.toEqual([])
     const [url] = fetchMock.mock.calls[0]
     expect(url).toContain('/businesses/biz-1/campaigns')
+  })
+})
+
+describe('approveCampaign', () => {
+  it('returns the now-approved campaign', async () => {
+    const campaign = {
+      id: '1',
+      name: null,
+      objective: 'SALES' as const,
+      status: 'APPROVED',
+      productId: null,
+      audienceId: null,
+      metaCampaignId: null,
+    }
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(jsonResponse(campaign))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(approveCampaign('biz-1', 'camp-1')).resolves.toEqual(campaign)
+    const [url, options] = fetchMock.mock.calls[0]
+    expect(url).toContain('/businesses/biz-1/campaigns/camp-1/approve')
+    expect(options?.method).toBe('POST')
+  })
+})
+
+describe('publishCampaign', () => {
+  it('returns the now-live campaign', async () => {
+    const campaign = {
+      id: '1',
+      name: null,
+      objective: 'SALES' as const,
+      status: 'LIVE',
+      productId: null,
+      audienceId: null,
+      metaCampaignId: 'meta_campaign_1',
+    }
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(jsonResponse(campaign))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(publishCampaign('biz-1', 'camp-1')).resolves.toEqual(campaign)
+    const [url, options] = fetchMock.mock.calls[0]
+    expect(url).toContain('/businesses/biz-1/campaigns/camp-1/publish')
+    expect(options?.method).toBe('POST')
+  })
+
+  it('throws ApiError when publishing fails', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi
+        .fn<typeof fetch>()
+        .mockResolvedValue(jsonResponse({ detail: 'Approve this campaign before publishing' }, 400)),
+    )
+
+    await expect(publishCampaign('biz-1', 'camp-1')).rejects.toMatchObject({
+      status: 400,
+      message: 'Approve this campaign before publishing',
+    })
   })
 })
 
