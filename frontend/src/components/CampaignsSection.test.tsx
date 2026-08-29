@@ -113,7 +113,7 @@ describe('CampaignsSection', () => {
 
     render(<CampaignsSection businessId="biz-1" />)
 
-    expect(await screen.findByText('Ventas — DRAFT')).toBeInTheDocument()
+    expect(await screen.findByText('Sales — DRAFT')).toBeInTheDocument()
   })
 
   it('shows the campaign name, when set, ahead of the objective', async () => {
@@ -132,7 +132,7 @@ describe('CampaignsSection', () => {
     render(<CampaignsSection businessId="biz-1" />)
 
     expect(
-      await screen.findByText('Custom Colombian Emerald Ring — Ventas — DRAFT'),
+      await screen.findByText('Custom Colombian Emerald Ring — Sales — DRAFT'),
     ).toBeInTheDocument()
   })
 
@@ -300,7 +300,7 @@ describe('CampaignsSection', () => {
     const user = userEvent.setup()
 
     render(<CampaignsSection businessId="biz-1" />)
-    await screen.findByText('Ventas — DRAFT')
+    await screen.findByText('Sales — DRAFT')
 
     await user.click(screen.getByRole('button', { name: 'Generate strategy' }))
 
@@ -334,7 +334,7 @@ describe('CampaignsSection', () => {
     const user = userEvent.setup()
 
     render(<CampaignsSection businessId="biz-1" />)
-    await screen.findByText('Ventas — DRAFT')
+    await screen.findByText('Sales — DRAFT')
 
     await user.click(screen.getByRole('button', { name: 'Generate strategy' }))
 
@@ -561,7 +561,7 @@ describe('CampaignsSection', () => {
     const user = userEvent.setup()
 
     render(<CampaignsSection businessId="biz-1" />)
-    await screen.findByText('Ventas — PENDING_APPROVAL')
+    await screen.findByText('Sales — PENDING_APPROVAL')
 
     await user.click(screen.getByRole('button', { name: 'Approve & Publish' }))
 
@@ -651,7 +651,7 @@ describe('CampaignsSection', () => {
     const user = userEvent.setup()
 
     render(<CampaignsSection businessId="biz-1" />)
-    await screen.findByText('Ventas — PENDING_APPROVAL')
+    await screen.findByText('Sales — PENDING_APPROVAL')
 
     await user.click(screen.getByRole('button', { name: 'Approve & Publish' }))
 
@@ -690,7 +690,7 @@ describe('CampaignsSection', () => {
     const user = userEvent.setup()
 
     render(<CampaignsSection businessId="biz-1" />)
-    await screen.findByText('Ventas — PENDING_APPROVAL')
+    await screen.findByText('Sales — PENDING_APPROVAL')
 
     await user.click(screen.getByRole('button', { name: 'Approve & Publish' }))
 
@@ -802,7 +802,7 @@ describe('CampaignsSection', () => {
     ])
 
     render(<CampaignsSection businessId="biz-1" />)
-    await screen.findByText('Ventas — APPROVED')
+    await screen.findByText('Sales — APPROVED')
 
     expect(
       screen.queryByRole('button', { name: 'Refresh results' }),
@@ -1075,7 +1075,7 @@ describe('CampaignsSection', () => {
     ])
 
     render(<CampaignsSection businessId="biz-1" />)
-    await screen.findByText('Ventas — APPROVED')
+    await screen.findByText('Sales — APPROVED')
 
     expect(screen.queryByRole('button', { name: 'Analyze now' })).not.toBeInTheDocument()
   })

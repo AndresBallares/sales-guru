@@ -95,7 +95,7 @@ export function DashboardPage() {
         <h2>Create a business</h2>
         <form onSubmit={handleSubmit} noValidate>
           <div className="field">
-            <label htmlFor="name">Nombre</label>
+            <label htmlFor="name">Name</label>
             <input
               id="name"
               required
@@ -113,7 +113,7 @@ export function DashboardPage() {
             />
           </div>
           <div className="field">
-            <label htmlFor="industry">Industria</label>
+            <label htmlFor="industry">Industry</label>
             <input
               id="industry"
               value={industry}
@@ -121,7 +121,7 @@ export function DashboardPage() {
             />
           </div>
           <div className="field">
-            <label htmlFor="location">Ubicación</label>
+            <label htmlFor="location">Location</label>
             <input
               id="location"
               value={location}
@@ -129,7 +129,7 @@ export function DashboardPage() {
             />
           </div>
           <div className="field">
-            <label htmlFor="description">Descripción</label>
+            <label htmlFor="description">Description</label>
             <textarea
               id="description"
               value={description}

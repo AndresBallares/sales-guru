@@ -28,9 +28,9 @@ test('sign up, create a business, log out, log back in', async ({ page }) => {
   await expect(page.getByText(`Signed in as ${email}`)).toBeVisible()
   await expect(page.getByText('No businesses yet')).toBeVisible()
 
-  await page.getByLabel('Nombre').fill('Acme Widgets')
-  await page.getByLabel('Industria').fill('Manufacturing')
-  await page.getByLabel('Ubicación').fill('CDMX')
+  await page.getByLabel('Name').fill('Acme Widgets')
+  await page.getByLabel('Industry').fill('Manufacturing')
+  await page.getByLabel('Location').fill('CDMX')
   await page.getByRole('button', { name: 'Create business' }).click()
 
   await expect(page.getByText('Acme Widgets — Manufacturing · CDMX')).toBeVisible()
@@ -64,10 +64,10 @@ test('sign up, create a business, log out, log back in', async ({ page }) => {
   await page.getByLabel('Product').focus()
   await page.getByLabel('Product').selectOption({ label: 'Handmade leather wallets' })
   await page.getByLabel('Audience').selectOption({ label: 'Busy professionals, 30-55' })
-  await page.getByLabel('Objective').selectOption({ label: 'Ventas' })
+  await page.getByLabel('Objective').selectOption({ label: 'Sales' })
   await page.getByRole('button', { name: 'Create campaign' }).click()
 
-  await expect(page.getByText('Spring Wallet Sale — Ventas — DRAFT')).toBeVisible()
+  await expect(page.getByText('Spring Wallet Sale — Sales — DRAFT')).toBeVisible()
 
   const businessDetailResults = await new AxeBuilder({ page }).analyze()
   expect(businessDetailResults.violations).toEqual([])

@@ -30,11 +30,11 @@ import {
 } from '../lib/api'
 
 const OBJECTIVE_LABELS: Record<Objective, string> = {
-  SALES: 'Ventas',
+  SALES: 'Sales',
   LEADS: 'Leads',
-  TRAFFIC: 'Tráfico',
-  MESSAGES: 'Mensajes',
-  AWARENESS: 'Reconocimiento',
+  TRAFFIC: 'Traffic',
+  MESSAGES: 'Messages',
+  AWARENESS: 'Awareness',
 }
 
 const ACTION_LABELS: Record<ActionType, string> = {

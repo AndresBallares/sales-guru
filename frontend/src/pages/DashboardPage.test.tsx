@@ -94,11 +94,11 @@ describe('DashboardPage', () => {
     renderDashboard()
     await screen.findByText(/No businesses yet/)
 
-    await user.type(screen.getByLabelText('Nombre'), 'Acme Widgets')
+    await user.type(screen.getByLabelText('Name'), 'Acme Widgets')
     await user.type(screen.getByLabelText('Website'), 'https://acme.example')
-    await user.type(screen.getByLabelText('Industria'), 'Manufacturing')
-    await user.type(screen.getByLabelText('Ubicación'), 'CDMX')
-    await user.type(screen.getByLabelText('Descripción'), 'We make widgets.')
+    await user.type(screen.getByLabelText('Industry'), 'Manufacturing')
+    await user.type(screen.getByLabelText('Location'), 'CDMX')
+    await user.type(screen.getByLabelText('Description'), 'We make widgets.')
     await user.click(screen.getByRole('button', { name: 'Create business' }))
 
     await waitFor(() =>
@@ -121,7 +121,7 @@ describe('DashboardPage', () => {
     renderDashboard()
     await screen.findByText(/No businesses yet/)
 
-    await user.type(screen.getByLabelText('Nombre'), 'x')
+    await user.type(screen.getByLabelText('Name'), 'x')
     await user.click(screen.getByRole('button', { name: 'Create business' }))
 
     expect(await screen.findByRole('alert')).toHaveTextContent('Name is required')
