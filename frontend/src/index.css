@@ -212,17 +212,20 @@ main {
   width: 100%;
   max-width: 960px;
   margin: 0 auto;
-  padding: 2.5rem 1.5rem 5rem;
+  padding: 2.5rem max(1.5rem, env(safe-area-inset-right)) calc(5rem + env(safe-area-inset-bottom))
+    max(1.5rem, env(safe-area-inset-left));
   display: flex;
   flex-direction: column;
   gap: 1.5rem;
   flex: 1;
 }
 
+/* flex:1 (inherited above) already fills the space #root's column leaves
+   after .global-topbar, so this only needs to center within that — not
+   re-claim a full 100vh, which would overflow and add a second scrollbar. */
 .auth-page {
   max-width: 400px;
   justify-content: center;
-  min-height: 100vh;
   padding-top: 0;
   padding-bottom: 0;
   gap: 1.25rem;
@@ -351,6 +354,7 @@ button {
   border: none;
   border-radius: 999px;
   padding: 0.6rem 1.25rem;
+  min-height: 44px;
   cursor: pointer;
   transition:
     background-color 0.15s ease,
@@ -394,11 +398,15 @@ li button:hover:not(:disabled),
 
 /* ---------- Theme toggle ---------- */
 
+/* Static, not fixed: a floating overlay button covers page content while
+   scrolling on a small viewport, which is exactly what we don't want on
+   phones — see the mobile pass that added this comment. Sits in normal
+   flow above main, using the safe-area inset so it clears a notch/Dynamic
+   Island in landscape. */
 .global-topbar {
-  position: fixed;
-  top: 1rem;
-  right: 1rem;
-  z-index: 50;
+  display: flex;
+  justify-content: flex-end;
+  padding: max(1rem, env(safe-area-inset-top)) max(1.5rem, env(safe-area-inset-right)) 0;
 }
 
 .theme-toggle {
@@ -406,8 +414,9 @@ li button:hover:not(:disabled),
   background: var(--surface);
   border: 1px solid var(--border-strong);
   color: var(--text-secondary);
-  width: 2.5rem;
-  height: 2.5rem;
+  width: 44px;
+  height: 44px;
+  min-height: 44px;
   padding: 0;
   display: inline-flex;
   align-items: center;
