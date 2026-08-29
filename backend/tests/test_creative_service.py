@@ -186,6 +186,34 @@ async def test_generate_creatives_returns_four_variants(
 
 
 @pytest.mark.asyncio
+async def test_generate_creatives_recovers_from_a_stray_key_wrapper(
+    anthropic_api_key: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A "submit_creatives" tool call wrapping its variant list under a
+    "creatives" key instead of the schema's real "variants" field must
+    still succeed — same model-echoing-the-tool-name quirk observed for
+    the Strategist Agent (2026-08-29), see app/services/tool_use.py's
+    parse_tool_input. Unlike that case, the wrapped value here is already
+    the right list — just filed under the wrong key name, since
+    GeneratedCreativeBatch has exactly one field."""
+    _mock_client_returning(
+        monkeypatch,
+        [
+            SimpleNamespace(
+                type="tool_use", input={"creatives": _VALID_TOOL_INPUT["variants"]}
+            )
+        ],
+    )
+
+    result = await creative.generate_creatives(
+        business=_fake_business(), product=_fake_product(), strategy=_FAKE_STRATEGY
+    )
+
+    assert len(result) == 4
+    assert result[0].headline == "Emeralds With a Story"
+
+
+@pytest.mark.asyncio
 async def test_generate_creatives_works_with_no_product(
     anthropic_api_key: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:

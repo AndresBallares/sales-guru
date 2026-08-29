@@ -253,7 +253,11 @@ async def create_meta_campaign(
 
     Args:
         access_token: The business's Meta access token.
-        ad_account_id: The connected ad account to create the campaign in.
+        ad_account_id: The connected ad account to create the campaign in,
+            already carrying Meta's own "act_" prefix (that's the literal
+            `id` field /me/adaccounts returns — see list_ad_accounts —
+            and what gets stored on MetaConnection.adAccountId; not
+            re-added here, or it'd double up to "act_act_...").
         name: The campaign's display name on Meta.
         objective: Our Campaign.objective value — mapped to Meta's own
             objective enum via CAMPAIGN_OBJECTIVE_MAP.
@@ -265,13 +269,21 @@ async def create_meta_campaign(
         MetaConnectionError: If the call fails.
     """
     body = await _post_json(
-        f"{_GRAPH_BASE_URL}/act_{ad_account_id}/campaigns",
+        f"{_GRAPH_BASE_URL}/{ad_account_id}/campaigns",
         {
             "access_token": access_token,
             "name": name,
             "objective": CAMPAIGN_OBJECTIVE_MAP[objective],
             "status": "ACTIVE",
             "special_ad_categories": "[]",
+            # Meta requires this explicitly once a campaign doesn't use a
+            # campaign-level budget (real API behavior confirmed
+            # 2026-08-29, not caught by any mocked test before — error
+            # was "Must specify True or False in is_adset_budget_sharing_
+            # enabled field"). False because budget lives on the AdSet
+            # (create_meta_ad_set's daily_budget), not shared/optimized
+            # across ad sets at the campaign level.
+            "is_adset_budget_sharing_enabled": "false",
         },
     )
     campaign_id: str = body["id"]
@@ -295,7 +307,27 @@ async def create_meta_ad_set(
     geo default. PRD.md §7 already flags real location/interest
     resolution (free text -> Meta's own targeting-search taxonomy) as a
     known gap to close "at publish time" — this is that gap, still open;
-    interests aren't sent at all yet.
+    interests aren't sent at all yet. targeting_automation.advantage_audience
+    is explicitly set to 0 (disabled) rather than left unset — real API
+    behavior confirmed 2026-08-29 (not caught by any mocked test before):
+    Meta now requires this flag whenever explicit targeting is given, and
+    0 keeps delivery scoped to exactly what's specified above rather than
+    letting Meta broaden the audience on its own.
+
+    bid_strategy is fixed to LOWEST_COST_WITHOUT_CAP (automatic bidding,
+    no manual cap) — also newly required by Meta (same date), and the
+    only strategy that needs no additional bid_amount/bid_constraints
+    input, consistent with this app not collecting manual bid input
+    anywhere.
+
+    Known gap, not addressed yet: optimization_goal values that need
+    conversion tracking (e.g. OFFSITE_CONVERSIONS for SALES) also require
+    a promoted_object (a Meta Pixel id) that this app has nowhere to
+    source from — no pixel is stored anywhere in the data model. Real
+    testing against a live ad account hit this immediately; a fix needs a
+    product decision (store a pixel id per business? per ad account
+    connection? fall back to a non-conversion optimization_goal when none
+    exists?) rather than a one-line default here.
 
     Args:
         access_token: The business's Meta access token.
@@ -319,10 +351,11 @@ async def create_meta_ad_set(
             "age_min": age_min,
             "age_max": age_max,
             "geo_locations": {"countries": ["US"]},
+            "targeting_automation": {"advantage_audience": 0},
         }
     )
     body = await _post_json(
-        f"{_GRAPH_BASE_URL}/act_{ad_account_id}/adsets",
+        f"{_GRAPH_BASE_URL}/{ad_account_id}/adsets",
         {
             "access_token": access_token,
             "name": name,
@@ -330,6 +363,7 @@ async def create_meta_ad_set(
             "daily_budget": str(daily_budget_cents),
             "billing_event": "IMPRESSIONS",
             "optimization_goal": optimization_goal,
+            "bid_strategy": "LOWEST_COST_WITHOUT_CAP",
             "targeting": targeting,
             "status": "ACTIVE",
         },
@@ -388,7 +422,7 @@ async def create_meta_ad_creative(
 
     object_story_spec = json.dumps({"page_id": page_id, "link_data": link_data})
     body = await _post_json(
-        f"{_GRAPH_BASE_URL}/act_{ad_account_id}/adcreatives",
+        f"{_GRAPH_BASE_URL}/{ad_account_id}/adcreatives",
         {
             "access_token": access_token,
             "name": name,
@@ -424,7 +458,7 @@ async def create_meta_ad(
     """
     creative_ref = json.dumps({"creative_id": meta_creative_id})
     body = await _post_json(
-        f"{_GRAPH_BASE_URL}/act_{ad_account_id}/ads",
+        f"{_GRAPH_BASE_URL}/{ad_account_id}/ads",
         {
             "access_token": access_token,
             "name": name,

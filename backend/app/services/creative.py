@@ -7,7 +7,10 @@ Same forced-tool-use approach as the Marketing Strategist Agent
 (app/services/strategist.py) for guaranteed-structured output — the model
 must call a single tool whose input_schema is generated directly from
 GeneratedCreativeBatch, so the response is either schema-valid (exactly
-four variants) or the call fails cleanly.
+four variants) or the call fails cleanly. Also shares that module's
+parse_tool_input (app/services/tool_use.py) to tolerate a model wrapping
+its output under one stray top-level key instead of matching the schema
+directly.
 """
 
 import anthropic
@@ -17,6 +20,7 @@ from prisma.models import Business, Product
 from app.core.config import get_settings
 from app.schemas.creative import GeneratedCreativeBatch, GeneratedCreativeVariant
 from app.schemas.strategy import StrategyContent
+from app.services.tool_use import parse_tool_input
 
 _MODEL = "claude-sonnet-5"
 _MAX_TOKENS = 4096
@@ -137,5 +141,5 @@ async def generate_creatives(
     if tool_use is None:
         raise CreativeAgentError("Model did not return a tool call")
 
-    batch = GeneratedCreativeBatch.model_validate(tool_use.input)
+    batch = parse_tool_input(tool_use.input, GeneratedCreativeBatch)
     return batch.variants

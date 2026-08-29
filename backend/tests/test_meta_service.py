@@ -83,8 +83,14 @@ def meta_app_credentials(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
 def test_build_authorization_url_raises_without_app_credentials(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """No Meta app configured raises a clear error, not a crash."""
-    monkeypatch.delenv("META_APP_ID", raising=False)
+    """No Meta app configured raises a clear error, not a crash.
+
+    Set to "" rather than deleted — Settings reads .env directly (not just
+    os.environ, see app/core/config.py), so delenv alone doesn't hide a
+    real key that's actually present in .env; an explicit empty env var
+    does, since it outranks the dotenv source.
+    """
+    monkeypatch.setenv("META_APP_ID", "")
     get_settings.cache_clear()
 
     with pytest.raises(meta.MetaConnectionError, match="must all be configured"):
@@ -109,8 +115,14 @@ def test_build_authorization_url_includes_state_and_redirect_uri(
 async def test_exchange_code_for_token_raises_without_app_credentials(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """No Meta app configured raises a clear error before any network call."""
-    monkeypatch.delenv("META_APP_ID", raising=False)
+    """No Meta app configured raises a clear error before any network call.
+
+    Set to "" rather than deleted — Settings reads .env directly (not just
+    os.environ, see app/core/config.py), so delenv alone doesn't hide a
+    real key that's actually present in .env; an explicit empty env var
+    does, since it outranks the dotenv source.
+    """
+    monkeypatch.setenv("META_APP_ID", "")
     get_settings.cache_clear()
 
     with pytest.raises(meta.MetaConnectionError, match="must all be configured"):
@@ -276,10 +288,14 @@ async def test_create_meta_campaign_returns_the_new_id(
 
     assert campaign_id == "campaign_123"
     url, data = client.calls[0]
-    assert url == "https://graph.facebook.com/v21.0/act_act_1/campaigns"
+    # ad_account_id already carries Meta's own "act_" prefix (that's the
+    # literal `id` field /me/adaccounts returns) — never re-added here, or
+    # it'd double up to "act_act_1".
+    assert url == "https://graph.facebook.com/v21.0/act_1/campaigns"
     assert data["objective"] == "OUTCOME_SALES"
     assert data["status"] == "ACTIVE"
     assert data["access_token"] == "token"
+    assert data["is_adset_budget_sharing_enabled"] == "false"
 
 
 @pytest.mark.asyncio
@@ -301,12 +317,15 @@ async def test_create_meta_ad_set_returns_the_new_id(
     )
 
     assert ad_set_id == "adset_123"
-    _url, data = client.calls[0]
+    url, data = client.calls[0]
+    assert url == "https://graph.facebook.com/v21.0/act_1/adsets"
     assert data["campaign_id"] == "campaign_123"
     assert data["daily_budget"] == "2500"
     assert data["optimization_goal"] == "OFFSITE_CONVERSIONS"
+    assert data["bid_strategy"] == "LOWEST_COST_WITHOUT_CAP"
     assert '"age_min": 30' in data["targeting"]
     assert '"age_max": 55' in data["targeting"]
+    assert '"targeting_automation": {"advantage_audience": 0}' in data["targeting"]
 
 
 @pytest.mark.asyncio
@@ -330,7 +349,8 @@ async def test_create_meta_ad_creative_includes_the_image_when_present(
     )
 
     assert creative_id == "creative_123"
-    _url, data = client.calls[0]
+    url, data = client.calls[0]
+    assert url == "https://graph.facebook.com/v21.0/act_1/adcreatives"
     assert '"picture": "https://acme.example/ring.jpg"' in data["object_story_spec"]
     assert '"page_id": "page_1"' in data["object_story_spec"]
 
@@ -375,7 +395,8 @@ async def test_create_meta_ad_returns_the_new_id(
     )
 
     assert ad_id == "ad_123"
-    _url, data = client.calls[0]
+    url, data = client.calls[0]
+    assert url == "https://graph.facebook.com/v21.0/act_1/ads"
     assert data["adset_id"] == "adset_123"
     assert '"creative_id": "creative_123"' in data["creative"]
     assert data["status"] == "ACTIVE"

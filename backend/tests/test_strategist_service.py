@@ -186,6 +186,30 @@ async def test_generate_strategy_returns_structured_content(
 
 
 @pytest.mark.asyncio
+async def test_generate_strategy_recovers_from_a_stray_strategy_wrapper(
+    anthropic_api_key: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A real claude-sonnet-5 call (2026-08-29) wrapped its otherwise-valid
+    "submit_strategy" tool input under an extra top-level "strategy" key
+    instead of matching the flat schema directly. generate_strategy must
+    still succeed — see app/services/tool_use.py's parse_tool_input."""
+    _mock_client_returning(
+        monkeypatch,
+        [SimpleNamespace(type="tool_use", input={"strategy": _VALID_TOOL_INPUT})],
+    )
+
+    result = await strategist.generate_strategy(
+        business=_fake_business(),
+        product=_fake_product(),
+        audience=_fake_audience(),
+        objective="SALES",
+    )
+
+    assert result.objective == "SALES"
+    assert result.offer == "Custom Colombian emerald rings"
+
+
+@pytest.mark.asyncio
 async def test_generate_strategy_works_with_no_product_or_audience(
     anthropic_api_key: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:

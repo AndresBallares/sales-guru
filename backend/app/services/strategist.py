@@ -8,7 +8,10 @@ Uses Claude's tool-use (forced tool call) rather than free-form JSON + a
 parser — the model is required to call a single tool whose input_schema is
 generated directly from GeneratedStrategyFields, so the response either
 matches that schema or the call fails cleanly; there's no "the model wrote
-almost-valid JSON" failure mode to handle.
+almost-valid JSON" failure mode to handle. tool_choice only forces which
+tool is called though, not that its arguments strictly match the schema —
+see app/services/tool_use.py's parse_tool_input for the one stray-wrapper
+shape that's tolerated before failing.
 """
 
 import anthropic
@@ -17,6 +20,7 @@ from prisma.models import Audience, Business, Product
 
 from app.core.config import get_settings
 from app.schemas.strategy import GeneratedStrategyFields, StrategyContent
+from app.services.tool_use import parse_tool_input
 
 _MODEL = "claude-sonnet-5"
 _MAX_TOKENS = 2048
@@ -150,7 +154,7 @@ async def generate_strategy(
     if tool_use is None:
         raise StrategistError("Model did not return a tool call")
 
-    generated = GeneratedStrategyFields.model_validate(tool_use.input)
+    generated = parse_tool_input(tool_use.input, GeneratedStrategyFields)
     # model_validate (not the constructor) because `objective` is plain str
     # here (that's what Prisma gives us — SQLite has no enum, PRD.md §7) and
     # needs real runtime validation against the Literal, not a static cast.
