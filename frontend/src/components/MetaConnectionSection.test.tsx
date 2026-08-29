@@ -13,7 +13,9 @@ vi.mock('../lib/api', async (importOriginal) => {
     getMetaConnection: vi.fn<typeof actual.getMetaConnection>(),
     listMetaAdAccounts: vi.fn<typeof actual.listMetaAdAccounts>(),
     listMetaPages: vi.fn<typeof actual.listMetaPages>(),
+    listMetaPixels: vi.fn<typeof actual.listMetaPixels>(),
     finalizeMetaConnection: vi.fn<typeof actual.finalizeMetaConnection>(),
+    setMetaPixel: vi.fn<typeof actual.setMetaPixel>(),
     disconnectMeta: vi.fn<typeof actual.disconnectMeta>(),
   }
 })
@@ -33,6 +35,7 @@ const PENDING_CONNECTION: api.MetaConnection = {
   metaUserId: 'meta-user-1',
   adAccountId: null,
   pageId: null,
+  pixelId: null,
   tokenExpiresAt: '2026-10-01T00:00:00Z',
   createdAt: '2026-08-08T00:00:00Z',
 }
@@ -49,6 +52,7 @@ beforeEach(() => {
     writable: true,
     value: { href: '' },
   })
+  mockedApi.listMetaPixels.mockResolvedValue([])
 })
 
 describe('MetaConnectionSection', () => {
@@ -154,6 +158,65 @@ describe('MetaConnectionSection', () => {
     expect(screen.getByText('act_1')).toBeInTheDocument()
     expect(screen.getByText('page_1')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Disconnect' })).toBeInTheDocument()
+  })
+
+  it('shows the Pixel picker once connected with no Pixel set yet', async () => {
+    mockedApi.getMetaConnection.mockResolvedValue(COMPLETE_CONNECTION)
+    mockedApi.listMetaPixels.mockResolvedValue([{ id: 'pixel_1', name: 'Acme Pixel' }])
+
+    renderSection()
+    await screen.findByText(/Connected/)
+
+    expect(await screen.findByLabelText('Meta Pixel')).toBeInTheDocument()
+    expect(await screen.findByRole('option', { name: 'Acme Pixel' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Save Pixel' })).toBeDisabled()
+    expect(screen.queryByText(/^Pixel:/)).not.toBeInTheDocument()
+  })
+
+  it('saves the chosen Pixel', async () => {
+    mockedApi.getMetaConnection.mockResolvedValue(COMPLETE_CONNECTION)
+    mockedApi.listMetaPixels.mockResolvedValue([{ id: 'pixel_1', name: 'Acme Pixel' }])
+    mockedApi.setMetaPixel.mockResolvedValue({ ...COMPLETE_CONNECTION, pixelId: 'pixel_1' })
+    const user = userEvent.setup()
+
+    renderSection()
+    await screen.findByRole('option', { name: 'Acme Pixel' })
+
+    await user.selectOptions(screen.getByLabelText('Meta Pixel'), 'pixel_1')
+    await user.click(screen.getByRole('button', { name: 'Save Pixel' }))
+
+    await waitFor(() =>
+      expect(mockedApi.setMetaPixel).toHaveBeenCalledWith('biz-1', 'pixel_1'),
+    )
+    expect(await screen.findByText('Pixel:')).toBeInTheDocument()
+    expect(screen.getByText('pixel_1')).toBeInTheDocument()
+    expect(screen.queryByLabelText('Meta Pixel')).not.toBeInTheDocument()
+  })
+
+  it('shows an error if saving the Pixel fails', async () => {
+    mockedApi.getMetaConnection.mockResolvedValue(COMPLETE_CONNECTION)
+    mockedApi.listMetaPixels.mockResolvedValue([{ id: 'pixel_1', name: 'Acme Pixel' }])
+    mockedApi.setMetaPixel.mockRejectedValue(new api.ApiError(500, 'Server error'))
+    const user = userEvent.setup()
+
+    renderSection()
+    await screen.findByRole('option', { name: 'Acme Pixel' })
+
+    await user.selectOptions(screen.getByLabelText('Meta Pixel'), 'pixel_1')
+    await user.click(screen.getByRole('button', { name: 'Save Pixel' }))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Server error')
+  })
+
+  it('shows the current Pixel directly once one is already set, without a picker', async () => {
+    mockedApi.getMetaConnection.mockResolvedValue({ ...COMPLETE_CONNECTION, pixelId: 'pixel_1' })
+
+    renderSection()
+    await screen.findByText(/Connected/)
+
+    expect(screen.getByText('Pixel:')).toBeInTheDocument()
+    expect(screen.getByText('pixel_1')).toBeInTheDocument()
+    expect(screen.queryByLabelText('Meta Pixel')).not.toBeInTheDocument()
   })
 
   it('disconnects and returns to the not-connected state', async () => {

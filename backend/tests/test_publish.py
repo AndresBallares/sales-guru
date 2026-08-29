@@ -27,6 +27,7 @@ from app.schemas.strategy import (
     TargetAudience,
 )
 from app.services import meta as meta_service_module
+from app.services.publish import requires_pixel
 from fastapi.testclient import TestClient
 from prisma import Prisma
 
@@ -94,7 +95,9 @@ def _create_campaign(
     return id_
 
 
-def _connect_meta(client: TestClient, business_id: str) -> None:
+def _connect_meta(
+    client: TestClient, business_id: str, *, with_pixel: bool = True
+) -> None:
     """Drive a full connect -> callback -> finalize round-trip (mocked)."""
     connect_response = client.get(f"/businesses/{business_id}/meta/connect")
     state_id = connect_response.json()["authorizationUrl"].rsplit("/", 1)[-1]
@@ -107,10 +110,24 @@ def _connect_meta(client: TestClient, business_id: str) -> None:
         f"/businesses/{business_id}/meta/finalize",
         json={"adAccountId": "act_1", "pageId": "page_1"},
     )
+    # SALES (the default objective in these tests) maps to OFFSITE_CONVERSIONS,
+    # which requires a configured Pixel to publish (real API behavior
+    # confirmed 2026-08-29) — set one so these "build a live campaign"
+    # helpers keep working for tests that aren't about the Pixel requirement
+    # itself. with_pixel=False is for the tests that are about exactly that.
+    if with_pixel:
+        client.post(
+            f"/businesses/{business_id}/meta/pixel",
+            json={"pixelId": "pixel_1"},
+        )
 
 
 def _ready_campaign(
-    client: TestClient, *, with_destination_url: bool = True
+    client: TestClient,
+    *,
+    with_destination_url: bool = True,
+    with_pixel: bool = True,
+    objective: str = "SALES",
 ) -> tuple[str, str]:
     """Build a campaign all the way to APPROVED, Meta connected, ready to publish.
 
@@ -121,7 +138,9 @@ def _ready_campaign(
     business_id = _create_business(
         client, website="https://acme.example" if with_destination_url else None
     )
-    campaign_id = _create_campaign(client, business_id)
+    campaign_id: str = client.post(
+        f"/businesses/{business_id}/campaigns", json={"objective": objective}
+    ).json()["id"]
     client.post(f"/businesses/{business_id}/campaigns/{campaign_id}/strategy")
     creatives = client.post(
         f"/businesses/{business_id}/campaigns/{campaign_id}/creatives"
@@ -131,7 +150,7 @@ def _ready_campaign(
         f"/creatives/{creatives[0]['id']}/select"
     )
     client.post(f"/businesses/{business_id}/campaigns/{campaign_id}/approve")
-    _connect_meta(client, business_id)
+    _connect_meta(client, business_id, with_pixel=with_pixel)
     return business_id, campaign_id
 
 
@@ -180,6 +199,17 @@ def mock_services(monkeypatch: pytest.MonkeyPatch) -> dict[str, AsyncMock]:
         "create_ad_creative": create_ad_creative,
         "create_ad": create_ad,
     }
+
+
+def test_requires_pixel_is_true_for_sales() -> None:
+    """SALES maps to OFFSITE_CONVERSIONS, a confirmed conversion-tracking goal."""
+    assert requires_pixel("SALES") is True
+
+
+def test_requires_pixel_is_false_for_non_conversion_objectives() -> None:
+    """LEADS/TRAFFIC/MESSAGES/AWARENESS don't map to OFFSITE_CONVERSIONS."""
+    for objective in ("LEADS", "TRAFFIC", "MESSAGES", "AWARENESS"):
+        assert requires_pixel(objective) is False
 
 
 def test_publish_requires_a_session(client: TestClient) -> None:
@@ -283,6 +313,33 @@ def test_publish_400s_without_a_destination_url(client: TestClient) -> None:
     assert "destination" in response.json()["detail"].lower()
 
 
+def test_publish_400s_without_a_pixel_for_a_conversion_objective(
+    client: TestClient,
+) -> None:
+    """SALES maps to OFFSITE_CONVERSIONS, which needs a configured Pixel."""
+    business_id, campaign_id = _ready_campaign(client, with_pixel=False)
+
+    response = client.post(f"/businesses/{business_id}/campaigns/{campaign_id}/publish")
+
+    assert response.status_code == 400
+    assert "pixel" in response.json()["detail"].lower()
+
+
+def test_publish_succeeds_without_a_pixel_for_a_non_conversion_objective(
+    client: TestClient, mock_services: dict[str, AsyncMock]
+) -> None:
+    """TRAFFIC maps to LINK_CLICKS, which doesn't need a Pixel — no check blocks it."""
+    business_id, campaign_id = _ready_campaign(
+        client, with_pixel=False, objective="TRAFFIC"
+    )
+
+    response = client.post(f"/businesses/{business_id}/campaigns/{campaign_id}/publish")
+
+    assert response.status_code == 200
+    _, kwargs = mock_services["create_ad_set"].call_args
+    assert kwargs["pixel_id"] is None
+
+
 @pytest.mark.asyncio
 async def test_publish_400s_without_a_selected_creative(client: TestClient) -> None:
     """Defense in depth: APPROVED with no SELECTED creative (shouldn't happen
@@ -324,6 +381,8 @@ def test_publish_succeeds_and_marks_the_campaign_live(
     mock_services["create_ad_set"].assert_awaited_once()
     mock_services["create_ad_creative"].assert_awaited_once()
     mock_services["create_ad"].assert_awaited_once()
+    _, kwargs = mock_services["create_ad_set"].call_args
+    assert kwargs["pixel_id"] == "pixel_1"
 
     creatives = client.get(
         f"/businesses/{business_id}/campaigns/{campaign_id}/creatives"

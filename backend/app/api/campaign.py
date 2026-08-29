@@ -13,7 +13,7 @@ from app.core.db import db
 from app.schemas.campaign import CampaignCreateRequest, CampaignResponse
 from app.schemas.strategy import StrategyContent
 from app.services.meta import MetaConnectionError
-from app.services.publish import publish_campaign_to_meta
+from app.services.publish import publish_campaign_to_meta, requires_pixel
 
 router = APIRouter(prefix="/businesses/{business_id}/campaigns", tags=["campaigns"])
 
@@ -28,6 +28,10 @@ _NO_CREATIVE_SELECTED = "Select an ad creative before publishing"
 _NO_DESTINATION_URL = (
     "Set a product URL or business website before publishing — Meta requires "
     "a destination link for the ad"
+)
+_NO_PIXEL_CONFIGURED = (
+    "Connect a Meta Pixel before publishing this objective — Meta requires "
+    "one to track conversions"
 )
 
 
@@ -205,9 +209,11 @@ async def publish_campaign(
 
     Raises:
         HTTPException: 400 if the campaign isn't approved yet, Meta isn't
-            fully connected, no creative is selected, or there's no
-            destination URL to advertise; 500 if the Meta API call fails
-            (the campaign is moved to FAILED first, so it can be retried).
+            fully connected, no creative is selected, there's no
+            destination URL to advertise, or the objective needs a Meta
+            Pixel that isn't configured (see requires_pixel); 500 if the
+            Meta API call fails (the campaign is moved to FAILED first,
+            so it can be retried).
     """
     if campaign.status not in ("APPROVED", "FAILED"):
         raise HTTPException(
@@ -249,6 +255,11 @@ async def publish_campaign(
     if not destination_url:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST, detail=_NO_DESTINATION_URL
+        )
+
+    if requires_pixel(campaign.objective) and connection.pixelId is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=_NO_PIXEL_CONFIGURED
         )
 
     try:

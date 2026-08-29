@@ -7,7 +7,8 @@ same reasoning as every other build step: Meta is the source of truth for
 delivery, we still need our own queryable copy.
 
 Precondition checks (a complete Meta connection, a selected creative, a
-resolvable destination URL) live in the API layer (app/api/campaign.py),
+resolvable destination URL, a configured Pixel when the objective needs
+one — see requires_pixel) live in the API layer (app/api/campaign.py),
 same pattern as the strategy-required check before creative generation —
 this module assumes its caller already validated all of that and just
 does the Meta calls + local writes.
@@ -29,6 +30,26 @@ _OPTIMIZATION_GOAL_BY_OBJECTIVE = {
     "MESSAGES": "LINK_CLICKS",
     "AWARENESS": "REACH",
 }
+
+# Optimization goals that need a Meta Pixel as their promoted_object (real
+# API behavior confirmed 2026-08-29 — see create_meta_ad_set's docstring).
+# Only OFFSITE_CONVERSIONS is confirmed; LEAD_GENERATION likely needs a
+# Lead Form instead of a pixel, a different, unverified mechanism not
+# handled here yet.
+_GOALS_REQUIRING_PIXEL = frozenset({"OFFSITE_CONVERSIONS"})
+
+
+def requires_pixel(objective: str) -> bool:
+    """Whether publishing this objective needs a MetaConnection.pixelId set.
+
+    Args:
+        objective: A Campaign.objective value.
+
+    Returns:
+        True if the objective's mapped optimization_goal needs a Meta
+        Pixel as its promoted_object.
+    """
+    return _OPTIMIZATION_GOAL_BY_OBJECTIVE[objective] in _GOALS_REQUIRING_PIXEL
 
 
 async def publish_campaign_to_meta(
@@ -79,6 +100,7 @@ async def publish_campaign_to_meta(
         name=object_name,
         objective=campaign.objective,
     )
+    pixel_id = connection.pixelId if requires_pixel(campaign.objective) else None
     meta_ad_set_id = await meta.create_meta_ad_set(
         access_token=connection.accessToken,
         ad_account_id=connection.adAccountId,
@@ -88,6 +110,7 @@ async def publish_campaign_to_meta(
         optimization_goal=optimization_goal,
         age_min=age_min,
         age_max=age_max,
+        pixel_id=pixel_id,
     )
     meta_creative_id = await meta.create_meta_ad_creative(
         access_token=connection.accessToken,

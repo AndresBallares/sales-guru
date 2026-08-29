@@ -8,9 +8,12 @@ import {
   getMetaConnection,
   listMetaAdAccounts,
   listMetaPages,
+  listMetaPixels,
+  setMetaPixel,
   type MetaAdAccount,
   type MetaConnection,
   type MetaPage,
+  type MetaPixel,
 } from '../lib/api'
 
 export function MetaConnectionSection({ businessId }: { businessId: string }) {
@@ -26,6 +29,11 @@ export function MetaConnectionSection({ businessId }: { businessId: string }) {
   const [selectedPageId, setSelectedPageId] = useState('')
   const [finalizing, setFinalizing] = useState(false)
   const [disconnecting, setDisconnecting] = useState(false)
+
+  const [pixels, setPixels] = useState<MetaPixel[]>([])
+  const [selectedPixelId, setSelectedPixelId] = useState('')
+  const [settingPixel, setSettingPixel] = useState(false)
+  const [pixelError, setPixelError] = useState<string | null>(null)
 
   const refresh = useCallback(async () => {
     setLoading(true)
@@ -78,6 +86,16 @@ export function MetaConnectionSection({ businessId }: { businessId: string }) {
     listMetaPages(businessId).then(setPages).catch(() => undefined)
   }, [pending, businessId])
 
+  // Pixels belong to the ad account, so this can only run once one's been
+  // chosen (finalize done, no longer pending) — separate, optional
+  // follow-up step, since not every objective needs one (PRD.md §5 step 8).
+  useEffect(() => {
+    if (pending || connection === null) {
+      return
+    }
+    listMetaPixels(businessId).then(setPixels).catch(() => undefined)
+  }, [pending, connection, businessId])
+
   async function handleConnect() {
     setConnecting(true)
     setError(null)
@@ -103,6 +121,19 @@ export function MetaConnectionSection({ businessId }: { businessId: string }) {
       setError(err instanceof ApiError ? err.message : 'Could not save the Meta connection.')
     } finally {
       setFinalizing(false)
+    }
+  }
+
+  async function handleSetPixel() {
+    setSettingPixel(true)
+    setPixelError(null)
+    try {
+      const updated = await setMetaPixel(businessId, selectedPixelId)
+      setConnection(updated)
+    } catch (err) {
+      setPixelError(err instanceof ApiError ? err.message : 'Could not save the Pixel.')
+    } finally {
+      setSettingPixel(false)
     }
   }
 
@@ -193,6 +224,46 @@ export function MetaConnectionSection({ businessId }: { businessId: string }) {
             Connected — ad account <strong>{connection.adAccountId}</strong>, Page{' '}
             <strong>{connection.pageId}</strong>.
           </p>
+
+          {connection.pixelId ? (
+            <p>
+              Pixel: <strong>{connection.pixelId}</strong>
+            </p>
+          ) : (
+            <div>
+              <p>
+                Optional — only needed for Sales campaigns, to track conversions.
+              </p>
+              <div className="field">
+                <label htmlFor="meta-pixel">Meta Pixel</label>
+                <select
+                  id="meta-pixel"
+                  value={selectedPixelId}
+                  onChange={(event) => setSelectedPixelId(event.target.value)}
+                >
+                  <option value="">Select a Pixel</option>
+                  {pixels.map((pixel) => (
+                    <option key={pixel.id} value={pixel.id}>
+                      {pixel.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              {pixelError && (
+                <p className="form-error" role="alert">
+                  {pixelError}
+                </p>
+              )}
+              <button
+                type="button"
+                onClick={handleSetPixel}
+                disabled={settingPixel || !selectedPixelId}
+              >
+                {settingPixel ? 'Saving…' : 'Save Pixel'}
+              </button>
+            </div>
+          )}
+
           <button type="button" onClick={handleDisconnect} disabled={disconnecting}>
             {disconnecting ? 'Disconnecting…' : 'Disconnect'}
           </button>

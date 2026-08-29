@@ -335,12 +335,18 @@ export interface MetaPage {
   name: string
 }
 
+export interface MetaPixel {
+  id: string
+  name: string
+}
+
 export interface MetaConnection {
   id: string
   businessId: string
   metaUserId: string
   adAccountId: string | null
   pageId: string | null
+  pixelId: string | null
   tokenExpiresAt: string
   createdAt: string
 }
@@ -361,6 +367,10 @@ export function listMetaPages(businessId: string): Promise<MetaPage[]> {
   return request<MetaPage[]>(`/businesses/${businessId}/meta/pages`)
 }
 
+export function listMetaPixels(businessId: string): Promise<MetaPixel[]> {
+  return request<MetaPixel[]>(`/businesses/${businessId}/meta/pixels`)
+}
+
 export interface MetaFinalizeInput {
   adAccountId: string
   pageId: string
@@ -373,6 +383,16 @@ export function finalizeMetaConnection(
   return request<MetaConnection>(`/businesses/${businessId}/meta/finalize`, {
     method: 'POST',
     body: JSON.stringify(input),
+  })
+}
+
+export function setMetaPixel(
+  businessId: string,
+  pixelId: string,
+): Promise<MetaConnection> {
+  return request<MetaConnection>(`/businesses/${businessId}/meta/pixel`, {
+    method: 'POST',
+    body: JSON.stringify({ pixelId }),
   })
 }
 

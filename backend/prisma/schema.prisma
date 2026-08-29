@@ -155,6 +155,12 @@ model MetaConnection {
   accessToken    String
   adAccountId    String?
   pageId         String?
+  // Optional — only conversion-tracking optimization goals (currently
+  // just SALES -> OFFSITE_CONVERSIONS) need one. Selected as its own
+  // follow-up step after adAccountId/pageId are set (GET .../meta/pixels
+  // needs an ad account to query against — see app/api/meta.py), not
+  // bundled into the initial finalize picker.
+  pixelId        String?
   tokenExpiresAt DateTime
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt

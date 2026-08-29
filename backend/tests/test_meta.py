@@ -16,7 +16,7 @@ from unittest.mock import AsyncMock, Mock
 
 import pytest
 from app.api import meta as meta_module
-from app.schemas.meta import MetaAdAccount, MetaPage
+from app.schemas.meta import MetaAdAccount, MetaPage, MetaPixel
 from fastapi.testclient import TestClient
 from prisma import Prisma
 
@@ -64,6 +64,8 @@ def mock_meta_service(monkeypatch: pytest.MonkeyPatch) -> dict[str, AsyncMock | 
     monkeypatch.setattr(meta_module, "list_ad_accounts", ad_accounts)
     pages = AsyncMock(return_value=[MetaPage(id="page_1", name="Acme Jewelry")])
     monkeypatch.setattr(meta_module, "list_pages", pages)
+    pixels = AsyncMock(return_value=[MetaPixel(id="pixel_1", name="venzi jewelry")])
+    monkeypatch.setattr(meta_module, "list_ad_pixels", pixels)
     return {
         "build_url": build_url,
         "exchange_code": exchange_code,
@@ -71,6 +73,7 @@ def mock_meta_service(monkeypatch: pytest.MonkeyPatch) -> dict[str, AsyncMock | 
         "user_id": user_id,
         "ad_accounts": ad_accounts,
         "pages": pages,
+        "pixels": pixels,
     }
 
 
@@ -282,6 +285,115 @@ def test_finalize_stores_the_chosen_ad_account_and_page(client: TestClient) -> N
     body = response.json()
     assert body["adAccountId"] == "act_1"
     assert body["pageId"] == "page_1"
+
+
+def test_get_pixels_requires_a_session(client: TestClient) -> None:
+    """Listing Pixels with no session cookie returns 401."""
+    response = client.get("/businesses/some-id/meta/pixels")
+
+    assert response.status_code == 401
+
+
+def test_get_pixels_404s_before_any_connection_started(client: TestClient) -> None:
+    """Listing Pixels before a connection exists returns 404."""
+    _signed_up_client(client)
+    business_id = _create_business(client)
+
+    response = client.get(f"/businesses/{business_id}/meta/pixels")
+
+    assert response.status_code == 404
+
+
+def test_get_pixels_400s_before_an_ad_account_is_chosen(client: TestClient) -> None:
+    """Pixels belong to an ad account — finalize must run first (see meta.py)."""
+    _signed_up_client(client)
+    business_id = _create_business(client)
+    _connect(client, business_id)
+
+    response = client.get(f"/businesses/{business_id}/meta/pixels")
+
+    assert response.status_code == 400
+    assert "ad account" in response.json()["detail"].lower()
+
+
+def test_get_pixels_returns_the_list_once_an_ad_account_is_chosen(
+    client: TestClient,
+) -> None:
+    """Once finalize has picked an ad account, its Pixels are listed."""
+    _signed_up_client(client)
+    business_id = _create_business(client)
+    _connect(client, business_id)
+    client.post(
+        f"/businesses/{business_id}/meta/finalize",
+        json={"adAccountId": "act_1", "pageId": "page_1"},
+    )
+
+    response = client.get(f"/businesses/{business_id}/meta/pixels")
+
+    assert response.status_code == 200
+    assert response.json() == [{"id": "pixel_1", "name": "venzi jewelry"}]
+
+
+def test_get_pixels_surfaces_agent_failures_as_500(
+    client: TestClient, mock_meta_service: dict[str, AsyncMock | Mock]
+) -> None:
+    """A MetaConnectionError from the Graph API call becomes a clean 500."""
+    from app.services.meta import MetaConnectionError
+
+    _signed_up_client(client)
+    business_id = _create_business(client)
+    _connect(client, business_id)
+    client.post(
+        f"/businesses/{business_id}/meta/finalize",
+        json={"adAccountId": "act_1", "pageId": "page_1"},
+    )
+    mock_meta_service["pixels"].side_effect = MetaConnectionError(
+        "Invalid OAuth access token"
+    )
+
+    response = client.get(f"/businesses/{business_id}/meta/pixels")
+
+    assert response.status_code == 500
+    assert "Invalid OAuth access token" in response.json()["detail"]
+
+
+def test_set_pixel_requires_a_session(client: TestClient) -> None:
+    """Setting the Pixel with no session cookie returns 401."""
+    response = client.post(
+        "/businesses/some-id/meta/pixel", json={"pixelId": "pixel_1"}
+    )
+
+    assert response.status_code == 401
+
+
+def test_set_pixel_404s_before_any_connection_started(client: TestClient) -> None:
+    """Setting the Pixel before a connection exists returns 404."""
+    _signed_up_client(client)
+    business_id = _create_business(client)
+
+    response = client.post(
+        f"/businesses/{business_id}/meta/pixel", json={"pixelId": "pixel_1"}
+    )
+
+    assert response.status_code == 404
+
+
+def test_set_pixel_stores_the_chosen_pixel(client: TestClient) -> None:
+    """Setting the Pixel records it, separate from and after finalize."""
+    _signed_up_client(client)
+    business_id = _create_business(client)
+    _connect(client, business_id)
+    client.post(
+        f"/businesses/{business_id}/meta/finalize",
+        json={"adAccountId": "act_1", "pageId": "page_1"},
+    )
+
+    response = client.post(
+        f"/businesses/{business_id}/meta/pixel", json={"pixelId": "pixel_1"}
+    )
+
+    assert response.status_code == 200
+    assert response.json()["pixelId"] == "pixel_1"
 
 
 def test_disconnect_requires_a_session(client: TestClient) -> None:

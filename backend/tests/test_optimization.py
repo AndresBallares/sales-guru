@@ -91,6 +91,15 @@ def _connect_meta(client: TestClient, business_id: str) -> None:
         f"/businesses/{business_id}/meta/finalize",
         json={"adAccountId": "act_1", "pageId": "page_1"},
     )
+    # SALES (the default objective in these tests) maps to OFFSITE_CONVERSIONS,
+    # which requires a configured Pixel to publish (real API behavior
+    # confirmed 2026-08-29) — set one so these "build a live campaign"
+    # helpers keep working for tests that aren't about the Pixel requirement
+    # itself (see test_meta.py / test_campaign.py for those).
+    client.post(
+        f"/businesses/{business_id}/meta/pixel",
+        json={"pixelId": "pixel_1"},
+    )
 
 
 def _live_campaign(client: TestClient) -> tuple[str, str]:

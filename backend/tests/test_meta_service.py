@@ -11,7 +11,7 @@ from typing import Any
 import httpx
 import pytest
 from app.core.config import get_settings
-from app.schemas.meta import MetaPage
+from app.schemas.meta import MetaPage, MetaPixel
 from app.services import meta
 
 
@@ -209,6 +209,24 @@ async def test_list_pages_returns_parsed_pages(monkeypatch: pytest.MonkeyPatch) 
 
 
 @pytest.mark.asyncio
+async def test_list_ad_pixels_returns_parsed_pixels(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A successful call returns the ad account's Pixels, parsed into MetaPixel."""
+    client = _mock_client_returning(
+        monkeypatch,
+        _FakeResponse({"data": [{"id": "pixel_1", "name": "venzi jewelry"}]}),
+    )
+
+    pixels = await meta.list_ad_pixels("some-token", "act_1")
+
+    assert pixels == [MetaPixel(id="pixel_1", name="venzi jewelry")]
+    url, params = client.calls[0]
+    assert url == "https://graph.facebook.com/v21.0/act_1/adspixels"
+    assert params["access_token"] == "some-token"
+
+
+@pytest.mark.asyncio
 async def test_get_json_raises_on_network_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -326,6 +344,35 @@ async def test_create_meta_ad_set_returns_the_new_id(
     assert '"age_min": 30' in data["targeting"]
     assert '"age_max": 55' in data["targeting"]
     assert '"targeting_automation": {"advantage_audience": 0}' in data["targeting"]
+    assert "promoted_object" not in data
+
+
+@pytest.mark.asyncio
+async def test_create_meta_ad_set_includes_promoted_object_with_a_pixel(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A pixel_id builds promoted_object with a fixed PURCHASE event type.
+
+    Real API behavior confirmed 2026-08-29: OFFSITE_CONVERSIONS requires
+    this — see app/services/publish.py's requires_pixel.
+    """
+    client = _mock_client_returning(monkeypatch, _FakeResponse({"id": "adset_123"}))
+
+    await meta.create_meta_ad_set(
+        access_token="token",
+        ad_account_id="act_1",
+        name="Custom Colombian Emerald Ring",
+        meta_campaign_id="campaign_123",
+        daily_budget_cents=2500,
+        optimization_goal="OFFSITE_CONVERSIONS",
+        age_min=30,
+        age_max=55,
+        pixel_id="pixel_1",
+    )
+
+    _url, data = client.calls[0]
+    assert '"pixel_id": "pixel_1"' in data["promoted_object"]
+    assert '"custom_event_type": "PURCHASE"' in data["promoted_object"]
 
 
 @pytest.mark.asyncio

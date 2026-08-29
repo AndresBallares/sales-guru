@@ -15,7 +15,7 @@ from typing import Any, NamedTuple
 import httpx
 
 from app.core.config import get_settings
-from app.schemas.meta import MetaAdAccount, MetaPage
+from app.schemas.meta import MetaAdAccount, MetaPage, MetaPixel
 
 _GRAPH_VERSION = "v21.0"
 _GRAPH_BASE_URL = f"https://graph.facebook.com/{_GRAPH_VERSION}"
@@ -246,6 +246,31 @@ async def list_pages(access_token: str) -> list[MetaPage]:
     return [MetaPage.model_validate(item) for item in body.get("data", [])]
 
 
+async def list_ad_pixels(access_token: str, ad_account_id: str) -> list[MetaPixel]:
+    """List the Meta Pixels available on a given ad account.
+
+    Unlike list_ad_accounts/list_pages, Pixels aren't listed via /me/... —
+    they belong to an ad account, not directly to the user, so this needs
+    one already chosen (real API behavior confirmed 2026-08-29).
+
+    Args:
+        access_token: A valid Meta access token.
+        ad_account_id: The connected ad account, already carrying Meta's
+            own "act_" prefix (see create_meta_campaign's docstring).
+
+    Returns:
+        The ad account's Pixels.
+
+    Raises:
+        MetaConnectionError: If the call fails.
+    """
+    body = await _get_json(
+        f"{_GRAPH_BASE_URL}/{ad_account_id}/adspixels",
+        {"fields": "id,name", "access_token": access_token},
+    )
+    return [MetaPixel.model_validate(item) for item in body.get("data", [])]
+
+
 async def create_meta_campaign(
     *, access_token: str, ad_account_id: str, name: str, objective: str
 ) -> str:
@@ -300,6 +325,7 @@ async def create_meta_ad_set(
     optimization_goal: str,
     age_min: int,
     age_max: int,
+    pixel_id: str | None = None,
 ) -> str:
     """Create a live AdSet object on Meta, under an already-created campaign.
 
@@ -320,15 +346,6 @@ async def create_meta_ad_set(
     input, consistent with this app not collecting manual bid input
     anywhere.
 
-    Known gap, not addressed yet: optimization_goal values that need
-    conversion tracking (e.g. OFFSITE_CONVERSIONS for SALES) also require
-    a promoted_object (a Meta Pixel id) that this app has nowhere to
-    source from — no pixel is stored anywhere in the data model. Real
-    testing against a live ad account hit this immediately; a fix needs a
-    product decision (store a pixel id per business? per ad account
-    connection? fall back to a non-conversion optimization_goal when none
-    exists?) rather than a one-line default here.
-
     Args:
         access_token: The business's Meta access token.
         ad_account_id: The connected ad account.
@@ -339,6 +356,13 @@ async def create_meta_ad_set(
         optimization_goal: A Meta optimization_goal value.
         age_min: Minimum target age.
         age_max: Maximum target age.
+        pixel_id: The MetaConnection's configured Pixel, if any. Required
+            by Meta (as a promoted_object) for conversion-tracking
+            optimization_goal values — currently just OFFSITE_CONVERSIONS
+            — confirmed by the caller (app/api/campaign.py) before this
+            is ever invoked, not re-checked here. custom_event_type is
+            fixed to PURCHASE (matches the SALES objective this pairs
+            with; not user-configurable yet).
 
     Returns:
         The new Meta ad set id.
@@ -354,19 +378,24 @@ async def create_meta_ad_set(
             "targeting_automation": {"advantage_audience": 0},
         }
     )
+    data = {
+        "access_token": access_token,
+        "name": name,
+        "campaign_id": meta_campaign_id,
+        "daily_budget": str(daily_budget_cents),
+        "billing_event": "IMPRESSIONS",
+        "optimization_goal": optimization_goal,
+        "bid_strategy": "LOWEST_COST_WITHOUT_CAP",
+        "targeting": targeting,
+        "status": "ACTIVE",
+    }
+    if pixel_id is not None:
+        data["promoted_object"] = json.dumps(
+            {"pixel_id": pixel_id, "custom_event_type": "PURCHASE"}
+        )
     body = await _post_json(
         f"{_GRAPH_BASE_URL}/{ad_account_id}/adsets",
-        {
-            "access_token": access_token,
-            "name": name,
-            "campaign_id": meta_campaign_id,
-            "daily_budget": str(daily_budget_cents),
-            "billing_event": "IMPRESSIONS",
-            "optimization_goal": optimization_goal,
-            "bid_strategy": "LOWEST_COST_WITHOUT_CAP",
-            "targeting": targeting,
-            "status": "ACTIVE",
-        },
+        data,
     )
     ad_set_id: str = body["id"]
     return ad_set_id

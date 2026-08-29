@@ -25,11 +25,30 @@ class MetaPage(CamelCaseModel):
     name: str
 
 
+class MetaPixel(CamelCaseModel):
+    """One of the ad account's Meta Pixels, as offered for selection."""
+
+    id: str
+    name: str
+
+
 class MetaFinalizeRequest(CamelCaseModel):
     """The user's chosen ad account + Page, completing the connection."""
 
     ad_account_id: str
     page_id: str
+
+
+class MetaPixelRequest(CamelCaseModel):
+    """The user's chosen Pixel — a separate, optional follow-up step.
+
+    Only conversion-tracking optimization goals need one (currently just
+    SALES -> OFFSITE_CONVERSIONS, see app/services/publish.py), so it's
+    not bundled into MetaFinalizeRequest — a business advertising for
+    TRAFFIC/AWARENESS/MESSAGES never needs to see this step at all.
+    """
+
+    pixel_id: str
 
 
 class MetaConnectionResponse(CamelCaseModel):
@@ -43,5 +62,6 @@ class MetaConnectionResponse(CamelCaseModel):
     meta_user_id: str
     ad_account_id: str | None
     page_id: str | None
+    pixel_id: str | None
     token_expires_at: datetime
     created_at: datetime

@@ -25,6 +25,8 @@ from app.schemas.meta import (
     MetaConnectResponse,
     MetaFinalizeRequest,
     MetaPage,
+    MetaPixel,
+    MetaPixelRequest,
 )
 from app.services.meta import (
     MetaConnectionError,
@@ -33,6 +35,7 @@ from app.services.meta import (
     get_long_lived_token,
     get_meta_user_id,
     list_ad_accounts,
+    list_ad_pixels,
     list_pages,
 )
 
@@ -40,6 +43,7 @@ router = APIRouter(prefix="/businesses/{business_id}/meta", tags=["meta"])
 callback_router = APIRouter(tags=["meta"])
 
 _CONNECTION_NOT_FOUND = "Meta connection not found"
+_AD_ACCOUNT_NOT_SET = "Select an ad account and Page before choosing a Pixel"
 _STATE_TTL = timedelta(minutes=10)
 
 
@@ -58,6 +62,7 @@ def _to_response(connection: MetaConnection) -> MetaConnectionResponse:
         meta_user_id=connection.metaUserId,
         ad_account_id=connection.adAccountId,
         page_id=connection.pageId,
+        pixel_id=connection.pixelId,
         token_expires_at=connection.tokenExpiresAt,
         created_at=connection.createdAt,
     )
@@ -204,6 +209,72 @@ async def finalize(
     updated = await db.metaconnection.update(
         where={"id": connection.id},
         data={"adAccountId": payload.ad_account_id, "pageId": payload.page_id},
+    )
+    assert updated is not None  # just fetched above, can't vanish mid-request
+    return _to_response(updated)
+
+
+@router.get("/pixels", response_model=list[MetaPixel])
+async def get_pixels(
+    business: Business = Depends(get_owned_business),
+) -> list[MetaPixel]:
+    """List the Pixels available on the connection's chosen ad account.
+
+    A separate, later step from get_ad_accounts/get_pages — Pixels
+    belong to an ad account (real API behavior confirmed 2026-08-29, see
+    app/services/meta.py's list_ad_pixels), so this can't be offered
+    until finalize has already picked one.
+
+    Args:
+        business: The business, resolved and ownership-checked by
+            get_owned_business.
+
+    Returns:
+        The chosen ad account's Pixels — an empty list if it has none.
+
+    Raises:
+        HTTPException: 404 if no connection exists yet; 400 if an ad
+            account hasn't been chosen yet; 500 if the Graph API call
+            fails.
+    """
+    connection = await _require_connection(business.id)
+    if connection.adAccountId is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=_AD_ACCOUNT_NOT_SET
+        )
+    try:
+        return await list_ad_pixels(connection.accessToken, connection.adAccountId)
+    except MetaConnectionError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)
+        ) from exc
+
+
+@router.post("/pixel", response_model=MetaConnectionResponse)
+async def set_pixel(
+    payload: MetaPixelRequest,
+    business: Business = Depends(get_owned_business),
+) -> MetaConnectionResponse:
+    """Record the chosen Pixel — optional, only needed for some objectives.
+
+    A separate endpoint from finalize (not a field re-sent alongside
+    adAccountId/pageId) since it's genuinely optional and only choosable
+    once an ad account is already set — see get_pixels.
+
+    Args:
+        payload: The chosen pixelId.
+        business: The business, resolved and ownership-checked by
+            get_owned_business.
+
+    Returns:
+        The updated connection.
+
+    Raises:
+        HTTPException: 404 if no connection exists yet.
+    """
+    connection = await _require_connection(business.id)
+    updated = await db.metaconnection.update(
+        where={"id": connection.id}, data={"pixelId": payload.pixel_id}
     )
     assert updated is not None  # just fetched above, can't vanish mid-request
     return _to_response(updated)
