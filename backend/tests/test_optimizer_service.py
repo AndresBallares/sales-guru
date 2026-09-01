@@ -14,7 +14,14 @@ import anthropic
 import httpx
 import pytest
 from app.core.config import get_settings
-from app.services import optimizer
+from app.schemas.strategy import (
+    GeneratedTestPlanFields,
+    NormalizedMetrics,
+    TargetAudience,
+    TestPlanContent,
+    UnitEconomicsFields,
+)
+from app.services import optimizer, strategist
 from prisma.models import AdSet, Business, Campaign, Metric
 
 _NOW = datetime(2026, 8, 9, 12, 0, tzinfo=UTC)
@@ -58,6 +65,17 @@ def _fake_metric(**overrides: object) -> Metric:
         "clicks": 50,
         "spend": 12.5,
         "conversions": 8,
+        "reach": None,
+        "cpm": None,
+        "ctr": None,
+        "cpc": None,
+        "landingPageViews": None,
+        "addToCart": None,
+        "addToCartRate": None,
+        "conversionRate": None,
+        "cac": None,
+        "purchaseValue": None,
+        "roas": None,
     }
     defaults.update(overrides)
     return cast(Metric, SimpleNamespace(**defaults))
@@ -520,4 +538,279 @@ async def test_generate_recommendation_raises_on_malformed_tool_input(
             campaign=_fake_campaign(),
             ad_set=_fake_ad_set(),
             windows=[],
+        )
+
+
+# --- TEST_PLAN evaluation ("Phase B") ---------------------------------------
+
+
+def _fake_test_plan(**overrides: object) -> TestPlanContent:
+    """Build a real TestPlanContent from the strategist's own assembly
+    helpers, not a hand-rolled duplicate shape — same reasoning as
+    tests/test_strategy.py's _FAKE_TEST_PLAN."""
+    generated = GeneratedTestPlanFields(
+        hypothesis_audience_name="Luxury Jewelry Interest Audience",
+        hypothesis_audience_targeting=TargetAudience(
+            age_min=30, age_max=55, interests=["fine jewelry"]
+        ),
+        hypothesis_statement="The hypothesis-driven audience will produce a lower CAC.",
+        offer="Custom emerald rings",
+        positioning="Premium and personal",
+        creative_angles=["Craftsmanship", "Price value"],
+        copy_strategy="Lead with the story behind each piece",
+    )
+    benchmark_context = strategist._build_benchmark_context()
+    defaults: dict[str, object] = {
+        "objective": "SALES",
+        "audience_variants": [
+            strategist._build_broad_baseline_variant(),
+            strategist._build_hypothesis_variant(generated),
+        ],
+        "hypotheses": [
+            strategist._build_primary_hypothesis(generated.hypothesis_statement)
+        ],
+        "offer": generated.offer,
+        "positioning": generated.positioning,
+        "creative_angles": generated.creative_angles,
+        "copy_strategy": generated.copy_strategy,
+        "daily_budget": 50.0,
+        "duration_days": 10,
+        "total_budget": 500.0,
+        "success_criteria": strategist._build_success_criteria(benchmark_context, None),
+        "baseline_metrics": NormalizedMetrics(),
+        "benchmark_context": benchmark_context,
+    }
+    defaults.update(overrides)
+    return TestPlanContent.model_validate(defaults)
+
+
+_VALID_TEST_EVALUATION_INPUT: dict[str, Any] = {
+    "keyFindings": ["CTR is within the typical range for this vertical."],
+    "recommendedAction": "continue_testing",
+    "reasoning": "Not enough conversion volume yet to read economic indicators.",
+    "confidence": "LOW",
+}
+
+
+def test_has_sufficient_test_data_true_when_budget_fraction_met() -> None:
+    """Half the declared budget spent is enough, regardless of time elapsed."""
+    test_plan = _fake_test_plan()
+    metric = _fake_metric(spend=250.0)  # 250 / 500 = 50%
+
+    assert optimizer.has_sufficient_test_data(
+        test_plan=test_plan,
+        latest_metric=metric,
+        campaign_live_since=_NOW,
+        now=_NOW,
+    )
+
+
+def test_has_sufficient_test_data_true_when_duration_fraction_met() -> None:
+    """Half the declared duration elapsed is enough, regardless of spend."""
+    test_plan = _fake_test_plan()
+    metric = _fake_metric(spend=1.0)
+
+    assert optimizer.has_sufficient_test_data(
+        test_plan=test_plan,
+        latest_metric=metric,
+        campaign_live_since=_NOW - timedelta(days=5),  # 5 / 10 days = 50%
+        now=_NOW,
+    )
+
+
+def test_has_sufficient_test_data_false_when_neither_met() -> None:
+    """Low spend and little time elapsed means not enough data yet."""
+    test_plan = _fake_test_plan()
+    metric = _fake_metric(spend=10.0)
+
+    assert not optimizer.has_sufficient_test_data(
+        test_plan=test_plan,
+        latest_metric=metric,
+        campaign_live_since=_NOW - timedelta(hours=6),
+        now=_NOW,
+    )
+
+
+# --- _format_criterion_line --------------------------------------------------
+
+
+def test_format_criterion_line_includes_the_performance_zone() -> None:
+    """A real value against a benchmark reports its zone, not just the raw number."""
+    test_plan = _fake_test_plan()
+    ctr_criterion = next(
+        c for c in test_plan.success_criteria.leading_indicators if c.metric == "ctr"
+    )
+
+    line = optimizer._format_criterion_line(ctr_criterion, 5.0)
+
+    assert "actual 5.00" in line
+    assert "exceptional" in line
+
+
+def test_format_criterion_line_handles_a_missing_value() -> None:
+    """No actual value yet reports "not yet available", not None or a crash."""
+    test_plan = _fake_test_plan()
+    ctr_criterion = next(
+        c for c in test_plan.success_criteria.leading_indicators if c.metric == "ctr"
+    )
+
+    line = optimizer._format_criterion_line(ctr_criterion, None)
+
+    assert "not yet available" in line
+
+
+def test_format_criterion_line_includes_the_business_target() -> None:
+    """A criterion with a business_target reports it separately from the benchmark."""
+    unit_economics = UnitEconomicsFields(
+        gross_profit=303.0, breakeven_cac=303.0, target_cac=100.0, breakeven_roas=3.3
+    )
+    test_plan = _fake_test_plan(
+        success_criteria=strategist._build_success_criteria(
+            strategist._build_benchmark_context(), unit_economics
+        )
+    )
+    cac_criterion = next(
+        c for c in test_plan.success_criteria.economic_indicators if c.metric == "cac"
+    )
+
+    line = optimizer._format_criterion_line(cac_criterion, 40.0)
+
+    assert "business target" in line
+
+
+# --- _build_test_evaluation_prompt ------------------------------------------
+
+
+def test_build_test_evaluation_prompt_never_asks_for_a_winner() -> None:
+    """The prompt explicitly forbids declaring a winner — no real
+    per-variant data exists until multi-adset publishing is built."""
+    test_plan = _fake_test_plan()
+    metric = _fake_metric()
+
+    prompt = optimizer._build_test_evaluation_prompt(
+        _fake_business(), _fake_campaign(), test_plan, metric
+    )
+
+    assert "cannot and must not declare either variant a winner" in prompt
+    assert "Broad / Automated Baseline" in prompt
+    assert "Luxury Jewelry Interest Audience" in prompt
+    assert "The hypothesis-driven audience will produce a lower CAC." in prompt
+    assert "prefer_broad" in prompt  # named as explicitly off-limits
+    assert "$50.00/day for 10 days" in prompt
+
+
+def test_build_test_evaluation_prompt_includes_real_metrics() -> None:
+    """Real collected numbers are surfaced, not just the test's design."""
+    test_plan = _fake_test_plan()
+    metric = _fake_metric(impressions=5000, clicks=200, spend=150.0, conversions=5)
+
+    prompt = optimizer._build_test_evaluation_prompt(
+        _fake_business(), _fake_campaign(), test_plan, metric
+    )
+
+    assert "Impressions: 5000" in prompt
+    assert "$150.00" in prompt
+
+
+# --- evaluate_test_plan ------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_evaluate_test_plan_raises_without_an_api_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """No ANTHROPIC_API_KEY configured raises a clear error, not a crash."""
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "")
+    get_settings.cache_clear()
+
+    with pytest.raises(optimizer.OptimizerError, match="not configured"):
+        await optimizer.evaluate_test_plan(
+            business=_fake_business(),
+            campaign=_fake_campaign(),
+            test_plan=_fake_test_plan(),
+            latest_metric=_fake_metric(),
+        )
+
+    get_settings.cache_clear()
+
+
+@pytest.mark.asyncio
+async def test_evaluate_test_plan_returns_the_parsed_evaluation(
+    anthropic_api_key: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A valid tool-use response is parsed into GeneratedTestEvaluation."""
+    _mock_client_returning(
+        monkeypatch,
+        [SimpleNamespace(type="tool_use", input=_VALID_TEST_EVALUATION_INPUT)],
+    )
+
+    result = await optimizer.evaluate_test_plan(
+        business=_fake_business(),
+        campaign=_fake_campaign(),
+        test_plan=_fake_test_plan(),
+        latest_metric=_fake_metric(),
+    )
+
+    assert result.recommended_action == "continue_testing"
+    assert result.confidence == "LOW"
+    assert result.key_findings == ["CTR is within the typical range for this vertical."]
+
+
+@pytest.mark.asyncio
+async def test_evaluate_test_plan_raises_on_api_error(
+    anthropic_api_key: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An Anthropic API failure surfaces as OptimizerError, not a raw exception."""
+    request = httpx.Request("POST", "https://api.anthropic.com/v1/messages")
+    create = AsyncMock(side_effect=anthropic.APIConnectionError(request=request))
+    fake_client = SimpleNamespace(messages=SimpleNamespace(create=create))
+    monkeypatch.setattr(optimizer, "AsyncAnthropic", lambda **_kwargs: fake_client)
+
+    with pytest.raises(optimizer.OptimizerError, match="Anthropic API call failed"):
+        await optimizer.evaluate_test_plan(
+            business=_fake_business(),
+            campaign=_fake_campaign(),
+            test_plan=_fake_test_plan(),
+            latest_metric=_fake_metric(),
+        )
+
+
+@pytest.mark.asyncio
+async def test_evaluate_test_plan_raises_when_no_tool_call_returned(
+    anthropic_api_key: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Text instead of the forced tool call is a clear OptimizerError."""
+    _mock_client_returning(
+        monkeypatch, [SimpleNamespace(type="text", text="I have thoughts...")]
+    )
+
+    with pytest.raises(optimizer.OptimizerError, match="did not return a tool call"):
+        await optimizer.evaluate_test_plan(
+            business=_fake_business(),
+            campaign=_fake_campaign(),
+            test_plan=_fake_test_plan(),
+            latest_metric=_fake_metric(),
+        )
+
+
+@pytest.mark.asyncio
+async def test_evaluate_test_plan_raises_on_malformed_tool_input(
+    anthropic_api_key: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A tool call missing required fields fails validation clearly."""
+    _mock_client_returning(
+        monkeypatch,
+        [
+            SimpleNamespace(
+                type="tool_use", input={"reasoning": "missing everything else"}
+            )
+        ],
+    )
+
+    with pytest.raises(Exception, match="validation error"):
+        await optimizer.evaluate_test_plan(
+            business=_fake_business(),
+            campaign=_fake_campaign(),
+            test_plan=_fake_test_plan(),
+            latest_metric=_fake_metric(),
         )

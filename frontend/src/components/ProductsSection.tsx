@@ -101,11 +101,14 @@ export function ProductsSection({ businessId }: { businessId: string }) {
             />
           </div>
           <div className="field">
-            <label htmlFor="margin">Margin</label>
+            <label htmlFor="margin">Margin (as a fraction, e.g. 0.4 for 40%)</label>
             <input
               id="margin"
               type="number"
               step="0.01"
+              min="0"
+              max="1"
+              placeholder="0.40"
               value={margin}
               onChange={(event) => setMargin(event.target.value)}
             />

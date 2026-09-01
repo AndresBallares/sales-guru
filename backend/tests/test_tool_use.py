@@ -11,7 +11,8 @@ from pydantic import BaseModel
 
 
 class _Flat(BaseModel):
-    """A model with several flat top-level fields, like GeneratedStrategyFields."""
+    """A model with several flat top-level fields, like
+    GeneratedDataDrivenStrategyFields."""
 
     offer: str
     positioning: str

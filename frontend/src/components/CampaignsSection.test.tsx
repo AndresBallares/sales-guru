@@ -25,6 +25,8 @@ vi.mock('../lib/api', async (importOriginal) => {
     listRecommendations: vi.fn<typeof actual.listRecommendations>(),
     approveRecommendation: vi.fn<typeof actual.approveRecommendation>(),
     rejectRecommendation: vi.fn<typeof actual.rejectRecommendation>(),
+    createTestEvaluation: vi.fn<typeof actual.createTestEvaluation>(),
+    listTestEvaluations: vi.fn<typeof actual.listTestEvaluations>(),
   }
 })
 const mockedApi = vi.mocked(api)
@@ -34,10 +36,12 @@ const FAKE_STRATEGY: api.Strategy = {
   campaignId: 'camp-1',
   createdAt: '2026-08-08T00:00:00Z',
   content: {
+    planType: 'DATA_DRIVEN_STRATEGY',
     objective: 'SALES',
     targetAudience: {
       ageMin: 30,
       ageMax: 55,
+      genders: null,
       location: ['New York'],
       interests: ['fine jewelry'],
       problem: 'Hard to find quality pieces',
@@ -48,6 +52,10 @@ const FAKE_STRATEGY: api.Strategy = {
     creativeAngles: ['Craftsmanship', 'Luxury'],
     copyStrategy: 'Lead with the story behind each piece',
     budgetRecommendation: { daily: 25, rationale: 'Small test spend' },
+    keyLearnings: ['Craftsmanship angle performed best'],
+    recommendedAdjustments: ['Drop the price angle'],
+    scalingTrigger: 'Increase budget once CAC stays under target',
+    unitEconomics: null,
   },
 }
 
@@ -69,6 +77,174 @@ function fakeCreative(overrides: Partial<api.Creative> = {}): api.Creative {
   }
 }
 
+function fakeMetric(overrides: Partial<api.Metric> = {}): api.Metric {
+  return {
+    id: 'metric-1',
+    campaignId: 'camp-1',
+    impressions: 1000,
+    clicks: 50,
+    spend: 12.5,
+    conversions: 3,
+    reach: null,
+    cpm: null,
+    ctr: null,
+    cpc: null,
+    landingPageViews: null,
+    addToCart: null,
+    addToCartRate: null,
+    conversionRate: null,
+    cac: null,
+    purchaseValue: null,
+    roas: null,
+    fetchedAt: '2026-08-08T00:00:00Z',
+    ...overrides,
+  }
+}
+
+function fakeTestPlanContent(
+  overrides: Partial<api.TestPlanContent> = {},
+): api.TestPlanContent {
+  const benchmarkEntry: api.BenchmarkContextEntry = {
+    low: 1.94,
+    median: 2.42,
+    high: 2.9,
+    source: 'test',
+    asOf: '2026-09-01',
+    direction: 'higher_is_better',
+  }
+  return {
+    planType: 'TEST_PLAN',
+    objective: 'SALES',
+    audienceVariants: [
+      {
+        id: 'broad_baseline',
+        name: 'Broad / Automated Baseline',
+        type: 'broad_automated',
+        isBaseline: true,
+        hypothesis: "Meta's automated delivery can find customers efficiently.",
+        targeting: {
+          ageMin: null,
+          ageMax: null,
+          genders: null,
+          location: [],
+          interests: [],
+          problem: null,
+          desire: null,
+        },
+      },
+      {
+        id: 'hypothesis_audience',
+        name: 'Luxury Jewelry Interest Audience',
+        type: 'hypothesis_driven',
+        isBaseline: false,
+        hypothesis: 'Interest-based targeting will produce a lower CAC.',
+        targeting: {
+          ageMin: 30,
+          ageMax: 55,
+          genders: ['female'],
+          location: ['New York'],
+          interests: ['fine jewelry'],
+          problem: null,
+          desire: null,
+        },
+      },
+    ],
+    hypotheses: [
+      {
+        id: 'audience_targeting',
+        statement: 'The hypothesis-driven audience will produce a lower CAC.',
+        baselineVariant: 'broad_baseline',
+        testVariant: 'hypothesis_audience',
+        primaryMetric: 'cac',
+        secondaryMetrics: ['ctr', 'cpc'],
+      },
+    ],
+    offer: 'Custom emerald rings',
+    positioning: 'Premium and personal',
+    creativeAngles: ['Craftsmanship', 'Price value'],
+    copyStrategy: 'Lead with the story behind each piece',
+    dailyBudget: 50,
+    durationDays: 10,
+    totalBudget: 500,
+    successCriteria: {
+      leadingIndicators: [
+        {
+          metric: 'ctr',
+          benchmark: benchmarkEntry,
+          businessTarget: null,
+          direction: 'higher_is_better',
+          guidance: 'An early signal.',
+        },
+      ],
+      economicIndicators: [
+        {
+          metric: 'cac',
+          benchmark: benchmarkEntry,
+          businessTarget: 66,
+          direction: 'lower_is_better',
+          guidance: 'Needs sufficient conversion volume.',
+        },
+      ],
+      profitabilityNote: 'Weighed against this product-specific target.',
+    },
+    decisionRules: [
+      { condition: 'both audiences show weak CTR', action: 'test_new_creative' },
+    ],
+    baselineMetrics: {
+      impressions: null,
+      reach: null,
+      spend: null,
+      cpm: null,
+      clicks: null,
+      ctr: null,
+      cpc: null,
+      landingPageViews: null,
+      addToCart: null,
+      addToCartRate: null,
+      conversions: null,
+      conversionRate: null,
+      cac: null,
+      purchaseValue: null,
+      roas: null,
+    },
+    benchmarkContext: {
+      platform: 'meta',
+      industry: 'jewelry',
+      country: 'US',
+      ctr: benchmarkEntry,
+      cpm: benchmarkEntry,
+      cvr: benchmarkEntry,
+      cac: benchmarkEntry,
+    },
+    dataSource: {
+      businessFacts: ['business profile'],
+      historicalMetaData: [],
+      industryBenchmarks: ['ctr'],
+      aiGeneratedHypotheses: ['hypothesis-driven audience targeting'],
+    },
+    unitEconomics: { grossProfit: 200, breakevenCac: 200, targetCac: 66, breakevenRoas: 2.5 },
+    ...overrides,
+  }
+}
+
+function fakeTestEvaluation(
+  overrides: Partial<api.TestEvaluation> = {},
+): api.TestEvaluation {
+  return {
+    id: 'eval-1',
+    campaignId: 'camp-1',
+    status: 'SUFFICIENT_DATA',
+    winningVariant: null,
+    confidence: 'LOW',
+    hypothesisResult: 'INCONCLUSIVE',
+    keyFindings: ['CTR is within the typical range for this vertical.'],
+    recommendedAction: 'continue_testing',
+    reasoning: 'Not enough conversion volume yet to read economic indicators.',
+    createdAt: '2026-09-01T00:00:00Z',
+    ...overrides,
+  }
+}
+
 beforeEach(() => {
   vi.resetAllMocks()
   mockedApi.listProducts.mockResolvedValue([])
@@ -77,6 +253,7 @@ beforeEach(() => {
   mockedApi.listCreatives.mockResolvedValue([])
   mockedApi.listMetrics.mockResolvedValue([])
   mockedApi.listRecommendations.mockResolvedValue([])
+  mockedApi.listTestEvaluations.mockResolvedValue([])
 })
 
 function fakeRecommendation(overrides: Partial<api.Recommendation> = {}): api.Recommendation {
@@ -310,7 +487,7 @@ describe('CampaignsSection', () => {
     expect(screen.getByText('Luxury')).toBeInTheDocument()
     expect(screen.getByText(/Lead with the story/)).toBeInTheDocument()
     expect(screen.getByText(/\$25\/day/)).toBeInTheDocument()
-    expect(mockedApi.createStrategy).toHaveBeenCalledWith('biz-1', 'camp-1')
+    expect(mockedApi.createStrategy).toHaveBeenCalledWith('biz-1', 'camp-1', undefined)
     expect(
       screen.getByRole('button', { name: 'Regenerate strategy' }),
     ).toBeInTheDocument()
@@ -341,6 +518,75 @@ describe('CampaignsSection', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent(
       'ANTHROPIC_API_KEY is not configured',
     )
+  })
+
+  it('asks the one-time question on 428, then retries with the answer', async () => {
+    mockedApi.listCampaigns.mockResolvedValue([
+      {
+        id: 'camp-1',
+        name: null,
+        objective: 'SALES',
+        status: 'DRAFT',
+        productId: null,
+        audienceId: null,
+        metaCampaignId: null,
+      },
+    ])
+    mockedApi.createStrategy
+      .mockRejectedValueOnce(new api.ApiError(428, 'Answer required'))
+      .mockResolvedValueOnce(FAKE_STRATEGY)
+    const user = userEvent.setup()
+
+    render(<CampaignsSection businessId="biz-1" />)
+    await screen.findByText('Sales — DRAFT')
+
+    await user.click(screen.getByRole('button', { name: 'Generate strategy' }))
+    await screen.findByText('Has this business run advertising campaigns before?')
+
+    await user.click(screen.getByRole('button', { name: 'Yes' }))
+
+    expect(await screen.findByText(/Custom emerald rings/)).toBeInTheDocument()
+    expect(mockedApi.createStrategy).toHaveBeenNthCalledWith(2, 'biz-1', 'camp-1', true)
+    expect(
+      screen.queryByText('Has this business run advertising campaigns before?'),
+    ).not.toBeInTheDocument()
+  })
+
+  it('displays a TEST_PLAN with its own fields', async () => {
+    mockedApi.listCampaigns.mockResolvedValue([
+      {
+        id: 'camp-1',
+        name: null,
+        objective: 'SALES',
+        status: 'DRAFT',
+        productId: null,
+        audienceId: null,
+        metaCampaignId: null,
+      },
+    ])
+    mockedApi.createStrategy.mockResolvedValue({
+      id: 'strat-1',
+      campaignId: 'camp-1',
+      createdAt: '2026-08-31T00:00:00Z',
+      content: fakeTestPlanContent(),
+    })
+    const user = userEvent.setup()
+
+    render(<CampaignsSection businessId="biz-1" />)
+    await screen.findByText('Sales — DRAFT')
+
+    await user.click(screen.getByRole('button', { name: 'Generate strategy' }))
+
+    expect(await screen.findByText(/Test plan/)).toBeInTheDocument()
+    expect(screen.getByText(/Broad \/ Automated Baseline \(baseline\):/)).toBeInTheDocument()
+    expect(screen.getByText(/Luxury Jewelry Interest Audience:/)).toBeInTheDocument()
+    expect(
+      screen.getByText(/The hypothesis-driven audience will produce a lower CAC\./),
+    ).toBeInTheDocument()
+    expect(screen.getByText(/\$50\/day for 10 days/)).toBeInTheDocument()
+    expect(screen.getByText(/test new creative/)).toBeInTheDocument()
+    expect(screen.getByText(/gross profit \$200.00/)).toBeInTheDocument()
+    expect(screen.getByText(/breakeven ROAS 2.50x/)).toBeInTheDocument()
   })
 
   it('loads and displays a previously generated strategy for a non-draft campaign', async () => {
@@ -711,17 +957,7 @@ describe('CampaignsSection', () => {
         metaCampaignId: 'meta_campaign_1',
       },
     ])
-    mockedApi.listMetrics.mockResolvedValue([
-      {
-        id: 'metric-1',
-        campaignId: 'camp-1',
-        impressions: 1000,
-        clicks: 50,
-        spend: 12.5,
-        conversions: 3,
-        fetchedAt: '2026-08-08T00:00:00Z',
-      },
-    ])
+    mockedApi.listMetrics.mockResolvedValue([fakeMetric()])
 
     render(<CampaignsSection businessId="biz-1" />)
 
@@ -743,15 +979,9 @@ describe('CampaignsSection', () => {
         metaCampaignId: 'meta_campaign_1',
       },
     ])
-    mockedApi.refreshMetrics.mockResolvedValue({
-      id: 'metric-1',
-      campaignId: 'camp-1',
-      impressions: 2000,
-      clicks: 90,
-      spend: 30,
-      conversions: 8,
-      fetchedAt: '2026-08-08T00:00:00Z',
-    })
+    mockedApi.refreshMetrics.mockResolvedValue(
+      fakeMetric({ impressions: 2000, clicks: 90, spend: 30, conversions: 8 }),
+    )
     const user = userEvent.setup()
 
     render(<CampaignsSection businessId="biz-1" />)
@@ -1078,5 +1308,115 @@ describe('CampaignsSection', () => {
     await screen.findByText('Sales — APPROVED')
 
     expect(screen.queryByRole('button', { name: 'Analyze now' })).not.toBeInTheDocument()
+  })
+
+  it('loads and shows previously fetched test evaluations for a live TEST_PLAN campaign', async () => {
+    mockedApi.listCampaigns.mockResolvedValue([
+      {
+        id: 'camp-1',
+        name: null,
+        objective: 'SALES',
+        status: 'LIVE',
+        productId: null,
+        audienceId: null,
+        metaCampaignId: 'meta_campaign_1',
+      },
+    ])
+    mockedApi.getStrategy.mockResolvedValue({
+      id: 'strat-1',
+      campaignId: 'camp-1',
+      createdAt: '2026-08-31T00:00:00Z',
+      content: fakeTestPlanContent(),
+    })
+    mockedApi.listTestEvaluations.mockResolvedValue([fakeTestEvaluation()])
+
+    render(<CampaignsSection businessId="biz-1" />)
+
+    expect(await screen.findByText(/SUFFICIENT_DATA/)).toBeInTheDocument()
+    expect(
+      screen.getByText('CTR is within the typical range for this vertical.'),
+    ).toBeInTheDocument()
+  })
+
+  it('evaluates a live TEST_PLAN campaign and shows the new evaluation', async () => {
+    mockedApi.listCampaigns.mockResolvedValue([
+      {
+        id: 'camp-1',
+        name: null,
+        objective: 'SALES',
+        status: 'LIVE',
+        productId: null,
+        audienceId: null,
+        metaCampaignId: 'meta_campaign_1',
+      },
+    ])
+    mockedApi.getStrategy.mockResolvedValue({
+      id: 'strat-1',
+      campaignId: 'camp-1',
+      createdAt: '2026-08-31T00:00:00Z',
+      content: fakeTestPlanContent(),
+    })
+    mockedApi.createTestEvaluation.mockResolvedValue(fakeTestEvaluation())
+    const user = userEvent.setup()
+
+    render(<CampaignsSection businessId="biz-1" />)
+    await screen.findByText(/Live on Meta/)
+
+    await user.click(screen.getByRole('button', { name: 'Evaluate test' }))
+
+    expect(mockedApi.createTestEvaluation).toHaveBeenCalledWith('biz-1', 'camp-1')
+    expect(await screen.findByText(/SUFFICIENT_DATA/)).toBeInTheDocument()
+  })
+
+  it('shows an error if evaluating a test plan fails', async () => {
+    mockedApi.listCampaigns.mockResolvedValue([
+      {
+        id: 'camp-1',
+        name: null,
+        objective: 'SALES',
+        status: 'LIVE',
+        productId: null,
+        audienceId: null,
+        metaCampaignId: 'meta_campaign_1',
+      },
+    ])
+    mockedApi.getStrategy.mockResolvedValue({
+      id: 'strat-1',
+      campaignId: 'camp-1',
+      createdAt: '2026-08-31T00:00:00Z',
+      content: fakeTestPlanContent(),
+    })
+    mockedApi.createTestEvaluation.mockRejectedValue(
+      new api.ApiError(400, 'Refresh results at least once before requesting an evaluation'),
+    )
+    const user = userEvent.setup()
+
+    render(<CampaignsSection businessId="biz-1" />)
+    await screen.findByText(/Live on Meta/)
+
+    await user.click(screen.getByRole('button', { name: 'Evaluate test' }))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'Refresh results at least once before requesting an evaluation',
+    )
+  })
+
+  it('does not show an Evaluate test button for a DATA_DRIVEN_STRATEGY campaign', async () => {
+    mockedApi.listCampaigns.mockResolvedValue([
+      {
+        id: 'camp-1',
+        name: null,
+        objective: 'SALES',
+        status: 'LIVE',
+        productId: null,
+        audienceId: null,
+        metaCampaignId: 'meta_campaign_1',
+      },
+    ])
+
+    render(<CampaignsSection businessId="biz-1" />)
+    await screen.findByText(/Live on Meta/)
+
+    expect(screen.queryByRole('button', { name: 'Evaluate test' })).not.toBeInTheDocument()
   })
 })

@@ -17,6 +17,7 @@ from app.api.metric import router as metric_router
 from app.api.optimization import router as optimization_router
 from app.api.product import router as product_router
 from app.api.strategy import router as strategy_router
+from app.api.test_evaluation import router as test_evaluation_router
 from app.core.config import get_settings
 from app.core.db import db
 from app.core.scheduler import start_scheduler, stop_scheduler
@@ -63,6 +64,7 @@ app.include_router(meta_router)
 app.include_router(meta_callback_router)
 app.include_router(metric_router)
 app.include_router(optimization_router)
+app.include_router(test_evaluation_router)
 
 
 @app.get("/health")

@@ -110,14 +110,14 @@ describe('ProductsSection', () => {
 
     await user.type(screen.getByLabelText('What do you sell?'), 'Handmade wallets')
     await user.type(screen.getByLabelText('Price'), '49.99')
-    await user.type(screen.getByLabelText('Margin'), '40')
+    await user.type(screen.getByLabelText(/Margin/), '0.4')
     await user.click(screen.getByRole('button', { name: 'Add product' }))
 
     await waitFor(() =>
       expect(mockedApi.createProduct).toHaveBeenCalledWith('biz-1', {
         description: 'Handmade wallets',
         price: 49.99,
-        margin: 40,
+        margin: 0.4,
         features: undefined,
         benefits: undefined,
         url: undefined,

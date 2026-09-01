@@ -234,6 +234,7 @@ export function publishCampaign(businessId: string, campaignId: string): Promise
 export interface TargetAudience {
   ageMin: number | null
   ageMax: number | null
+  genders: string[] | null
   location: string[]
   interests: string[]
   problem: string | null
@@ -245,15 +246,152 @@ export interface BudgetRecommendation {
   rationale: string
 }
 
-export interface StrategyContent {
+export interface UnitEconomics {
+  grossProfit: number
+  breakevenCac: number
+  targetCac: number
+  breakevenRoas: number
+}
+
+// --- TEST_PLAN: a structured advertising experiment (confirmed with the
+// user 2026-08-31), not just two recommended audiences. Always compares a
+// fixed broad/automated baseline (Variant A) against one specific,
+// hypothesis-driven audience (Variant B).
+
+export type AudienceVariantType = 'broad_automated' | 'hypothesis_driven'
+
+export interface AudienceVariant {
+  id: 'broad_baseline' | 'hypothesis_audience'
+  name: string
+  type: AudienceVariantType
+  isBaseline: boolean
+  hypothesis: string
+  targeting: TargetAudience
+}
+
+export interface TestHypothesis {
+  id: string
+  statement: string
+  baselineVariant: 'broad_baseline'
+  testVariant: 'hypothesis_audience'
+  primaryMetric: string
+  secondaryMetrics: string[]
+}
+
+// Every field is null until real Meta data comes in — null means
+// "unavailable or not applicable," never zero (confirmed with the user
+// 2026-08-31).
+export interface NormalizedMetrics {
+  impressions: number | null
+  reach: number | null
+  spend: number | null
+  cpm: number | null
+  clicks: number | null
+  ctr: number | null
+  cpc: number | null
+  landingPageViews: number | null
+  addToCart: number | null
+  addToCartRate: number | null
+  conversions: number | null
+  conversionRate: number | null
+  cac: number | null
+  purchaseValue: number | null
+  roas: number | null
+}
+
+export interface BenchmarkContextEntry {
+  low: number
+  median: number
+  high: number
+  source: string
+  asOf: string
+  direction: 'higher_is_better' | 'lower_is_better'
+}
+
+// Industry-wide expectations for a cold-start campaign — not this
+// business's actual performance (confirmed with the user 2026-08-31).
+export interface BenchmarkContext {
+  platform: 'meta'
+  industry: 'jewelry'
+  country: 'US'
+  ctr: BenchmarkContextEntry
+  cpm: BenchmarkContextEntry
+  cvr: BenchmarkContextEntry
+  cac: BenchmarkContextEntry
+}
+
+// benchmark (industry-wide) and businessTarget (this specific business's
+// own economics) are deliberately two separate numbers, never blended
+// into one (confirmed with the user 2026-09-01) — a $2,000 product at 50%
+// margin needing "CAC below $100" has nothing to do with what the broader
+// jewelry industry typically sees.
+export interface SuccessCriterion {
+  metric: string
+  benchmark: BenchmarkContextEntry | null
+  businessTarget: number | null
+  direction: 'higher_is_better' | 'lower_is_better'
+  guidance: string
+}
+
+export interface SuccessCriteria {
+  leadingIndicators: SuccessCriterion[]
+  economicIndicators: SuccessCriterion[]
+  profitabilityNote: string
+}
+
+export interface DecisionRule {
+  condition: string
+  action: string
+}
+
+export interface DataSourceTag {
+  businessFacts: string[]
+  historicalMetaData: string[]
+  industryBenchmarks: string[]
+  aiGeneratedHypotheses: string[]
+}
+
+// A business with no meaningful advertising history yet. See
+// DATA_DRIVEN_STRATEGY below for the alternative, generated instead once
+// real performance data exists.
+export interface TestPlanContent {
+  planType: 'TEST_PLAN'
+  objective: Objective
+  audienceVariants: AudienceVariant[]
+  hypotheses: TestHypothesis[]
+  offer: string
+  positioning: string
+  creativeAngles: string[]
+  copyStrategy: string
+  dailyBudget: number
+  durationDays: number
+  totalBudget: number
+  successCriteria: SuccessCriteria
+  decisionRules: DecisionRule[]
+  baselineMetrics: NormalizedMetrics
+  benchmarkContext: BenchmarkContext
+  dataSource: DataSourceTag
+  unitEconomics: UnitEconomics | null
+}
+
+// A business with real historical performance data — a full strategy plus
+// forward-looking guidance grounded in what already worked.
+export interface DataDrivenStrategyContent {
+  planType: 'DATA_DRIVEN_STRATEGY'
+  objective: Objective
   targetAudience: TargetAudience
   offer: string
   positioning: string
   creativeAngles: string[]
   copyStrategy: string
   budgetRecommendation: BudgetRecommendation
-  objective: Objective
+  keyLearnings: string[]
+  recommendedAdjustments: string[]
+  scalingTrigger: string
+  unitEconomics: UnitEconomics | null
 }
+
+export type StrategyContent = TestPlanContent | DataDrivenStrategyContent
 
 export interface Strategy {
   id: string
@@ -262,9 +400,23 @@ export interface Strategy {
   createdAt: string
 }
 
-export function createStrategy(businessId: string, campaignId: string): Promise<Strategy> {
+// hasPriorAdvertisingExperience answers the one-time "has this business
+// run ad campaigns before?" question — only needed the first time a
+// business generates a strategy and only when Meta has no real ad-account
+// history either; omitting it when the backend doesn't need it is fine.
+// A 428 response (ApiError with status 428) means the backend does need
+// it and this call should be retried with an answer.
+export function createStrategy(
+  businessId: string,
+  campaignId: string,
+  hasPriorAdvertisingExperience?: boolean,
+): Promise<Strategy> {
   return request<Strategy>(`/businesses/${businessId}/campaigns/${campaignId}/strategy`, {
     method: 'POST',
+    body:
+      hasPriorAdvertisingExperience === undefined
+        ? undefined
+        : JSON.stringify({ hasPriorAdvertisingExperience }),
   })
 }
 
@@ -400,6 +552,10 @@ export function disconnectMeta(businessId: string): Promise<void> {
   return request<void>(`/businesses/${businessId}/meta`, { method: 'DELETE' })
 }
 
+// Every field from reach onward is the "Phase B" extended metric set
+// (confirmed 2026-09-01) — null means unavailable/not applicable, never
+// zero (see the backend's fetch_campaign_insights for exactly when each
+// is populated).
 export interface Metric {
   id: string
   campaignId: string
@@ -407,6 +563,17 @@ export interface Metric {
   clicks: number
   spend: number
   conversions: number
+  reach: number | null
+  cpm: number | null
+  ctr: number | null
+  cpc: number | null
+  landingPageViews: number | null
+  addToCart: number | null
+  addToCartRate: number | null
+  conversionRate: number | null
+  cac: number | null
+  purchaseValue: number | null
+  roas: number | null
   fetchedAt: string
 }
 
@@ -478,5 +645,54 @@ export function rejectRecommendation(
   return request<Recommendation>(
     `/businesses/${businessId}/campaigns/${campaignId}/optimize/${recommendationId}/reject`,
     { method: 'POST' },
+  )
+}
+
+// --- TEST_PLAN Optimizer ("Phase B", confirmed 2026-09-01) ------------------
+//
+// Distinct from Recommendation above, which applies regardless of plan
+// type — this evaluates a TEST_PLAN's hypothesis against real Metric
+// history. winningVariant/hypothesisResult are always null/'INCONCLUSIVE'
+// today: real per-variant Meta data doesn't exist until multi-adset
+// publishing ("Phase C") is built, so no comparison is possible yet.
+
+export type TestEvaluationStatus = 'SUFFICIENT_DATA' | 'INSUFFICIENT_DATA'
+export type TestEvaluationConfidence = 'LOW' | 'MEDIUM' | 'HIGH'
+export type HypothesisResult = 'SUPPORTED' | 'REJECTED' | 'INCONCLUSIVE'
+export type TestEvaluationAction =
+  | 'continue_testing'
+  | 'test_new_creative'
+  | 'investigate_offer_or_landing_page'
+  | 'investigate_checkout_or_purchase_friction'
+
+export interface TestEvaluation {
+  id: string
+  campaignId: string
+  status: TestEvaluationStatus
+  winningVariant: 'broad_baseline' | 'hypothesis_audience' | null
+  confidence: TestEvaluationConfidence
+  hypothesisResult: HypothesisResult
+  keyFindings: string[]
+  recommendedAction: TestEvaluationAction
+  reasoning: string
+  createdAt: string
+}
+
+export function createTestEvaluation(
+  businessId: string,
+  campaignId: string,
+): Promise<TestEvaluation> {
+  return request<TestEvaluation>(
+    `/businesses/${businessId}/campaigns/${campaignId}/test-evaluation`,
+    { method: 'POST' },
+  )
+}
+
+export function listTestEvaluations(
+  businessId: string,
+  campaignId: string,
+): Promise<TestEvaluation[]> {
+  return request<TestEvaluation[]>(
+    `/businesses/${businessId}/campaigns/${campaignId}/test-evaluation`,
   )
 }

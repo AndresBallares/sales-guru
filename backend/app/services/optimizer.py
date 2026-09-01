@@ -39,10 +39,14 @@ from prisma.models import AdSet, Business, Campaign, Metric
 
 from app.core.config import get_settings
 from app.schemas.optimization import GeneratedRecommendation
+from app.schemas.strategy import SuccessCriterion, TestPlanContent
+from app.schemas.test_evaluation import GeneratedTestEvaluation
+from app.services.benchmarks import classify_performance_zone
 
 _MODEL = "claude-sonnet-5"
 _MAX_TOKENS = 1024
 _TOOL_NAME = "submit_recommendation"
+_TEST_EVALUATION_TOOL_NAME = "submit_test_evaluation"
 
 # Event + Time + Data Sufficiency gate (PRD.md build step 10) — all three
 # must hold before the scheduled job spends an LLM call on a campaign.
@@ -452,3 +456,244 @@ async def generate_recommendation(
     return RecommendationResult(
         recommendation=generated, capped_by_guardrail=capped_by_guardrail
     )
+
+
+# --- TEST_PLAN evaluation ("Phase B" of the test-plan redesign, PRD.md §5
+# step 10, confirmed 2026-09-01) ---------------------------------------------
+#
+# Answers "did the campaign accomplish what the Test Plan set out to
+# test?" by comparing real Metric history against the original
+# Strategy.content. Distinct from the recommendation logic above (which
+# reacts to a live campaign's own metrics with a PAUSE/INCREASE/DECREASE
+# action regardless of plan type) — this is specifically about a
+# TEST_PLAN's hypothesis.
+#
+# Known constraint, not yet resolved: campaign publish (app/services/
+# publish.py) still creates exactly one AdSet per campaign — there is no
+# real per-variant data to compare the hypothesis-driven audience against
+# the published broad-baseline variant. winning_variant is therefore
+# always None and hypothesis_result is always "INCONCLUSIVE" today; this
+# evaluation still does real, useful work by checking the single running
+# variant's real metrics against the TEST_PLAN's own success criteria.
+
+# A test is "worth evaluating" once it's consumed at least half its
+# declared budget or run at least half its declared duration — tied to
+# the test's own design parameters (TestPlanContent.total_budget/
+# duration_days), not a fixed constant, since a $500 test and a $5,000
+# test don't reach a meaningful sample at the same dollar amount.
+MIN_TEST_BUDGET_SPENT_FRACTION = 0.5
+MIN_TEST_DURATION_ELAPSED_FRACTION = 0.5
+
+
+def has_sufficient_test_data(
+    *,
+    test_plan: TestPlanContent,
+    latest_metric: Metric,
+    campaign_live_since: datetime,
+    now: datetime | None = None,
+) -> bool:
+    """Whether a TEST_PLAN has run long enough / spent enough to evaluate.
+
+    Either leg passing is enough (not both, unlike has_sufficient_data
+    above) — a test that blew through its budget in two days has real
+    signal even though little time has passed, and a slow-spending test
+    that's run its full duration has real signal even below budget.
+
+    Args:
+        test_plan: The campaign's original TEST_PLAN.
+        latest_metric: The most recent Metric snapshot.
+        campaign_live_since: When the campaign started running —
+            approximated by the caller as the earliest Metric snapshot's
+            fetchedAt (Campaign has no dedicated "went live at" column).
+        now: Injectable for tests; defaults to the real current time.
+
+    Returns:
+        True if enough of the test's own budget or duration has elapsed.
+    """
+    now = now or datetime.now(UTC)
+    spend_fraction = (
+        latest_metric.spend / test_plan.total_budget if test_plan.total_budget else 0.0
+    )
+    hours_elapsed = (now - campaign_live_since).total_seconds() / 3600
+    duration_fraction = (
+        hours_elapsed / (test_plan.duration_days * 24)
+        if test_plan.duration_days
+        else 0.0
+    )
+    return (
+        spend_fraction >= MIN_TEST_BUDGET_SPENT_FRACTION
+        or duration_fraction >= MIN_TEST_DURATION_ELAPSED_FRACTION
+    )
+
+
+def _format_criterion_line(
+    criterion: SuccessCriterion, actual_value: float | None
+) -> str:
+    """Format one success criterion against its actual value.
+
+    Includes the benchmark performance zone when both a benchmark and a
+    real value exist.
+    """
+    metric = criterion.metric
+    benchmark = criterion.benchmark
+    business_target = criterion.business_target
+    value_str = "not yet available" if actual_value is None else f"{actual_value:.2f}"
+    parts = [f"{metric}: actual {value_str}"]
+    if benchmark is not None:
+        zone = (
+            classify_performance_zone(actual_value, benchmark)
+            if actual_value is not None
+            else None
+        )
+        parts.append(
+            f"industry range {benchmark.low}-{benchmark.high} "
+            f"(median {benchmark.median})" + (f" — {zone}" if zone is not None else "")
+        )
+    if business_target is not None:
+        parts.append(f"business target {business_target:.2f}")
+    return " | ".join(parts)
+
+
+def _build_test_evaluation_prompt(
+    business: Business,
+    campaign: Campaign,
+    test_plan: TestPlanContent,
+    latest_metric: Metric,
+) -> str:
+    """Build the grounding prompt for a TEST_PLAN evaluation.
+
+    Args:
+        business: The business the campaign belongs to.
+        campaign: The live campaign being evaluated.
+        test_plan: The campaign's original TEST_PLAN.
+        latest_metric: The most recent Metric snapshot (lifetime-to-date
+            totals, same convention as fetch_campaign_insights).
+
+    Returns:
+        The prompt text.
+    """
+    baseline, hypothesis = test_plan.audience_variants
+    primary_hypothesis = test_plan.hypotheses[0]
+
+    actual_by_metric: dict[str, float | None] = {
+        "ctr": latest_metric.ctr,
+        "cpm": latest_metric.cpm,
+        "conversion_rate": latest_metric.conversionRate,
+        "cac": latest_metric.cac,
+        "roas": latest_metric.roas,
+        "add_to_cart_rate": latest_metric.addToCartRate,
+    }
+
+    lines = [
+        "You are a paid-ads test analyst. This campaign is running a "
+        "structured two-variant experiment, but only Variant A (the "
+        "broad/automated baseline) has actually been published to Meta "
+        "so far — there is no real data yet for Variant B (the "
+        "hypothesis-driven audience). You cannot and must not declare "
+        "either variant a winner, or claim the hypothesis is supported "
+        "or rejected — that comparison isn't possible until both "
+        "variants are actually running. Your job is only to read how "
+        "the currently-running variant is performing against this "
+        "test's own success criteria, and recommend what to do next.",
+        "",
+        f"Business: {business.name}",
+        f"Campaign: {campaign.name or campaign.id} (objective: {campaign.objective})",
+        f"Currently running: {baseline.name} ({baseline.hypothesis})",
+        f"Designed but not yet published: {hypothesis.name} ({hypothesis.hypothesis})",
+        f"Primary hypothesis being tested: {primary_hypothesis.statement}",
+        "",
+        f"Test design: ${test_plan.daily_budget:.2f}/day for "
+        f"{test_plan.duration_days} days (${test_plan.total_budget:.2f} total).",
+        "",
+        "Real performance so far (lifetime-to-date):",
+        f"- Impressions: {latest_metric.impressions}, clicks: {latest_metric.clicks}, "
+        f"spend: ${latest_metric.spend:.2f}, conversions: {latest_metric.conversions}",
+    ]
+    lines += [
+        "",
+        "Leading indicators (a useful early read):",
+        *(
+            f"- {_format_criterion_line(c, actual_by_metric.get(c.metric))}"
+            for c in test_plan.success_criteria.leading_indicators
+        ),
+        "",
+        "Economic indicators (need more conversion volume to trust):",
+        *(
+            f"- {_format_criterion_line(c, actual_by_metric.get(c.metric))}"
+            for c in test_plan.success_criteria.economic_indicators
+        ),
+        "",
+        test_plan.success_criteria.profitability_note,
+        "",
+        "This test's own decision-rule playbook, for reference:",
+        *(
+            f"- If {rule.condition} -> {rule.action}"
+            for rule in test_plan.decision_rules
+        ),
+        "",
+        "Choose exactly one recommended_action from: continue_testing, "
+        "test_new_creative, investigate_offer_or_landing_page, "
+        "investigate_checkout_or_purchase_friction — never prefer_broad "
+        "or prefer_hypothesis, since no real comparison is possible yet. "
+        "Submit your evaluation using the provided tool, including your "
+        "own confidence (LOW/MEDIUM/HIGH).",
+    ]
+    return "\n".join(lines)
+
+
+async def evaluate_test_plan(
+    *,
+    business: Business,
+    campaign: Campaign,
+    test_plan: TestPlanContent,
+    latest_metric: Metric,
+) -> GeneratedTestEvaluation:
+    """Call the Optimizer on a TEST_PLAN and return its structured evaluation.
+
+    Args:
+        business: The business the campaign belongs to.
+        campaign: The live campaign being evaluated.
+        test_plan: The campaign's original TEST_PLAN — caller has already
+            confirmed has_sufficient_test_data passed.
+        latest_metric: The most recent Metric snapshot.
+
+    Returns:
+        The generated evaluation (recommended_action is always one of
+        the cross-variant-comparison-free actions — see
+        app/schemas/test_evaluation.py's RecommendedAction).
+
+    Raises:
+        OptimizerError: If no API key is configured, the API call fails,
+            or the model doesn't return a valid tool call.
+    """
+    settings = get_settings()
+    if not settings.anthropic_api_key:
+        raise OptimizerError("ANTHROPIC_API_KEY is not configured")
+
+    client = AsyncAnthropic(api_key=settings.anthropic_api_key)
+    prompt = _build_test_evaluation_prompt(business, campaign, test_plan, latest_metric)
+
+    try:
+        response = await client.messages.create(
+            model=_MODEL,
+            max_tokens=_MAX_TOKENS,
+            tools=[
+                {
+                    "name": _TEST_EVALUATION_TOOL_NAME,
+                    "description": "Submit the test-plan evaluation.",
+                    "input_schema": GeneratedTestEvaluation.model_json_schema(),
+                }
+            ],
+            tool_choice={"type": "tool", "name": _TEST_EVALUATION_TOOL_NAME},
+            messages=[{"role": "user", "content": prompt}],
+        )
+    except anthropic.AnthropicError as exc:
+        raise OptimizerError(f"Anthropic API call failed: {exc}") from exc
+
+    tool_use = next(
+        (block for block in response.content if block.type == "tool_use"), None
+    )
+    if tool_use is None:
+        raise OptimizerError("Model did not return a tool call")
+
+    return GeneratedTestEvaluation.model_validate(tool_use.input)

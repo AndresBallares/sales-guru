@@ -23,7 +23,7 @@ from app.api import strategy as strategy_module
 from app.schemas.creative import GeneratedCreativeVariant
 from app.schemas.strategy import (
     BudgetRecommendation,
-    StrategyContent,
+    DataDrivenStrategyContent,
     TargetAudience,
 )
 from app.services import meta as meta_service_module
@@ -31,7 +31,7 @@ from app.services.publish import requires_pixel
 from fastapi.testclient import TestClient
 from prisma import Prisma
 
-_FAKE_STRATEGY = StrategyContent(
+_FAKE_STRATEGY = DataDrivenStrategyContent(
     objective="SALES",
     target_audience=TargetAudience(age_min=30, age_max=55),
     offer="Custom emerald rings",
@@ -39,6 +39,9 @@ _FAKE_STRATEGY = StrategyContent(
     creative_angles=["Craftsmanship", "Luxury"],
     copy_strategy="Lead with the story behind each piece",
     budget_recommendation=BudgetRecommendation(daily=25, rationale="Small test spend"),
+    key_learnings=["Craftsmanship angle performed best"],
+    recommended_adjustments=["Drop the price angle"],
+    scaling_trigger="Increase budget once CAC stays under target",
 )
 
 _FAKE_VARIANTS = [
@@ -141,7 +144,10 @@ def _ready_campaign(
     campaign_id: str = client.post(
         f"/businesses/{business_id}/campaigns", json={"objective": objective}
     ).json()["id"]
-    client.post(f"/businesses/{business_id}/campaigns/{campaign_id}/strategy")
+    client.post(
+        f"/businesses/{business_id}/campaigns/{campaign_id}/strategy",
+        json={"hasPriorAdvertisingExperience": True},
+    )
     creatives = client.post(
         f"/businesses/{business_id}/campaigns/{campaign_id}/creatives"
     ).json()
@@ -259,7 +265,10 @@ def test_publish_400s_without_meta_connected(client: TestClient) -> None:
     _signed_up_client(client)
     business_id = _create_business(client, website="https://acme.example")
     campaign_id = _create_campaign(client, business_id)
-    client.post(f"/businesses/{business_id}/campaigns/{campaign_id}/strategy")
+    client.post(
+        f"/businesses/{business_id}/campaigns/{campaign_id}/strategy",
+        json={"hasPriorAdvertisingExperience": True},
+    )
     creatives = client.post(
         f"/businesses/{business_id}/campaigns/{campaign_id}/creatives"
     ).json()
@@ -280,7 +289,10 @@ def test_publish_400s_without_ad_account_and_page_selected(client: TestClient) -
     _signed_up_client(client)
     business_id = _create_business(client, website="https://acme.example")
     campaign_id = _create_campaign(client, business_id)
-    client.post(f"/businesses/{business_id}/campaigns/{campaign_id}/strategy")
+    client.post(
+        f"/businesses/{business_id}/campaigns/{campaign_id}/strategy",
+        json={"hasPriorAdvertisingExperience": True},
+    )
     creatives = client.post(
         f"/businesses/{business_id}/campaigns/{campaign_id}/creatives"
     ).json()
@@ -399,7 +411,10 @@ def test_publish_uses_the_product_url_when_available(
     business_id = _create_business(client, website="https://acme.example")
     product_id = _create_product(client, business_id, url="https://acme.example/rings")
     campaign_id = _create_campaign(client, business_id, product_id=product_id)
-    client.post(f"/businesses/{business_id}/campaigns/{campaign_id}/strategy")
+    client.post(
+        f"/businesses/{business_id}/campaigns/{campaign_id}/strategy",
+        json={"hasPriorAdvertisingExperience": True},
+    )
     creatives = client.post(
         f"/businesses/{business_id}/campaigns/{campaign_id}/creatives"
     ).json()

@@ -19,7 +19,7 @@ from prisma.models import Business, Product
 
 from app.core.config import get_settings
 from app.schemas.creative import GeneratedCreativeBatch, GeneratedCreativeVariant
-from app.schemas.strategy import StrategyContent
+from app.schemas.strategy import StrategyContent, primary_audience
 from app.services.tool_use import parse_tool_input
 
 _MODEL = "claude-sonnet-5"
@@ -77,10 +77,11 @@ def _build_prompt(
         f"Copy strategy: {strategy.copy_strategy}",
         f"Creative angles to draw from: {', '.join(strategy.creative_angles)}",
     ]
-    if strategy.target_audience.problem:
-        lines.append(f"Target audience problem: {strategy.target_audience.problem}")
-    if strategy.target_audience.desire:
-        lines.append(f"Target audience desire: {strategy.target_audience.desire}")
+    audience = primary_audience(strategy)
+    if audience.problem:
+        lines.append(f"Target audience problem: {audience.problem}")
+    if audience.desire:
+        lines.append(f"Target audience desire: {audience.desire}")
     lines += [
         f"Campaign objective: {strategy.objective}",
         "",

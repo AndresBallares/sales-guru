@@ -6,7 +6,7 @@ from prisma.models import Campaign, Creative
 from app.core.authz import get_owned_campaign
 from app.core.db import db
 from app.schemas.creative import CreativeResponse
-from app.schemas.strategy import StrategyContent
+from app.schemas.strategy import StrategyContentAdapter
 from app.services.creative import CreativeAgentError, generate_creatives
 
 router = APIRouter(
@@ -91,7 +91,7 @@ async def create_creatives(
         variants = await generate_creatives(
             business=business,
             product=product,
-            strategy=StrategyContent.model_validate_json(strategy.content),
+            strategy=StrategyContentAdapter.validate_json(strategy.content),
         )
     except CreativeAgentError as exc:
         raise HTTPException(

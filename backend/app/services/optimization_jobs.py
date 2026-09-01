@@ -35,12 +35,14 @@ clicked Approve or compute_requires_approval decided a click wasn't
 needed.
 """
 
+import json
 import logging
 from datetime import UTC, datetime
 
-from prisma.models import Campaign, OptimizationRecommendation
+from prisma.models import Campaign, OptimizationRecommendation, TestEvaluation
 
 from app.core.db import db
+from app.schemas.strategy import TestPlanContent
 from app.services import optimizer
 from app.services.meta import (
     MetaConnectionError,
@@ -85,6 +87,17 @@ async def collect_metrics_for_all_live_campaigns() -> None:
                 "clicks": insights.clicks,
                 "spend": insights.spend,
                 "conversions": insights.conversions,
+                "reach": insights.reach,
+                "cpm": insights.cpm,
+                "ctr": insights.ctr,
+                "cpc": insights.cpc,
+                "landingPageViews": insights.landing_page_views,
+                "addToCart": insights.add_to_cart,
+                "addToCartRate": insights.add_to_cart_rate,
+                "conversionRate": insights.conversion_rate,
+                "cac": insights.cac,
+                "purchaseValue": insights.purchase_value,
+                "roas": insights.roas,
             }
         )
 
@@ -309,3 +322,91 @@ async def evaluate_all_live_campaigns() -> None:
             logger.warning(
                 "Optimization evaluation failed for campaign %s", campaign.id
             )
+
+
+async def generate_and_store_test_evaluation(
+    campaign: Campaign, test_plan: TestPlanContent
+) -> TestEvaluation:
+    """Evaluate a TEST_PLAN campaign against its real Metric history, and store it.
+
+    Manual "evaluate now" only today (app/api/test_evaluation.py) — not
+    yet wired into the scheduler alongside evaluate_all_live_campaigns
+    above (a deliberate scoping choice for "Phase B," confirmed
+    2026-09-01, kept separate so this addition stays reviewable).
+
+    Args:
+        campaign: The live campaign to evaluate. Caller is responsible
+            for confirming it's LIVE, has a TEST_PLAN strategy, and has
+            at least one Metric row.
+        test_plan: The campaign's parsed TEST_PLAN.
+
+    Returns:
+        The newly stored evaluation — always created, even when the
+        data-sufficiency gate fails. An "INSUFFICIENT_DATA" evaluation is
+        itself a meaningful, storable result (per the product
+        requirement to say so explicitly), not an error — unlike
+        generate_and_store_recommendation's "return None" when there's
+        no trend window to reason over at all.
+
+    Raises:
+        optimizer.OptimizerError: If the LLM call fails (only reached
+            once the sufficiency gate passes).
+    """
+    business = await db.business.find_unique(where={"id": campaign.businessId})
+    assert business is not None  # guaranteed by the FK, not user input
+
+    metrics = await db.metric.find_many(where={"campaignId": campaign.id})
+    latest = max(metrics, key=lambda m: m.fetchedAt)
+    # Campaign has no dedicated "went live at" column — the earliest
+    # Metric snapshot is a reasonable proxy, since collection starts
+    # shortly after publish (see collect_metrics_for_all_live_campaigns).
+    campaign_live_since = min(metrics, key=lambda m: m.fetchedAt).fetchedAt
+
+    if not optimizer.has_sufficient_test_data(
+        test_plan=test_plan,
+        latest_metric=latest,
+        campaign_live_since=campaign_live_since,
+    ):
+        spend_fraction = (
+            latest.spend / test_plan.total_budget if test_plan.total_budget else 0.0
+        )
+        hours_elapsed = (datetime.now(UTC) - campaign_live_since).total_seconds() / 3600
+        duration_fraction = (
+            hours_elapsed / (test_plan.duration_days * 24)
+            if test_plan.duration_days
+            else 0.0
+        )
+        return await db.testevaluation.create(
+            data={
+                "campaignId": campaign.id,
+                "status": "INSUFFICIENT_DATA",
+                "winningVariant": None,
+                "confidence": "LOW",
+                "hypothesisResult": "INCONCLUSIVE",
+                "keyFindings": json.dumps([]),
+                "recommendedAction": "continue_testing",
+                "reasoning": (
+                    f"Only {spend_fraction:.0%} of the ${test_plan.total_budget:.2f} "
+                    f"test budget and {duration_fraction:.0%} of its "
+                    f"{test_plan.duration_days}-day duration have elapsed — not "
+                    f"enough data yet for a reliable read."
+                ),
+            }
+        )
+
+    generated = await optimizer.evaluate_test_plan(
+        business=business, campaign=campaign, test_plan=test_plan, latest_metric=latest
+    )
+
+    return await db.testevaluation.create(
+        data={
+            "campaignId": campaign.id,
+            "status": "SUFFICIENT_DATA",
+            "winningVariant": None,
+            "confidence": generated.confidence,
+            "hypothesisResult": "INCONCLUSIVE",
+            "keyFindings": json.dumps(generated.key_findings),
+            "recommendedAction": generated.recommended_action,
+            "reasoning": generated.reasoning,
+        }
+    )

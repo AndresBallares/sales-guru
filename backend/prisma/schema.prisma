@@ -80,6 +80,13 @@ model Business {
   industry       String?
   location       String?
   description    String?
+  // Self-reported once, the first time a strategy is generated for this
+  // business (app/api/strategy.py) — null until then. Only consulted when
+  // the real-data check (Meta account-level ad history, once connected)
+  // comes back empty; real data always takes priority over this when both
+  // are available. Feeds the Marketing Strategist Agent's TEST_PLAN vs.
+  // STRATEGY_OPTIMIZATION decision (see app/services/strategist.py).
+  hasPriorAdvertisingExperience Boolean?
   products       Product[]
   audiences      Audience[]
   metaConnection MetaConnection?
@@ -203,6 +210,7 @@ model Campaign {
   creatives               Creative[]
   metrics                 Metric[]
   optimizations           OptimizationRecommendation[]
+  testEvaluations         TestEvaluation[]
   metaCampaignId          String?
   // Last time the scheduled optimization job evaluated this campaign at
   // all (app/services/optimizer.py's evaluate_all_live_campaigns) —
@@ -300,6 +308,14 @@ model Creative {
   updatedAt      DateTime @updatedAt
 }
 
+// impressions/clicks/spend/conversions are the original step-9 fields —
+// always present, unchanged. Everything below is the "Phase B" extended
+// metric set (PRD.md §5 step 10, confirmed 2026-09-01), added for the
+// TEST_PLAN Optimizer's success-criteria evaluation: all nullable, and
+// null means "unavailable/not applicable to this campaign's objective,"
+// never zero (same convention as NormalizedMetrics, app/schemas/
+// strategy.py) — see app/services/meta.py's fetch_campaign_insights for
+// exactly when each is populated vs. left null.
 model Metric {
   id          String   @id @default(cuid())
   campaign    Campaign @relation(fields: [campaignId], references: [id])
@@ -308,6 +324,17 @@ model Metric {
   clicks      Int
   spend       Float
   conversions Int
+  reach            Int?
+  cpm              Float?
+  ctr              Float?
+  cpc              Float?
+  landingPageViews Int?
+  addToCart        Int?
+  addToCartRate    Float?
+  conversionRate   Float?
+  cac              Float?
+  purchaseValue    Float?
+  roas             Float?
   fetchedAt   DateTime @default(now())
 }
 
@@ -356,4 +383,52 @@ model OptimizationRecommendation {
   status           String   @default("PENDING")
   createdAt        DateTime @default(now())
   updatedAt        DateTime @updatedAt
+}
+
+// TestEvaluation is the Optimizer's read on a TEST_PLAN campaign (PRD.md
+// §5 step 10 "Phase B", confirmed 2026-09-01) — compares real Metric
+// history against the original Strategy.content (the persisted test
+// plan), answering "did the campaign accomplish what the test set out to
+// test?" A new row each time it's (re-)generated, same "history stays
+// queryable, not overwritten" reasoning as OptimizationRecommendation.
+//
+// TestEvaluation.status: SUFFICIENT_DATA | INSUFFICIENT_DATA — the
+// backend's own gate (has_sufficient_test_data, app/services/
+// optimizer.py), tied to the test's own declared totalBudget/
+// durationDays, not a fixed constant; never the LLM's call.
+//
+// TestEvaluation.hypothesisResult: SUPPORTED | REJECTED | INCONCLUSIVE —
+// always INCONCLUSIVE today. Real two-variant publishing ("Phase C")
+// doesn't exist yet (campaign publish still creates exactly one AdSet,
+// app/services/publish.py), so there's no real data for the
+// hypothesis-driven variant to compare the published broad-baseline
+// variant against. Kept as its own field (not inferred from
+// winningVariant) so this isn't a breaking change once Phase C lands.
+//
+// TestEvaluation.winningVariant is nullable and, for the same reason,
+// always null today.
+//
+// TestEvaluation.confidence: LOW | MEDIUM | HIGH — the LLM's own
+// self-assessment, part of its forced tool call, same pattern as
+// OptimizationRecommendation.risk.
+//
+// TestEvaluation.recommendedAction is one of the TEST_PLAN's own
+// decision_rules actions (app/schemas/strategy.py's
+// TEST_PLAN_DECISION_RULES) — excluding prefer_broad/prefer_hypothesis,
+// which require the cross-variant comparison Phase C would enable.
+//
+// keyFindings is JSON-serialized (list[str]) — SQLite has no native
+// array/Json type, same pattern as Strategy.content.
+model TestEvaluation {
+  id                String   @id @default(cuid())
+  campaign          Campaign @relation(fields: [campaignId], references: [id])
+  campaignId        String
+  status            String
+  winningVariant    String?
+  confidence        String
+  hypothesisResult  String
+  keyFindings       String
+  recommendedAction String
+  reasoning         String
+  createdAt         DateTime @default(now())
 }

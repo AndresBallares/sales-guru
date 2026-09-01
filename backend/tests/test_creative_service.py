@@ -15,7 +15,7 @@ import pytest
 from app.core.config import get_settings
 from app.schemas.strategy import (
     BudgetRecommendation,
-    StrategyContent,
+    DataDrivenStrategyContent,
     TargetAudience,
 )
 from app.services import creative
@@ -38,7 +38,7 @@ _VALID_TOOL_INPUT: dict[str, Any] = {
     ]
 }
 
-_FAKE_STRATEGY = StrategyContent(
+_FAKE_STRATEGY = DataDrivenStrategyContent(
     objective="SALES",
     target_audience=TargetAudience(
         problem="Hard to find quality pieces", desire="Own something unique"
@@ -48,6 +48,9 @@ _FAKE_STRATEGY = StrategyContent(
     creative_angles=["Craftsmanship", "Luxury", "Personalization", "Heritage"],
     copy_strategy="Lead with the story behind each piece",
     budget_recommendation=BudgetRecommendation(daily=25, rationale="Small test spend"),
+    key_learnings=["Craftsmanship angle performed best"],
+    recommended_adjustments=["Drop the price angle"],
+    scaling_trigger="Increase budget once CAC stays under target",
 )
 
 

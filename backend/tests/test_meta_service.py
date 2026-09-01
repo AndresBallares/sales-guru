@@ -481,6 +481,7 @@ async def test_fetch_campaign_insights_parses_the_first_row(
     assert insights.clicks == 50
     assert insights.spend == 12.5
     assert insights.conversions == 13
+    assert insights.conversion_rate == 13 / 50
 
 
 @pytest.mark.asyncio
@@ -519,6 +520,195 @@ async def test_fetch_campaign_insights_handles_no_actions(
 
 
 @pytest.mark.asyncio
+async def test_fetch_campaign_insights_returns_none_extended_fields_with_no_delivery(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """No delivery data means every extended field is None, not zero — a
+    genuinely different fact (unavailable) from "collected and was zero"."""
+    _mock_client_returning(monkeypatch, _FakeResponse({"data": []}))
+
+    insights = await meta.fetch_campaign_insights(
+        access_token="token", meta_campaign_id="campaign_123"
+    )
+
+    assert insights.reach is None
+    assert insights.cpm is None
+    assert insights.ctr is None
+    assert insights.cpc is None
+    assert insights.landing_page_views is None
+    assert insights.add_to_cart is None
+    assert insights.add_to_cart_rate is None
+    assert insights.conversion_rate is None
+    assert insights.cac is None
+    assert insights.purchase_value is None
+    assert insights.roas is None
+
+
+@pytest.mark.asyncio
+async def test_fetch_campaign_insights_passes_through_reach_cpm_ctr_cpc(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """reach/cpm/ctr/cpc come straight from Meta, no re-derivation."""
+    _mock_client_returning(
+        monkeypatch,
+        _FakeResponse(
+            {
+                "data": [
+                    {
+                        "impressions": "1000",
+                        "reach": "800",
+                        "clicks": "50",
+                        "spend": "12.50",
+                        "cpm": "12.50",
+                        "ctr": "5.0",
+                        "cpc": "0.25",
+                    }
+                ]
+            }
+        ),
+    )
+
+    insights = await meta.fetch_campaign_insights(
+        access_token="token", meta_campaign_id="campaign_123"
+    )
+
+    assert insights.reach == 800
+    assert insights.cpm == 12.5
+    assert insights.ctr == 5.0
+    assert insights.cpc == 0.25
+
+
+@pytest.mark.asyncio
+async def test_fetch_campaign_insights_computes_add_to_cart_rate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """add_to_cart_rate = add_to_cart / landing_page_views, not / clicks."""
+    _mock_client_returning(
+        monkeypatch,
+        _FakeResponse(
+            {
+                "data": [
+                    {
+                        "impressions": "1000",
+                        "clicks": "100",
+                        "spend": "12.50",
+                        "actions": [
+                            {"action_type": "landing_page_view", "value": "40"},
+                            {"action_type": "add_to_cart", "value": "10"},
+                        ],
+                    }
+                ]
+            }
+        ),
+    )
+
+    insights = await meta.fetch_campaign_insights(
+        access_token="token", meta_campaign_id="campaign_123"
+    )
+
+    assert insights.landing_page_views == 40
+    assert insights.add_to_cart == 10
+    assert insights.add_to_cart_rate == 0.25
+
+
+@pytest.mark.asyncio
+async def test_fetch_campaign_insights_add_to_cart_rate_none_with_no_landing_views(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """No landing page views means the rate can't be computed — None, not 0."""
+    _mock_client_returning(
+        monkeypatch,
+        _FakeResponse(
+            {
+                "data": [
+                    {
+                        "impressions": "1000",
+                        "clicks": "100",
+                        "spend": "12.50",
+                        "actions": [{"action_type": "link_click", "value": "5"}],
+                    }
+                ]
+            }
+        ),
+    )
+
+    insights = await meta.fetch_campaign_insights(
+        access_token="token", meta_campaign_id="campaign_123"
+    )
+
+    assert insights.landing_page_views == 0
+    assert insights.add_to_cart_rate is None
+
+
+@pytest.mark.asyncio
+async def test_fetch_campaign_insights_computes_cac_and_roas_from_purchases_only(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """cac/roas use only purchase-specific actions, not the broader
+    conversions figure (link clicks/leads mixed in would be misleading)."""
+    _mock_client_returning(
+        monkeypatch,
+        _FakeResponse(
+            {
+                "data": [
+                    {
+                        "impressions": "1000",
+                        "clicks": "100",
+                        "spend": "100.00",
+                        "actions": [
+                            {"action_type": "link_click", "value": "50"},
+                            {"action_type": "purchase", "value": "4"},
+                        ],
+                        "action_values": [
+                            {"action_type": "purchase", "value": "800.00"}
+                        ],
+                    }
+                ]
+            }
+        ),
+    )
+
+    insights = await meta.fetch_campaign_insights(
+        access_token="token", meta_campaign_id="campaign_123"
+    )
+
+    assert insights.purchase_value == 800.0
+    assert insights.cac == 25.0  # $100 spend / 4 purchases
+    assert insights.roas == 8.0  # $800 revenue / $100 spend
+
+
+@pytest.mark.asyncio
+async def test_fetch_campaign_insights_cac_and_roas_none_with_no_purchases(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """No purchase actions means cac/roas can't be computed — None, not
+    a divide-by-zero or a misleading number from unrelated actions."""
+    _mock_client_returning(
+        monkeypatch,
+        _FakeResponse(
+            {
+                "data": [
+                    {
+                        "impressions": "1000",
+                        "clicks": "100",
+                        "spend": "100.00",
+                        "actions": [{"action_type": "link_click", "value": "50"}],
+                    }
+                ]
+            }
+        ),
+    )
+
+    insights = await meta.fetch_campaign_insights(
+        access_token="token", meta_campaign_id="campaign_123"
+    )
+
+    assert insights.cac is None
+    assert insights.purchase_value is None
+    assert insights.roas is None
+
+
+@pytest.mark.asyncio
 async def test_fetch_campaign_insights_raises_on_failure(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -530,6 +720,147 @@ async def test_fetch_campaign_insights_raises_on_failure(
         await meta.fetch_campaign_insights(
             access_token="token", meta_campaign_id="campaign_123"
         )
+
+
+@pytest.mark.asyncio
+async def test_fetch_account_historical_performance_parses_each_campaign_row(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Every campaign row on the account is parsed, actions summed per row."""
+    _mock_client_returning(
+        monkeypatch,
+        _FakeResponse(
+            {
+                "data": [
+                    {
+                        "campaign_name": "Spring Sale",
+                        "impressions": "5000",
+                        "clicks": "200",
+                        "spend": "150.00",
+                        "actions": [
+                            {"action_type": "link_click", "value": "40"},
+                            {"action_type": "purchase", "value": "5"},
+                        ],
+                    },
+                    {
+                        "campaign_name": "Holiday Push",
+                        "impressions": "9000",
+                        "clicks": "300",
+                        "spend": "400.00",
+                    },
+                ]
+            }
+        ),
+    )
+
+    rows = await meta.fetch_account_historical_performance(
+        access_token="token", ad_account_id="act_1"
+    )
+
+    assert rows == [
+        meta.AccountCampaignInsights(
+            campaign_name="Spring Sale",
+            impressions=5000,
+            clicks=200,
+            spend=150.0,
+            conversions=45,
+        ),
+        meta.AccountCampaignInsights(
+            campaign_name="Holiday Push",
+            impressions=9000,
+            clicks=300,
+            spend=400.0,
+            conversions=0,
+        ),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_fetch_account_historical_performance_skips_nameless_rows(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A row Meta didn't attach a campaign_name to isn't useful grounding."""
+    _mock_client_returning(
+        monkeypatch,
+        _FakeResponse(
+            {"data": [{"impressions": "100", "clicks": "1", "spend": "1.0"}]}
+        ),
+    )
+
+    rows = await meta.fetch_account_historical_performance(
+        access_token="token", ad_account_id="act_1"
+    )
+
+    assert rows == []
+
+
+@pytest.mark.asyncio
+async def test_fetch_account_historical_performance_returns_empty_with_no_history(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A freshly-connected account with no prior campaigns returns an empty list."""
+    _mock_client_returning(monkeypatch, _FakeResponse({"data": []}))
+
+    rows = await meta.fetch_account_historical_performance(
+        access_token="token", ad_account_id="act_1"
+    )
+
+    assert rows == []
+
+
+@pytest.mark.asyncio
+async def test_fetch_account_historical_performance_raises_on_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A Graph API failure surfaces as MetaConnectionError."""
+    fake_client = _FakeAsyncClient(error=httpx.ConnectError("boom"))
+    monkeypatch.setattr(httpx, "AsyncClient", lambda: fake_client)
+
+    with pytest.raises(meta.MetaConnectionError, match="Meta API call failed"):
+        await meta.fetch_account_historical_performance(
+            access_token="token", ad_account_id="act_1"
+        )
+
+
+def test_has_meaningful_history_true_when_any_campaign_has_spend() -> None:
+    """Any real spend at all counts — no dollar threshold (see docstring)."""
+    rows = [
+        meta.AccountCampaignInsights(
+            campaign_name="Spring Sale",
+            impressions=0,
+            clicks=0,
+            spend=0.0,
+            conversions=0,
+        ),
+        meta.AccountCampaignInsights(
+            campaign_name="Holiday Push",
+            impressions=10,
+            clicks=1,
+            spend=5.0,
+            conversions=0,
+        ),
+    ]
+
+    assert meta.has_meaningful_history(rows) is True
+
+
+def test_has_meaningful_history_false_with_no_spend_or_no_rows() -> None:
+    """Zero spend across every row, or no rows at all, means no real history."""
+    assert meta.has_meaningful_history([]) is False
+    assert (
+        meta.has_meaningful_history(
+            [
+                meta.AccountCampaignInsights(
+                    campaign_name="Spring Sale",
+                    impressions=0,
+                    clicks=0,
+                    spend=0.0,
+                    conversions=0,
+                )
+            ]
+        )
+        is False
+    )
 
 
 @pytest.mark.asyncio

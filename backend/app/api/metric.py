@@ -33,6 +33,17 @@ def _to_response(metric: Metric) -> MetricResponse:
         clicks=metric.clicks,
         spend=metric.spend,
         conversions=metric.conversions,
+        reach=metric.reach,
+        cpm=metric.cpm,
+        ctr=metric.ctr,
+        cpc=metric.cpc,
+        landing_page_views=metric.landingPageViews,
+        add_to_cart=metric.addToCart,
+        add_to_cart_rate=metric.addToCartRate,
+        conversion_rate=metric.conversionRate,
+        cac=metric.cac,
+        purchase_value=metric.purchaseValue,
+        roas=metric.roas,
         fetched_at=metric.fetchedAt,
     )
 
@@ -91,6 +102,17 @@ async def refresh_metrics(
             "clicks": insights.clicks,
             "spend": insights.spend,
             "conversions": insights.conversions,
+            "reach": insights.reach,
+            "cpm": insights.cpm,
+            "ctr": insights.ctr,
+            "cpc": insights.cpc,
+            "landingPageViews": insights.landing_page_views,
+            "addToCart": insights.add_to_cart,
+            "addToCartRate": insights.add_to_cart_rate,
+            "conversionRate": insights.conversion_rate,
+            "cac": insights.cac,
+            "purchaseValue": insights.purchase_value,
+            "roas": insights.roas,
         }
     )
     return _to_response(metric)

@@ -13,12 +13,12 @@ from app.api import strategy as strategy_module
 from app.schemas.creative import GeneratedCreativeVariant
 from app.schemas.strategy import (
     BudgetRecommendation,
-    StrategyContent,
+    DataDrivenStrategyContent,
     TargetAudience,
 )
 from fastapi.testclient import TestClient
 
-_FAKE_STRATEGY = StrategyContent(
+_FAKE_STRATEGY = DataDrivenStrategyContent(
     objective="SALES",
     target_audience=TargetAudience(),
     offer="Custom emerald rings",
@@ -26,6 +26,9 @@ _FAKE_STRATEGY = StrategyContent(
     creative_angles=["Craftsmanship", "Luxury"],
     copy_strategy="Lead with the story behind each piece",
     budget_recommendation=BudgetRecommendation(daily=25, rationale="Small test spend"),
+    key_learnings=["Craftsmanship angle performed best"],
+    recommended_adjustments=["Drop the price angle"],
+    scaling_trigger="Increase budget once CAC stays under target",
 )
 
 _FAKE_VARIANTS = [
@@ -69,7 +72,8 @@ def _create_campaign(client: TestClient, business_id: str) -> str:
 def _generate_strategy(client: TestClient, business_id: str, campaign_id: str) -> None:
     """Generate a strategy on a campaign (mocked in the strategy fixture)."""
     response = client.post(
-        f"/businesses/{business_id}/campaigns/{campaign_id}/strategy"
+        f"/businesses/{business_id}/campaigns/{campaign_id}/strategy",
+        json={"hasPriorAdvertisingExperience": True},
     )
     assert response.status_code == 201
 

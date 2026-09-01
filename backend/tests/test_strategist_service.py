@@ -13,10 +13,44 @@ import anthropic
 import httpx
 import pytest
 from app.core.config import get_settings
+from app.schemas.strategy import (
+    DEFAULT_TEST_BUDGET,
+    DEFAULT_TEST_DURATION,
+    MAX_STARTING_BUDGET,
+    MIN_TEST_BUDGET,
+    SECONDARY_HYPOTHESIS_METRICS,
+    TEST_PLAN_DECISION_RULES,
+    GeneratedTestPlanFields,
+    TargetAudience,
+    UnitEconomicsFields,
+)
 from app.services import strategist
+from app.services.benchmarks import JEWELRY_META_BENCHMARKS
+from app.services.meta import AccountCampaignInsights
 from prisma.models import Audience, Business, Product
 
-_VALID_TOOL_INPUT: dict[str, Any] = {
+_VALID_TEST_PLAN_INPUT: dict[str, Any] = {
+    "hypothesisAudienceName": "Luxury Jewelry Interest Audience",
+    "hypothesisAudienceTargeting": {
+        "ageMin": 30,
+        "ageMax": 55,
+        "genders": ["female"],
+        "location": ["United States"],
+        "interests": ["Fine jewelry", "Luxury fashion"],
+        "problem": None,
+        "desire": None,
+    },
+    "hypothesisStatement": (
+        "Customers with demonstrated interest in fine jewelry and luxury "
+        "fashion will produce a lower CAC than the broad automated baseline."
+    ),
+    "offer": "Custom Colombian emerald rings",
+    "positioning": "Premium and personal, not mass-market",
+    "creativeAngles": ["Craftsmanship", "Price value"],
+    "copyStrategy": "Lead with the story and character of the stone",
+}
+
+_VALID_DATA_DRIVEN_STRATEGY_INPUT: dict[str, Any] = {
     "targetAudience": {
         "ageMin": 30,
         "ageMax": 55,
@@ -29,7 +63,10 @@ _VALID_TOOL_INPUT: dict[str, Any] = {
     "positioning": "Premium and personal, not mass-market",
     "creativeAngles": ["Craftsmanship", "Luxury", "Personalization"],
     "copyStrategy": "Lead with the story and character of the stone",
-    "budgetRecommendation": {"daily": 25, "rationale": "Small, testable initial spend"},
+    "budgetRecommendation": {"daily": 60, "rationale": "Scale the winning angle"},
+    "keyLearnings": ["Craftsmanship angle drove the best CTR last quarter"],
+    "recommendedAdjustments": ["Drop the price-focused angle"],
+    "scalingTrigger": "Increase budget once CAC stays under target for 7 days",
 }
 
 
@@ -48,6 +85,7 @@ def _fake_product(**overrides: object) -> Product:
     defaults: dict[str, object] = {
         "description": "Custom emerald rings",
         "price": None,
+        "margin": None,
         "features": None,
         "benefits": None,
     }
@@ -88,86 +126,184 @@ def anthropic_api_key(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     get_settings.cache_clear()
 
 
-def test_build_prompt_includes_all_optional_fields_when_present() -> None:
-    """Every optional business/product/audience field, when set, ends up in
-    the prompt — this is the agent's only grounding, so a silently-dropped
-    field would mean the model never sees data the user actually provided."""
-    business = _fake_business(
-        industry="Jewelry", location="Bogotá", description="Family-run since 1985"
-    )
-    product = _fake_product(
-        price=450.0, features="Ethically sourced", benefits="Lifetime warranty"
-    )
-    audience = _fake_audience(
-        ageMin=30,
-        ageMax=55,
-        location="New York",
-        interests="fine jewelry",
-        problem="Hard to find quality pieces",
-        desire="Own something unique",
+def test_build_test_plan_prompt_includes_grounding_and_budget_context() -> None:
+    """The test-plan prompt grounds on business/product/audience and states
+    the decided budget/duration and vertical benchmark ranges — the
+    agent's only inputs."""
+    business = _fake_business(industry="Jewelry", location="Bogotá")
+    product = _fake_product(price=450.0)
+
+    prompt = strategist._build_test_plan_prompt(
+        business, product, None, "SALES", None, 50.0, 10
     )
 
-    prompt = strategist._build_prompt(business, product, audience, "SALES")
-
-    for expected in (
-        "Acme Jewelry",
-        "Jewelry",
-        "Bogotá",
-        "Family-run since 1985",
-        "Custom emerald rings",
-        "450.0",
-        "Ethically sourced",
-        "Lifetime warranty",
-        "Jewelry buyers",
-        "30-55",
-        "New York",
-        "fine jewelry",
-        "Hard to find quality pieces",
-        "Own something unique",
-        "SALES",
-    ):
-        assert expected in prompt
+    assert "Acme Jewelry" in prompt
+    assert "jewelry & accessories industry" in prompt
+    assert "median 2.42%" in prompt
+    assert "1.94%–2.90%" in prompt
+    assert "$50.00/day for 10" in prompt
+    assert "SALES" in prompt
+    assert "this product only executes on Meta" in prompt
+    assert "broad/automated baseline" in prompt
 
 
-def test_build_prompt_handles_no_product_or_audience() -> None:
-    """With neither selected, the prompt still makes sense — tells the model
-    to recommend from scratch rather than silently omitting the sections."""
-    prompt = strategist._build_prompt(_fake_business(), None, None, "AWARENESS")
+def test_build_test_plan_prompt_includes_unit_economics_when_available() -> None:
+    """Unit economics, when computable, are handed to the model as grounding."""
+    unit_economics = UnitEconomicsFields(
+        gross_profit=200.0, breakeven_cac=200.0, target_cac=66.0, breakeven_roas=2.5
+    )
 
-    assert "No specific product was selected" in prompt
-    assert "No audience has been defined yet" in prompt
+    prompt = strategist._build_test_plan_prompt(
+        _fake_business(), None, None, "SALES", unit_economics, 66.0, 10
+    )
+
+    assert "$200.00" in prompt
+    assert "$66.00" in prompt
+    assert "2.50x" in prompt
+
+
+def test_build_data_driven_strategy_prompt_includes_account_history() -> None:
+    """Real per-campaign Meta history is surfaced as grounding, not omitted."""
+    history = [
+        AccountCampaignInsights(
+            campaign_name="Spring Sale",
+            impressions=5000,
+            clicks=200,
+            spend=150.0,
+            conversions=5,
+        )
+    ]
+
+    prompt = strategist._build_data_driven_strategy_prompt(
+        _fake_business(), None, None, "SALES", None, history
+    )
+
+    assert "Spring Sale" in prompt
+    assert "$150.00 spend" in prompt
+
+
+def test_build_data_driven_strategy_prompt_notes_missing_history() -> None:
+    """A self-reported-only established business gets an honest note, not
+    fabricated numbers."""
+    prompt = strategist._build_data_driven_strategy_prompt(
+        _fake_business(), None, None, "SALES", None, []
+    )
+
+    assert "No numeric ad-account history is available" in prompt
+
+
+def test_build_broad_baseline_variant_is_fixed_and_empty() -> None:
+    """Variant A is entirely backend-constructed — deliberately empty
+    targeting, no invented interests."""
+    variant = strategist._build_broad_baseline_variant()
+
+    assert variant.id == "broad_baseline"
+    assert variant.type == "broad_automated"
+    assert variant.is_baseline is True
+    assert variant.targeting == TargetAudience()
+
+
+def test_build_hypothesis_variant_wraps_the_llm_output() -> None:
+    """Variant B's structural fields are fixed; content comes from the LLM."""
+    generated = GeneratedTestPlanFields.model_validate(_VALID_TEST_PLAN_INPUT)
+
+    variant = strategist._build_hypothesis_variant(generated)
+
+    assert variant.id == "hypothesis_audience"
+    assert variant.type == "hypothesis_driven"
+    assert variant.is_baseline is False
+    assert variant.name == "Luxury Jewelry Interest Audience"
+    assert variant.targeting.interests == ["Fine jewelry", "Luxury fashion"]
+    assert variant.targeting.genders == ["female"]
+
+
+def test_build_primary_hypothesis_is_fixed_except_the_statement() -> None:
+    """Only the statement is LLM-generated — the comparison structure
+    (which variants, which metrics) is always the same."""
+    hypothesis = strategist._build_primary_hypothesis("Some specific claim.")
+
+    assert hypothesis.statement == "Some specific claim."
+    assert hypothesis.baseline_variant == "broad_baseline"
+    assert hypothesis.test_variant == "hypothesis_audience"
+    assert hypothesis.primary_metric == "cac"
+    assert hypothesis.secondary_metrics == SECONDARY_HYPOTHESIS_METRICS
+
+
+def test_build_benchmark_context_snapshots_the_live_benchmarks() -> None:
+    """benchmark_context is a point-in-time copy of the live constants."""
+    context = strategist._build_benchmark_context()
+
+    assert context.ctr.median == JEWELRY_META_BENCHMARKS.ctr.median
+    assert context.ctr.direction == "higher_is_better"
+    assert context.cac.median == JEWELRY_META_BENCHMARKS.cac.median
+    assert context.cac.direction == "lower_is_better"
+
+
+def test_build_success_criteria_keeps_benchmark_and_business_target_separate() -> None:
+    """A business target must never be blended into (e.g. min()'d with) the
+    industry benchmark — confirmed with the user 2026-09-01: a $2,000
+    product at 50% margin needing "CAC below $100" has nothing to do with
+    what the broader jewelry industry typically sees."""
+    benchmark_context = strategist._build_benchmark_context()
+    unit_economics = UnitEconomicsFields(
+        gross_profit=303.0, breakeven_cac=303.0, target_cac=100.0, breakeven_roas=3.3
+    )
+
+    criteria = strategist._build_success_criteria(benchmark_context, unit_economics)
+
+    cac = next(c for c in criteria.economic_indicators if c.metric == "cac")
+    assert cac.benchmark == benchmark_context.cac
+    assert cac.business_target == 100.0
+    assert cac.direction == "lower_is_better"
+
+    roas = next(c for c in criteria.economic_indicators if c.metric == "roas")
+    assert roas.benchmark is None
+    assert roas.business_target == 3.3
+    assert roas.direction == "higher_is_better"
+
+
+def test_build_success_criteria_has_no_business_target_without_unit_economics() -> None:
+    """No product price/margin means no business-specific target — the
+    industry benchmark ranges are the only signal, and the plan says so."""
+    benchmark_context = strategist._build_benchmark_context()
+
+    criteria = strategist._build_success_criteria(benchmark_context, None)
+
+    cac = next(c for c in criteria.economic_indicators if c.metric == "cac")
+    assert cac.business_target is None
+    assert "no business-specific target is available" in criteria.profitability_note
 
 
 @pytest.mark.asyncio
 async def test_generate_strategy_raises_without_an_api_key(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """No ANTHROPIC_API_KEY configured raises a clear error, not a crash.
-
-    Set to "" rather than deleted — Settings reads .env directly (not just
-    os.environ, see app/core/config.py), so delenv alone doesn't hide a
-    real key that's actually present in .env; an explicit empty env var
-    does, since it outranks the dotenv source.
-    """
+    """No ANTHROPIC_API_KEY configured raises a clear error, not a crash."""
     monkeypatch.setenv("ANTHROPIC_API_KEY", "")
     get_settings.cache_clear()
 
     with pytest.raises(strategist.StrategistError, match="not configured"):
         await strategist.generate_strategy(
-            business=_fake_business(), product=None, audience=None, objective="SALES"
+            business=_fake_business(),
+            product=None,
+            audience=None,
+            objective="SALES",
+            plan_type="TEST_PLAN",
         )
 
     get_settings.cache_clear()
 
 
 @pytest.mark.asyncio
-async def test_generate_strategy_returns_structured_content(
+async def test_generate_strategy_returns_a_test_plan(
     anthropic_api_key: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A valid tool-use response is parsed into StrategyContent, with the
-    given objective injected rather than taken from the model."""
+    """A valid TEST_PLAN tool-use response is parsed, with every backend-
+    computed field (variants, hypothesis structure, budget, success
+    criteria, decision rules, benchmark context, baseline metrics) filled
+    in around the LLM's Variant B content."""
     _mock_client_returning(
-        monkeypatch, [SimpleNamespace(type="tool_use", input=_VALID_TOOL_INPUT)]
+        monkeypatch, [SimpleNamespace(type="tool_use", input=_VALID_TEST_PLAN_INPUT)]
     )
 
     result = await strategist.generate_strategy(
@@ -175,54 +311,215 @@ async def test_generate_strategy_returns_structured_content(
         product=_fake_product(),
         audience=_fake_audience(),
         objective="SALES",
+        plan_type="TEST_PLAN",
     )
 
+    assert result.plan_type == "TEST_PLAN"
     assert result.objective == "SALES"
-    assert result.target_audience.age_min == 30
-    assert result.target_audience.age_max == 55
-    assert result.target_audience.location == ["New York", "New Jersey"]
-    assert result.creative_angles == ["Craftsmanship", "Luxury", "Personalization"]
-    assert result.budget_recommendation.daily == 25
+    assert result.creative_angles == ["Craftsmanship", "Price value"]
+    assert result.decision_rules == TEST_PLAN_DECISION_RULES
+    assert result.unit_economics is None
+
+    assert len(result.audience_variants) == 2
+    baseline, hypothesis = result.audience_variants
+    assert baseline.id == "broad_baseline"
+    assert baseline.is_baseline is True
+    assert baseline.targeting == TargetAudience()
+    assert hypothesis.id == "hypothesis_audience"
+    assert hypothesis.is_baseline is False
+    assert hypothesis.name == "Luxury Jewelry Interest Audience"
+
+    assert len(result.hypotheses) == 1
+    assert result.hypotheses[0].baseline_variant == "broad_baseline"
+    assert result.hypotheses[0].test_variant == "hypothesis_audience"
+    assert result.hypotheses[0].primary_metric == "cac"
+
+    assert len(result.success_criteria.leading_indicators) == 3
+    assert len(result.success_criteria.economic_indicators) == 3
+    assert result.baseline_metrics.impressions is None
+    assert result.baseline_metrics.spend is None
+    assert result.benchmark_context.ctr.median == JEWELRY_META_BENCHMARKS.ctr.median
+    assert result.data_source.historical_meta_data == []
+
+
+def test_compute_test_daily_budget_defaults_with_no_unit_economics() -> None:
+    """No computable unit economics falls back to the fixed default."""
+    assert strategist._compute_test_daily_budget(None) == DEFAULT_TEST_BUDGET
+
+
+def test_compute_test_daily_budget_uses_target_cac_within_the_band() -> None:
+    """When this product's target CAC falls inside [MIN, MAX], use it as-is."""
+    unit_economics = UnitEconomicsFields(
+        gross_profit=150.0, breakeven_cac=150.0, target_cac=49.5, breakeven_roas=2.0
+    )
+
+    assert strategist._compute_test_daily_budget(unit_economics) == 49.5
+
+
+def test_compute_test_daily_budget_clamps_to_the_max_starting_budget() -> None:
+    """A high-margin/high-price product's target CAC is capped, not used raw."""
+    unit_economics = UnitEconomicsFields(
+        gross_profit=1000.0, breakeven_cac=1000.0, target_cac=330.0, breakeven_roas=2.0
+    )
+
+    assert strategist._compute_test_daily_budget(unit_economics) == MAX_STARTING_BUDGET
+
+
+def test_compute_test_daily_budget_clamps_to_the_min_test_budget() -> None:
+    """A thin-margin/low-price product's target CAC is floored, not used raw."""
+    unit_economics = UnitEconomicsFields(
+        gross_profit=15.0, breakeven_cac=15.0, target_cac=4.95, breakeven_roas=2.0
+    )
+
+    assert strategist._compute_test_daily_budget(unit_economics) == MIN_TEST_BUDGET
 
 
 @pytest.mark.asyncio
-async def test_generate_strategy_recovers_from_a_stray_strategy_wrapper(
+async def test_generate_strategy_uses_the_default_test_budget_with_no_product(
+    anthropic_api_key: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """With no product (so no unit economics), the test budget/duration are
+    the fixed defaults — a business rule, never something the LLM proposes
+    (the LLM's tool schema doesn't even ask for them)."""
+    _mock_client_returning(
+        monkeypatch, [SimpleNamespace(type="tool_use", input=_VALID_TEST_PLAN_INPUT)]
+    )
+
+    result = await strategist.generate_strategy(
+        business=_fake_business(),
+        product=None,
+        audience=None,
+        objective="SALES",
+        plan_type="TEST_PLAN",
+    )
+
+    assert result.plan_type == "TEST_PLAN"
+    assert result.daily_budget == DEFAULT_TEST_BUDGET
+    assert result.duration_days == DEFAULT_TEST_DURATION
+    assert result.total_budget == DEFAULT_TEST_BUDGET * DEFAULT_TEST_DURATION
+
+
+@pytest.mark.asyncio
+async def test_generate_strategy_anchors_test_budget_to_unit_economics(
+    anthropic_api_key: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """With unit economics available, the daily test budget is anchored to
+    this product's own target CAC (clamped), not a fixed number."""
+    _mock_client_returning(
+        monkeypatch, [SimpleNamespace(type="tool_use", input=_VALID_TEST_PLAN_INPUT)]
+    )
+
+    result = await strategist.generate_strategy(
+        business=_fake_business(),
+        product=_fake_product(price=150.0, margin=0.5),
+        audience=None,
+        objective="SALES",
+        plan_type="TEST_PLAN",
+    )
+
+    # gross_profit = 150 * 0.5 = 75; target_cac = 75 * 0.33 = 24.75, within band.
+    assert result.plan_type == "TEST_PLAN"
+    assert result.daily_budget == 24.75
+    assert result.duration_days == DEFAULT_TEST_DURATION
+    assert result.total_budget == 24.75 * DEFAULT_TEST_DURATION
+
+
+@pytest.mark.asyncio
+async def test_generate_strategy_includes_unit_economics_in_a_test_plan(
+    anthropic_api_key: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A product with price+margin set gets unit economics on the plan,
+    kept as a separate business_target on the CAC/ROAS criteria — never
+    blended into the industry benchmark (confirmed with the user
+    2026-09-01)."""
+    _mock_client_returning(
+        monkeypatch, [SimpleNamespace(type="tool_use", input=_VALID_TEST_PLAN_INPUT)]
+    )
+
+    result = await strategist.generate_strategy(
+        business=_fake_business(),
+        product=_fake_product(price=500.0, margin=0.4),
+        audience=None,
+        objective="SALES",
+        plan_type="TEST_PLAN",
+    )
+
+    assert result.plan_type == "TEST_PLAN"
+    assert result.unit_economics == UnitEconomicsFields(
+        gross_profit=200.0, breakeven_cac=200.0, target_cac=66.0, breakeven_roas=2.5
+    )
+    cac = next(
+        c for c in result.success_criteria.economic_indicators if c.metric == "cac"
+    )
+    assert cac.business_target == 66.0
+    assert cac.benchmark is not None
+    assert cac.benchmark.median == JEWELRY_META_BENCHMARKS.cac.median
+    roas = next(
+        c for c in result.success_criteria.economic_indicators if c.metric == "roas"
+    )
+    assert roas.business_target == 2.5
+
+
+@pytest.mark.asyncio
+async def test_generate_strategy_returns_a_data_driven_strategy_plan(
+    anthropic_api_key: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A valid DATA_DRIVEN_STRATEGY tool-use response is parsed correctly,
+    with real account history passed through as grounding."""
+    _mock_client_returning(
+        monkeypatch,
+        [SimpleNamespace(type="tool_use", input=_VALID_DATA_DRIVEN_STRATEGY_INPUT)],
+    )
+    history = [
+        AccountCampaignInsights(
+            campaign_name="Spring Sale",
+            impressions=5000,
+            clicks=200,
+            spend=150.0,
+            conversions=5,
+        )
+    ]
+
+    result = await strategist.generate_strategy(
+        business=_fake_business(),
+        product=_fake_product(),
+        audience=_fake_audience(),
+        objective="SALES",
+        plan_type="DATA_DRIVEN_STRATEGY",
+        account_history=history,
+    )
+
+    assert result.plan_type == "DATA_DRIVEN_STRATEGY"
+    assert result.objective == "SALES"
+    assert result.target_audience.age_min == 30
+    assert result.budget_recommendation.daily == 60
+    assert result.key_learnings == [
+        "Craftsmanship angle drove the best CTR last quarter"
+    ]
+
+
+@pytest.mark.asyncio
+async def test_generate_strategy_recovers_from_a_stray_wrapper(
     anthropic_api_key: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A real claude-sonnet-5 call (2026-08-29) wrapped its otherwise-valid
-    "submit_strategy" tool input under an extra top-level "strategy" key
-    instead of matching the flat schema directly. generate_strategy must
-    still succeed — see app/services/tool_use.py's parse_tool_input."""
+    tool input under an extra top-level key instead of matching the flat
+    schema directly — generate_strategy must still succeed for either
+    plan type. See app/services/tool_use.py's parse_tool_input."""
     _mock_client_returning(
         monkeypatch,
-        [SimpleNamespace(type="tool_use", input={"strategy": _VALID_TOOL_INPUT})],
+        [SimpleNamespace(type="tool_use", input={"plan": _VALID_TEST_PLAN_INPUT})],
     )
 
     result = await strategist.generate_strategy(
         business=_fake_business(),
-        product=_fake_product(),
-        audience=_fake_audience(),
+        product=None,
+        audience=None,
         objective="SALES",
+        plan_type="TEST_PLAN",
     )
 
-    assert result.objective == "SALES"
     assert result.offer == "Custom Colombian emerald rings"
-
-
-@pytest.mark.asyncio
-async def test_generate_strategy_works_with_no_product_or_audience(
-    anthropic_api_key: None, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """The agent can generate a strategy from scratch, product/audience optional."""
-    _mock_client_returning(
-        monkeypatch, [SimpleNamespace(type="tool_use", input=_VALID_TOOL_INPUT)]
-    )
-
-    result = await strategist.generate_strategy(
-        business=_fake_business(), product=None, audience=None, objective="AWARENESS"
-    )
-
-    assert result.objective == "AWARENESS"
 
 
 @pytest.mark.asyncio
@@ -237,7 +534,11 @@ async def test_generate_strategy_raises_on_api_error(
 
     with pytest.raises(strategist.StrategistError, match="Anthropic API call failed"):
         await strategist.generate_strategy(
-            business=_fake_business(), product=None, audience=None, objective="SALES"
+            business=_fake_business(),
+            product=None,
+            audience=None,
+            objective="SALES",
+            plan_type="TEST_PLAN",
         )
 
 
@@ -253,7 +554,11 @@ async def test_generate_strategy_raises_when_no_tool_call_returned(
 
     with pytest.raises(strategist.StrategistError, match="did not return a tool call"):
         await strategist.generate_strategy(
-            business=_fake_business(), product=None, audience=None, objective="SALES"
+            business=_fake_business(),
+            product=None,
+            audience=None,
+            objective="SALES",
+            plan_type="TEST_PLAN",
         )
 
 
@@ -270,5 +575,9 @@ async def test_generate_strategy_raises_on_malformed_tool_input(
 
     with pytest.raises(Exception, match="validation error"):
         await strategist.generate_strategy(
-            business=_fake_business(), product=None, audience=None, objective="SALES"
+            business=_fake_business(),
+            product=None,
+            audience=None,
+            objective="SALES",
+            plan_type="TEST_PLAN",
         )

@@ -33,10 +33,19 @@ from app.api import meta as meta_api_module
 from app.api import strategy as strategy_module
 from app.schemas.creative import GeneratedCreativeVariant
 from app.schemas.optimization import GeneratedRecommendation
-from app.schemas.strategy import BudgetRecommendation, StrategyContent, TargetAudience
+from app.schemas.strategy import (
+    BudgetRecommendation,
+    DataDrivenStrategyContent,
+    GeneratedTestPlanFields,
+    NormalizedMetrics,
+    TargetAudience,
+    TestPlanContent,
+)
+from app.schemas.test_evaluation import GeneratedTestEvaluation
 from app.services import meta as meta_service_module
 from app.services import optimization_jobs
 from app.services import optimizer as optimizer_module
+from app.services import strategist as strategist_module
 from app.services.meta import CampaignInsights, MetaConnectionError
 from fastapi.testclient import TestClient
 from prisma import Prisma
@@ -53,7 +62,7 @@ def _run[T](client: TestClient, func: Callable[..., Awaitable[T]], *args: object
     return client.portal.call(func, *args)
 
 
-_FAKE_STRATEGY = StrategyContent(
+_FAKE_STRATEGY = DataDrivenStrategyContent(
     objective="SALES",
     target_audience=TargetAudience(age_min=30, age_max=55),
     offer="Custom emerald rings",
@@ -61,7 +70,52 @@ _FAKE_STRATEGY = StrategyContent(
     creative_angles=["Craftsmanship", "Luxury"],
     copy_strategy="Lead with the story behind each piece",
     budget_recommendation=BudgetRecommendation(daily=25, rationale="Small test spend"),
+    key_learnings=["Craftsmanship angle performed best"],
+    recommended_adjustments=["Drop the price angle"],
+    scaling_trigger="Increase budget once CAC stays under target",
 )
+
+
+def _fake_test_plan() -> TestPlanContent:
+    """Build a real TestPlanContent from the strategist's own assembly
+    helpers, not a hand-rolled duplicate shape."""
+    generated = GeneratedTestPlanFields(
+        hypothesis_audience_name="Luxury Jewelry Interest Audience",
+        hypothesis_audience_targeting=TargetAudience(
+            age_min=30, age_max=55, interests=["fine jewelry"]
+        ),
+        hypothesis_statement="The hypothesis-driven audience will produce a lower CAC.",
+        offer="Custom emerald rings",
+        positioning="Premium and personal",
+        creative_angles=["Craftsmanship", "Price value"],
+        copy_strategy="Lead with the story behind each piece",
+    )
+    benchmark_context = strategist_module._build_benchmark_context()
+    return TestPlanContent(
+        objective="SALES",
+        audience_variants=[
+            strategist_module._build_broad_baseline_variant(),
+            strategist_module._build_hypothesis_variant(generated),
+        ],
+        hypotheses=[
+            strategist_module._build_primary_hypothesis(generated.hypothesis_statement)
+        ],
+        offer=generated.offer,
+        positioning=generated.positioning,
+        creative_angles=generated.creative_angles,
+        copy_strategy=generated.copy_strategy,
+        daily_budget=50.0,
+        duration_days=10,
+        total_budget=500.0,
+        success_criteria=strategist_module._build_success_criteria(
+            benchmark_context, None
+        ),
+        baseline_metrics=NormalizedMetrics(),
+        benchmark_context=benchmark_context,
+    )
+
+
+_FAKE_TEST_PLAN = _fake_test_plan()
 
 _FAKE_VARIANTS = [
     GeneratedCreativeVariant(
@@ -146,7 +200,10 @@ def _publish_campaign(client: TestClient, business_id: str) -> str:
     campaign_id: str = client.post(
         f"/businesses/{business_id}/campaigns", json={"objective": "SALES"}
     ).json()["id"]
-    client.post(f"/businesses/{business_id}/campaigns/{campaign_id}/strategy")
+    client.post(
+        f"/businesses/{business_id}/campaigns/{campaign_id}/strategy",
+        json={"hasPriorAdvertisingExperience": True},
+    )
     creatives = client.post(
         f"/businesses/{business_id}/campaigns/{campaign_id}/creatives"
     ).json()
@@ -157,6 +214,23 @@ def _publish_campaign(client: TestClient, business_id: str) -> str:
     client.post(f"/businesses/{business_id}/campaigns/{campaign_id}/approve")
     client.post(f"/businesses/{business_id}/campaigns/{campaign_id}/publish")
     return campaign_id
+
+
+def _publish_test_plan_campaign(
+    client: TestClient, business_id: str, monkeypatch: pytest.MonkeyPatch
+) -> str:
+    """Same as _publish_campaign, but with a TEST_PLAN strategy instead of
+    the DATA_DRIVEN_STRATEGY the autouse mock_services fixture defaults to
+    — overrides that mock's return value just for the strategy-generation
+    call this helper makes.
+
+    Returns:
+        The new campaign's id.
+    """
+    monkeypatch.setattr(
+        strategy_module, "generate_strategy", AsyncMock(return_value=_FAKE_TEST_PLAN)
+    )
+    return _publish_campaign(client, business_id)
 
 
 def _live_campaign(client: TestClient) -> tuple[str, str]:
@@ -738,3 +812,88 @@ async def test_evaluate_isolates_failures_between_campaigns(
     all_recs = await seeder.optimizationrecommendation.find_many()
     await seeder.disconnect()
     assert len(all_recs) == 1
+
+
+# --- generate_and_store_test_evaluation ("Phase B") -------------------------
+
+_VALID_TEST_EVALUATION = GeneratedTestEvaluation(
+    key_findings=["CTR is within the typical range for this vertical."],
+    recommended_action="continue_testing",
+    reasoning="Not enough conversion volume yet to read economic indicators.",
+    confidence="LOW",
+)
+
+
+@pytest.mark.asyncio
+async def test_generate_and_store_test_evaluation_insufficient_data(
+    client: TestClient,
+    mock_services: dict[str, AsyncMock],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Low spend and little time elapsed stores an INSUFFICIENT_DATA
+    evaluation without ever calling the LLM."""
+    _signed_up_client(client)
+    business_id = _create_business(client)
+    _connect_meta(client, business_id)
+    campaign_id = _publish_test_plan_campaign(client, business_id, monkeypatch)
+    await _seed_metric(campaign_id, fetched_at=datetime.now(UTC), spend=1.0)
+
+    evaluate = AsyncMock(return_value=_VALID_TEST_EVALUATION)
+    monkeypatch.setattr(optimizer_module, "evaluate_test_plan", evaluate)
+
+    campaign = await _fetch_campaign(campaign_id)
+    result = _run(
+        client,
+        optimization_jobs.generate_and_store_test_evaluation,
+        campaign,
+        _FAKE_TEST_PLAN,
+    )
+
+    assert result.status == "INSUFFICIENT_DATA"
+    assert result.hypothesisResult == "INCONCLUSIVE"
+    assert result.winningVariant is None
+    assert result.recommendedAction == "continue_testing"
+    evaluate.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_generate_and_store_test_evaluation_sufficient_data(
+    client: TestClient,
+    mock_services: dict[str, AsyncMock],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Enough of the test's budget spent triggers a real LLM evaluation,
+    stored as SUFFICIENT_DATA."""
+    _signed_up_client(client)
+    business_id = _create_business(client)
+    _connect_meta(client, business_id)
+    campaign_id = _publish_test_plan_campaign(client, business_id, monkeypatch)
+    await _seed_metric(campaign_id, fetched_at=datetime.now(UTC), spend=250.0)
+
+    evaluate = AsyncMock(return_value=_VALID_TEST_EVALUATION)
+    monkeypatch.setattr(optimizer_module, "evaluate_test_plan", evaluate)
+
+    campaign = await _fetch_campaign(campaign_id)
+    result = _run(
+        client,
+        optimization_jobs.generate_and_store_test_evaluation,
+        campaign,
+        _FAKE_TEST_PLAN,
+    )
+
+    assert result.status == "SUFFICIENT_DATA"
+    assert result.confidence == "LOW"
+    assert result.recommendedAction == "continue_testing"
+    assert result.hypothesisResult == "INCONCLUSIVE"
+    assert result.winningVariant is None
+    evaluate.assert_awaited_once()
+
+
+async def _fetch_campaign(campaign_id: str) -> object:
+    """Fetch a real Campaign row by id via a fresh connection."""
+    seeder = Prisma()
+    await seeder.connect()
+    campaign = await seeder.campaign.find_unique(where={"id": campaign_id})
+    await seeder.disconnect()
+    assert campaign is not None
+    return campaign

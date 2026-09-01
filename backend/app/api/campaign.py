@@ -11,7 +11,7 @@ from prisma.models import Business, Campaign
 from app.core.authz import get_owned_business, get_owned_campaign
 from app.core.db import db
 from app.schemas.campaign import CampaignCreateRequest, CampaignResponse
-from app.schemas.strategy import StrategyContent
+from app.schemas.strategy import StrategyContentAdapter
 from app.services.meta import MetaConnectionError
 from app.services.publish import publish_campaign_to_meta, requires_pixel
 
@@ -267,7 +267,7 @@ async def publish_campaign(
             campaign=campaign,
             connection=connection,
             creative=creative,
-            strategy=StrategyContent.model_validate_json(strategy.content),
+            strategy=StrategyContentAdapter.validate_json(strategy.content),
             destination_url=destination_url,
         )
     except MetaConnectionError as exc:

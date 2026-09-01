@@ -501,12 +501,65 @@ async def create_meta_ad(
 
 
 class CampaignInsights(NamedTuple):
-    """Lifetime performance numbers for a Meta campaign."""
+    """Lifetime performance numbers for a Meta campaign.
+
+    impressions/clicks/spend/conversions are the original step-9 fields.
+    Everything from reach onward is the "Phase B" extended set (PRD.md §5
+    step 10, confirmed 2026-09-01), added for the TEST_PLAN Optimizer's
+    success-criteria evaluation — all default None ("unavailable/not
+    applicable," never zero, same NormalizedMetrics convention as
+    app/schemas/strategy.py) so existing callers that only care about the
+    original four fields are unaffected.
+    """
 
     impressions: int
     clicks: int
     spend: float
     conversions: int
+    reach: int | None = None
+    cpm: float | None = None
+    ctr: float | None = None
+    cpc: float | None = None
+    landing_page_views: int | None = None
+    add_to_cart: int | None = None
+    add_to_cart_rate: float | None = None
+    conversion_rate: float | None = None
+    cac: float | None = None
+    purchase_value: float | None = None
+    roas: float | None = None
+
+
+# Meta's own action_type values for the funnel steps the extended metric
+# set tracks. Not exhaustive across every pixel/CAPI setup a business
+# might have configured — a reasonable first pass (PRD.md §5 step 10),
+# flagged for revisiting against real end-to-end testing the same way
+# publish's own Meta-integration gaps were (PRD.md §5 step 8's "real bugs
+# real testing catches" note).
+_LANDING_PAGE_VIEW_ACTION_TYPES = frozenset({"landing_page_view"})
+_ADD_TO_CART_ACTION_TYPES = frozenset({"add_to_cart", "omni_add_to_cart"})
+_PURCHASE_ACTION_TYPES = frozenset(
+    {"purchase", "omni_purchase", "offsite_conversion.fb_pixel_purchase"}
+)
+
+
+def _sum_actions(actions: list[dict[str, str]], action_types: frozenset[str]) -> int:
+    """Sum the "value" of every action row whose action_type is in the given set."""
+    return sum(
+        int(action["value"])
+        for action in actions
+        if action.get("action_type") in action_types
+    )
+
+
+def _sum_action_values(
+    action_values: list[dict[str, str]], action_types: frozenset[str]
+) -> float:
+    """Sum the "value" of every action_values row whose action_type matches."""
+    return sum(
+        float(action["value"])
+        for action in action_values
+        if action.get("action_type") in action_types
+    )
 
 
 async def fetch_campaign_insights(
@@ -519,8 +572,11 @@ async def fetch_campaign_insights(
         meta_campaign_id: The Meta campaign id (Campaign.metaCampaignId).
 
     Returns:
-        All zero if Meta has no delivery data yet (e.g. a campaign
-        published moments ago) — not an error.
+        The original four fields are all zero if Meta has no delivery
+        data yet (e.g. a campaign published moments ago) — not an error;
+        every extended field is None in that case instead (no delivery
+        data means every derived metric is genuinely unavailable, not
+        zero — same distinction NormalizedMetrics makes).
 
         conversions is the sum of every entry in Meta's own "actions"
         breakdown (link clicks, purchases, leads, etc. all mixed
@@ -528,26 +584,141 @@ async def fetch_campaign_insights(
         that properly means mapping each Campaign.objective to the one
         or two action_types that actually count as "the" conversion for
         it, which isn't done yet (known simplification, PRD.md §5 step 9).
+        cac/roas below are narrower and use only the purchase-specific
+        action types (_PURCHASE_ACTION_TYPES), not this broader
+        conversions figure, since a customer-acquisition-cost or
+        return-on-ad-spend number mixed with leads/link-clicks would be
+        misleading.
+
+        addToCartRate is add_to_cart / landing_page_views (not / clicks)
+        — None when there were no landing page views to divide by.
 
     Raises:
         MetaConnectionError: If the call fails.
     """
     body = await _get_json(
         f"{_GRAPH_BASE_URL}/{meta_campaign_id}/insights",
-        {"fields": "impressions,clicks,spend,actions", "access_token": access_token},
+        {
+            "fields": (
+                "impressions,reach,spend,clicks,cpm,ctr,cpc,actions,action_values"
+            ),
+            "access_token": access_token,
+        },
     )
     rows = body.get("data", [])
     if not rows:
         return CampaignInsights(impressions=0, clicks=0, spend=0.0, conversions=0)
 
     row = rows[0]
-    conversions = sum(int(action["value"]) for action in row.get("actions", []))
+    actions = row.get("actions", [])
+    action_values = row.get("action_values", [])
+    spend = float(row.get("spend", 0.0))
+    clicks = int(row.get("clicks", 0))
+    conversions = sum(int(action["value"]) for action in actions)
+
+    landing_page_views = _sum_actions(actions, _LANDING_PAGE_VIEW_ACTION_TYPES)
+    add_to_cart = _sum_actions(actions, _ADD_TO_CART_ACTION_TYPES)
+    purchases = _sum_actions(actions, _PURCHASE_ACTION_TYPES)
+    purchase_value = _sum_action_values(action_values, _PURCHASE_ACTION_TYPES)
+
     return CampaignInsights(
         impressions=int(row.get("impressions", 0)),
-        clicks=int(row.get("clicks", 0)),
-        spend=float(row.get("spend", 0.0)),
+        clicks=clicks,
+        spend=spend,
         conversions=conversions,
+        reach=int(row["reach"]) if "reach" in row else None,
+        cpm=float(row["cpm"]) if "cpm" in row else None,
+        ctr=float(row["ctr"]) if "ctr" in row else None,
+        cpc=float(row["cpc"]) if "cpc" in row else None,
+        landing_page_views=landing_page_views if actions else None,
+        add_to_cart=add_to_cart if actions else None,
+        add_to_cart_rate=(
+            (add_to_cart / landing_page_views) if landing_page_views else None
+        ),
+        conversion_rate=(conversions / clicks) if clicks else None,
+        cac=(spend / purchases) if purchases else None,
+        purchase_value=purchase_value if action_values else None,
+        roas=(purchase_value / spend) if spend and action_values else None,
     )
+
+
+class AccountCampaignInsights(NamedTuple):
+    """Lifetime performance numbers for one campaign on a connected ad account."""
+
+    campaign_name: str
+    impressions: int
+    clicks: int
+    spend: float
+    conversions: int
+
+
+async def fetch_account_historical_performance(
+    *, access_token: str, ad_account_id: str
+) -> list[AccountCampaignInsights]:
+    """Fetch lifetime, per-campaign performance for an entire ad account.
+
+    Unlike fetch_campaign_insights (which looks up one Meta campaign this
+    app itself published), this pulls every campaign Meta has delivery
+    data for on the account — including ones run before the business ever
+    connected to Sales Guru. Used by the Marketing Strategist Agent
+    (app/services/strategist.py) to decide between a TEST_PLAN and a
+    DATA_DRIVEN_STRATEGY plan, and to ground the latter in what actually
+    worked before (confirmed with the user 2026-08-31).
+
+    Args:
+        access_token: The business's Meta access token.
+        ad_account_id: The connected ad account, already carrying Meta's
+            own "act_" prefix (see create_meta_campaign's docstring).
+
+    Returns:
+        One entry per campaign with delivery data, empty if the account
+        has none. Rows with no name are skipped — Meta shouldn't omit it,
+        but a nameless row isn't useful grounding for the agent's prompt.
+
+    Raises:
+        MetaConnectionError: If the call fails.
+    """
+    body = await _get_json(
+        f"{_GRAPH_BASE_URL}/{ad_account_id}/insights",
+        {
+            "level": "campaign",
+            "fields": "campaign_name,impressions,clicks,spend,actions",
+            "date_preset": "maximum",
+            "access_token": access_token,
+        },
+    )
+    results: list[AccountCampaignInsights] = []
+    for row in body.get("data", []):
+        name = row.get("campaign_name")
+        if not name:
+            continue
+        conversions = sum(int(action["value"]) for action in row.get("actions", []))
+        results.append(
+            AccountCampaignInsights(
+                campaign_name=name,
+                impressions=int(row.get("impressions", 0)),
+                clicks=int(row.get("clicks", 0)),
+                spend=float(row.get("spend", 0.0)),
+                conversions=conversions,
+            )
+        )
+    return results
+
+
+def has_meaningful_history(rows: list[AccountCampaignInsights]) -> bool:
+    """Whether an account's historical pull shows any real spend.
+
+    Args:
+        rows: The result of fetch_account_historical_performance.
+
+    Returns:
+        True if any campaign on the account has spent anything at all —
+        the bar for "this business has run ads before" is deliberately
+        low (any real spend, not a dollar threshold): a self-reported "no"
+        should never override real evidence to the contrary, however
+        small (confirmed with the user 2026-08-31).
+    """
+    return any(row.spend > 0 for row in rows)
 
 
 async def pause_meta_ad(*, access_token: str, meta_ad_id: str) -> None:

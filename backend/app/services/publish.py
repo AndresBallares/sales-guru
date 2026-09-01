@@ -17,7 +17,7 @@ does the Meta calls + local writes.
 from prisma.models import Campaign, Creative, MetaConnection
 
 from app.core.db import db
-from app.schemas.strategy import StrategyContent
+from app.schemas.strategy import StrategyContent, daily_budget, primary_audience
 from app.services import meta
 
 # No user input collects this yet, so each objective gets a reasonable
@@ -88,9 +88,10 @@ async def publish_campaign_to_meta(
     assert connection.adAccountId is not None
     assert connection.pageId is not None
 
-    daily_budget_cents = round(strategy.budget_recommendation.daily * 100)
-    age_min = strategy.target_audience.age_min or 18
-    age_max = strategy.target_audience.age_max or 65
+    daily_budget_cents = round(daily_budget(strategy) * 100)
+    audience = primary_audience(strategy)
+    age_min = audience.age_min or 18
+    age_max = audience.age_max or 65
     optimization_goal = _OPTIMIZATION_GOAL_BY_OBJECTIVE[campaign.objective]
     object_name = campaign.name or f"Sales Guru campaign {campaign.id}"
 
@@ -136,7 +137,7 @@ async def publish_campaign_to_meta(
         data={
             "campaignId": campaign.id,
             "name": object_name,
-            "budget": strategy.budget_recommendation.daily,
+            "budget": daily_budget_cents / 100,
             "optimizationGoal": optimization_goal,
             "status": "LIVE",
             "metaAdSetId": meta_ad_set_id,

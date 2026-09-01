@@ -7,6 +7,7 @@ import {
   createCreatives,
   createRecommendation,
   createStrategy,
+  createTestEvaluation,
   getStrategy,
   listAudiences,
   listCampaigns,
@@ -14,6 +15,7 @@ import {
   listMetrics,
   listProducts,
   listRecommendations,
+  listTestEvaluations,
   publishCampaign,
   refreshMetrics,
   rejectRecommendation,
@@ -27,6 +29,7 @@ import {
   type Product,
   type Recommendation,
   type StrategyContent,
+  type TestEvaluation,
 } from '../lib/api'
 
 const OBJECTIVE_LABELS: Record<Objective, string> = {
@@ -62,6 +65,11 @@ export function CampaignsSection({ businessId }: { businessId: string }) {
   const [strategies, setStrategies] = useState<Record<string, StrategyContent>>({})
   const [generatingId, setGeneratingId] = useState<string | null>(null)
   const [strategyErrors, setStrategyErrors] = useState<Record<string, string>>({})
+  // Set when the backend responds 428 — it needs the one-time "has this
+  // business advertised before?" answer before it can generate a strategy.
+  const [needsAdExperienceAnswerId, setNeedsAdExperienceAnswerId] = useState<
+    string | null
+  >(null)
 
   const [creatives, setCreatives] = useState<Record<string, Creative[]>>({})
   const [generatingCreativesId, setGeneratingCreativesId] = useState<string | null>(null)
@@ -83,6 +91,10 @@ export function CampaignsSection({ businessId }: { businessId: string }) {
     action: 'approve' | 'reject'
   } | null>(null)
   const [recommendationErrors, setRecommendationErrors] = useState<Record<string, string>>({})
+
+  const [testEvaluations, setTestEvaluations] = useState<Record<string, TestEvaluation[]>>({})
+  const [evaluatingId, setEvaluatingId] = useState<string | null>(null)
+  const [evaluateErrors, setEvaluateErrors] = useState<Record<string, string>>({})
 
   const refresh = useCallback(async () => {
     setLoading(true)
@@ -168,6 +180,23 @@ export function CampaignsSection({ businessId }: { businessId: string }) {
         }
         return next
       })
+
+      // Same reasoning again — only LIVE campaigns can have test
+      // evaluations, and the campaign list itself doesn't include them.
+      const fetchedTestEvaluations = await Promise.all(
+        live.map((c) =>
+          listTestEvaluations(businessId, c.id)
+            .then((list) => [c.id, list] as const)
+            .catch(() => null),
+        ),
+      )
+      setTestEvaluations((prev) => {
+        const next = { ...prev }
+        for (const entry of fetchedTestEvaluations) {
+          if (entry && entry[1].length > 0) next[entry[0]] = entry[1]
+        }
+        return next
+      })
     } catch (err) {
       setListError(err instanceof ApiError ? err.message : 'Could not load campaigns.')
     } finally {
@@ -210,14 +239,21 @@ export function CampaignsSection({ businessId }: { businessId: string }) {
     }
   }
 
-  async function handleGenerateStrategy(campaignId: string) {
+  async function handleGenerateStrategy(campaignId: string, hasPriorAdvertisingExperience?: boolean) {
     setGeneratingId(campaignId)
     setStrategyErrors((prev) => ({ ...prev, [campaignId]: '' }))
     try {
-      const strategy = await createStrategy(businessId, campaignId)
+      const strategy = await createStrategy(businessId, campaignId, hasPriorAdvertisingExperience)
       setStrategies((prev) => ({ ...prev, [campaignId]: strategy.content }))
+      setNeedsAdExperienceAnswerId(null)
       await refresh()
     } catch (err) {
+      if (err instanceof ApiError && err.status === 428) {
+        // The one-time question hasn't been answered for this business yet
+        // — ask, then retry with the answer (handleAnswerAdExperience).
+        setNeedsAdExperienceAnswerId(campaignId)
+        return
+      }
       setStrategyErrors((prev) => ({
         ...prev,
         [campaignId]: err instanceof ApiError ? err.message : 'Could not generate strategy.',
@@ -303,6 +339,25 @@ export function CampaignsSection({ businessId }: { businessId: string }) {
       }))
     } finally {
       setRefreshingMetricsId(null)
+    }
+  }
+
+  async function handleEvaluateTestPlan(campaignId: string) {
+    setEvaluatingId(campaignId)
+    setEvaluateErrors((prev) => ({ ...prev, [campaignId]: '' }))
+    try {
+      const evaluation = await createTestEvaluation(businessId, campaignId)
+      setTestEvaluations((prev) => ({
+        ...prev,
+        [campaignId]: [evaluation, ...(prev[campaignId] ?? [])],
+      }))
+    } catch (err) {
+      setEvaluateErrors((prev) => ({
+        ...prev,
+        [campaignId]: err instanceof ApiError ? err.message : 'Could not evaluate test plan.',
+      }))
+    } finally {
+      setEvaluatingId(null)
     }
   }
 
@@ -397,6 +452,8 @@ export function CampaignsSection({ businessId }: { businessId: string }) {
             const latestMetric = campaignMetrics[0]
             const campaignRecommendations = recommendations[campaign.id] ?? []
             const analyzeError = analyzeErrors[campaign.id]
+            const campaignTestEvaluations = testEvaluations[campaign.id] ?? []
+            const evaluateError = evaluateErrors[campaign.id]
             return (
               <li key={campaign.id}>
                 {campaign.name ? `${campaign.name} — ` : ''}
@@ -417,6 +474,25 @@ export function CampaignsSection({ businessId }: { businessId: string }) {
                     {strategyError}
                   </p>
                 )}
+                {needsAdExperienceAnswerId === campaign.id && (
+                  <fieldset>
+                    <legend>Has this business run advertising campaigns before?</legend>
+                    <button
+                      type="button"
+                      onClick={() => handleGenerateStrategy(campaign.id, true)}
+                      disabled={generatingId === campaign.id}
+                    >
+                      Yes
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleGenerateStrategy(campaign.id, false)}
+                      disabled={generatingId === campaign.id}
+                    >
+                      No
+                    </button>
+                  </fieldset>
+                )}
                 {strategy && (
                   <div aria-label={`Strategy for ${campaign.name ?? campaign.id}`}>
                     <p>
@@ -425,44 +501,178 @@ export function CampaignsSection({ businessId }: { businessId: string }) {
                     <p>
                       <strong>Positioning:</strong> {strategy.positioning}
                     </p>
-                    <p>
-                      <strong>Target audience:</strong>{' '}
-                      {[
-                        strategy.targetAudience.ageMin != null &&
-                        strategy.targetAudience.ageMax != null
-                          ? `${strategy.targetAudience.ageMin}-${strategy.targetAudience.ageMax}`
-                          : null,
-                        strategy.targetAudience.location.join(', '),
-                        strategy.targetAudience.interests.join(', '),
-                      ]
-                        .filter(Boolean)
-                        .join(' — ')}
-                    </p>
-                    {strategy.targetAudience.problem && (
+                    {strategy.planType === 'TEST_PLAN' ? (
+                      <>
+                        <p>
+                          <strong>Test plan</strong> — this business has no
+                          meaningful advertising history yet. The purpose is
+                          to collect real data, not assume a winner.
+                        </p>
+                        {strategy.audienceVariants.map((variant) => (
+                          <div key={variant.id}>
+                            <p>
+                              <strong>
+                                {variant.name}
+                                {variant.isBaseline ? ' (baseline)' : ''}:
+                              </strong>{' '}
+                              {[
+                                variant.targeting.ageMin != null &&
+                                variant.targeting.ageMax != null
+                                  ? `${variant.targeting.ageMin}-${variant.targeting.ageMax}`
+                                  : null,
+                                variant.targeting.genders?.join(', '),
+                                variant.targeting.location.join(', '),
+                                variant.targeting.interests.join(', '),
+                              ]
+                                .filter(Boolean)
+                                .join(' — ') || 'Broad — no targeting constraints'}
+                            </p>
+                            <p>{variant.hypothesis}</p>
+                          </div>
+                        ))}
+                        <p>
+                          <strong>Creative angles:</strong>
+                        </p>
+                        <ul>
+                          {strategy.creativeAngles.map((angle) => (
+                            <li key={angle}>{angle}</li>
+                          ))}
+                        </ul>
+                        <p>
+                          <strong>Copy strategy:</strong> {strategy.copyStrategy}
+                        </p>
+                        <p>
+                          <strong>Primary hypothesis:</strong>
+                        </p>
+                        <ul>
+                          {strategy.hypotheses.map((hypothesis) => (
+                            <li key={hypothesis.id}>
+                              {hypothesis.statement} (measured by{' '}
+                              {hypothesis.primaryMetric}, also tracking{' '}
+                              {hypothesis.secondaryMetrics.join(', ')})
+                            </li>
+                          ))}
+                        </ul>
+                        <p>
+                          <strong>Test budget:</strong> ${strategy.dailyBudget}/day for{' '}
+                          {strategy.durationDays} days (${strategy.totalBudget} total)
+                        </p>
+                        <p>
+                          <strong>Leading indicators (early signal):</strong>
+                        </p>
+                        <ul>
+                          {strategy.successCriteria.leadingIndicators.map((criterion) => (
+                            <li key={criterion.metric}>
+                              <strong>{criterion.metric}:</strong>{' '}
+                              {criterion.benchmark
+                                ? `industry range ${criterion.benchmark.low}–${criterion.benchmark.high} (median ${criterion.benchmark.median})`
+                                : 'no industry benchmark configured'}
+                              {criterion.businessTarget != null &&
+                                ` — business target: ${criterion.businessTarget}`}
+                              {' — '}
+                              {criterion.guidance}
+                            </li>
+                          ))}
+                        </ul>
+                        <p>
+                          <strong>Economic indicators (need more volume):</strong>
+                        </p>
+                        <ul>
+                          {strategy.successCriteria.economicIndicators.map((criterion) => (
+                            <li key={criterion.metric}>
+                              <strong>{criterion.metric}:</strong>{' '}
+                              {criterion.benchmark
+                                ? `industry range ${criterion.benchmark.low}–${criterion.benchmark.high} (median ${criterion.benchmark.median})`
+                                : 'no industry benchmark configured'}
+                              {criterion.businessTarget != null &&
+                                ` — business target: ${criterion.businessTarget}`}
+                              {' — '}
+                              {criterion.guidance}
+                            </li>
+                          ))}
+                        </ul>
+                        <p>{strategy.successCriteria.profitabilityNote}</p>
+                        <p>
+                          <strong>Decision rules:</strong>
+                        </p>
+                        <ul>
+                          {strategy.decisionRules.map((rule) => (
+                            <li key={rule.action}>
+                              If {rule.condition} → {rule.action.replaceAll('_', ' ')}
+                            </li>
+                          ))}
+                        </ul>
+                      </>
+                    ) : (
+                      <>
+                        <p>
+                          <strong>Target audience:</strong>{' '}
+                          {[
+                            strategy.targetAudience.ageMin != null &&
+                            strategy.targetAudience.ageMax != null
+                              ? `${strategy.targetAudience.ageMin}-${strategy.targetAudience.ageMax}`
+                              : null,
+                            strategy.targetAudience.location.join(', '),
+                            strategy.targetAudience.interests.join(', '),
+                          ]
+                            .filter(Boolean)
+                            .join(' — ')}
+                        </p>
+                        {strategy.targetAudience.problem && (
+                          <p>
+                            <strong>Problem:</strong> {strategy.targetAudience.problem}
+                          </p>
+                        )}
+                        {strategy.targetAudience.desire && (
+                          <p>
+                            <strong>Desire:</strong> {strategy.targetAudience.desire}
+                          </p>
+                        )}
+                        <p>
+                          <strong>Creative angles:</strong>
+                        </p>
+                        <ul>
+                          {strategy.creativeAngles.map((angle) => (
+                            <li key={angle}>{angle}</li>
+                          ))}
+                        </ul>
+                        <p>
+                          <strong>Copy strategy:</strong> {strategy.copyStrategy}
+                        </p>
+                        <p>
+                          <strong>Budget:</strong> ${strategy.budgetRecommendation.daily}/day —{' '}
+                          {strategy.budgetRecommendation.rationale}
+                        </p>
+                        <p>
+                          <strong>Key learnings:</strong>
+                        </p>
+                        <ul>
+                          {strategy.keyLearnings.map((learning) => (
+                            <li key={learning}>{learning}</li>
+                          ))}
+                        </ul>
+                        <p>
+                          <strong>Recommended adjustments:</strong>
+                        </p>
+                        <ul>
+                          {strategy.recommendedAdjustments.map((adjustment) => (
+                            <li key={adjustment}>{adjustment}</li>
+                          ))}
+                        </ul>
+                        <p>
+                          <strong>Scaling trigger:</strong> {strategy.scalingTrigger}
+                        </p>
+                      </>
+                    )}
+                    {strategy.unitEconomics && (
                       <p>
-                        <strong>Problem:</strong> {strategy.targetAudience.problem}
+                        <strong>Unit economics:</strong> gross profit $
+                        {strategy.unitEconomics.grossProfit.toFixed(2)}, breakeven CAC $
+                        {strategy.unitEconomics.breakevenCac.toFixed(2)}, target CAC $
+                        {strategy.unitEconomics.targetCac.toFixed(2)}, breakeven ROAS{' '}
+                        {strategy.unitEconomics.breakevenRoas.toFixed(2)}x
                       </p>
                     )}
-                    {strategy.targetAudience.desire && (
-                      <p>
-                        <strong>Desire:</strong> {strategy.targetAudience.desire}
-                      </p>
-                    )}
-                    <p>
-                      <strong>Creative angles:</strong>
-                    </p>
-                    <ul>
-                      {strategy.creativeAngles.map((angle) => (
-                        <li key={angle}>{angle}</li>
-                      ))}
-                    </ul>
-                    <p>
-                      <strong>Copy strategy:</strong> {strategy.copyStrategy}
-                    </p>
-                    <p>
-                      <strong>Budget:</strong> ${strategy.budgetRecommendation.daily}/day —{' '}
-                      {strategy.budgetRecommendation.rationale}
-                    </p>
                   </div>
                 )}
                 {strategy && (
@@ -680,6 +890,47 @@ export function CampaignsSection({ businessId }: { businessId: string }) {
                           )
                         })}
                       </ul>
+                    )}
+                    {strategy?.planType === 'TEST_PLAN' && (
+                      <div>
+                        <button
+                          type="button"
+                          onClick={() => handleEvaluateTestPlan(campaign.id)}
+                          disabled={evaluatingId === campaign.id}
+                        >
+                          {evaluatingId === campaign.id ? 'Evaluating…' : 'Evaluate test'}
+                        </button>
+                        {evaluateError && (
+                          <p className="form-error" role="alert">
+                            {evaluateError}
+                          </p>
+                        )}
+                        {campaignTestEvaluations.length > 0 && (
+                          <ul aria-label={`Test evaluations for ${campaign.name ?? campaign.id}`}>
+                            {campaignTestEvaluations.map((evaluation) => (
+                              <li key={evaluation.id}>
+                                <p>
+                                  <strong>{evaluation.status}</strong>
+                                  {' — '}
+                                  hypothesis: {evaluation.hypothesisResult.toLowerCase()}
+                                  {' — '}
+                                  confidence: {evaluation.confidence.toLowerCase()}
+                                  {' — '}
+                                  recommended: {evaluation.recommendedAction.replaceAll('_', ' ')}
+                                </p>
+                                <p>{evaluation.reasoning}</p>
+                                {evaluation.keyFindings.length > 0 && (
+                                  <ul>
+                                    {evaluation.keyFindings.map((finding) => (
+                                      <li key={finding}>{finding}</li>
+                                    ))}
+                                  </ul>
+                                )}
+                              </li>
+                            ))}
+                          </ul>
+                        )}
+                      </div>
                     )}
                   </div>
                 )}
