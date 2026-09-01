@@ -76,7 +76,7 @@ _FAKE_TEST_PLAN = TestPlanContent(
     copy_strategy=_GENERATED_TEST_PLAN_FIELDS.copy_strategy,
     daily_budget=50,
     duration_days=10,
-    total_budget=500,
+    total_budget=1000,
     success_criteria=strategist_service._build_success_criteria(
         _FAKE_BENCHMARK_CONTEXT, None
     ),

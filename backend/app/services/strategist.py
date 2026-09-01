@@ -209,10 +209,12 @@ def _build_test_plan_prompt(
             only used as a hint for the hypothesis-driven variant.
         objective: The campaign's fixed objective.
         unit_economics: This product's computed unit economics, if available.
-        daily_budget: The already-decided test budget (a backend business
-            rule — see _compute_test_daily_budget), given here only as
-            context so the hypothesis/creative angles are realistic for
-            the actual spend level, not something the model is asked to set.
+        daily_budget: The already-decided PER-VARIANT test budget (a
+            backend business rule — see _compute_test_daily_budget), given
+            here only as context so the hypothesis/creative angles are
+            realistic for the actual spend level, not something the model
+            is asked to set. Each of the two variants gets its own AdSet
+            at this rate — actual total daily spend is 2x this number.
         duration_days: The already-decided test duration, same reasoning.
 
     Returns:
@@ -238,10 +240,12 @@ def _build_test_plan_prompt(
         "",
         f"Campaign objective: {objective}",
         "",
-        f"This test will run at ${daily_budget:.2f}/day for {duration_days} "
-        f"days — that's a fixed business decision, not something you need "
-        f"to determine, but factor it into how ambitious your hypothesis "
-        f"and creative angles can realistically be at that spend level.",
+        f"Each variant (baseline and hypothesis-driven) will run at "
+        f"${daily_budget:.2f}/day for {duration_days} days — "
+        f"${daily_budget * 2:.2f}/day total across both — that's a fixed "
+        f"business decision, not something you need to determine, but "
+        f"factor it into how ambitious your hypothesis and creative "
+        f"angles can realistically be at that spend level.",
         "",
         "Design Variant B's audience from the real product/business/"
         "audience data above — do not create an unnecessarily complicated, "
@@ -632,6 +636,17 @@ async def generate_strategy(
         )
         generated = parse_tool_input(raw, GeneratedTestPlanFields)
         benchmark_context = _build_benchmark_context()
+        audience_variants = [
+            _build_broad_baseline_variant(),
+            _build_hypothesis_variant(generated),
+        ]
+        # daily_budget is a PER-VARIANT spend — each of the two variants
+        # gets its own AdSet at this rate (confirmed with the user
+        # 2026-09-01), not the two variants splitting one shared rate.
+        # total_budget therefore multiplies by len(audience_variants), not
+        # just duration_days: $50/day x 2 variants x 10 days = $1,000, not
+        # $500.
+        total_budget = daily_budget * len(audience_variants) * duration_days
         # model_validate (not the constructor) because `objective` is plain
         # str here (that's what Prisma gives us — SQLite has no enum,
         # PRD.md §7) and needs real runtime validation against the
@@ -639,10 +654,7 @@ async def generate_strategy(
         return TestPlanContent.model_validate(
             {
                 "objective": objective,
-                "audience_variants": [
-                    _build_broad_baseline_variant(),
-                    _build_hypothesis_variant(generated),
-                ],
+                "audience_variants": audience_variants,
                 "hypotheses": [
                     _build_primary_hypothesis(generated.hypothesis_statement)
                 ],
@@ -652,7 +664,7 @@ async def generate_strategy(
                 "copy_strategy": generated.copy_strategy,
                 "daily_budget": daily_budget,
                 "duration_days": duration_days,
-                "total_budget": daily_budget * duration_days,
+                "total_budget": total_budget,
                 "success_criteria": _build_success_criteria(
                     benchmark_context, unit_economics
                 ),

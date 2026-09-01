@@ -396,7 +396,7 @@ async def test_generate_strategy_uses_the_default_test_budget_with_no_product(
     assert result.plan_type == "TEST_PLAN"
     assert result.daily_budget == DEFAULT_TEST_BUDGET
     assert result.duration_days == DEFAULT_TEST_DURATION
-    assert result.total_budget == DEFAULT_TEST_BUDGET * DEFAULT_TEST_DURATION
+    assert result.total_budget == DEFAULT_TEST_BUDGET * 2 * DEFAULT_TEST_DURATION
 
 
 @pytest.mark.asyncio
@@ -421,7 +421,7 @@ async def test_generate_strategy_anchors_test_budget_to_unit_economics(
     assert result.plan_type == "TEST_PLAN"
     assert result.daily_budget == 24.75
     assert result.duration_days == DEFAULT_TEST_DURATION
-    assert result.total_budget == 24.75 * DEFAULT_TEST_DURATION
+    assert result.total_budget == 24.75 * 2 * DEFAULT_TEST_DURATION
 
 
 @pytest.mark.asyncio

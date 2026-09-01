@@ -37,6 +37,21 @@ class MetaConnectionError(RuntimeError):
     """Raised when the Meta Ads connection can't be built or used."""
 
 
+class CustomLocation(NamedTuple):
+    """A radius-based geo target (PRD.md build step 11) for a Meta AdSet.
+
+    Maps directly to Meta's targeting.geo_locations.custom_locations
+    entry shape. Replaces the default {"countries": ["US"]} targeting
+    entirely when given to create_meta_ad_set — Meta targets by either a
+    country list or custom (lat/lng + radius) locations, not both mixed
+    within one geo_locations object.
+    """
+
+    lat: float
+    lng: float
+    radius_miles: float
+
+
 def _require_app_credentials() -> tuple[str, str, str]:
     """Fetch the configured Meta app id/secret/redirect URI, or raise clearly.
 
@@ -326,14 +341,18 @@ async def create_meta_ad_set(
     age_min: int,
     age_max: int,
     pixel_id: str | None = None,
+    custom_location: CustomLocation | None = None,
 ) -> str:
     """Create a live AdSet object on Meta, under an already-created campaign.
 
-    Targeting is deliberately minimal — age range only, a single-country
-    geo default. PRD.md §7 already flags real location/interest
-    resolution (free text -> Meta's own targeting-search taxonomy) as a
-    known gap to close "at publish time" — this is that gap, still open;
-    interests aren't sent at all yet. targeting_automation.advantage_audience
+    Targeting is deliberately minimal — age range plus either the default
+    single-country geo or, when custom_location is given (PRD.md build
+    step 11), a radius around one curated event venue instead. PRD.md §7
+    already flags real free-text location/interest resolution (via
+    Meta's own targeting-search taxonomy) as a known gap to close "at
+    publish time" — this is a separate, narrower mechanism (a fixed
+    curated venue, not arbitrary free text) and interests still aren't
+    sent at all yet. targeting_automation.advantage_audience
     is explicitly set to 0 (disabled) rather than left unset — real API
     behavior confirmed 2026-08-29 (not caught by any mocked test before):
     Meta now requires this flag whenever explicit targeting is given, and
@@ -363,6 +382,15 @@ async def create_meta_ad_set(
             is ever invoked, not re-checked here. custom_event_type is
             fixed to PURCHASE (matches the SALES objective this pairs
             with; not user-configurable yet).
+        custom_location: A radius-based geo target, if this campaign is
+            targeting a curated event venue (app/services/event_venues.py)
+            instead of the default broad-US geo. When given, entirely
+            replaces geo_locations.countries with
+            geo_locations.custom_locations — Meta doesn't mix the two
+            within one targeting spec. Distance unit/radius bounds are
+            sent as-is (miles) — not yet verified against the real Graph
+            API, same "real end-to-end testing catches what mocks can't"
+            caution as the rest of this function's real-API fixes below.
 
     Returns:
         The new Meta ad set id.
@@ -370,11 +398,25 @@ async def create_meta_ad_set(
     Raises:
         MetaConnectionError: If the call fails.
     """
+    geo_locations = (
+        {
+            "custom_locations": [
+                {
+                    "latitude": custom_location.lat,
+                    "longitude": custom_location.lng,
+                    "radius": custom_location.radius_miles,
+                    "distance_unit": "mile",
+                }
+            ]
+        }
+        if custom_location is not None
+        else {"countries": ["US"]}
+    )
     targeting = json.dumps(
         {
             "age_min": age_min,
             "age_max": age_max,
-            "geo_locations": {"countries": ["US"]},
+            "geo_locations": geo_locations,
             "targeting_automation": {"advantage_audience": 0},
         }
     )

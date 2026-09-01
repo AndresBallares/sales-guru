@@ -27,6 +27,7 @@ from app.schemas.strategy import (
     TargetAudience,
 )
 from app.services import meta as meta_service_module
+from app.services.event_venues import EVENT_VENUES
 from app.services.publish import requires_pixel
 from fastapi.testclient import TestClient
 from prisma import Prisma
@@ -131,6 +132,7 @@ def _ready_campaign(
     with_destination_url: bool = True,
     with_pixel: bool = True,
     objective: str = "SALES",
+    event_venue_key: str | None = None,
 ) -> tuple[str, str]:
     """Build a campaign all the way to APPROVED, Meta connected, ready to publish.
 
@@ -141,8 +143,11 @@ def _ready_campaign(
     business_id = _create_business(
         client, website="https://acme.example" if with_destination_url else None
     )
+    payload: dict[str, str] = {"objective": objective}
+    if event_venue_key is not None:
+        payload["eventVenueKey"] = event_venue_key
     campaign_id: str = client.post(
-        f"/businesses/{business_id}/campaigns", json={"objective": objective}
+        f"/businesses/{business_id}/campaigns", json=payload
     ).json()["id"]
     client.post(
         f"/businesses/{business_id}/campaigns/{campaign_id}/strategy",
@@ -401,6 +406,42 @@ def test_publish_succeeds_and_marks_the_campaign_live(
     ).json()
     selected = next(c for c in creatives if c["status"] == "SELECTED")
     assert selected["adId"] is not None
+
+
+def test_publish_targets_the_curated_venue_for_an_event_campaign(
+    client: TestClient, mock_services: dict[str, AsyncMock]
+) -> None:
+    """An event-venue campaign's AdSet is created with a custom_location
+    targeting the venue's coordinates/radius, instead of the default
+    broad-US geo (PRD.md build step 11)."""
+    business_id, campaign_id = _ready_campaign(client, event_venue_key="jck_las_vegas")
+
+    response = client.post(f"/businesses/{business_id}/campaigns/{campaign_id}/publish")
+
+    assert response.status_code == 200
+    _, kwargs = mock_services["create_ad_set"].call_args
+    custom_location = kwargs["custom_location"]
+    assert custom_location is not None
+    assert custom_location.lat == EVENT_VENUES["jck_las_vegas"].lat
+    assert custom_location.lng == EVENT_VENUES["jck_las_vegas"].lng
+    assert (
+        custom_location.radius_miles
+        == EVENT_VENUES["jck_las_vegas"].recommended_radius_miles
+    )
+
+
+def test_publish_uses_broad_geo_for_a_non_event_campaign(
+    client: TestClient, mock_services: dict[str, AsyncMock]
+) -> None:
+    """A campaign with no eventVenueKey still publishes with custom_location
+    unset, unchanged from before this feature (PRD.md build step 11)."""
+    business_id, campaign_id = _ready_campaign(client)
+
+    response = client.post(f"/businesses/{business_id}/campaigns/{campaign_id}/publish")
+
+    assert response.status_code == 200
+    _, kwargs = mock_services["create_ad_set"].call_args
+    assert kwargs["custom_location"] is None
 
 
 def test_publish_uses_the_product_url_when_available(

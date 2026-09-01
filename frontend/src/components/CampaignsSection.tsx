@@ -8,6 +8,7 @@ import {
   createRecommendation,
   createStrategy,
   createTestEvaluation,
+  EVENT_VENUES,
   getStrategy,
   listAudiences,
   listCampaigns,
@@ -59,6 +60,9 @@ export function CampaignsSection({ businessId }: { businessId: string }) {
   const [objective, setObjective] = useState<Objective>('SALES')
   const [productId, setProductId] = useState('')
   const [audienceId, setAudienceId] = useState('')
+  const [eventVenueKey, setEventVenueKey] = useState('')
+  const [startDate, setStartDate] = useState('')
+  const [endDate, setEndDate] = useState('')
   const [formError, setFormError] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
 
@@ -226,11 +230,17 @@ export function CampaignsSection({ businessId }: { businessId: string }) {
         name: name || undefined,
         productId: productId || undefined,
         audienceId: audienceId || undefined,
+        eventVenueKey: eventVenueKey || undefined,
+        startDate: startDate || undefined,
+        endDate: endDate || undefined,
       })
       setName('')
       setObjective('SALES')
       setProductId('')
       setAudienceId('')
+      setEventVenueKey('')
+      setStartDate('')
+      setEndDate('')
       await refresh()
     } catch (err) {
       setFormError(err instanceof ApiError ? err.message : 'Could not create campaign.')
@@ -458,6 +468,24 @@ export function CampaignsSection({ businessId }: { businessId: string }) {
               <li key={campaign.id}>
                 {campaign.name ? `${campaign.name} — ` : ''}
                 {OBJECTIVE_LABELS[campaign.objective]} — {campaign.status}
+                {campaign.eventVenueKey && (
+                  <p>
+                    Event:{' '}
+                    {EVENT_VENUES.find((v) => v.key === campaign.eventVenueKey)?.label ??
+                      campaign.eventVenueKey}
+                    {campaign.startDate && campaign.endDate && (
+                      // Sliced, not parsed as a local Date — these are
+                      // calendar dates stored at midnight UTC (see
+                      // app/services/event_venues.py's default window),
+                      // and converting through the viewer's local
+                      // timezone can shift the displayed day by one.
+                      <>
+                        {' '}
+                        ({campaign.startDate.slice(0, 10)} – {campaign.endDate.slice(0, 10)})
+                      </>
+                    )}
+                  </p>
+                )}
                 <button
                   type="button"
                   onClick={() => handleGenerateStrategy(campaign.id)}
@@ -554,8 +582,9 @@ export function CampaignsSection({ businessId }: { businessId: string }) {
                           ))}
                         </ul>
                         <p>
-                          <strong>Test budget:</strong> ${strategy.dailyBudget}/day for{' '}
-                          {strategy.durationDays} days (${strategy.totalBudget} total)
+                          <strong>Test budget:</strong> ${strategy.dailyBudget}/day per
+                          variant for {strategy.durationDays} days (${strategy.totalBudget}{' '}
+                          total across both variants)
                         </p>
                         <p>
                           <strong>Leading indicators (early signal):</strong>
@@ -997,6 +1026,44 @@ export function CampaignsSection({ businessId }: { businessId: string }) {
               ))}
             </select>
           </div>
+          <div className="field">
+            <label htmlFor="event-venue">Event venue</label>
+            <select
+              id="event-venue"
+              value={eventVenueKey}
+              onChange={(event) => setEventVenueKey(event.target.value)}
+            >
+              <option value="">None — broad US targeting</option>
+              {EVENT_VENUES.map((venue) => (
+                <option key={venue.key} value={venue.key}>
+                  {venue.label}
+                </option>
+              ))}
+            </select>
+          </div>
+          {eventVenueKey && (
+            <>
+              <div className="field">
+                <label htmlFor="event-start-date">Start date</label>
+                <input
+                  id="event-start-date"
+                  type="date"
+                  value={startDate}
+                  onChange={(event) => setStartDate(event.target.value)}
+                />
+              </div>
+              <div className="field">
+                <label htmlFor="event-end-date">End date</label>
+                <input
+                  id="event-end-date"
+                  type="date"
+                  value={endDate}
+                  onChange={(event) => setEndDate(event.target.value)}
+                />
+              </div>
+              <p>Leave dates blank to default to the venue's typical window.</p>
+            </>
+          )}
           {formError && (
             <p className="form-error" role="alert">
               {formError}

@@ -6,6 +6,7 @@ from prisma.models import Campaign, OptimizationRecommendation
 from app.core.authz import get_owned_campaign
 from app.core.db import db
 from app.schemas.optimization import RecommendationResponse
+from app.schemas.strategy import StrategyContentAdapter
 from app.services.meta import MetaConnectionError
 from app.services.optimization_jobs import (
     apply_recommendation,
@@ -19,6 +20,11 @@ router = APIRouter(
 )
 
 _NOT_LIVE_YET = "Publish this campaign before requesting optimization recommendations"
+_IS_A_TEST_PLAN = (
+    "This is an A/B test — it's evaluated by the test evaluator, not the "
+    "general optimization recommender. Use the test evaluation endpoint "
+    "for this campaign instead."
+)
 _NO_METRICS_YET = "Refresh results at least once before requesting a recommendation"
 _NOT_ENOUGH_HISTORY = (
     "Not enough historical data yet — check back after metrics have been "
@@ -81,13 +87,22 @@ async def create_recommendation(
         The newly generated (PENDING) recommendation.
 
     Raises:
-        HTTPException: 400 if the campaign isn't live yet, has no
-            performance data yet, or doesn't have enough historical
-            spread yet for a trend window; 500 if the LLM call fails.
+        HTTPException: 400 if the campaign isn't live yet, is a TEST_PLAN
+            (A/B test) campaign — handled by the test evaluator, not this
+            endpoint — has no performance data yet, or doesn't have
+            enough historical spread yet for a trend window; 500 if the
+            LLM call fails.
     """
     if campaign.status != "LIVE":
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST, detail=_NOT_LIVE_YET
+        )
+
+    strategy = await db.strategy.find_unique(where={"campaignId": campaign.id})
+    assert strategy is not None  # guaranteed by LIVE status (publish requires it)
+    if StrategyContentAdapter.validate_json(strategy.content).plan_type == "TEST_PLAN":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=_IS_A_TEST_PLAN
         )
 
     has_metrics = await db.metric.find_first(where={"campaignId": campaign.id})

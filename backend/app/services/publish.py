@@ -19,6 +19,8 @@ from prisma.models import Campaign, Creative, MetaConnection
 from app.core.db import db
 from app.schemas.strategy import StrategyContent, daily_budget, primary_audience
 from app.services import meta
+from app.services.event_venues import EVENT_VENUES
+from app.services.meta import CustomLocation
 
 # No user input collects this yet, so each objective gets a reasonable
 # Meta optimization_goal default rather than leaving it unset (the AdSet
@@ -95,6 +97,20 @@ async def publish_campaign_to_meta(
     optimization_goal = _OPTIMIZATION_GOAL_BY_OBJECTIVE[campaign.objective]
     object_name = campaign.name or f"Sales Guru campaign {campaign.id}"
 
+    # PRD.md build step 11: an event-venue campaign replaces the default
+    # broad-US geo entirely with a radius around the venue. Plan-type
+    # agnostic by construction — this doesn't look at strategy.plan_type
+    # at all, same as the rest of this single-AdSet publish path (Phase
+    # C, real two-variant publishing, is the only place plan_type would
+    # matter here, and it isn't built yet).
+    custom_location = None
+    if campaign.eventVenueKey is not None:
+        venue = EVENT_VENUES.get(campaign.eventVenueKey)
+        assert venue is not None  # validated at campaign creation, can't drift
+        custom_location = CustomLocation(
+            lat=venue.lat, lng=venue.lng, radius_miles=venue.recommended_radius_miles
+        )
+
     meta_campaign_id = await meta.create_meta_campaign(
         access_token=connection.accessToken,
         ad_account_id=connection.adAccountId,
@@ -112,6 +128,7 @@ async def publish_campaign_to_meta(
         age_min=age_min,
         age_max=age_max,
         pixel_id=pixel_id,
+        custom_location=custom_location,
     )
     meta_creative_id = await meta.create_meta_ad_creative(
         access_token=connection.accessToken,

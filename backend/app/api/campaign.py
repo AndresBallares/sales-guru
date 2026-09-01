@@ -5,6 +5,8 @@ objective can be picked and a strategy generated without ever connecting
 Meta; that connection only matters at publish time (step 8).
 """
 
+from datetime import UTC, datetime, time
+
 from fastapi import APIRouter, Depends, HTTPException, status
 from prisma.models import Business, Campaign
 
@@ -12,6 +14,7 @@ from app.core.authz import get_owned_business, get_owned_campaign
 from app.core.db import db
 from app.schemas.campaign import CampaignCreateRequest, CampaignResponse
 from app.schemas.strategy import StrategyContentAdapter
+from app.services.event_venues import EVENT_VENUES, default_event_window
 from app.services.meta import MetaConnectionError
 from app.services.publish import publish_campaign_to_meta, requires_pixel
 
@@ -19,6 +22,7 @@ router = APIRouter(prefix="/businesses/{business_id}/campaigns", tags=["campaign
 
 _PRODUCT_NOT_FOUND = "Product not found"
 _AUDIENCE_NOT_FOUND = "Audience not found"
+_EVENT_VENUE_NOT_FOUND = "Unknown event venue"
 _NOT_READY_FOR_APPROVAL = "Select an ad creative before approving this campaign"
 _NOT_READY_FOR_PUBLISH = "Approve this campaign before publishing"
 _META_NOT_CONNECTED = (
@@ -52,6 +56,9 @@ def _to_response(campaign: Campaign) -> CampaignResponse:
         product_id=campaign.productId,
         audience_id=campaign.audienceId,
         meta_campaign_id=campaign.metaCampaignId,
+        event_venue_key=campaign.eventVenueKey,
+        start_date=campaign.startDate,
+        end_date=campaign.endDate,
     )
 
 
@@ -104,6 +111,49 @@ async def _validate_audience(business_id: str, audience_id: str | None) -> None:
         )
 
 
+def _resolve_event_window(
+    payload: CampaignCreateRequest,
+) -> tuple[datetime | None, datetime | None]:
+    """Resolve a campaign's start/end datetimes from the request.
+
+    event_venue_key (if set) must be a known curated venue
+    (app/services/event_venues.py) — raises 404 otherwise, same
+    "not found" treatment as an unresolvable product/audience id. When a
+    venue is given but start_date/end_date are omitted, they default to
+    the venue's next typical window (see default_event_window),
+    converted to midnight UTC since dates need to be stored as
+    DateTime (SQLite has no native Date type). Explicit dates in the
+    payload always win over the default.
+
+    Args:
+        payload: The incoming create-campaign request.
+
+    Returns:
+        (start_date, end_date) to store — both None for a non-event
+        campaign with no dates given.
+
+    Raises:
+        HTTPException: 404 if event_venue_key doesn't resolve.
+    """
+    if payload.event_venue_key is None:
+        return payload.start_date, payload.end_date
+
+    venue = EVENT_VENUES.get(payload.event_venue_key)
+    if venue is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=_EVENT_VENUE_NOT_FOUND
+        )
+
+    if payload.start_date is not None or payload.end_date is not None:
+        return payload.start_date, payload.end_date
+
+    default_start, default_end = default_event_window(venue)
+    return (
+        datetime.combine(default_start, time.min, tzinfo=UTC),
+        datetime.combine(default_end, time.min, tzinfo=UTC),
+    )
+
+
 @router.post("", response_model=CampaignResponse, status_code=status.HTTP_201_CREATED)
 async def create_campaign(
     payload: CampaignCreateRequest,
@@ -112,16 +162,21 @@ async def create_campaign(
     """Create a campaign under a business owned by the current user.
 
     Args:
-        payload: The objective (required) and optional product/audience to
-            target.
+        payload: The objective (required) and optional product/audience/
+            event venue to target.
         business: The parent business, resolved and ownership-checked by
             get_owned_business.
 
     Returns:
         The newly created campaign.
+
+    Raises:
+        HTTPException: 404 if event_venue_key is set but doesn't resolve
+            to a curated venue.
     """
     await _validate_product(business.id, payload.product_id)
     await _validate_audience(business.id, payload.audience_id)
+    start_date, end_date = _resolve_event_window(payload)
 
     campaign = await db.campaign.create(
         data={
@@ -130,6 +185,9 @@ async def create_campaign(
             "objective": payload.objective,
             "productId": payload.product_id,
             "audienceId": payload.audience_id,
+            "eventVenueKey": payload.event_venue_key,
+            "startDate": start_date,
+            "endDate": end_date,
         }
     )
     return _to_response(campaign)

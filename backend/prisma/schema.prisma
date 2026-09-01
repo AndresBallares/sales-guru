@@ -212,6 +212,16 @@ model Campaign {
   optimizations           OptimizationRecommendation[]
   testEvaluations         TestEvaluation[]
   metaCampaignId          String?
+  // Event/venue geo-targeting (PRD.md build step 11, confirmed
+  // 2026-09-01): eventVenueKey references a curated entry in
+  // app/services/event_venues.py (not a DB table — the set is small,
+  // fixed, and hand-curated). startDate/endDate default from the
+  // venue's typical window at campaign creation but are always
+  // user-editable; both null for a non-event campaign, which still
+  // runs indefinitely on its daily budget as before.
+  eventVenueKey           String?
+  startDate               DateTime?
+  endDate                 DateTime?
   // Last time the scheduled optimization job evaluated this campaign at
   // all (app/services/optimizer.py's evaluate_all_live_campaigns) —
   // updated on every evaluation regardless of outcome (WAIT or an actual

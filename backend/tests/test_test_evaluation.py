@@ -63,7 +63,7 @@ def _fake_test_plan() -> TestPlanContent:
         copy_strategy=generated.copy_strategy,
         daily_budget=50.0,
         duration_days=10,
-        total_budget=500.0,
+        total_budget=1000.0,
         success_criteria=strategist_module._build_success_criteria(
             benchmark_context, None
         ),

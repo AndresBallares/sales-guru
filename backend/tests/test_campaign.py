@@ -124,6 +124,81 @@ def test_create_campaign_with_product_and_audience(client: TestClient) -> None:
     assert body["audienceId"] == audience_id
 
 
+def test_create_campaign_with_only_objective_has_null_event_fields(
+    client: TestClient,
+) -> None:
+    """A non-event campaign's eventVenueKey/startDate/endDate all stay null."""
+    _signed_up_client(client)
+    business_id = _create_business(client)
+
+    response = client.post(
+        f"/businesses/{business_id}/campaigns", json={"objective": "SALES"}
+    )
+
+    assert response.status_code == 201
+    body = response.json()
+    assert body["eventVenueKey"] is None
+    assert body["startDate"] is None
+    assert body["endDate"] is None
+
+
+def test_create_campaign_with_an_event_venue_defaults_the_window(
+    client: TestClient,
+) -> None:
+    """An event venue with no explicit dates defaults to its typical window."""
+    _signed_up_client(client)
+    business_id = _create_business(client)
+
+    response = client.post(
+        f"/businesses/{business_id}/campaigns",
+        json={"objective": "SALES", "eventVenueKey": "jck_las_vegas"},
+    )
+
+    assert response.status_code == 201
+    body = response.json()
+    assert body["eventVenueKey"] == "jck_las_vegas"
+    assert body["startDate"] is not None
+    assert body["endDate"] is not None
+    assert body["startDate"] < body["endDate"]
+
+
+def test_create_campaign_with_an_event_venue_and_explicit_dates(
+    client: TestClient,
+) -> None:
+    """Explicit start/end dates in the payload always win over the default."""
+    _signed_up_client(client)
+    business_id = _create_business(client)
+
+    response = client.post(
+        f"/businesses/{business_id}/campaigns",
+        json={
+            "objective": "SALES",
+            "eventVenueKey": "jck_las_vegas",
+            "startDate": "2027-07-01T00:00:00Z",
+            "endDate": "2027-07-04T00:00:00Z",
+        },
+    )
+
+    assert response.status_code == 201
+    body = response.json()
+    assert body["startDate"] == "2027-07-01T00:00:00Z"
+    assert body["endDate"] == "2027-07-04T00:00:00Z"
+
+
+def test_create_campaign_404s_for_an_unknown_event_venue(client: TestClient) -> None:
+    """A venue key outside the curated set returns 404, not a silent no-op."""
+    _signed_up_client(client)
+    business_id = _create_business(client)
+
+    response = client.post(
+        f"/businesses/{business_id}/campaigns",
+        json={"objective": "SALES", "eventVenueKey": "not_a_real_venue"},
+    )
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Unknown event venue"
+
+
 def test_create_campaign_rejects_an_invalid_objective(client: TestClient) -> None:
     """An objective outside the fixed set returns 422."""
     _signed_up_client(client)

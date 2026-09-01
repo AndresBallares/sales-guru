@@ -42,7 +42,7 @@ from datetime import UTC, datetime
 from prisma.models import Campaign, OptimizationRecommendation, TestEvaluation
 
 from app.core.db import db
-from app.schemas.strategy import TestPlanContent
+from app.schemas.strategy import StrategyContentAdapter, TestPlanContent
 from app.services import optimizer
 from app.services.meta import (
     MetaConnectionError,
@@ -259,7 +259,21 @@ async def generate_and_store_recommendation(
 
 
 async def _evaluate_campaign(campaign: Campaign) -> None:
-    """Gate-check one live campaign, deep-analyzing it if it's due."""
+    """Gate-check one live campaign, deep-analyzing it if it's due.
+
+    Skips TEST_PLAN campaigns: they're evaluated by
+    generate_and_store_test_evaluation instead (not yet wired into this
+    scheduled job — a deliberate Phase B scoping choice, see
+    app/api/test_evaluation.py). The general recommender below assumes
+    one AdSet per campaign, which doesn't hold once a TEST_PLAN's two
+    audience variants are both published (Phase C) — skip rather than
+    generate a recommendation against an arbitrary one of the two.
+    """
+    strategy = await db.strategy.find_unique(where={"campaignId": campaign.id})
+    assert strategy is not None  # guaranteed by LIVE status (publish requires it)
+    if StrategyContentAdapter.validate_json(strategy.content).plan_type == "TEST_PLAN":
+        return
+
     metrics = await db.metric.find_many(where={"campaignId": campaign.id})
     if not metrics:
         return

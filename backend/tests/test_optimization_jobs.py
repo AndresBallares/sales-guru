@@ -106,7 +106,7 @@ def _fake_test_plan() -> TestPlanContent:
         copy_strategy=generated.copy_strategy,
         daily_budget=50.0,
         duration_days=10,
-        total_budget=500.0,
+        total_budget=1000.0,
         success_criteria=strategist_module._build_success_criteria(
             benchmark_context, None
         ),
@@ -674,6 +674,59 @@ async def test_evaluate_skips_campaigns_with_no_metrics_at_all(
 
 
 @pytest.mark.asyncio
+async def test_evaluate_skips_test_plan_campaigns(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A TEST_PLAN campaign is evaluated by generate_and_store_test_evaluation
+    instead — the general recommender assumes one AdSet per campaign, which
+    doesn't hold once a TEST_PLAN's two audience variants are both published
+    (Phase C), so it must never fire a recommendation for one even when the
+    gate would otherwise pass."""
+    _signed_up_client(client)
+    business_id = _create_business(client)
+    _connect_meta(client, business_id)
+    campaign_id = _publish_test_plan_campaign(client, business_id, monkeypatch)
+    now = datetime.now(UTC)
+    await _seed_metric(
+        campaign_id,
+        fetched_at=now - timedelta(hours=25),
+        spend=0.0,
+        clicks=0,
+        impressions=0,
+        conversions=0,
+    )
+    await _seed_metric(
+        campaign_id,
+        fetched_at=now,
+        spend=25.0,
+        clicks=40,
+        impressions=2000,
+        conversions=6,
+    )
+    generate_recommendation = AsyncMock(return_value=_fake_result())
+    monkeypatch.setattr(
+        optimizer_module, "generate_recommendation", generate_recommendation
+    )
+
+    _run(client, optimization_jobs.evaluate_all_live_campaigns)
+
+    seeder = Prisma()
+    await seeder.connect()
+    campaign = await seeder.campaign.find_unique(where={"id": campaign_id})
+    recs = await seeder.optimizationrecommendation.find_many(
+        where={"campaignId": campaign_id}
+    )
+    await seeder.disconnect()
+
+    generate_recommendation.assert_not_awaited()
+    assert recs == []
+    # Skipped before the checkpoint update, unlike the "insufficient data"
+    # WAIT path — a TEST_PLAN campaign is never this job's business at all.
+    assert campaign is not None
+    assert campaign.lastOptimizationCheckAt is None
+
+
+@pytest.mark.asyncio
 async def test_evaluate_generates_a_recommendation_when_the_gate_passes(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -868,7 +921,7 @@ async def test_generate_and_store_test_evaluation_sufficient_data(
     business_id = _create_business(client)
     _connect_meta(client, business_id)
     campaign_id = _publish_test_plan_campaign(client, business_id, monkeypatch)
-    await _seed_metric(campaign_id, fetched_at=datetime.now(UTC), spend=250.0)
+    await _seed_metric(campaign_id, fetched_at=datetime.now(UTC), spend=500.0)
 
     evaluate = AsyncMock(return_value=_VALID_TEST_EVALUATION)
     monkeypatch.setattr(optimizer_module, "evaluate_test_plan", evaluate)

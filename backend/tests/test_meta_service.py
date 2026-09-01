@@ -344,7 +344,38 @@ async def test_create_meta_ad_set_returns_the_new_id(
     assert '"age_min": 30' in data["targeting"]
     assert '"age_max": 55' in data["targeting"]
     assert '"targeting_automation": {"advantage_audience": 0}' in data["targeting"]
+    assert '"geo_locations": {"countries": ["US"]}' in data["targeting"]
     assert "promoted_object" not in data
+
+
+@pytest.mark.asyncio
+async def test_create_meta_ad_set_targets_a_custom_location_when_given(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A custom_location replaces the default country geo entirely with a
+    radius around the given lat/lng (PRD.md build step 11)."""
+    client = _mock_client_returning(monkeypatch, _FakeResponse({"id": "adset_123"}))
+
+    await meta.create_meta_ad_set(
+        access_token="token",
+        ad_account_id="act_1",
+        name="JCK Las Vegas push",
+        meta_campaign_id="campaign_123",
+        daily_budget_cents=2500,
+        optimization_goal="OFFSITE_CONVERSIONS",
+        age_min=30,
+        age_max=55,
+        custom_location=meta.CustomLocation(
+            lat=36.1299, lng=-115.1529, radius_miles=10.0
+        ),
+    )
+
+    _url, data = client.calls[0]
+    assert '"countries"' not in data["targeting"]
+    assert '"latitude": 36.1299' in data["targeting"]
+    assert '"longitude": -115.1529' in data["targeting"]
+    assert '"radius": 10.0' in data["targeting"]
+    assert '"distance_unit": "mile"' in data["targeting"]
 
 
 @pytest.mark.asyncio

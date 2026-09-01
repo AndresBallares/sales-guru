@@ -575,7 +575,7 @@ def _fake_test_plan(**overrides: object) -> TestPlanContent:
         "copy_strategy": generated.copy_strategy,
         "daily_budget": 50.0,
         "duration_days": 10,
-        "total_budget": 500.0,
+        "total_budget": 1000.0,
         "success_criteria": strategist._build_success_criteria(benchmark_context, None),
         "baseline_metrics": NormalizedMetrics(),
         "benchmark_context": benchmark_context,
@@ -595,7 +595,7 @@ _VALID_TEST_EVALUATION_INPUT: dict[str, Any] = {
 def test_has_sufficient_test_data_true_when_budget_fraction_met() -> None:
     """Half the declared budget spent is enough, regardless of time elapsed."""
     test_plan = _fake_test_plan()
-    metric = _fake_metric(spend=250.0)  # 250 / 500 = 50%
+    metric = _fake_metric(spend=500.0)  # 500 / 1000 = 50%
 
     assert optimizer.has_sufficient_test_data(
         test_plan=test_plan,

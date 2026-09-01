@@ -165,7 +165,7 @@ function fakeTestPlanContent(
     copyStrategy: 'Lead with the story behind each piece',
     dailyBudget: 50,
     durationDays: 10,
-    totalBudget: 500,
+    totalBudget: 1000,
     successCriteria: {
       leadingIndicators: [
         {
@@ -285,6 +285,9 @@ describe('CampaignsSection', () => {
         productId: null,
         audienceId: null,
         metaCampaignId: null,
+        eventVenueKey: null,
+        startDate: null,
+        endDate: null,
       },
     ])
 
@@ -303,6 +306,9 @@ describe('CampaignsSection', () => {
         productId: null,
         audienceId: null,
         metaCampaignId: null,
+        eventVenueKey: null,
+        startDate: null,
+        endDate: null,
       },
     ])
 
@@ -392,6 +398,9 @@ describe('CampaignsSection', () => {
           productId: 'prod-1',
           audienceId: 'aud-1',
           metaCampaignId: null,
+          eventVenueKey: null,
+          startDate: null,
+          endDate: null,
         },
       ])
     mockedApi.listProducts.mockResolvedValue([
@@ -425,6 +434,9 @@ describe('CampaignsSection', () => {
       productId: 'prod-1',
       audienceId: 'aud-1',
       metaCampaignId: null,
+      eventVenueKey: null,
+      startDate: null,
+      endDate: null,
     })
     const user = userEvent.setup()
 
@@ -446,6 +458,55 @@ describe('CampaignsSection', () => {
       }),
     )
     expect(await screen.findByText('Spring Sale — Leads — DRAFT')).toBeInTheDocument()
+  })
+
+  it('creates an event-venue campaign with the selected venue and dates', async () => {
+    mockedApi.listCampaigns.mockResolvedValueOnce([]).mockResolvedValueOnce([
+      {
+        id: 'camp-1',
+        name: null,
+        objective: 'SALES',
+        status: 'DRAFT',
+        productId: null,
+        audienceId: null,
+        metaCampaignId: null,
+        eventVenueKey: 'jck_las_vegas',
+        startDate: '2027-06-01T00:00:00Z',
+        endDate: '2027-06-04T00:00:00Z',
+      },
+    ])
+    mockedApi.createCampaign.mockResolvedValue({
+      id: 'camp-1',
+      name: null,
+      objective: 'SALES',
+      status: 'DRAFT',
+      productId: null,
+      audienceId: null,
+      metaCampaignId: null,
+      eventVenueKey: 'jck_las_vegas',
+      startDate: '2027-06-01T00:00:00Z',
+      endDate: '2027-06-04T00:00:00Z',
+    })
+    const user = userEvent.setup()
+
+    render(<CampaignsSection businessId="biz-1" />)
+    await screen.findByText(/No campaigns yet/)
+
+    await user.selectOptions(screen.getByLabelText('Event venue'), 'jck_las_vegas')
+    expect(screen.getByLabelText('Start date')).toBeInTheDocument()
+    await user.type(screen.getByLabelText('Start date'), '2027-06-01')
+    await user.type(screen.getByLabelText('End date'), '2027-06-04')
+    await user.click(screen.getByRole('button', { name: 'Create campaign' }))
+
+    await waitFor(() =>
+      expect(mockedApi.createCampaign).toHaveBeenCalledWith('biz-1', {
+        objective: 'SALES',
+        eventVenueKey: 'jck_las_vegas',
+        startDate: '2027-06-01',
+        endDate: '2027-06-04',
+      }),
+    )
+    expect(await screen.findByText(/Event: JCK Las Vegas/)).toBeInTheDocument()
   })
 
   it('shows an error if campaign creation fails', async () => {
@@ -471,6 +532,9 @@ describe('CampaignsSection', () => {
         productId: null,
         audienceId: null,
         metaCampaignId: null,
+        eventVenueKey: null,
+        startDate: null,
+        endDate: null,
       },
     ])
     mockedApi.createStrategy.mockResolvedValue(FAKE_STRATEGY)
@@ -503,6 +567,9 @@ describe('CampaignsSection', () => {
         productId: null,
         audienceId: null,
         metaCampaignId: null,
+        eventVenueKey: null,
+        startDate: null,
+        endDate: null,
       },
     ])
     mockedApi.createStrategy.mockRejectedValue(
@@ -530,6 +597,9 @@ describe('CampaignsSection', () => {
         productId: null,
         audienceId: null,
         metaCampaignId: null,
+        eventVenueKey: null,
+        startDate: null,
+        endDate: null,
       },
     ])
     mockedApi.createStrategy
@@ -562,6 +632,9 @@ describe('CampaignsSection', () => {
         productId: null,
         audienceId: null,
         metaCampaignId: null,
+        eventVenueKey: null,
+        startDate: null,
+        endDate: null,
       },
     ])
     mockedApi.createStrategy.mockResolvedValue({
@@ -583,7 +656,7 @@ describe('CampaignsSection', () => {
     expect(
       screen.getByText(/The hypothesis-driven audience will produce a lower CAC\./),
     ).toBeInTheDocument()
-    expect(screen.getByText(/\$50\/day for 10 days/)).toBeInTheDocument()
+    expect(screen.getByText(/\$50\/day per variant for 10 days/)).toBeInTheDocument()
     expect(screen.getByText(/test new creative/)).toBeInTheDocument()
     expect(screen.getByText(/gross profit \$200.00/)).toBeInTheDocument()
     expect(screen.getByText(/breakeven ROAS 2.50x/)).toBeInTheDocument()
@@ -599,6 +672,9 @@ describe('CampaignsSection', () => {
         productId: null,
         audienceId: null,
         metaCampaignId: null,
+        eventVenueKey: null,
+        startDate: null,
+        endDate: null,
       },
     ])
     mockedApi.getStrategy.mockResolvedValue(FAKE_STRATEGY)
@@ -619,6 +695,9 @@ describe('CampaignsSection', () => {
         productId: null,
         audienceId: null,
         metaCampaignId: null,
+        eventVenueKey: null,
+        startDate: null,
+        endDate: null,
       },
     ])
     mockedApi.getStrategy.mockResolvedValue(FAKE_STRATEGY)
@@ -652,6 +731,9 @@ describe('CampaignsSection', () => {
         productId: null,
         audienceId: null,
         metaCampaignId: null,
+        eventVenueKey: null,
+        startDate: null,
+        endDate: null,
       },
     ])
     mockedApi.getStrategy.mockResolvedValue(FAKE_STRATEGY)
@@ -680,6 +762,9 @@ describe('CampaignsSection', () => {
         productId: null,
         audienceId: null,
         metaCampaignId: null,
+        eventVenueKey: null,
+        startDate: null,
+        endDate: null,
       },
     ])
     mockedApi.getStrategy.mockResolvedValue(FAKE_STRATEGY)
@@ -700,6 +785,9 @@ describe('CampaignsSection', () => {
       productId: null,
       audienceId: null,
       metaCampaignId: null,
+      eventVenueKey: null,
+      startDate: null,
+      endDate: null,
     }
     mockedApi.listCampaigns.mockResolvedValueOnce([draftCampaign])
     mockedApi.listCampaigns.mockResolvedValueOnce([
@@ -746,6 +834,9 @@ describe('CampaignsSection', () => {
         productId: null,
         audienceId: null,
         metaCampaignId: null,
+        eventVenueKey: null,
+        startDate: null,
+        endDate: null,
       },
     ])
     mockedApi.getStrategy.mockResolvedValue(FAKE_STRATEGY)
@@ -771,6 +862,9 @@ describe('CampaignsSection', () => {
         productId: null,
         audienceId: null,
         metaCampaignId: null,
+        eventVenueKey: null,
+        startDate: null,
+        endDate: null,
       },
     ])
     mockedApi.listCampaigns.mockResolvedValueOnce([
@@ -782,6 +876,9 @@ describe('CampaignsSection', () => {
         productId: null,
         audienceId: null,
         metaCampaignId: 'meta_campaign_1',
+        eventVenueKey: null,
+        startDate: null,
+        endDate: null,
       },
     ])
     mockedApi.getStrategy.mockResolvedValue(FAKE_STRATEGY)
@@ -794,6 +891,9 @@ describe('CampaignsSection', () => {
       productId: null,
       audienceId: null,
       metaCampaignId: null,
+      eventVenueKey: null,
+      startDate: null,
+      endDate: null,
     })
     mockedApi.publishCampaign.mockResolvedValue({
       id: 'camp-1',
@@ -803,6 +903,9 @@ describe('CampaignsSection', () => {
       productId: null,
       audienceId: null,
       metaCampaignId: 'meta_campaign_1',
+      eventVenueKey: null,
+      startDate: null,
+      endDate: null,
     })
     const user = userEvent.setup()
 
@@ -829,6 +932,9 @@ describe('CampaignsSection', () => {
         productId: null,
         audienceId: null,
         metaCampaignId: null,
+        eventVenueKey: null,
+        startDate: null,
+        endDate: null,
       },
     ])
     mockedApi.getStrategy.mockResolvedValue(FAKE_STRATEGY)
@@ -841,6 +947,9 @@ describe('CampaignsSection', () => {
       productId: null,
       audienceId: null,
       metaCampaignId: 'meta_campaign_1',
+      eventVenueKey: null,
+      startDate: null,
+      endDate: null,
     })
     const user = userEvent.setup()
 
@@ -864,6 +973,9 @@ describe('CampaignsSection', () => {
         productId: null,
         audienceId: null,
         metaCampaignId: null,
+        eventVenueKey: null,
+        startDate: null,
+        endDate: null,
       },
     ])
     mockedApi.getStrategy.mockResolvedValue(FAKE_STRATEGY)
@@ -887,6 +999,9 @@ describe('CampaignsSection', () => {
         productId: null,
         audienceId: null,
         metaCampaignId: null,
+        eventVenueKey: null,
+        startDate: null,
+        endDate: null,
       },
     ])
     mockedApi.getStrategy.mockResolvedValue(FAKE_STRATEGY)
@@ -917,6 +1032,9 @@ describe('CampaignsSection', () => {
         productId: null,
         audienceId: null,
         metaCampaignId: null,
+        eventVenueKey: null,
+        startDate: null,
+        endDate: null,
       },
     ])
     mockedApi.getStrategy.mockResolvedValue(FAKE_STRATEGY)
@@ -929,6 +1047,9 @@ describe('CampaignsSection', () => {
       productId: null,
       audienceId: null,
       metaCampaignId: null,
+      eventVenueKey: null,
+      startDate: null,
+      endDate: null,
     })
     mockedApi.publishCampaign.mockRejectedValue(
       new api.ApiError(400, 'Connect Meta Ads and select an ad account and Page before publishing'),
@@ -955,6 +1076,9 @@ describe('CampaignsSection', () => {
         productId: null,
         audienceId: null,
         metaCampaignId: 'meta_campaign_1',
+        eventVenueKey: null,
+        startDate: null,
+        endDate: null,
       },
     ])
     mockedApi.listMetrics.mockResolvedValue([fakeMetric()])
@@ -977,6 +1101,9 @@ describe('CampaignsSection', () => {
         productId: null,
         audienceId: null,
         metaCampaignId: 'meta_campaign_1',
+        eventVenueKey: null,
+        startDate: null,
+        endDate: null,
       },
     ])
     mockedApi.refreshMetrics.mockResolvedValue(
@@ -1003,6 +1130,9 @@ describe('CampaignsSection', () => {
         productId: null,
         audienceId: null,
         metaCampaignId: 'meta_campaign_1',
+        eventVenueKey: null,
+        startDate: null,
+        endDate: null,
       },
     ])
     mockedApi.refreshMetrics.mockRejectedValue(
@@ -1028,6 +1158,9 @@ describe('CampaignsSection', () => {
         productId: null,
         audienceId: null,
         metaCampaignId: null,
+        eventVenueKey: null,
+        startDate: null,
+        endDate: null,
       },
     ])
 
@@ -1049,6 +1182,9 @@ describe('CampaignsSection', () => {
         productId: null,
         audienceId: null,
         metaCampaignId: 'meta_campaign_1',
+        eventVenueKey: null,
+        startDate: null,
+        endDate: null,
       },
     ])
     mockedApi.listRecommendations.mockResolvedValue([fakeRecommendation()])
@@ -1074,6 +1210,9 @@ describe('CampaignsSection', () => {
         productId: null,
         audienceId: null,
         metaCampaignId: 'meta_campaign_1',
+        eventVenueKey: null,
+        startDate: null,
+        endDate: null,
       },
     ])
     mockedApi.createRecommendation.mockResolvedValue(fakeRecommendation())
@@ -1098,6 +1237,9 @@ describe('CampaignsSection', () => {
         productId: null,
         audienceId: null,
         metaCampaignId: 'meta_campaign_1',
+        eventVenueKey: null,
+        startDate: null,
+        endDate: null,
       },
     ])
     mockedApi.createRecommendation.mockRejectedValue(
@@ -1123,6 +1265,9 @@ describe('CampaignsSection', () => {
         productId: null,
         audienceId: null,
         metaCampaignId: 'meta_campaign_1',
+        eventVenueKey: null,
+        startDate: null,
+        endDate: null,
       },
     ])
     mockedApi.listRecommendations.mockResolvedValue([fakeRecommendation()])
@@ -1153,6 +1298,9 @@ describe('CampaignsSection', () => {
         productId: null,
         audienceId: null,
         metaCampaignId: 'meta_campaign_1',
+        eventVenueKey: null,
+        startDate: null,
+        endDate: null,
       },
     ])
     mockedApi.listRecommendations.mockResolvedValue([fakeRecommendation()])
@@ -1183,6 +1331,9 @@ describe('CampaignsSection', () => {
         productId: null,
         audienceId: null,
         metaCampaignId: 'meta_campaign_1',
+        eventVenueKey: null,
+        startDate: null,
+        endDate: null,
       },
     ])
     mockedApi.listRecommendations.mockResolvedValue([fakeRecommendation()])
@@ -1209,6 +1360,9 @@ describe('CampaignsSection', () => {
         productId: null,
         audienceId: null,
         metaCampaignId: 'meta_campaign_1',
+        eventVenueKey: null,
+        startDate: null,
+        endDate: null,
       },
     ])
     mockedApi.listRecommendations.mockResolvedValue([fakeRecommendation()])
@@ -1235,6 +1389,9 @@ describe('CampaignsSection', () => {
         productId: null,
         audienceId: null,
         metaCampaignId: 'meta_campaign_1',
+        eventVenueKey: null,
+        startDate: null,
+        endDate: null,
       },
     ])
     mockedApi.listRecommendations.mockResolvedValue([
@@ -1258,6 +1415,9 @@ describe('CampaignsSection', () => {
         productId: null,
         audienceId: null,
         metaCampaignId: 'meta_campaign_1',
+        eventVenueKey: null,
+        startDate: null,
+        endDate: null,
       },
     ])
     mockedApi.listRecommendations.mockResolvedValue([
@@ -1279,6 +1439,9 @@ describe('CampaignsSection', () => {
         productId: null,
         audienceId: null,
         metaCampaignId: 'meta_campaign_1',
+        eventVenueKey: null,
+        startDate: null,
+        endDate: null,
       },
     ])
     mockedApi.listRecommendations.mockResolvedValue([
@@ -1301,6 +1464,9 @@ describe('CampaignsSection', () => {
         productId: null,
         audienceId: null,
         metaCampaignId: null,
+        eventVenueKey: null,
+        startDate: null,
+        endDate: null,
       },
     ])
 
@@ -1320,6 +1486,9 @@ describe('CampaignsSection', () => {
         productId: null,
         audienceId: null,
         metaCampaignId: 'meta_campaign_1',
+        eventVenueKey: null,
+        startDate: null,
+        endDate: null,
       },
     ])
     mockedApi.getStrategy.mockResolvedValue({
@@ -1348,6 +1517,9 @@ describe('CampaignsSection', () => {
         productId: null,
         audienceId: null,
         metaCampaignId: 'meta_campaign_1',
+        eventVenueKey: null,
+        startDate: null,
+        endDate: null,
       },
     ])
     mockedApi.getStrategy.mockResolvedValue({
@@ -1378,6 +1550,9 @@ describe('CampaignsSection', () => {
         productId: null,
         audienceId: null,
         metaCampaignId: 'meta_campaign_1',
+        eventVenueKey: null,
+        startDate: null,
+        endDate: null,
       },
     ])
     mockedApi.getStrategy.mockResolvedValue({
@@ -1411,6 +1586,9 @@ describe('CampaignsSection', () => {
         productId: null,
         audienceId: null,
         metaCampaignId: 'meta_campaign_1',
+        eventVenueKey: null,
+        startDate: null,
+        endDate: null,
       },
     ])
 

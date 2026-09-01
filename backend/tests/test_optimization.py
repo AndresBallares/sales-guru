@@ -23,10 +23,14 @@ from app.schemas.creative import GeneratedCreativeVariant
 from app.schemas.strategy import (
     BudgetRecommendation,
     DataDrivenStrategyContent,
+    GeneratedTestPlanFields,
+    NormalizedMetrics,
     TargetAudience,
+    TestPlanContent,
 )
 from app.services import meta as meta_service_module
 from app.services import optimization_jobs
+from app.services import strategist as strategist_module
 from app.services.meta import MetaConnectionError
 from app.services.optimizer import OptimizerError
 from fastapi.testclient import TestClient
@@ -44,6 +48,48 @@ _FAKE_STRATEGY = DataDrivenStrategyContent(
     recommended_adjustments=["Drop the price angle"],
     scaling_trigger="Increase budget once CAC stays under target",
 )
+
+
+def _fake_test_plan() -> TestPlanContent:
+    """Build a real TestPlanContent from the strategist's own assembly
+    helpers, not a hand-rolled duplicate shape."""
+    generated = GeneratedTestPlanFields(
+        hypothesis_audience_name="Luxury Jewelry Interest Audience",
+        hypothesis_audience_targeting=TargetAudience(
+            age_min=30, age_max=55, interests=["fine jewelry"]
+        ),
+        hypothesis_statement="The hypothesis-driven audience will produce a lower CAC.",
+        offer="Custom emerald rings",
+        positioning="Premium and personal",
+        creative_angles=["Craftsmanship", "Price value"],
+        copy_strategy="Lead with the story behind each piece",
+    )
+    benchmark_context = strategist_module._build_benchmark_context()
+    return TestPlanContent(
+        objective="SALES",
+        audience_variants=[
+            strategist_module._build_broad_baseline_variant(),
+            strategist_module._build_hypothesis_variant(generated),
+        ],
+        hypotheses=[
+            strategist_module._build_primary_hypothesis(generated.hypothesis_statement)
+        ],
+        offer=generated.offer,
+        positioning=generated.positioning,
+        creative_angles=generated.creative_angles,
+        copy_strategy=generated.copy_strategy,
+        daily_budget=50.0,
+        duration_days=10,
+        total_budget=1000.0,
+        success_criteria=strategist_module._build_success_criteria(
+            benchmark_context, None
+        ),
+        baseline_metrics=NormalizedMetrics(),
+        benchmark_context=benchmark_context,
+    )
+
+
+_FAKE_TEST_PLAN = _fake_test_plan()
 
 _FAKE_VARIANTS = [
     GeneratedCreativeVariant(
@@ -121,6 +167,38 @@ def _live_campaign(client: TestClient) -> tuple[str, str]:
     client.post(
         f"/businesses/{business_id}/campaigns/{campaign_id}/strategy",
         json={"hasPriorAdvertisingExperience": True},
+    )
+    creatives = client.post(
+        f"/businesses/{business_id}/campaigns/{campaign_id}/creatives"
+    ).json()
+    client.post(
+        f"/businesses/{business_id}/campaigns/{campaign_id}"
+        f"/creatives/{creatives[0]['id']}/select"
+    )
+    client.post(f"/businesses/{business_id}/campaigns/{campaign_id}/approve")
+    _connect_meta(client, business_id)
+    client.post(f"/businesses/{business_id}/campaigns/{campaign_id}/publish")
+    return business_id, campaign_id
+
+
+def _live_test_plan_campaign(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> tuple[str, str]:
+    """Same as _live_campaign, but with a TEST_PLAN strategy instead of the
+    DATA_DRIVEN_STRATEGY the autouse mock_services fixture defaults to.
+
+    Returns:
+        (business_id, campaign_id).
+    """
+    monkeypatch.setattr(
+        strategy_module, "generate_strategy", AsyncMock(return_value=_FAKE_TEST_PLAN)
+    )
+    _signed_up_client(client)
+    business_id = _create_business(client)
+    campaign_id = _create_campaign(client, business_id)
+    client.post(
+        f"/businesses/{business_id}/campaigns/{campaign_id}/strategy",
+        json={"hasPriorAdvertisingExperience": False},
     )
     creatives = client.post(
         f"/businesses/{business_id}/campaigns/{campaign_id}/creatives"
@@ -266,6 +344,24 @@ def test_create_recommendation_400s_before_the_campaign_is_live(
 
     assert response.status_code == 400
     assert "publish" in response.json()["detail"].lower()
+
+
+def test_create_recommendation_400s_visibly_for_a_test_plan_campaign(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A TEST_PLAN (A/B test) campaign is evaluated by the test evaluator,
+    not this general recommender — clicking "Analyze now" on one must
+    surface a clear message, not fail silently or generate a nonsensical
+    recommendation against one arbitrary variant."""
+    business_id, campaign_id = _live_test_plan_campaign(client, monkeypatch)
+
+    response = client.post(
+        f"/businesses/{business_id}/campaigns/{campaign_id}/optimize"
+    )
+
+    assert response.status_code == 400
+    assert "a/b test" in response.json()["detail"].lower()
+    assert "test evaluator" in response.json()["detail"].lower()
 
 
 def test_create_recommendation_400s_without_any_metrics_yet(

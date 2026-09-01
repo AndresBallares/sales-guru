@@ -70,6 +70,9 @@ export interface Campaign {
   productId: string | null
   audienceId: string | null
   metaCampaignId: string | null
+  eventVenueKey: string | null
+  startDate: string | null
+  endDate: string | null
 }
 
 export interface CampaignCreateInput {
@@ -77,7 +80,29 @@ export interface CampaignCreateInput {
   name?: string
   productId?: string
   audienceId?: string
+  eventVenueKey?: string
+  startDate?: string
+  endDate?: string
 }
+
+// Mirrors the backend's curated table (app/services/event_venues.py) —
+// same "small, fixed, hand-curated set" reasoning already used for the
+// Objective union above: no endpoint needed for a list this small and
+// this static.
+export interface EventVenueOption {
+  key: string
+  label: string
+}
+
+export const EVENT_VENUES: EventVenueOption[] = [
+  { key: 'jck_las_vegas', label: 'JCK Las Vegas — Las Vegas Convention Center, NV' },
+  { key: 'couture_las_vegas', label: 'Couture — Wynn Las Vegas, NV' },
+  {
+    key: 'agta_gemfair_tucson',
+    label: 'AGTA GemFair Tucson — Tucson Convention Center, AZ',
+  },
+  { key: 'ja_new_york', label: 'JA New York — Javits Center, NY' },
+]
 
 const API_URL: string = import.meta.env.VITE_API_URL ?? 'http://localhost:8000'
 
