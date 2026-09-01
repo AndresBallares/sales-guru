@@ -12,13 +12,29 @@ invents.
 """
 
 from datetime import datetime
-from typing import Annotated, Literal
+from typing import TYPE_CHECKING, Annotated, Literal
 
 from pydantic import Field, TypeAdapter
 
 from app.schemas.base import CamelCaseModel
 from app.schemas.campaign import Objective
 from app.services.benchmarks import BenchmarkRange
+from app.services.interests import INTERESTS
+
+# Forced tool-use plus this Literal means the Strategist LLM can only ever
+# emit an interest key that's guaranteed to resolve to a real, currently-
+# valid Meta interest id (app/services/interests.py) — no fuzzy matching,
+# no runtime API dependency at publish time. Built from the curated
+# table's own keys rather than hand-duplicated here, so the two can't
+# drift out of sync (confirmed with the user 2026-09-02, "Phase C" of the
+# test-plan redesign). mypy/ty can't statically verify a Literal built
+# from a runtime dict's keys, so type-checking sees the always-valid
+# `str` in the TYPE_CHECKING branch; Pydantic (and the real JSON schema
+# it builds for the tool call) sees the real dynamic Literal at runtime.
+if TYPE_CHECKING:
+    InterestKey = str
+else:
+    InterestKey = Literal[tuple(sorted(INTERESTS))]
 
 
 class TargetAudience(CamelCaseModel):
@@ -29,14 +45,15 @@ class TargetAudience(CamelCaseModel):
     fields directly, same reasoning already used for the Audience table.
     genders is a list (not a single value) to match Meta's own targeting
     shape, which accepts multiple; None means "not specified" (broad),
-    distinct from an empty list.
+    distinct from an empty list. interests is constrained to the curated
+    InterestKey enum (not free text) for the same reason.
     """
 
     age_min: int | None = None
     age_max: int | None = None
     genders: list[str] | None = None
     location: list[str] = Field(default_factory=list)
-    interests: list[str] = Field(default_factory=list)
+    interests: list[InterestKey] = Field(default_factory=list)
     problem: str | None = None
     desire: str | None = None
 

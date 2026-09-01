@@ -342,22 +342,24 @@ async def create_meta_ad_set(
     age_max: int,
     pixel_id: str | None = None,
     custom_location: CustomLocation | None = None,
+    interests: list[dict[str, str]] | None = None,
+    advantage_audience: int = 0,
 ) -> str:
     """Create a live AdSet object on Meta, under an already-created campaign.
 
-    Targeting is deliberately minimal — age range plus either the default
-    single-country geo or, when custom_location is given (PRD.md build
-    step 11), a radius around one curated event venue instead. PRD.md §7
-    already flags real free-text location/interest resolution (via
-    Meta's own targeting-search taxonomy) as a known gap to close "at
-    publish time" — this is a separate, narrower mechanism (a fixed
-    curated venue, not arbitrary free text) and interests still aren't
-    sent at all yet. targeting_automation.advantage_audience
-    is explicitly set to 0 (disabled) rather than left unset — real API
-    behavior confirmed 2026-08-29 (not caught by any mocked test before):
-    Meta now requires this flag whenever explicit targeting is given, and
-    0 keeps delivery scoped to exactly what's specified above rather than
-    letting Meta broaden the audience on its own.
+    Targeting is age range plus geo (either the default single-country
+    geo or, when custom_location is given — PRD.md build step 11 — a
+    radius around one curated event venue instead) plus, optionally,
+    interests. interests is a list of already-resolved {"id", "name"}
+    Meta interest objects (app/services/interests.py's curated table,
+    resolved by the caller — this function has no opinion on where they
+    came from, same as custom_location). advantage_audience defaults to
+    0 (explicit targeting only, no Meta-driven expansion) but PRD.md
+    "Phase C" (real two-variant TEST_PLAN publishing) passes 1 for the
+    broad/automated baseline variant — real API behavior confirmed
+    2026-08-29 (not caught by any mocked test before): Meta now requires
+    this flag whenever explicit targeting is given at all, so it's always
+    sent explicitly rather than left unset.
 
     bid_strategy is fixed to LOWEST_COST_WITHOUT_CAP (automatic bidding,
     no manual cap) — also newly required by Meta (same date), and the
@@ -391,6 +393,11 @@ async def create_meta_ad_set(
             sent as-is (miles) — not yet verified against the real Graph
             API, same "real end-to-end testing catches what mocks can't"
             caution as the rest of this function's real-API fixes below.
+        interests: Already-resolved Meta interest objects to add as
+            explicit detailed targeting, if any (empty/None means no
+            interest targeting — the broad-baseline case).
+        advantage_audience: 0 (default) for explicit-only targeting, 1 to
+            let Meta expand delivery beyond what's specified here.
 
     Returns:
         The new Meta ad set id.
@@ -412,14 +419,15 @@ async def create_meta_ad_set(
         if custom_location is not None
         else {"countries": ["US"]}
     )
-    targeting = json.dumps(
-        {
-            "age_min": age_min,
-            "age_max": age_max,
-            "geo_locations": geo_locations,
-            "targeting_automation": {"advantage_audience": 0},
-        }
-    )
+    targeting_spec: dict[str, object] = {
+        "age_min": age_min,
+        "age_max": age_max,
+        "geo_locations": geo_locations,
+        "targeting_automation": {"advantage_audience": advantage_audience},
+    }
+    if interests:
+        targeting_spec["interests"] = interests
+    targeting = json.dumps(targeting_spec)
     data = {
         "access_token": access_token,
         "name": name,
@@ -797,3 +805,74 @@ async def update_meta_ad_set_budget(
         f"{_GRAPH_BASE_URL}/{meta_ad_set_id}",
         {"access_token": access_token, "daily_budget": str(daily_budget_cents)},
     )
+
+
+async def search_ad_interests(*, access_token: str, query: str) -> list[dict[str, Any]]:
+    """Search Meta's ad-interest targeting taxonomy for a free-text term.
+
+    Real endpoint confirmed 2026-09-02, used by scripts/resolve_interests.py
+    to build the curated jewelry interest lookup table
+    (app/services/interests.py) — GET /search?type=adinterest&q=... Not
+    ad-account-scoped; any valid access token with ads permissions works.
+    Not called at runtime by the app itself — interests are resolved once
+    into a static curated table, not looked up live per request (see
+    app/services/interests.py's module docstring for why) — this exists
+    so the resolution script shares the same real API wrapper as the rest
+    of this module instead of a separate ad hoc HTTP call.
+
+    Args:
+        access_token: A Meta access token with ads permissions.
+        query: Free-text search term (e.g. "engagement rings").
+
+    Returns:
+        Meta's raw result list — each item has at least id/name/
+        audience_size_lower_bound/audience_size_upper_bound.
+
+    Raises:
+        MetaConnectionError: If the call fails.
+    """
+    body = await _get_json(
+        f"{_GRAPH_BASE_URL}/search",
+        {"type": "adinterest", "q": query, "access_token": access_token},
+    )
+    data: list[dict[str, Any]] = body.get("data", [])
+    return data
+
+
+async def validate_ad_interests(
+    *, access_token: str, meta_ids: list[str]
+) -> list[dict[str, Any]]:
+    """Check whether previously-resolved interest ids are still live on Meta.
+
+    Real endpoint confirmed 2026-09-02: GET /search?type=adinterestvalid&
+    interest_fbid_list=[...] — note interest_fbid_list, not the more
+    obvious-looking interest_list, which silently returns valid=false for
+    every id regardless of whether it's real (a genuine API quirk, only
+    caught by testing against the live endpoint, not documented anywhere
+    this was checked). Returns a fresh audience_size for each still-valid
+    id, which scripts/resolve_interests.py uses to refresh the curated
+    table's numbers alongside re-stamping resolved_at — same freshness
+    pattern as app/services/benchmarks.py's BenchmarkRange.as_of.
+
+    Args:
+        access_token: A Meta access token with ads permissions.
+        meta_ids: The interest ids to check.
+
+    Returns:
+        Meta's raw result list, one entry per input id, each with at
+        least id/valid/audience_size (audience_size only present when
+        valid).
+
+    Raises:
+        MetaConnectionError: If the call fails.
+    """
+    body = await _get_json(
+        f"{_GRAPH_BASE_URL}/search",
+        {
+            "type": "adinterestvalid",
+            "interest_fbid_list": json.dumps(meta_ids),
+            "access_token": access_token,
+        },
+    )
+    data: list[dict[str, Any]] = body.get("data", [])
+    return data

@@ -36,7 +36,7 @@ _VALID_TEST_PLAN_INPUT: dict[str, Any] = {
         "ageMax": 55,
         "genders": ["female"],
         "location": ["United States"],
-        "interests": ["Fine jewelry", "Luxury fashion"],
+        "interests": ["jewelry", "luxury_goods"],
         "problem": None,
         "desire": None,
     },
@@ -55,7 +55,7 @@ _VALID_DATA_DRIVEN_STRATEGY_INPUT: dict[str, Any] = {
         "ageMin": 30,
         "ageMax": 55,
         "location": ["New York", "New Jersey"],
-        "interests": ["fine jewelry"],
+        "interests": ["jewelry"],
         "problem": "Hard to find quality, unique pieces",
         "desire": "Own something with a story",
     },
@@ -213,7 +213,7 @@ def test_build_hypothesis_variant_wraps_the_llm_output() -> None:
     assert variant.type == "hypothesis_driven"
     assert variant.is_baseline is False
     assert variant.name == "Luxury Jewelry Interest Audience"
-    assert variant.targeting.interests == ["Fine jewelry", "Luxury fashion"]
+    assert variant.targeting.interests == ["jewelry", "luxury_goods"]
     assert variant.targeting.genders == ["female"]
 
 

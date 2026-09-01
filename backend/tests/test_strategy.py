@@ -30,7 +30,7 @@ _FAKE_DATA_DRIVEN_STRATEGY = DataDrivenStrategyContent(
         age_min=30,
         age_max=55,
         location=["New York"],
-        interests=["fine jewelry"],
+        interests=["jewelry"],
         problem="Hard to find quality pieces",
         desire="Own something unique",
     ),
@@ -50,7 +50,7 @@ _FAKE_DATA_DRIVEN_STRATEGY = DataDrivenStrategyContent(
 _GENERATED_TEST_PLAN_FIELDS = GeneratedTestPlanFields(
     hypothesis_audience_name="Luxury Jewelry Interest Audience",
     hypothesis_audience_targeting=TargetAudience(
-        age_min=30, age_max=55, interests=["fine jewelry"]
+        age_min=30, age_max=55, interests=["jewelry"]
     ),
     hypothesis_statement="The hypothesis-driven audience will produce a lower CAC.",
     offer="Custom emerald rings",

@@ -24,9 +24,13 @@ from app.schemas.creative import GeneratedCreativeVariant
 from app.schemas.strategy import (
     BudgetRecommendation,
     DataDrivenStrategyContent,
+    GeneratedTestPlanFields,
+    NormalizedMetrics,
     TargetAudience,
+    TestPlanContent,
 )
 from app.services import meta as meta_service_module
+from app.services import strategist as strategist_module
 from app.services.event_venues import EVENT_VENUES
 from app.services.publish import requires_pixel
 from fastapi.testclient import TestClient
@@ -57,6 +61,49 @@ _FAKE_VARIANTS = [
     )
     for letter in "ABCD"
 ]
+
+
+def _fake_test_plan() -> TestPlanContent:
+    """Build a real TestPlanContent from the strategist's own assembly
+    helpers, not a hand-rolled duplicate shape — same pattern already
+    used in test_optimization.py/test_optimization_jobs.py."""
+    generated = GeneratedTestPlanFields(
+        hypothesis_audience_name="Luxury Jewelry Interest Audience",
+        hypothesis_audience_targeting=TargetAudience(
+            age_min=30, age_max=55, interests=["jewelry"]
+        ),
+        hypothesis_statement="The hypothesis-driven audience will produce a lower CAC.",
+        offer="Custom emerald rings",
+        positioning="Premium and personal",
+        creative_angles=["Craftsmanship", "Price value"],
+        copy_strategy="Lead with the story behind each piece",
+    )
+    benchmark_context = strategist_module._build_benchmark_context()
+    return TestPlanContent(
+        objective="SALES",
+        audience_variants=[
+            strategist_module._build_broad_baseline_variant(),
+            strategist_module._build_hypothesis_variant(generated),
+        ],
+        hypotheses=[
+            strategist_module._build_primary_hypothesis(generated.hypothesis_statement)
+        ],
+        offer=generated.offer,
+        positioning=generated.positioning,
+        creative_angles=generated.creative_angles,
+        copy_strategy=generated.copy_strategy,
+        daily_budget=50.0,
+        duration_days=10,
+        total_budget=1000.0,
+        success_criteria=strategist_module._build_success_criteria(
+            benchmark_context, None
+        ),
+        baseline_metrics=NormalizedMetrics(),
+        benchmark_context=benchmark_context,
+    )
+
+
+_FAKE_TEST_PLAN = _fake_test_plan()
 
 
 def _signed_up_client(
@@ -133,12 +180,25 @@ def _ready_campaign(
     with_pixel: bool = True,
     objective: str = "SALES",
     event_venue_key: str | None = None,
+    monkeypatch: pytest.MonkeyPatch | None = None,
+    test_plan: bool = False,
 ) -> tuple[str, str]:
     """Build a campaign all the way to APPROVED, Meta connected, ready to publish.
+
+    test_plan=True overrides the mocked strategy to a TEST_PLAN
+    (_FAKE_TEST_PLAN) instead of the default DataDrivenStrategyContent —
+    requires monkeypatch to be given.
 
     Returns:
         (business_id, campaign_id).
     """
+    if test_plan:
+        assert monkeypatch is not None
+        monkeypatch.setattr(
+            strategy_module,
+            "generate_strategy",
+            AsyncMock(return_value=_FAKE_TEST_PLAN),
+        )
     _signed_up_client(client)
     business_id = _create_business(
         client, website="https://acme.example" if with_destination_url else None
@@ -406,6 +466,65 @@ def test_publish_succeeds_and_marks_the_campaign_live(
     ).json()
     selected = next(c for c in creatives if c["status"] == "SELECTED")
     assert selected["adId"] is not None
+
+
+@pytest.mark.asyncio
+async def test_publish_creates_two_real_adsets_for_a_test_plan_campaign(
+    client: TestClient,
+    mock_services: dict[str, AsyncMock],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A TEST_PLAN campaign publishes both audience variants as real,
+    independent AdSets/Ads on Meta ("Phase C," confirmed 2026-09-02),
+    reusing one ad creative object across both, with the per-variant
+    budget (not split) and the right advantage_audience/interests split
+    between the broad baseline and the hypothesis-driven variant."""
+    mock_services["create_ad_set"].side_effect = ["meta_adset_a", "meta_adset_b"]
+    mock_services["create_ad"].side_effect = ["meta_ad_a", "meta_ad_b"]
+    business_id, campaign_id = _ready_campaign(
+        client, monkeypatch=monkeypatch, test_plan=True
+    )
+
+    response = client.post(f"/businesses/{business_id}/campaigns/{campaign_id}/publish")
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "LIVE"
+    mock_services["create_campaign"].assert_awaited_once()
+    mock_services["create_ad_creative"].assert_awaited_once()  # one creative, reused
+    assert mock_services["create_ad_set"].await_count == 2
+    assert mock_services["create_ad"].await_count == 2
+
+    baseline_kwargs = mock_services["create_ad_set"].call_args_list[0].kwargs
+    hypothesis_kwargs = mock_services["create_ad_set"].call_args_list[1].kwargs
+    assert baseline_kwargs["daily_budget_cents"] == 5000  # $50/day, per variant
+    assert hypothesis_kwargs["daily_budget_cents"] == 5000  # same rate, not split
+    assert baseline_kwargs["advantage_audience"] == 1
+    assert baseline_kwargs["interests"] == []
+    assert hypothesis_kwargs["advantage_audience"] == 0
+    assert hypothesis_kwargs["interests"] == [
+        {"id": "6003266225248", "name": "Jewelry"}
+    ]
+
+    used_ad_set_ids = {
+        c.kwargs["meta_ad_set_id"] for c in mock_services["create_ad"].call_args_list
+    }
+    assert used_ad_set_ids == {"meta_adset_a", "meta_adset_b"}
+
+    creatives = client.get(
+        f"/businesses/{business_id}/campaigns/{campaign_id}/creatives"
+    ).json()
+    selected = [c for c in creatives if c["status"] == "SELECTED"]
+    assert len(selected) == 2  # the original row plus one duplicate
+    assert all(c["adId"] is not None for c in selected)
+    assert len({c["adId"] for c in selected}) == 2  # two distinct Ads
+
+    seeder = Prisma()
+    await seeder.connect()
+    db_creatives = await seeder.creative.find_many(
+        where={"campaignId": campaign_id, "status": "SELECTED"}
+    )
+    await seeder.disconnect()
+    assert {c.metaCreativeId for c in db_creatives} == {"meta_creative_1"}
 
 
 def test_publish_targets_the_curated_venue_for_an_event_campaign(

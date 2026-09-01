@@ -948,3 +948,74 @@ async def test_update_meta_ad_set_budget_raises_on_failure(
         await meta.update_meta_ad_set_budget(
             access_token="token", meta_ad_set_id="adset_123", daily_budget_cents=4000
         )
+
+
+@pytest.mark.asyncio
+async def test_search_ad_interests_returns_the_raw_result_list(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A search hits the real endpoint shape and returns Meta's data list."""
+    client = _mock_client_returning(
+        monkeypatch,
+        _FakeResponse(
+            {
+                "data": [
+                    {
+                        "id": "6002969885729",
+                        "name": "Engagement ring",
+                        "audience_size_lower_bound": 55933936,
+                        "audience_size_upper_bound": 65778309,
+                    }
+                ]
+            }
+        ),
+    )
+
+    results = await meta.search_ad_interests(
+        access_token="token", query="engagement rings"
+    )
+
+    assert results == [
+        {
+            "id": "6002969885729",
+            "name": "Engagement ring",
+            "audience_size_lower_bound": 55933936,
+            "audience_size_upper_bound": 65778309,
+        }
+    ]
+    url, params = client.calls[0]
+    assert url == "https://graph.facebook.com/v21.0/search"
+    assert params["type"] == "adinterest"
+    assert params["q"] == "engagement rings"
+    assert params["access_token"] == "token"
+
+
+@pytest.mark.asyncio
+async def test_validate_ad_interests_sends_the_fbid_list_param(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Uses interest_fbid_list (not interest_list — a real API quirk, see
+    the function's own docstring) and returns Meta's raw validity list."""
+    client = _mock_client_returning(
+        monkeypatch,
+        _FakeResponse(
+            {
+                "data": [
+                    {"id": "6002969885729", "valid": True, "audience_size": 60000000}
+                ]
+            }
+        ),
+    )
+
+    results = await meta.validate_ad_interests(
+        access_token="token", meta_ids=["6002969885729"]
+    )
+
+    assert results == [
+        {"id": "6002969885729", "valid": True, "audience_size": 60000000}
+    ]
+    url, params = client.calls[0]
+    assert url == "https://graph.facebook.com/v21.0/search"
+    assert params["type"] == "adinterestvalid"
+    assert params["interest_fbid_list"] == '["6002969885729"]'
+    assert params["access_token"] == "token"

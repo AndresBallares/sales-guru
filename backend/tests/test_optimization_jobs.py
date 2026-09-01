@@ -82,7 +82,7 @@ def _fake_test_plan() -> TestPlanContent:
     generated = GeneratedTestPlanFields(
         hypothesis_audience_name="Luxury Jewelry Interest Audience",
         hypothesis_audience_targeting=TargetAudience(
-            age_min=30, age_max=55, interests=["fine jewelry"]
+            age_min=30, age_max=55, interests=["jewelry"]
         ),
         hypothesis_statement="The hypothesis-driven audience will produce a lower CAC.",
         offer="Custom emerald rings",
