@@ -222,6 +222,7 @@ async def _publish_test_plan_variant(
             "optimizationGoal": optimization_goal,
             "status": "LIVE",
             "metaAdSetId": meta_ad_set_id,
+            "variantId": variant.id,
         }
     )
     ad = await db.ad.create(

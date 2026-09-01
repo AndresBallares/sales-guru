@@ -81,6 +81,7 @@ function fakeMetric(overrides: Partial<api.Metric> = {}): api.Metric {
   return {
     id: 'metric-1',
     campaignId: 'camp-1',
+    adSetId: null,
     impressions: 1000,
     clicks: 50,
     spend: 12.5,

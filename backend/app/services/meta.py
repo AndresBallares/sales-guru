@@ -612,14 +612,18 @@ def _sum_action_values(
     )
 
 
-async def fetch_campaign_insights(
-    *, access_token: str, meta_campaign_id: str
+async def _fetch_insights(
+    *, access_token: str, meta_object_id: str
 ) -> CampaignInsights:
-    """Fetch lifetime performance numbers for a live Meta campaign.
+    """Fetch lifetime performance numbers for any Meta object with an /insights edge.
+
+    Works for a Campaign or an AdSet — the endpoint shape and fields are
+    identical either way, Meta's Insights API is symmetric across object
+    levels.
 
     Args:
         access_token: The business's Meta access token.
-        meta_campaign_id: The Meta campaign id (Campaign.metaCampaignId).
+        meta_object_id: The Meta campaign or ad set id.
 
     Returns:
         The original four fields are all zero if Meta has no delivery
@@ -647,7 +651,7 @@ async def fetch_campaign_insights(
         MetaConnectionError: If the call fails.
     """
     body = await _get_json(
-        f"{_GRAPH_BASE_URL}/{meta_campaign_id}/insights",
+        f"{_GRAPH_BASE_URL}/{meta_object_id}/insights",
         {
             "fields": (
                 "impressions,reach,spend,clicks,cpm,ctr,cpc,actions,action_values"
@@ -689,6 +693,54 @@ async def fetch_campaign_insights(
         cac=(spend / purchases) if purchases else None,
         purchase_value=purchase_value if action_values else None,
         roas=(purchase_value / spend) if spend and action_values else None,
+    )
+
+
+async def fetch_campaign_insights(
+    *, access_token: str, meta_campaign_id: str
+) -> CampaignInsights:
+    """Fetch lifetime performance numbers for a live Meta campaign.
+
+    See _fetch_insights for the full field-shape documentation.
+
+    Args:
+        access_token: The business's Meta access token.
+        meta_campaign_id: The Meta campaign id (Campaign.metaCampaignId).
+
+    Returns:
+        The campaign's lifetime-to-date insights.
+
+    Raises:
+        MetaConnectionError: If the call fails.
+    """
+    return await _fetch_insights(
+        access_token=access_token, meta_object_id=meta_campaign_id
+    )
+
+
+async def fetch_ad_set_insights(
+    *, access_token: str, meta_ad_set_id: str
+) -> CampaignInsights:
+    """Fetch lifetime performance numbers for one live Meta AdSet.
+
+    Used for per-AdSet metric collection on a TEST_PLAN campaign's two
+    real audience variants (PRD.md build step 10, confirmed 2026-09-02)
+    — same shape and reasoning as fetch_campaign_insights, just scoped to
+    one AdSet instead of the whole campaign, so each variant's own real
+    performance can be compared against the other's.
+
+    Args:
+        access_token: The business's Meta access token.
+        meta_ad_set_id: The Meta ad set id (AdSet.metaAdSetId).
+
+    Returns:
+        That one AdSet's lifetime-to-date insights.
+
+    Raises:
+        MetaConnectionError: If the call fails.
+    """
+    return await _fetch_insights(
+        access_token=access_token, meta_object_id=meta_ad_set_id
     )
 
 

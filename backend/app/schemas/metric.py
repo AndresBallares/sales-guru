@@ -12,10 +12,14 @@ class MetricResponse(CamelCaseModel):
     (PRD.md §5 step 10, confirmed 2026-09-01) — None means unavailable/
     not applicable, never zero (see app/services/meta.py's
     fetch_campaign_insights for exactly when each is populated).
+    ad_set_id is set only for one TEST_PLAN variant's own snapshot
+    (per-AdSet metric collection, confirmed 2026-09-02) — None for the
+    pre-existing campaign-level aggregate collection.
     """
 
     id: str
     campaign_id: str
+    ad_set_id: str | None
     impressions: int
     clicks: int
     spend: float

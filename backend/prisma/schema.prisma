@@ -256,7 +256,16 @@ model AdSet {
   optimizationGoal String
   status           String   @default("DRAFT")
   ads              Ad[]
+  metrics          Metric[]
   metaAdSetId      String?
+  // Which TEST_PLAN AudienceVariant this AdSet is ("broad_baseline" |
+  // "hypothesis_audience", app/schemas/strategy.py) — set only for a
+  // TEST_PLAN campaign's two real AdSets (PRD.md build step 5 "Phase C",
+  // app/services/publish.py's _publish_test_plan_variant), null for a
+  // DATA_DRIVEN_STRATEGY campaign's single AdSet. Lets per-AdSet Metric
+  // collection and the TEST_PLAN evaluator (step 10) map an AdSet back
+  // to which variant it is without fragile name-matching.
+  variantId        String?
   createdAt        DateTime @default(now())
   updatedAt        DateTime @updatedAt
 }
@@ -330,6 +339,15 @@ model Metric {
   id          String   @id @default(cuid())
   campaign    Campaign @relation(fields: [campaignId], references: [id])
   campaignId  String
+  // Set only when this snapshot is one TEST_PLAN AdSet's own performance
+  // (PRD.md build step 10, per-AdSet metric collection, confirmed
+  // 2026-09-02) — null for the pre-existing campaign-level aggregate
+  // collection (DATA_DRIVEN_STRATEGY's single AdSet, and any TEST_PLAN
+  // history collected before this field existed). Lets the TEST_PLAN
+  // evaluator compare each variant's own real numbers instead of one
+  // undifferentiated pool.
+  adSet       AdSet?   @relation(fields: [adSetId], references: [id])
+  adSetId     String?
   impressions Int
   clicks      Int
   spend       Float

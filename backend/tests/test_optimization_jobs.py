@@ -254,6 +254,8 @@ async def _seed_metric(
     clicks: int = 50,
     spend: float = 12.5,
     conversions: int = 8,
+    ad_set_id: str | None = None,
+    cac: float | None = None,
 ) -> None:
     """Insert a Metric snapshot with a controlled fetchedAt via a fresh connection."""
     seeder = Prisma()
@@ -261,14 +263,25 @@ async def _seed_metric(
     await seeder.metric.create(
         data={
             "campaignId": campaign_id,
+            "adSetId": ad_set_id,
             "impressions": impressions,
             "clicks": clicks,
             "spend": spend,
             "conversions": conversions,
+            "cac": cac,
             "fetchedAt": fetched_at,
         }
     )
     await seeder.disconnect()
+
+
+async def _fetch_ad_sets_by_variant(campaign_id: str) -> dict[str, str]:
+    """Fetch a campaign's real AdSet ids, keyed by variantId, via a fresh connection."""
+    seeder = Prisma()
+    await seeder.connect()
+    ad_sets = await seeder.adset.find_many(where={"campaignId": campaign_id})
+    await seeder.disconnect()
+    return {a.variantId: a.id for a in ad_sets if a.variantId is not None}
 
 
 @pytest.fixture(autouse=True)
@@ -387,6 +400,75 @@ async def test_collect_metrics_skips_a_campaign_with_no_meta_connection(
         f"/businesses/{business_id}/campaigns/{campaign_id}/metrics"
     ).json()
     assert listed == []
+
+
+def test_collect_metrics_collects_per_adset_for_a_test_plan_campaign(
+    client: TestClient,
+    mock_services: dict[str, AsyncMock],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A TEST_PLAN campaign (two real AdSets, "Phase C") collects one
+    Metric snapshot per AdSet, each tagged with its own adSetId, instead
+    of one undifferentiated campaign-level aggregate."""
+    monkeypatch.setattr(
+        meta_service_module,
+        "create_meta_ad_set",
+        AsyncMock(side_effect=["meta_adset_a", "meta_adset_b"]),
+    )
+    ad_set_insights = AsyncMock(
+        side_effect=[
+            CampaignInsights(impressions=100, clicks=5, spend=10.0, conversions=1),
+            CampaignInsights(impressions=200, clicks=10, spend=20.0, conversions=2),
+        ]
+    )
+    monkeypatch.setattr(optimization_jobs, "fetch_ad_set_insights", ad_set_insights)
+    _signed_up_client(client)
+    business_id = _create_business(client)
+    _connect_meta(client, business_id)
+    campaign_id = _publish_test_plan_campaign(client, business_id, monkeypatch)
+
+    _run(client, optimization_jobs.collect_metrics_for_all_live_campaigns)
+
+    listed = client.get(
+        f"/businesses/{business_id}/campaigns/{campaign_id}/metrics"
+    ).json()
+    assert len(listed) == 2
+    ad_set_ids = {m["adSetId"] for m in listed}
+    assert None not in ad_set_ids
+    assert len(ad_set_ids) == 2
+    mock_services["insights"].assert_not_awaited()  # campaign-level call unused
+
+
+def test_collect_metrics_one_variant_failing_doesnt_block_the_other(
+    client: TestClient,
+    mock_services: dict[str, AsyncMock],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """One TEST_PLAN variant's Meta call failing still records the other."""
+    monkeypatch.setattr(
+        meta_service_module,
+        "create_meta_ad_set",
+        AsyncMock(side_effect=["meta_adset_a", "meta_adset_b"]),
+    )
+    ad_set_insights = AsyncMock(
+        side_effect=[
+            MetaConnectionError("Invalid OAuth access token"),
+            CampaignInsights(impressions=200, clicks=10, spend=20.0, conversions=2),
+        ]
+    )
+    monkeypatch.setattr(optimization_jobs, "fetch_ad_set_insights", ad_set_insights)
+    _signed_up_client(client)
+    business_id = _create_business(client)
+    _connect_meta(client, business_id)
+    campaign_id = _publish_test_plan_campaign(client, business_id, monkeypatch)
+
+    _run(client, optimization_jobs.collect_metrics_for_all_live_campaigns)
+
+    listed = client.get(
+        f"/businesses/{business_id}/campaigns/{campaign_id}/metrics"
+    ).json()
+    assert len(listed) == 1
+    assert listed[0]["impressions"] == 200
 
 
 # --- generate_and_store_recommendation --------------------------------------
@@ -940,6 +1022,159 @@ async def test_generate_and_store_test_evaluation_sufficient_data(
     assert result.hypothesisResult == "INCONCLUSIVE"
     assert result.winningVariant is None
     evaluate.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_generate_and_store_test_evaluation_real_two_variant_comparison(
+    client: TestClient,
+    mock_services: dict[str, AsyncMock],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Once both real AdSets have their own per-variant Metric data with
+    enough conversion volume, the backend computes a real winningVariant/
+    hypothesisResult — overriding whatever recommendedAction the LLM
+    returned with prefer_hypothesis, since the hypothesis-driven variant's
+    real CAC is lower here."""
+    _signed_up_client(client)
+    business_id = _create_business(client)
+    _connect_meta(client, business_id)
+    campaign_id = _publish_test_plan_campaign(client, business_id, monkeypatch)
+    ad_sets_by_variant = await _fetch_ad_sets_by_variant(campaign_id)
+    baseline_ad_set_id = ad_sets_by_variant["broad_baseline"]
+    hypothesis_ad_set_id = ad_sets_by_variant["hypothesis_audience"]
+
+    now = datetime.now(UTC)
+    # $500/variant fair share (daily_budget=50 * duration_days=10) -> 50%
+    # spend clears the per-variant gate on both sides.
+    await _seed_metric(
+        campaign_id,
+        fetched_at=now,
+        ad_set_id=baseline_ad_set_id,
+        spend=250.0,
+        conversions=10,
+        cac=50.0,
+    )
+    await _seed_metric(
+        campaign_id,
+        fetched_at=now,
+        ad_set_id=hypothesis_ad_set_id,
+        spend=250.0,
+        conversions=10,
+        cac=30.0,
+    )
+
+    evaluate = AsyncMock(return_value=_VALID_TEST_EVALUATION)
+    monkeypatch.setattr(optimizer_module, "evaluate_test_plan", evaluate)
+
+    campaign = await _fetch_campaign(campaign_id)
+    result = _run(
+        client,
+        optimization_jobs.generate_and_store_test_evaluation,
+        campaign,
+        _FAKE_TEST_PLAN,
+    )
+
+    assert result.status == "SUFFICIENT_DATA"
+    assert result.winningVariant == "hypothesis_audience"
+    assert result.hypothesisResult == "SUPPORTED"
+    assert result.recommendedAction == "prefer_hypothesis"
+    evaluate.assert_awaited_once()
+    _, kwargs = evaluate.call_args
+    assert kwargs["hypothesis_metric"] is not None
+
+
+@pytest.mark.asyncio
+async def test_generate_and_store_test_evaluation_prefers_the_broad_baseline(
+    client: TestClient,
+    mock_services: dict[str, AsyncMock],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When the broad baseline's real CAC is lower, the hypothesis is
+    rejected and recommendedAction becomes prefer_broad."""
+    _signed_up_client(client)
+    business_id = _create_business(client)
+    _connect_meta(client, business_id)
+    campaign_id = _publish_test_plan_campaign(client, business_id, monkeypatch)
+    ad_sets_by_variant = await _fetch_ad_sets_by_variant(campaign_id)
+
+    now = datetime.now(UTC)
+    await _seed_metric(
+        campaign_id,
+        fetched_at=now,
+        ad_set_id=ad_sets_by_variant["broad_baseline"],
+        spend=250.0,
+        conversions=10,
+        cac=30.0,
+    )
+    await _seed_metric(
+        campaign_id,
+        fetched_at=now,
+        ad_set_id=ad_sets_by_variant["hypothesis_audience"],
+        spend=250.0,
+        conversions=10,
+        cac=50.0,
+    )
+
+    evaluate = AsyncMock(return_value=_VALID_TEST_EVALUATION)
+    monkeypatch.setattr(optimizer_module, "evaluate_test_plan", evaluate)
+
+    campaign = await _fetch_campaign(campaign_id)
+    result = _run(
+        client,
+        optimization_jobs.generate_and_store_test_evaluation,
+        campaign,
+        _FAKE_TEST_PLAN,
+    )
+
+    assert result.winningVariant == "broad_baseline"
+    assert result.hypothesisResult == "REJECTED"
+    assert result.recommendedAction == "prefer_broad"
+
+
+@pytest.mark.asyncio
+async def test_generate_and_store_test_evaluation_insufficient_with_lopsided_variants(
+    client: TestClient,
+    mock_services: dict[str, AsyncMock],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Two real AdSets exist, but only one has meaningful spend yet — not
+    a real comparison, so this stays INSUFFICIENT_DATA without calling
+    the LLM, even though a naive combined-total read might look ready."""
+    _signed_up_client(client)
+    business_id = _create_business(client)
+    _connect_meta(client, business_id)
+    campaign_id = _publish_test_plan_campaign(client, business_id, monkeypatch)
+    ad_sets_by_variant = await _fetch_ad_sets_by_variant(campaign_id)
+
+    now = datetime.now(UTC)
+    await _seed_metric(
+        campaign_id,
+        fetched_at=now,
+        ad_set_id=ad_sets_by_variant["broad_baseline"],
+        spend=400.0,
+        conversions=8,
+    )
+    await _seed_metric(
+        campaign_id,
+        fetched_at=now,
+        ad_set_id=ad_sets_by_variant["hypothesis_audience"],
+        spend=5.0,
+        conversions=0,
+    )
+
+    evaluate = AsyncMock(return_value=_VALID_TEST_EVALUATION)
+    monkeypatch.setattr(optimizer_module, "evaluate_test_plan", evaluate)
+
+    campaign = await _fetch_campaign(campaign_id)
+    result = _run(
+        client,
+        optimization_jobs.generate_and_store_test_evaluation,
+        campaign,
+        _FAKE_TEST_PLAN,
+    )
+
+    assert result.status == "INSUFFICIENT_DATA"
+    evaluate.assert_not_awaited()
 
 
 async def _fetch_campaign(campaign_id: str) -> object:

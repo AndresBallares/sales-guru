@@ -584,6 +584,7 @@ export function disconnectMeta(businessId: string): Promise<void> {
 export interface Metric {
   id: string
   campaignId: string
+  adSetId: string | null
   impressions: number
   clicks: number
   spend: number

@@ -29,6 +29,7 @@ def _to_response(metric: Metric) -> MetricResponse:
     return MetricResponse(
         id=metric.id,
         campaign_id=metric.campaignId,
+        ad_set_id=metric.adSetId,
         impressions=metric.impressions,
         clicks=metric.clicks,
         spend=metric.spend,

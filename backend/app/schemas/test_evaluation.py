@@ -19,16 +19,31 @@ TestEvaluationStatus = Literal["SUFFICIENT_DATA", "INSUFFICIENT_DATA"]
 Confidence = Literal["LOW", "MEDIUM", "HIGH"]
 HypothesisResult = Literal["SUPPORTED", "REJECTED", "INCONCLUSIVE"]
 
-# Excludes prefer_broad/prefer_hypothesis — those require the cross-variant
-# comparison real two-adset publishing would enable ("Phase C", not built
-# yet: campaign publish still creates exactly one AdSet, app/services/
-# publish.py), so there's no real data for the hypothesis-driven variant
-# to compare the published broad-baseline variant against.
+# What the LLM may choose — diagnostic/iteration actions only, never a
+# variant-preference call. Declaring an A/B test's winner is a
+# deterministic computation on real CAC data (app/services/optimizer.py's
+# compute_test_result), not a judgment call, so prefer_broad/
+# prefer_hypothesis are never offered to the model as a choice — see
+# GeneratedTestEvaluation's docstring.
+GeneratedRecommendedAction = Literal[
+    "continue_testing",
+    "test_new_creative",
+    "investigate_offer_or_landing_page",
+    "investigate_checkout_or_purchase_friction",
+]
+
+# The full stored/API set — adds prefer_broad/prefer_hypothesis, which
+# only the backend ever sets (app/services/optimizer.py's
+# compute_test_result), once real per-variant CAC data with enough
+# conversion volume on both sides exists (PRD.md build step 5 "Phase C"
+# plus step 10's per-AdSet metric collection, confirmed 2026-09-02).
 RecommendedAction = Literal[
     "continue_testing",
     "test_new_creative",
     "investigate_offer_or_landing_page",
     "investigate_checkout_or_purchase_friction",
+    "prefer_broad",
+    "prefer_hypothesis",
 ]
 
 
@@ -39,15 +54,16 @@ class GeneratedTestEvaluation(CamelCaseModel):
     GeneratedRecommendation.risk (app/schemas/optimization.py).
     status/winning_variant/hypothesis_result are deliberately NOT
     generated here — they're backend-computed/fixed (see
-    app/services/optimizer.py's evaluate_test_plan) — asking the model to
-    self-report whether its own analysis has "enough data," or to name a
-    winning variant with no real data for the other one, is exactly the
-    kind of deterministic-or-impossible calculation PRD.md's Optimizer
-    Agent responsibilities say the LLM must not own.
+    app/services/optimizer.py's evaluate_test_plan/compute_test_result)
+    — asking the model to self-report whether its own analysis has
+    "enough data," or to name a winning variant, is exactly the kind of
+    deterministic-or-impossible calculation PRD.md's Optimizer Agent
+    responsibilities say the LLM must not own — true regardless of
+    whether real per-variant data exists yet.
     """
 
     key_findings: list[str]
-    recommended_action: RecommendedAction
+    recommended_action: GeneratedRecommendedAction
     reasoning: str
     confidence: Confidence
 
@@ -55,9 +71,11 @@ class GeneratedTestEvaluation(CamelCaseModel):
 class TestEvaluationResponse(CamelCaseModel):
     """Public-facing representation of a stored TestEvaluation.
 
-    winning_variant is always null and hypothesis_result is always
-    "INCONCLUSIVE" today — see the model's doc comment in schema.prisma
-    for why (no real per-variant data exists until "Phase C").
+    winning_variant/hypothesis_result are non-null/non-"INCONCLUSIVE"
+    only once both of a TEST_PLAN's real AdSets have collected enough
+    conversion volume to compare (app/services/optimizer.py's
+    compute_test_result) — before that (including any campaign published
+    before "Phase C" existed), they stay null/"INCONCLUSIVE".
     """
 
     id: str

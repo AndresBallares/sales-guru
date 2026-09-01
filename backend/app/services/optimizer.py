@@ -526,6 +526,110 @@ def has_sufficient_test_data(
     )
 
 
+def has_sufficient_test_data_for_variants(
+    *,
+    test_plan: TestPlanContent,
+    baseline_metric: Metric,
+    hypothesis_metric: Metric,
+    campaign_live_since: datetime,
+    now: datetime | None = None,
+) -> bool:
+    """Whether BOTH of a TEST_PLAN's two real AdSets have enough data to compare.
+
+    The real per-variant counterpart to has_sufficient_test_data, used
+    once a campaign has published both AdSets for real (PRD.md build
+    step 5 "Phase C" plus per-AdSet metric collection, step 10, confirmed
+    2026-09-02). Each variant's own spend is checked against its own
+    fair-share budget — daily_budget * duration_days, a variant's full
+    planned spend over the test, since daily_budget is already a
+    PER-VARIANT rate (see TestPlanContent.daily_budget's docstring) — not
+    the combined total_budget, which covers both variants together and
+    would otherwise be unreachable by either one alone.
+
+    Args:
+        test_plan: The campaign's original TEST_PLAN.
+        baseline_metric: The broad-baseline AdSet's most recent snapshot.
+        hypothesis_metric: The hypothesis-driven AdSet's most recent
+            snapshot.
+        campaign_live_since: When the campaign started running.
+        now: Injectable for tests; defaults to the real current time.
+
+    Returns:
+        True if both variants have individually spent enough of their
+        own fair share, or the test's shared duration has elapsed
+        enough — a lopsided spend split (one variant funded, the other
+        barely touched) isn't a real comparison yet even if the combined
+        total looks sufficient.
+    """
+    now = now or datetime.now(UTC)
+    variant_budget = test_plan.daily_budget * test_plan.duration_days
+    baseline_fraction = (
+        baseline_metric.spend / variant_budget if variant_budget else 0.0
+    )
+    hypothesis_fraction = (
+        hypothesis_metric.spend / variant_budget if variant_budget else 0.0
+    )
+    hours_elapsed = (now - campaign_live_since).total_seconds() / 3600
+    duration_fraction = (
+        hours_elapsed / (test_plan.duration_days * 24)
+        if test_plan.duration_days
+        else 0.0
+    )
+    both_spent_enough = (
+        baseline_fraction >= MIN_TEST_BUDGET_SPENT_FRACTION
+        and hypothesis_fraction >= MIN_TEST_BUDGET_SPENT_FRACTION
+    )
+    return both_spent_enough or duration_fraction >= MIN_TEST_DURATION_ELAPSED_FRACTION
+
+
+# A CAC computed from a handful of conversions is noise, not a
+# trustworthy comparison — this gate is stricter than (and separate
+# from) has_sufficient_test_data_for_variants' spend/duration check,
+# matching PRD.md's distinction between "leading indicators, useful
+# early" and "economic indicators, need more volume" (CAC is economic).
+MIN_CONVERSIONS_TO_COMPARE_VARIANTS = 3
+
+
+def compute_test_result(
+    *, baseline_metric: Metric, hypothesis_metric: Metric
+) -> tuple[str | None, str]:
+    """Deterministically decide the primary hypothesis's result from real CAC.
+
+    Never an LLM judgment call — see GeneratedTestEvaluation's docstring
+    for why declaring an A/B test's winner is a deterministic computation
+    on real numbers, not something to ask a model to decide. The primary
+    hypothesis is always about `cac` (app/schemas/strategy.py's
+    PRIMARY_HYPOTHESIS_METRIC) — a lower CAC on the hypothesis-driven
+    variant supports the hypothesis; a lower CAC on the broad baseline
+    rejects it.
+
+    Args:
+        baseline_metric: The broad-baseline AdSet's most recent snapshot.
+        hypothesis_metric: The hypothesis-driven AdSet's most recent
+            snapshot.
+
+    Returns:
+        (winning_variant, hypothesis_result) — winning_variant is
+        "broad_baseline"/"hypothesis_audience"/None, hypothesis_result is
+        "SUPPORTED"/"REJECTED"/"INCONCLUSIVE". Inconclusive whenever
+        either variant hasn't yet cleared MIN_CONVERSIONS_TO_COMPARE_VARIANTS,
+        has no computable CAC (no purchases at all), or the two are an
+        exact tie.
+    """
+    if (
+        baseline_metric.conversions < MIN_CONVERSIONS_TO_COMPARE_VARIANTS
+        or hypothesis_metric.conversions < MIN_CONVERSIONS_TO_COMPARE_VARIANTS
+        or baseline_metric.cac is None
+        or hypothesis_metric.cac is None
+    ):
+        return None, "INCONCLUSIVE"
+    if hypothesis_metric.cac < baseline_metric.cac:
+        return "hypothesis_audience", "SUPPORTED"
+    if baseline_metric.cac < hypothesis_metric.cac:
+        return "broad_baseline", "REJECTED"
+    return None, "INCONCLUSIVE"
+
+
 def _format_criterion_line(
     criterion: SuccessCriterion, actual_value: float | None
 ) -> str:
@@ -554,11 +658,59 @@ def _format_criterion_line(
     return " | ".join(parts)
 
 
+def _metric_value_by_criterion(metric: Metric) -> dict[str, float | None]:
+    """Map a Metric row's fields onto TestPlanContent.success_criteria's names."""
+    return {
+        "ctr": metric.ctr,
+        "cpm": metric.cpm,
+        "conversion_rate": metric.conversionRate,
+        "cac": metric.cac,
+        "roas": metric.roas,
+        "add_to_cart_rate": metric.addToCartRate,
+    }
+
+
+def _format_two_variant_criterion_line(
+    criterion: SuccessCriterion,
+    baseline_value: float | None,
+    hypothesis_value: float | None,
+) -> str:
+    """Format one success criterion against both variants' real values.
+
+    Same benchmark-zone classification as _format_criterion_line, applied
+    to each variant's own number, so a reader sees which is doing better
+    on this criterion without doing the direction-aware (higher/lower-
+    is-better) comparison themselves.
+    """
+
+    def _describe(value: float | None) -> str:
+        if value is None:
+            return "not yet available"
+        zone = (
+            classify_performance_zone(value, criterion.benchmark)
+            if criterion.benchmark is not None
+            else None
+        )
+        return f"{value:.2f}" + (f" ({zone})" if zone is not None else "")
+
+    parts = [
+        f"{criterion.metric}: broad_baseline {_describe(baseline_value)}, "
+        f"hypothesis_audience {_describe(hypothesis_value)}"
+    ]
+    if criterion.benchmark is not None:
+        b = criterion.benchmark
+        parts.append(f"industry range {b.low}-{b.high} (median {b.median})")
+    if criterion.business_target is not None:
+        parts.append(f"business target {criterion.business_target:.2f}")
+    return " | ".join(parts)
+
+
 def _build_test_evaluation_prompt(
     business: Business,
     campaign: Campaign,
     test_plan: TestPlanContent,
     latest_metric: Metric,
+    hypothesis_metric: Metric | None = None,
 ) -> str:
     """Build the grounding prompt for a TEST_PLAN evaluation.
 
@@ -566,8 +718,17 @@ def _build_test_evaluation_prompt(
         business: The business the campaign belongs to.
         campaign: The live campaign being evaluated.
         test_plan: The campaign's original TEST_PLAN.
-        latest_metric: The most recent Metric snapshot (lifetime-to-date
-            totals, same convention as fetch_campaign_insights).
+        latest_metric: The broad-baseline variant's most recent Metric
+            snapshot (lifetime-to-date totals, same convention as
+            fetch_campaign_insights) — or, before "Phase C" real
+            two-variant publishing, the campaign's one and only snapshot.
+        hypothesis_metric: The hypothesis-driven variant's most recent
+            snapshot, if it has real data of its own yet (both AdSets
+            published, PRD.md build step 5 "Phase C", and at least one
+            collection cycle has run for it). None means either Phase C
+            hasn't published a second AdSet yet, or it has but no data
+            has been collected for it yet — either way, falls back to
+            the original single-variant framing.
 
     Returns:
         The prompt text.
@@ -575,53 +736,100 @@ def _build_test_evaluation_prompt(
     baseline, hypothesis = test_plan.audience_variants
     primary_hypothesis = test_plan.hypotheses[0]
 
-    actual_by_metric: dict[str, float | None] = {
-        "ctr": latest_metric.ctr,
-        "cpm": latest_metric.cpm,
-        "conversion_rate": latest_metric.conversionRate,
-        "cac": latest_metric.cac,
-        "roas": latest_metric.roas,
-        "add_to_cart_rate": latest_metric.addToCartRate,
-    }
+    if hypothesis_metric is None:
+        actual_by_metric = _metric_value_by_criterion(latest_metric)
+        lines = [
+            "You are a paid-ads test analyst. This campaign is running a "
+            "structured two-variant experiment, but only Variant A (the "
+            "broad/automated baseline) has real data so far — there is no "
+            "real data yet for Variant B (the hypothesis-driven audience). "
+            "You cannot and must not declare either variant a winner, or "
+            "claim the hypothesis is supported or rejected — that "
+            "comparison isn't possible until both variants have real "
+            "data. Your job is only to read how the currently-running "
+            "variant is performing against this test's own success "
+            "criteria, and recommend what to do next.",
+            "",
+            f"Business: {business.name}",
+            f"Campaign: {campaign.name or campaign.id} "
+            f"(objective: {campaign.objective})",
+            f"Currently running: {baseline.name} ({baseline.hypothesis})",
+            f"Designed but not yet with real data: {hypothesis.name} "
+            f"({hypothesis.hypothesis})",
+            f"Primary hypothesis being tested: {primary_hypothesis.statement}",
+            "",
+            f"Test design: ${test_plan.daily_budget:.2f}/day per variant for "
+            f"{test_plan.duration_days} days (${test_plan.total_budget:.2f} total).",
+            "",
+            "Real performance so far (lifetime-to-date):",
+            f"- Impressions: {latest_metric.impressions}, "
+            f"clicks: {latest_metric.clicks}, spend: ${latest_metric.spend:.2f}, "
+            f"conversions: {latest_metric.conversions}",
+            "",
+            "Leading indicators (a useful early read):",
+            *(
+                f"- {_format_criterion_line(c, actual_by_metric.get(c.metric))}"
+                for c in test_plan.success_criteria.leading_indicators
+            ),
+            "",
+            "Economic indicators (need more conversion volume to trust):",
+            *(
+                f"- {_format_criterion_line(c, actual_by_metric.get(c.metric))}"
+                for c in test_plan.success_criteria.economic_indicators
+            ),
+        ]
+    else:
+        baseline_by_metric = _metric_value_by_criterion(latest_metric)
+        hypothesis_by_metric = _metric_value_by_criterion(hypothesis_metric)
 
-    lines = [
-        "You are a paid-ads test analyst. This campaign is running a "
-        "structured two-variant experiment, but only Variant A (the "
-        "broad/automated baseline) has actually been published to Meta "
-        "so far — there is no real data yet for Variant B (the "
-        "hypothesis-driven audience). You cannot and must not declare "
-        "either variant a winner, or claim the hypothesis is supported "
-        "or rejected — that comparison isn't possible until both "
-        "variants are actually running. Your job is only to read how "
-        "the currently-running variant is performing against this "
-        "test's own success criteria, and recommend what to do next.",
-        "",
-        f"Business: {business.name}",
-        f"Campaign: {campaign.name or campaign.id} (objective: {campaign.objective})",
-        f"Currently running: {baseline.name} ({baseline.hypothesis})",
-        f"Designed but not yet published: {hypothesis.name} ({hypothesis.hypothesis})",
-        f"Primary hypothesis being tested: {primary_hypothesis.statement}",
-        "",
-        f"Test design: ${test_plan.daily_budget:.2f}/day for "
-        f"{test_plan.duration_days} days (${test_plan.total_budget:.2f} total).",
-        "",
-        "Real performance so far (lifetime-to-date):",
-        f"- Impressions: {latest_metric.impressions}, clicks: {latest_metric.clicks}, "
-        f"spend: ${latest_metric.spend:.2f}, conversions: {latest_metric.conversions}",
-    ]
+        def _two_variant_line(c: SuccessCriterion) -> str:
+            return _format_two_variant_criterion_line(
+                c, baseline_by_metric.get(c.metric), hypothesis_by_metric.get(c.metric)
+            )
+
+        lines = [
+            "You are a paid-ads test analyst. This campaign is running a "
+            "structured two-variant experiment and both variants now have "
+            "real data. Whether the hypothesis is SUPPORTED, REJECTED, or "
+            "still INCONCLUSIVE, and which variant (if any) is the winner, "
+            "is computed separately from real primary-metric (CAC) data — "
+            "not something you decide. Your job is to read how BOTH "
+            "variants are performing across every success criterion and "
+            "give qualitative findings plus a diagnostic recommendation "
+            "for what to do next.",
+            "",
+            f"Business: {business.name}",
+            f"Campaign: {campaign.name or campaign.id} "
+            f"(objective: {campaign.objective})",
+            f"broad_baseline: {baseline.name} ({baseline.hypothesis})",
+            f"hypothesis_audience: {hypothesis.name} ({hypothesis.hypothesis})",
+            f"Primary hypothesis being tested: {primary_hypothesis.statement}",
+            "",
+            f"Test design: ${test_plan.daily_budget:.2f}/day per variant for "
+            f"{test_plan.duration_days} days (${test_plan.total_budget:.2f} total).",
+            "",
+            "Real performance so far (lifetime-to-date):",
+            f"- broad_baseline: {latest_metric.impressions} impressions, "
+            f"{latest_metric.clicks} clicks, ${latest_metric.spend:.2f} spend, "
+            f"{latest_metric.conversions} conversions",
+            f"- hypothesis_audience: {hypothesis_metric.impressions} impressions, "
+            f"{hypothesis_metric.clicks} clicks, ${hypothesis_metric.spend:.2f} spend, "
+            f"{hypothesis_metric.conversions} conversions",
+            "",
+            "Leading indicators (a useful early read):",
+            *(
+                f"- {_two_variant_line(c)}"
+                for c in test_plan.success_criteria.leading_indicators
+            ),
+            "",
+            "Economic indicators (need more conversion volume to trust):",
+            *(
+                f"- {_two_variant_line(c)}"
+                for c in test_plan.success_criteria.economic_indicators
+            ),
+        ]
+
     lines += [
-        "",
-        "Leading indicators (a useful early read):",
-        *(
-            f"- {_format_criterion_line(c, actual_by_metric.get(c.metric))}"
-            for c in test_plan.success_criteria.leading_indicators
-        ),
-        "",
-        "Economic indicators (need more conversion volume to trust):",
-        *(
-            f"- {_format_criterion_line(c, actual_by_metric.get(c.metric))}"
-            for c in test_plan.success_criteria.economic_indicators
-        ),
         "",
         test_plan.success_criteria.profitability_note,
         "",
@@ -634,9 +842,9 @@ def _build_test_evaluation_prompt(
         "Choose exactly one recommended_action from: continue_testing, "
         "test_new_creative, investigate_offer_or_landing_page, "
         "investigate_checkout_or_purchase_friction — never prefer_broad "
-        "or prefer_hypothesis, since no real comparison is possible yet. "
-        "Submit your evaluation using the provided tool, including your "
-        "own confidence (LOW/MEDIUM/HIGH).",
+        "or prefer_hypothesis, that determination is made separately from "
+        "your output. Submit your evaluation using the provided tool, "
+        "including your own confidence (LOW/MEDIUM/HIGH).",
     ]
     return "\n".join(lines)
 
@@ -647,6 +855,7 @@ async def evaluate_test_plan(
     campaign: Campaign,
     test_plan: TestPlanContent,
     latest_metric: Metric,
+    hypothesis_metric: Metric | None = None,
 ) -> GeneratedTestEvaluation:
     """Call the Optimizer on a TEST_PLAN and return its structured evaluation.
 
@@ -654,13 +863,20 @@ async def evaluate_test_plan(
         business: The business the campaign belongs to.
         campaign: The live campaign being evaluated.
         test_plan: The campaign's original TEST_PLAN — caller has already
-            confirmed has_sufficient_test_data passed.
-        latest_metric: The most recent Metric snapshot.
+            confirmed has_sufficient_test_data/has_sufficient_test_data_for_variants
+            passed.
+        latest_metric: The broad-baseline variant's most recent snapshot
+            (or the campaign's only snapshot, pre-"Phase C").
+        hypothesis_metric: The hypothesis-driven variant's most recent
+            snapshot, if it has one yet — see _build_test_evaluation_prompt.
 
     Returns:
-        The generated evaluation (recommended_action is always one of
-        the cross-variant-comparison-free actions — see
-        app/schemas/test_evaluation.py's RecommendedAction).
+        The generated evaluation — recommended_action is always one of
+        the cross-variant-comparison-free actions (see
+        app/schemas/test_evaluation.py's GeneratedRecommendedAction); the
+        caller (app/services/optimization_jobs.py) is responsible for
+        overriding it with a backend-computed prefer_broad/
+        prefer_hypothesis (compute_test_result) when applicable.
 
     Raises:
         OptimizerError: If no API key is configured, the API call fails,
@@ -671,7 +887,9 @@ async def evaluate_test_plan(
         raise OptimizerError("ANTHROPIC_API_KEY is not configured")
 
     client = AsyncAnthropic(api_key=settings.anthropic_api_key)
-    prompt = _build_test_evaluation_prompt(business, campaign, test_plan, latest_metric)
+    prompt = _build_test_evaluation_prompt(
+        business, campaign, test_plan, latest_metric, hypothesis_metric
+    )
 
     try:
         response = await client.messages.create(

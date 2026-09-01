@@ -631,6 +631,138 @@ def test_has_sufficient_test_data_false_when_neither_met() -> None:
     )
 
 
+# --- has_sufficient_test_data_for_variants -----------------------------------
+
+
+def test_has_sufficient_test_data_for_variants_true_when_both_spent_enough() -> None:
+    """Both variants clearing their own fair-share budget is enough."""
+    test_plan = _fake_test_plan()  # daily_budget=50, duration_days=10 -> $500/variant
+    baseline = _fake_metric(spend=250.0)  # 250 / 500 = 50%
+    hypothesis = _fake_metric(spend=260.0)
+
+    assert optimizer.has_sufficient_test_data_for_variants(
+        test_plan=test_plan,
+        baseline_metric=baseline,
+        hypothesis_metric=hypothesis,
+        campaign_live_since=_NOW,
+        now=_NOW,
+    )
+
+
+def test_has_sufficient_test_data_for_variants_true_when_duration_elapsed() -> None:
+    """The shared duration leg passing is enough, regardless of spend split."""
+    test_plan = _fake_test_plan()
+    baseline = _fake_metric(spend=1.0)
+    hypothesis = _fake_metric(spend=1.0)
+
+    assert optimizer.has_sufficient_test_data_for_variants(
+        test_plan=test_plan,
+        baseline_metric=baseline,
+        hypothesis_metric=hypothesis,
+        campaign_live_since=_NOW - timedelta(days=5),  # 5 / 10 days = 50%
+        now=_NOW,
+    )
+
+
+def test_has_sufficient_test_data_for_variants_false_when_lopsided() -> None:
+    """One variant hitting its own threshold while the other hasn't isn't
+    enough — a lopsided spend split isn't a real comparison yet."""
+    test_plan = _fake_test_plan()
+    baseline = _fake_metric(spend=400.0)  # 400 / 500 = 80%
+    hypothesis = _fake_metric(spend=10.0)  # 10 / 500 = 2%
+
+    assert not optimizer.has_sufficient_test_data_for_variants(
+        test_plan=test_plan,
+        baseline_metric=baseline,
+        hypothesis_metric=hypothesis,
+        campaign_live_since=_NOW - timedelta(hours=6),
+        now=_NOW,
+    )
+
+
+def test_has_sufficient_test_data_for_variants_false_when_neither_met() -> None:
+    """Low spend on both and little time elapsed means not enough data yet."""
+    test_plan = _fake_test_plan()
+    baseline = _fake_metric(spend=10.0)
+    hypothesis = _fake_metric(spend=10.0)
+
+    assert not optimizer.has_sufficient_test_data_for_variants(
+        test_plan=test_plan,
+        baseline_metric=baseline,
+        hypothesis_metric=hypothesis,
+        campaign_live_since=_NOW - timedelta(hours=6),
+        now=_NOW,
+    )
+
+
+# --- compute_test_result ------------------------------------------------------
+
+
+def test_compute_test_result_supports_the_hypothesis_when_its_cac_is_lower() -> None:
+    """A lower CAC on the hypothesis-driven variant supports the hypothesis."""
+    baseline = _fake_metric(conversions=10, cac=50.0)
+    hypothesis = _fake_metric(conversions=10, cac=30.0)
+
+    winner, result = optimizer.compute_test_result(
+        baseline_metric=baseline, hypothesis_metric=hypothesis
+    )
+
+    assert winner == "hypothesis_audience"
+    assert result == "SUPPORTED"
+
+
+def test_compute_test_result_rejects_hypothesis_when_baseline_cac_is_lower() -> None:
+    """A lower CAC on the broad baseline rejects the hypothesis."""
+    baseline = _fake_metric(conversions=10, cac=30.0)
+    hypothesis = _fake_metric(conversions=10, cac=50.0)
+
+    winner, result = optimizer.compute_test_result(
+        baseline_metric=baseline, hypothesis_metric=hypothesis
+    )
+
+    assert winner == "broad_baseline"
+    assert result == "REJECTED"
+
+
+def test_compute_test_result_inconclusive_below_min_conversions() -> None:
+    """Too few conversions on either side is noise, not a trustworthy CAC."""
+    baseline = _fake_metric(conversions=1, cac=30.0)
+    hypothesis = _fake_metric(conversions=10, cac=50.0)
+
+    winner, result = optimizer.compute_test_result(
+        baseline_metric=baseline, hypothesis_metric=hypothesis
+    )
+
+    assert winner is None
+    assert result == "INCONCLUSIVE"
+
+
+def test_compute_test_result_inconclusive_without_a_computable_cac() -> None:
+    """No purchases at all means no CAC to compare, not a fabricated one."""
+    baseline = _fake_metric(conversions=10, cac=None)
+    hypothesis = _fake_metric(conversions=10, cac=30.0)
+
+    winner, result = optimizer.compute_test_result(
+        baseline_metric=baseline, hypothesis_metric=hypothesis
+    )
+
+    assert winner is None
+    assert result == "INCONCLUSIVE"
+
+
+def test_compute_test_result_inconclusive_on_an_exact_tie() -> None:
+    """An exact CAC tie has no winner."""
+    baseline = _fake_metric(conversions=10, cac=40.0)
+    hypothesis = _fake_metric(conversions=10, cac=40.0)
+
+    winner, result = optimizer.compute_test_result(
+        baseline_metric=baseline, hypothesis_metric=hypothesis
+    )
+
+    assert winner is None
+    assert result == "INCONCLUSIVE"
+
+
 # --- _format_criterion_line --------------------------------------------------
 
 
@@ -645,6 +777,55 @@ def test_format_criterion_line_includes_the_performance_zone() -> None:
 
     assert "actual 5.00" in line
     assert "exceptional" in line
+
+
+# --- _format_two_variant_criterion_line --------------------------------------
+
+
+def test_format_two_variant_criterion_line_shows_both_variants() -> None:
+    """Both variants' own values and zones are shown side by side."""
+    test_plan = _fake_test_plan()
+    ctr_criterion = next(
+        c for c in test_plan.success_criteria.leading_indicators if c.metric == "ctr"
+    )
+
+    line = optimizer._format_two_variant_criterion_line(ctr_criterion, 2.0, 5.0)
+
+    assert "broad_baseline 2.00" in line
+    assert "hypothesis_audience 5.00" in line
+    assert "exceptional" in line  # hypothesis's zone, the strong one
+
+
+def test_format_two_variant_criterion_line_handles_missing_values() -> None:
+    """Either variant missing a value reports "not yet available", not a crash."""
+    test_plan = _fake_test_plan()
+    ctr_criterion = next(
+        c for c in test_plan.success_criteria.leading_indicators if c.metric == "ctr"
+    )
+
+    line = optimizer._format_two_variant_criterion_line(ctr_criterion, None, None)
+
+    assert line.count("not yet available") == 2
+
+
+def test_format_two_variant_criterion_line_includes_the_business_target() -> None:
+    """A criterion with a business_target reports it separately, same as
+    the single-variant _format_criterion_line."""
+    unit_economics = UnitEconomicsFields(
+        gross_profit=303.0, breakeven_cac=303.0, target_cac=100.0, breakeven_roas=3.3
+    )
+    test_plan = _fake_test_plan(
+        success_criteria=strategist._build_success_criteria(
+            strategist._build_benchmark_context(), unit_economics
+        )
+    )
+    cac_criterion = next(
+        c for c in test_plan.success_criteria.economic_indicators if c.metric == "cac"
+    )
+
+    line = optimizer._format_two_variant_criterion_line(cac_criterion, 40.0, 30.0)
+
+    assert "business target" in line
 
 
 def test_format_criterion_line_handles_a_missing_value() -> None:
@@ -696,7 +877,7 @@ def test_build_test_evaluation_prompt_never_asks_for_a_winner() -> None:
     assert "Luxury Jewelry Interest Audience" in prompt
     assert "The hypothesis-driven audience will produce a lower CAC." in prompt
     assert "prefer_broad" in prompt  # named as explicitly off-limits
-    assert "$50.00/day for 10 days" in prompt
+    assert "$50.00/day per variant for 10 days" in prompt
 
 
 def test_build_test_evaluation_prompt_includes_real_metrics() -> None:
@@ -710,6 +891,25 @@ def test_build_test_evaluation_prompt_includes_real_metrics() -> None:
 
     assert "Impressions: 5000" in prompt
     assert "$150.00" in prompt
+
+
+def test_build_test_evaluation_prompt_compares_both_variants_when_real() -> None:
+    """Once both variants have real data, the prompt shows both, tells the
+    LLM the winner is computed separately, and never claims one variant
+    has no data (unlike the single-variant fallback framing)."""
+    test_plan = _fake_test_plan()
+    baseline = _fake_metric(impressions=5000, clicks=200, spend=150.0, conversions=5)
+    hypothesis = _fake_metric(impressions=4000, clicks=180, spend=140.0, conversions=8)
+
+    prompt = optimizer._build_test_evaluation_prompt(
+        _fake_business(), _fake_campaign(), test_plan, baseline, hypothesis
+    )
+
+    assert "both variants now have real data" in prompt
+    assert "is computed separately from real primary-metric" in prompt
+    assert "broad_baseline: 5000 impressions" in prompt
+    assert "hypothesis_audience: 4000 impressions" in prompt
+    assert "cannot and must not declare either variant a winner" not in prompt
 
 
 # --- evaluate_test_plan ------------------------------------------------------
@@ -754,6 +954,29 @@ async def test_evaluate_test_plan_returns_the_parsed_evaluation(
     assert result.recommended_action == "continue_testing"
     assert result.confidence == "LOW"
     assert result.key_findings == ["CTR is within the typical range for this vertical."]
+
+
+@pytest.mark.asyncio
+async def test_evaluate_test_plan_builds_the_two_variant_prompt_when_given(
+    anthropic_api_key: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Passing hypothesis_metric routes to the real two-variant prompt, not
+    the single-variant fallback."""
+    create = _mock_client_returning(
+        monkeypatch,
+        [SimpleNamespace(type="tool_use", input=_VALID_TEST_EVALUATION_INPUT)],
+    )
+
+    await optimizer.evaluate_test_plan(
+        business=_fake_business(),
+        campaign=_fake_campaign(),
+        test_plan=_fake_test_plan(),
+        latest_metric=_fake_metric(conversions=10, cac=30.0),
+        hypothesis_metric=_fake_metric(conversions=10, cac=20.0),
+    )
+
+    prompt = create.call_args.kwargs["messages"][0]["content"]
+    assert "both variants now have real data" in prompt
 
 
 @pytest.mark.asyncio
