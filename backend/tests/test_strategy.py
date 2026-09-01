@@ -10,6 +10,7 @@ the user 2026-08-31).
 from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock
 
+import pydantic
 import pytest
 from app.api import strategy as strategy_module
 from app.schemas.strategy import (
@@ -18,7 +19,9 @@ from app.schemas.strategy import (
     GeneratedTestPlanFields,
     NormalizedMetrics,
     TargetAudience,
+    TargetLocation,
     TestPlanContent,
+    primary_audience,
 )
 from app.services import strategist as strategist_service
 from app.services.meta import AccountCampaignInsights, MetaConnectionError
@@ -29,7 +32,7 @@ _FAKE_DATA_DRIVEN_STRATEGY = DataDrivenStrategyContent(
     target_audience=TargetAudience(
         age_min=30,
         age_max=55,
-        location=["New York"],
+        location=[TargetLocation(city="New York", region="New York")],
         interests=["jewelry"],
         problem="Hard to find quality pieces",
         desire="Own something unique",
@@ -83,6 +86,32 @@ _FAKE_TEST_PLAN = TestPlanContent(
     baseline_metrics=NormalizedMetrics(),
     benchmark_context=_FAKE_BENCHMARK_CONTEXT,
 )
+
+
+# --- TargetLocation / primary_audience (schema-level) ------------------------
+
+
+def test_target_location_requires_at_least_one_of_city_or_region() -> None:
+    """An entry with neither field carries no targeting information."""
+    with pytest.raises(pydantic.ValidationError, match="at least one of city/region"):
+        TargetLocation()
+
+
+def test_target_location_allows_region_only() -> None:
+    """A region-only entry (no specific city) is valid."""
+    location = TargetLocation(region="Texas")
+
+    assert location.city is None
+    assert location.region == "Texas"
+
+
+def test_primary_audience_uses_the_broad_baseline_for_a_test_plan() -> None:
+    """primary_audience() (still used by the Creative Agent regardless of
+    plan type, app/services/creative.py) reads Variant A for a TEST_PLAN
+    — the safe general-purpose default, per its own docstring."""
+    audience = primary_audience(_FAKE_TEST_PLAN)
+
+    assert audience == _FAKE_TEST_PLAN.audience_variants[0].targeting
 
 
 def _signed_up_client(

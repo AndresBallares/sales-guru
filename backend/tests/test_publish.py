@@ -27,11 +27,14 @@ from app.schemas.strategy import (
     GeneratedTestPlanFields,
     NormalizedMetrics,
     TargetAudience,
+    TargetLocation,
     TestPlanContent,
 )
+from app.services import geo as geo_module
 from app.services import meta as meta_service_module
 from app.services import strategist as strategist_module
 from app.services.event_venues import EVENT_VENUES
+from app.services.meta import ResolvedGeoLocation
 from app.services.publish import requires_pixel
 from fastapi.testclient import TestClient
 from prisma import Prisma
@@ -561,6 +564,96 @@ def test_publish_uses_broad_geo_for_a_non_event_campaign(
     assert response.status_code == 200
     _, kwargs = mock_services["create_ad_set"].call_args
     assert kwargs["custom_location"] is None
+
+
+def test_publish_resolves_real_locations_when_the_audience_has_any(
+    client: TestClient,
+    mock_services: dict[str, AsyncMock],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A TargetAudience with real structured locations gets them resolved
+    against Meta's live Geo Search (PRD.md build step 5, geo-taxonomy
+    resolution) and passed through to create_meta_ad_set."""
+    strategy_with_location = DataDrivenStrategyContent(
+        objective="SALES",
+        target_audience=TargetAudience(
+            age_min=30,
+            age_max=55,
+            location=[TargetLocation(city="New York", region="New York")],
+        ),
+        offer="Custom emerald rings",
+        positioning="Premium and personal",
+        creative_angles=["Craftsmanship", "Luxury"],
+        copy_strategy="Lead with the story behind each piece",
+        budget_recommendation=BudgetRecommendation(
+            daily=25, rationale="Small test spend"
+        ),
+        key_learnings=["Craftsmanship angle performed best"],
+        recommended_adjustments=["Drop the price angle"],
+        scaling_trigger="Increase budget once CAC stays under target",
+    )
+    monkeypatch.setattr(
+        strategy_module,
+        "generate_strategy",
+        AsyncMock(return_value=strategy_with_location),
+    )
+    resolve = AsyncMock(return_value=ResolvedGeoLocation(key="2490299", type="city"))
+    monkeypatch.setattr(geo_module, "resolve_target_location", resolve)
+    business_id, campaign_id = _ready_campaign(client)
+
+    response = client.post(f"/businesses/{business_id}/campaigns/{campaign_id}/publish")
+
+    assert response.status_code == 200
+    resolve.assert_awaited_once_with(
+        access_token="long-token", city="New York", region="New York"
+    )
+    _, kwargs = mock_services["create_ad_set"].call_args
+    assert kwargs["resolved_locations"] == [
+        ResolvedGeoLocation(key="2490299", type="city")
+    ]
+
+
+def test_publish_skips_location_resolution_for_an_event_venue_campaign(
+    client: TestClient,
+    mock_services: dict[str, AsyncMock],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An event venue's radius overrides audience locations entirely — no
+    geo resolution call is made at all, matching _resolve_custom_location's
+    "applies uniformly, not per-variant" precedence."""
+    strategy_with_location = DataDrivenStrategyContent(
+        objective="SALES",
+        target_audience=TargetAudience(
+            age_min=30,
+            age_max=55,
+            location=[TargetLocation(city="New York")],
+        ),
+        offer="Custom emerald rings",
+        positioning="Premium and personal",
+        creative_angles=["Craftsmanship", "Luxury"],
+        copy_strategy="Lead with the story behind each piece",
+        budget_recommendation=BudgetRecommendation(
+            daily=25, rationale="Small test spend"
+        ),
+        key_learnings=["Craftsmanship angle performed best"],
+        recommended_adjustments=["Drop the price angle"],
+        scaling_trigger="Increase budget once CAC stays under target",
+    )
+    monkeypatch.setattr(
+        strategy_module,
+        "generate_strategy",
+        AsyncMock(return_value=strategy_with_location),
+    )
+    resolve = AsyncMock()
+    monkeypatch.setattr(geo_module, "resolve_target_location", resolve)
+    business_id, campaign_id = _ready_campaign(client, event_venue_key="jck_las_vegas")
+
+    response = client.post(f"/businesses/{business_id}/campaigns/{campaign_id}/publish")
+
+    assert response.status_code == 200
+    resolve.assert_not_awaited()
+    _, kwargs = mock_services["create_ad_set"].call_args
+    assert kwargs["resolved_locations"] == []
 
 
 def test_publish_uses_the_product_url_when_available(

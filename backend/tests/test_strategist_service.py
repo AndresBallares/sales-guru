@@ -35,7 +35,7 @@ _VALID_TEST_PLAN_INPUT: dict[str, Any] = {
         "ageMin": 30,
         "ageMax": 55,
         "genders": ["female"],
-        "location": ["United States"],
+        "location": [{"city": "New York", "region": "New York"}],
         "interests": ["jewelry", "luxury_goods"],
         "problem": None,
         "desire": None,
@@ -54,7 +54,10 @@ _VALID_DATA_DRIVEN_STRATEGY_INPUT: dict[str, Any] = {
     "targetAudience": {
         "ageMin": 30,
         "ageMax": 55,
-        "location": ["New York", "New Jersey"],
+        "location": [
+            {"city": "New York", "region": "New York"},
+            {"region": "New Jersey"},
+        ],
         "interests": ["jewelry"],
         "problem": "Hard to find quality, unique pieces",
         "desire": "Own something with a story",

@@ -12,9 +12,9 @@ invents.
 """
 
 from datetime import datetime
-from typing import TYPE_CHECKING, Annotated, Literal
+from typing import TYPE_CHECKING, Annotated, Literal, Self
 
-from pydantic import Field, TypeAdapter
+from pydantic import Field, TypeAdapter, model_validator
 
 from app.schemas.base import CamelCaseModel
 from app.schemas.campaign import Objective
@@ -37,6 +37,36 @@ else:
     InterestKey = Literal[tuple(sorted(INTERESTS))]
 
 
+class TargetLocation(CamelCaseModel):
+    """One structured location for real geo-targeting resolution.
+
+    city/region as separate fields (not one free-text string) make
+    resolution against Meta's real Geo Search endpoint
+    (app/services/geo.py) near-deterministic. Confirmed against the live
+    API 2026-09-02: searching a city name alone hits real ambiguity —
+    "Springfield" alone returns 25+ candidates across a dozen-plus US
+    states (plus Australia/UK) with no single obviously-right answer —
+    the "Springfield problem" this structure exists to reduce. country
+    isn't part of this: this MVP is US-only everywhere already
+    (BenchmarkContext.country, the default geo_locations
+    countries:["US"]), so resolution always filters to the US as a
+    backend constraint, never something the LLM picks or a per-business
+    lookup — there's only one possible value today.
+
+    At least one of city/region must be set (validated) — an entry with
+    neither carries no targeting information.
+    """
+
+    city: str | None = None
+    region: str | None = None
+
+    @model_validator(mode="after")
+    def _at_least_one_field_set(self) -> Self:
+        if self.city is None and self.region is None:
+            raise ValueError("TargetLocation needs at least one of city/region set")
+        return self
+
+
 class TargetAudience(CamelCaseModel):
     """Agent-recommended (or refined) audience targeting.
 
@@ -46,13 +76,15 @@ class TargetAudience(CamelCaseModel):
     genders is a list (not a single value) to match Meta's own targeting
     shape, which accepts multiple; None means "not specified" (broad),
     distinct from an empty list. interests is constrained to the curated
-    InterestKey enum (not free text) for the same reason.
+    InterestKey enum (not free text) for the same reason; location is
+    structured (TargetLocation) rather than free text for the same
+    "guarantee resolvability" reasoning — see TargetLocation's docstring.
     """
 
     age_min: int | None = None
     age_max: int | None = None
     genders: list[str] | None = None
-    location: list[str] = Field(default_factory=list)
+    location: list[TargetLocation] = Field(default_factory=list)
     interests: list[InterestKey] = Field(default_factory=list)
     problem: str | None = None
     desire: str | None = None

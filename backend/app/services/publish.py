@@ -37,10 +37,10 @@ from app.schemas.strategy import (
     daily_budget,
     primary_audience,
 )
-from app.services import meta
+from app.services import geo, meta
 from app.services.event_venues import EVENT_VENUES
 from app.services.interests import INTERESTS
-from app.services.meta import CustomLocation
+from app.services.meta import CustomLocation, ResolvedGeoLocation
 
 # No user input collects this yet, so each objective gets a reasonable
 # Meta optimization_goal default rather than leaving it unset (the AdSet
@@ -104,6 +104,45 @@ def _resolve_interests(audience: TargetAudience) -> list[dict[str, str]]:
     ]
 
 
+async def _resolve_locations(
+    *,
+    access_token: str,
+    audience: TargetAudience,
+    custom_location: CustomLocation | None,
+) -> list[ResolvedGeoLocation]:
+    """Resolve an audience's structured locations into real Meta geo keys.
+
+    Skipped entirely when custom_location is set — an event venue's
+    radius is the geo target for the whole campaign (PRD.md build step
+    11), overriding whatever locations the audience itself named, same
+    "the event's geo constraint applies uniformly, not per-variant"
+    reasoning as _resolve_custom_location.
+
+    Args:
+        access_token: The business's Meta access token.
+        audience: The variant's (or DATA_DRIVEN_STRATEGY's) targeting.
+        custom_location: The campaign's event-venue geo target, if any.
+
+    Returns:
+        One ResolvedGeoLocation per audience.location entry, or an empty
+        list when there's nothing to resolve.
+
+    Raises:
+        geo.GeoResolutionError: If a location has no real US match at
+            all — a subclass of MetaConnectionError, so this propagates
+            through the same failure handling as any other Graph API
+            call this function makes.
+    """
+    if custom_location is not None or not audience.location:
+        return []
+    return [
+        await geo.resolve_target_location(
+            access_token=access_token, city=loc.city, region=loc.region
+        )
+        for loc in audience.location
+    ]
+
+
 async def _publish_single_variant(
     *,
     campaign: Campaign,
@@ -121,6 +160,11 @@ async def _publish_single_variant(
     """DATA_DRIVEN_STRATEGY (and pre-"Phase C" TEST_PLAN) path — one AdSet/Ad."""
     audience = primary_audience(strategy)
     daily_budget_cents = round(daily_budget(strategy) * 100)
+    resolved_locations = await _resolve_locations(
+        access_token=connection.accessToken,
+        audience=audience,
+        custom_location=custom_location,
+    )
 
     meta_ad_set_id = await meta.create_meta_ad_set(
         access_token=connection.accessToken,
@@ -133,6 +177,7 @@ async def _publish_single_variant(
         age_max=audience.age_max or 65,
         pixel_id=pixel_id,
         custom_location=custom_location,
+        resolved_locations=resolved_locations,
         interests=_resolve_interests(audience),
     )
     meta_ad_id = await meta.create_meta_ad(
@@ -192,6 +237,11 @@ async def _publish_test_plan_variant(
     interests) — see AudienceVariant.is_baseline.
     """
     name = f"{campaign.name or campaign.id} — {variant.name}"
+    resolved_locations = await _resolve_locations(
+        access_token=connection.accessToken,
+        audience=variant.targeting,
+        custom_location=custom_location,
+    )
     meta_ad_set_id = await meta.create_meta_ad_set(
         access_token=connection.accessToken,
         ad_account_id=ad_account_id,
@@ -203,6 +253,7 @@ async def _publish_test_plan_variant(
         age_max=variant.targeting.age_max or 65,
         pixel_id=pixel_id,
         custom_location=custom_location,
+        resolved_locations=resolved_locations,
         interests=_resolve_interests(variant.targeting),
         advantage_audience=1 if variant.is_baseline else 0,
     )

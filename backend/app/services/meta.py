@@ -10,7 +10,7 @@ app/services/publish.py; this module only wraps the raw Graph API.
 
 import json
 from datetime import UTC, datetime, timedelta
-from typing import Any, NamedTuple
+from typing import Any, Literal, NamedTuple
 
 import httpx
 
@@ -50,6 +50,20 @@ class CustomLocation(NamedTuple):
     lat: float
     lng: float
     radius_miles: float
+
+
+class ResolvedGeoLocation(NamedTuple):
+    """One resolved city or region geo target for a Meta AdSet.
+
+    Maps to one entry in targeting.geo_locations.cities or .regions
+    (app/services/geo.py resolves a TargetLocation into this real,
+    disambiguated Meta geo key — this module has no opinion on how it
+    was resolved, same "meta.py wraps the raw API, doesn't decide
+    business meaning" split as CustomLocation).
+    """
+
+    key: str
+    type: Literal["city", "region"]
 
 
 def _require_app_credentials() -> tuple[str, str, str]:
@@ -342,6 +356,7 @@ async def create_meta_ad_set(
     age_max: int,
     pixel_id: str | None = None,
     custom_location: CustomLocation | None = None,
+    resolved_locations: list[ResolvedGeoLocation] | None = None,
     interests: list[dict[str, str]] | None = None,
     advantage_audience: int = 0,
 ) -> str:
@@ -393,6 +408,16 @@ async def create_meta_ad_set(
             sent as-is (miles) — not yet verified against the real Graph
             API, same "real end-to-end testing catches what mocks can't"
             caution as the rest of this function's real-API fixes below.
+        resolved_locations: Already-resolved city/region geo targets
+            (app/services/geo.py), if the audience specified any real
+            locations. Ignored when custom_location is given (an event
+            venue's radius is the geo target, full stop — see
+            app/services/publish.py's _resolve_custom_location); when
+            given without custom_location, entirely replaces
+            geo_locations.countries the same way custom_location does.
+            geo_locations.cities/.regions shape is sent as {"key": ...}
+            per entry — not yet verified against a real live publish
+            (same caution as custom_location above).
         interests: Already-resolved Meta interest objects to add as
             explicit detailed targeting, if any (empty/None means no
             interest targeting — the broad-baseline case).
@@ -405,8 +430,8 @@ async def create_meta_ad_set(
     Raises:
         MetaConnectionError: If the call fails.
     """
-    geo_locations = (
-        {
+    if custom_location is not None:
+        geo_locations: dict[str, object] = {
             "custom_locations": [
                 {
                     "latitude": custom_location.lat,
@@ -416,9 +441,16 @@ async def create_meta_ad_set(
                 }
             ]
         }
-        if custom_location is not None
-        else {"countries": ["US"]}
-    )
+    elif resolved_locations:
+        geo_locations = {}
+        cities = [loc.key for loc in resolved_locations if loc.type == "city"]
+        regions = [loc.key for loc in resolved_locations if loc.type == "region"]
+        if cities:
+            geo_locations["cities"] = [{"key": key} for key in cities]
+        if regions:
+            geo_locations["regions"] = [{"key": key} for key in regions]
+    else:
+        geo_locations = {"countries": ["US"]}
     targeting_spec: dict[str, object] = {
         "age_min": age_min,
         "age_max": age_max,
@@ -923,6 +955,48 @@ async def validate_ad_interests(
         {
             "type": "adinterestvalid",
             "interest_fbid_list": json.dumps(meta_ids),
+            "access_token": access_token,
+        },
+    )
+    data: list[dict[str, Any]] = body.get("data", [])
+    return data
+
+
+async def search_ad_geolocations(
+    *, access_token: str, query: str, location_type: Literal["city", "region"]
+) -> list[dict[str, Any]]:
+    """Search Meta's real geo-targeting taxonomy for a free-text place name.
+
+    Real endpoint confirmed 2026-09-02, used by app/services/geo.py to
+    resolve a TargetLocation's city/region into a real Meta geo key at
+    publish time — GET /search?type=adgeolocation&location_types=
+    ["city"|"region"]&q=... Not ad-account-scoped; any valid access
+    token with ads permissions works, same as search_ad_interests.
+
+    Args:
+        access_token: A Meta access token with ads permissions.
+        query: Free-text place name (e.g. "New York", "Springfield",
+            "Texas").
+        location_type: Which taxonomy to search — a city name and a
+            region (state) name can't be searched together in one call.
+
+    Returns:
+        Meta's raw result list — each item has at least key/name/type/
+        country_code/country_name, plus region/region_id for a city
+        result. Ambiguous names (multiple real places sharing one name,
+        possibly across different countries or — for city results —
+        different US states) are common and expected; disambiguation is
+        app/services/geo.py's job, not this function's.
+
+    Raises:
+        MetaConnectionError: If the call fails.
+    """
+    body = await _get_json(
+        f"{_GRAPH_BASE_URL}/search",
+        {
+            "type": "adgeolocation",
+            "location_types": json.dumps([location_type]),
+            "q": query,
             "access_token": access_token,
         },
     )

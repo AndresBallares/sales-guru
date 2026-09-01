@@ -379,6 +379,152 @@ async def test_create_meta_ad_set_targets_a_custom_location_when_given(
 
 
 @pytest.mark.asyncio
+async def test_create_meta_ad_set_targets_resolved_cities_and_regions(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """resolved_locations replaces the default country geo entirely with
+    cities/regions, split by type (PRD.md build step 5, geo-taxonomy
+    resolution)."""
+    client = _mock_client_returning(monkeypatch, _FakeResponse({"id": "adset_123"}))
+
+    await meta.create_meta_ad_set(
+        access_token="token",
+        ad_account_id="act_1",
+        name="Custom Colombian Emerald Ring",
+        meta_campaign_id="campaign_123",
+        daily_budget_cents=2500,
+        optimization_goal="OFFSITE_CONVERSIONS",
+        age_min=30,
+        age_max=55,
+        resolved_locations=[
+            meta.ResolvedGeoLocation(key="2490299", type="city"),
+            meta.ResolvedGeoLocation(key="3886", type="region"),
+        ],
+    )
+
+    _url, data = client.calls[0]
+    assert '"countries"' not in data["targeting"]
+    assert '"cities": [{"key": "2490299"}]' in data["targeting"]
+    assert '"regions": [{"key": "3886"}]' in data["targeting"]
+
+
+@pytest.mark.asyncio
+async def test_create_meta_ad_set_includes_interests_when_given(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Already-resolved interests are added to the real targeting spec."""
+    client = _mock_client_returning(monkeypatch, _FakeResponse({"id": "adset_123"}))
+
+    await meta.create_meta_ad_set(
+        access_token="token",
+        ad_account_id="act_1",
+        name="Custom Colombian Emerald Ring",
+        meta_campaign_id="campaign_123",
+        daily_budget_cents=2500,
+        optimization_goal="OFFSITE_CONVERSIONS",
+        age_min=30,
+        age_max=55,
+        interests=[{"id": "6003266225248", "name": "Jewelry"}],
+    )
+
+    _url, data = client.calls[0]
+    assert (
+        '"interests": [{"id": "6003266225248", "name": "Jewelry"}]' in data["targeting"]
+    )
+
+
+@pytest.mark.asyncio
+async def test_create_meta_ad_set_targets_a_region_alone(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A region with no city resolved sends only regions, no cities key at all."""
+    client = _mock_client_returning(monkeypatch, _FakeResponse({"id": "adset_123"}))
+
+    await meta.create_meta_ad_set(
+        access_token="token",
+        ad_account_id="act_1",
+        name="Custom Colombian Emerald Ring",
+        meta_campaign_id="campaign_123",
+        daily_budget_cents=2500,
+        optimization_goal="OFFSITE_CONVERSIONS",
+        age_min=30,
+        age_max=55,
+        resolved_locations=[meta.ResolvedGeoLocation(key="3886", type="region")],
+    )
+
+    _url, data = client.calls[0]
+    assert '"cities"' not in data["targeting"]
+    assert '"regions": [{"key": "3886"}]' in data["targeting"]
+
+
+@pytest.mark.asyncio
+async def test_create_meta_ad_set_defaults_to_broad_us_without_any_geo_override(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Neither custom_location nor resolved_locations given keeps the
+    original default broad-US targeting."""
+    client = _mock_client_returning(monkeypatch, _FakeResponse({"id": "adset_123"}))
+
+    await meta.create_meta_ad_set(
+        access_token="token",
+        ad_account_id="act_1",
+        name="Custom Colombian Emerald Ring",
+        meta_campaign_id="campaign_123",
+        daily_budget_cents=2500,
+        optimization_goal="OFFSITE_CONVERSIONS",
+        age_min=30,
+        age_max=55,
+        resolved_locations=[],
+    )
+
+    _url, data = client.calls[0]
+    assert '"geo_locations": {"countries": ["US"]}' in data["targeting"]
+
+
+@pytest.mark.asyncio
+async def test_search_ad_geolocations_returns_the_raw_result_list(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A search hits the real endpoint shape and returns Meta's data list."""
+    client = _mock_client_returning(
+        monkeypatch,
+        _FakeResponse(
+            {
+                "data": [
+                    {
+                        "key": "2490299",
+                        "name": "New York",
+                        "type": "city",
+                        "country_code": "US",
+                        "region": "New York",
+                    }
+                ]
+            }
+        ),
+    )
+
+    results = await meta.search_ad_geolocations(
+        access_token="token", query="New York", location_type="city"
+    )
+
+    assert results == [
+        {
+            "key": "2490299",
+            "name": "New York",
+            "type": "city",
+            "country_code": "US",
+            "region": "New York",
+        }
+    ]
+    url, params = client.calls[0]
+    assert url == "https://graph.facebook.com/v21.0/search"
+    assert params["type"] == "adgeolocation"
+    assert params["location_types"] == '["city"]'
+    assert params["q"] == "New York"
+    assert params["access_token"] == "token"
+
+
+@pytest.mark.asyncio
 async def test_create_meta_ad_set_includes_promoted_object_with_a_pixel(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -513,6 +659,38 @@ async def test_fetch_campaign_insights_parses_the_first_row(
     assert insights.spend == 12.5
     assert insights.conversions == 13
     assert insights.conversion_rate == 13 / 50
+
+
+@pytest.mark.asyncio
+async def test_fetch_ad_set_insights_hits_the_ad_set_object_and_parses_the_row(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Same shared parsing as fetch_campaign_insights, scoped to one AdSet's
+    own /insights edge (PRD.md build step 10, per-AdSet metric collection)."""
+    client = _mock_client_returning(
+        monkeypatch,
+        _FakeResponse(
+            {
+                "data": [
+                    {
+                        "impressions": "500",
+                        "clicks": "20",
+                        "spend": "5.00",
+                        "actions": [],
+                    }
+                ]
+            }
+        ),
+    )
+
+    insights = await meta.fetch_ad_set_insights(
+        access_token="token", meta_ad_set_id="adset_123"
+    )
+
+    assert insights.impressions == 500
+    assert insights.spend == 5.0
+    url, _params = client.calls[0]
+    assert url == "https://graph.facebook.com/v21.0/adset_123/insights"
 
 
 @pytest.mark.asyncio

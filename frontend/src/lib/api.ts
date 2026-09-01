@@ -256,11 +256,16 @@ export function publishCampaign(businessId: string, campaignId: string): Promise
   })
 }
 
+export interface TargetLocation {
+  city: string | null
+  region: string | null
+}
+
 export interface TargetAudience {
   ageMin: number | null
   ageMax: number | null
   genders: string[] | null
-  location: string[]
+  location: TargetLocation[]
   interests: string[]
   problem: string | null
   desire: string | null

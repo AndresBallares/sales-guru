@@ -30,8 +30,15 @@ import {
   type Product,
   type Recommendation,
   type StrategyContent,
+  type TargetLocation,
   type TestEvaluation,
 } from '../lib/api'
+
+function formatLocations(locations: TargetLocation[]): string {
+  return locations
+    .map((loc) => [loc.city, loc.region].filter(Boolean).join(', '))
+    .join('; ')
+}
 
 const OBJECTIVE_LABELS: Record<Objective, string> = {
   SALES: 'Sales',
@@ -549,7 +556,7 @@ export function CampaignsSection({ businessId }: { businessId: string }) {
                                   ? `${variant.targeting.ageMin}-${variant.targeting.ageMax}`
                                   : null,
                                 variant.targeting.genders?.join(', '),
-                                variant.targeting.location.join(', '),
+                                formatLocations(variant.targeting.location),
                                 variant.targeting.interests.join(', '),
                               ]
                                 .filter(Boolean)
@@ -641,7 +648,7 @@ export function CampaignsSection({ businessId }: { businessId: string }) {
                             strategy.targetAudience.ageMax != null
                               ? `${strategy.targetAudience.ageMin}-${strategy.targetAudience.ageMax}`
                               : null,
-                            strategy.targetAudience.location.join(', '),
+                            formatLocations(strategy.targetAudience.location),
                             strategy.targetAudience.interests.join(', '),
                           ]
                             .filter(Boolean)
