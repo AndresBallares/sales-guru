@@ -11,11 +11,17 @@ import subprocess
 from collections.abc import AsyncIterator, Iterator
 from pathlib import Path
 
+from cryptography.fernet import Fernet
+
 os.environ["DATABASE_URL"] = "file:./test.db"
 # The APScheduler jobs (metrics collection + optimization evaluation,
 # PRD.md build step 10) must never fire during the test suite — they'd
 # run against a database individual tests are actively resetting mid-run.
 os.environ["ENABLE_SCHEDULER"] = "false"
+# A fresh key each run — tests never need to decrypt across process
+# restarts, and generating one avoids a fake-looking "real" secret sitting
+# in the repo (see app/core/crypto.py for what this encrypts/decrypts).
+os.environ["META_TOKEN_ENCRYPTION_KEY"] = Fernet.generate_key().decode()
 
 import pytest
 import pytest_asyncio

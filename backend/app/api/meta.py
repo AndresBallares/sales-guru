@@ -17,7 +17,9 @@ from prisma.models import Business, MetaConnection
 
 from app.core.authz import get_owned_business
 from app.core.config import get_settings
+from app.core.crypto import encrypt_token
 from app.core.db import db
+from app.core.meta_connection import get_meta_connection
 from app.core.session import SESSION_COOKIE_NAME, get_current_user
 from app.schemas.meta import (
     MetaAdAccount,
@@ -69,19 +71,19 @@ def _to_response(connection: MetaConnection) -> MetaConnectionResponse:
 
 
 async def _require_connection(business_id: str) -> MetaConnection:
-    """Fetch a business's MetaConnection, or 404 if none exists yet.
+    """Fetch a business's MetaConnection (accessToken decrypted), or 404.
 
     Args:
         business_id: The business to look up.
 
     Returns:
-        The MetaConnection.
+        The MetaConnection, with accessToken already decrypted.
 
     Raises:
         HTTPException: 404 if the business hasn't started (or finished)
             connecting Meta yet.
     """
-    connection = await db.metaconnection.find_unique(where={"businessId": business_id})
+    connection = await get_meta_connection(business_id)
     if connection is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail=_CONNECTION_NOT_FOUND
@@ -368,18 +370,19 @@ async def meta_callback(
     except MetaConnectionError:
         return _redirect(business_id, "error")
 
+    encrypted_access_token = encrypt_token(access_token)
     await db.metaconnection.upsert(
         where={"businessId": business_id},
         data={
             "create": {
                 "businessId": business_id,
                 "metaUserId": meta_user_id,
-                "accessToken": access_token,
+                "accessToken": encrypted_access_token,
                 "tokenExpiresAt": expires_at,
             },
             "update": {
                 "metaUserId": meta_user_id,
-                "accessToken": access_token,
+                "accessToken": encrypted_access_token,
                 "tokenExpiresAt": expires_at,
                 "adAccountId": None,
                 "pageId": None,

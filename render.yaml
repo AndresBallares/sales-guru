@@ -36,6 +36,12 @@
 # confirmed against a real deploy 2026-09-02). Pointing the cache at a
 # project-relative path fixes it, since that path IS part of what gets
 # deployed.
+#
+# META_TOKEN_ENCRYPTION_KEY (sync: false, set manually in the Render
+# dashboard, same as DATABASE_URL/ANTHROPIC_API_KEY/META_APP_SECRET):
+# encrypts MetaConnection.accessToken at rest (app/core/crypto.py).
+# Generate one with:
+#   python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
 
 services:
   - type: web
@@ -63,6 +69,8 @@ services:
         value: https://sales-guru-frontend.onrender.com
       - key: PRISMA_BINARY_CACHE_DIR
         value: .prisma-cache
+      - key: META_TOKEN_ENCRYPTION_KEY
+        sync: false
 
   - type: web
     runtime: static

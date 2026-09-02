@@ -13,6 +13,7 @@ from prisma.models import Campaign, Strategy
 
 from app.core.authz import get_owned_campaign
 from app.core.db import db
+from app.core.meta_connection import get_meta_connection
 from app.schemas.strategy import (
     CreateStrategyRequest,
     StrategyContentAdapter,
@@ -95,9 +96,7 @@ async def create_strategy(
         else None
     )
 
-    meta_connection = await db.metaconnection.find_unique(
-        where={"businessId": business.id}
-    )
+    meta_connection = await get_meta_connection(business.id)
     account_history: list[AccountCampaignInsights] = []
     if meta_connection is not None and meta_connection.adAccountId is not None:
         try:

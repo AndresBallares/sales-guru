@@ -5,6 +5,7 @@ from prisma.models import Campaign, Metric
 
 from app.core.authz import get_owned_campaign
 from app.core.db import db
+from app.core.meta_connection import get_meta_connection
 from app.schemas.metric import MetricResponse
 from app.services.meta import MetaConnectionError, fetch_campaign_insights
 
@@ -78,9 +79,7 @@ async def refresh_metrics(
             status_code=status.HTTP_400_BAD_REQUEST, detail=_NOT_LIVE_YET
         )
 
-    connection = await db.metaconnection.find_unique(
-        where={"businessId": campaign.businessId}
-    )
+    connection = await get_meta_connection(campaign.businessId)
     if connection is None:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST, detail=_META_NOT_CONNECTED

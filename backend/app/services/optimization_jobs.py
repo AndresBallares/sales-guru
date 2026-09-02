@@ -43,6 +43,7 @@ from prisma.models import Campaign, Metric, OptimizationRecommendation, TestEval
 from prisma.types import MetricCreateInput
 
 from app.core.db import db
+from app.core.meta_connection import get_meta_connection
 from app.schemas.strategy import StrategyContentAdapter, TestPlanContent
 from app.services import optimizer
 from app.services.meta import (
@@ -155,9 +156,7 @@ async def collect_metrics_for_all_live_campaigns() -> None:
     for campaign in campaigns:
         if campaign.metaCampaignId is None:
             continue
-        connection = await db.metaconnection.find_unique(
-            where={"businessId": campaign.businessId}
-        )
+        connection = await get_meta_connection(campaign.businessId)
         if connection is None:
             continue
         await _collect_metrics_for_campaign(campaign, connection.accessToken)
@@ -185,9 +184,7 @@ async def apply_recommendation(
     """
     campaign = await db.campaign.find_unique(where={"id": recommendation.campaignId})
     assert campaign is not None  # guaranteed by the FK, not user input
-    connection = await db.metaconnection.find_unique(
-        where={"businessId": campaign.businessId}
-    )
+    connection = await get_meta_connection(campaign.businessId)
     assert connection is not None  # guaranteed by LIVE status (publish requires it)
     ad_set = await db.adset.find_first(where={"campaignId": campaign.id})
     assert ad_set is not None  # guaranteed by LIVE status (publish creates it)

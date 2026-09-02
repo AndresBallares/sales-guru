@@ -12,6 +12,7 @@ from prisma.models import Business, Campaign
 
 from app.core.authz import get_owned_business, get_owned_campaign
 from app.core.db import db
+from app.core.meta_connection import get_meta_connection
 from app.schemas.campaign import CampaignCreateRequest, CampaignResponse
 from app.schemas.strategy import StrategyContentAdapter
 from app.services.event_venues import EVENT_VENUES, default_event_window
@@ -281,7 +282,7 @@ async def publish_campaign(
     business = await db.business.find_unique(where={"id": campaign.businessId})
     assert business is not None  # guaranteed by the FK, not user input
 
-    connection = await db.metaconnection.find_unique(where={"businessId": business.id})
+    connection = await get_meta_connection(business.id)
     connection_incomplete = (
         connection is None
         or connection.adAccountId is None

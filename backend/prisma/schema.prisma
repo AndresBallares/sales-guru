@@ -162,10 +162,11 @@ model Audience {
 // complete" shape already used for Strategy before objective was known to
 // be fixed, and for Creative before one variant is SELECTED.
 //
-// accessToken is stored in plaintext, not hashed — unlike Session/User,
-// this token has to be usable later for real Marketing API calls, not just
-// verified. Known gap, not addressed yet (PRD.md §4): revisit encryption
-// at rest before production, same bucket as the samesite=lax cookie gap.
+// accessToken is stored encrypted (app/core/crypto.py, Fernet), not
+// hashed — unlike Session/User, this token has to be usable later for
+// real Marketing API calls, not just verified. Every read goes through
+// app/core/meta_connection.py's get_meta_connection, which decrypts it;
+// never read this column directly.
 model MetaConnection {
   id             String   @id @default(cuid())
   business       Business @relation(fields: [businessId], references: [id])

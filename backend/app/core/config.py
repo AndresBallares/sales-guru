@@ -40,6 +40,15 @@ class Settings(BaseSettings):
         meta_app_secret: Meta App Secret, paired with meta_app_id.
         meta_redirect_uri: Callback URL registered in the Meta App's OAuth
             settings, e.g. "http://localhost:8000/meta/callback" in dev.
+        meta_token_encryption_key: Fernet key (app/core/crypto.py)
+            encrypting MetaConnection.accessToken at rest — a real Meta
+            access token has to be usable again for live Marketing API
+            calls, so it's encrypted (reversible), not hashed like
+            User.hashedPassword/Session.tokenHash. None until set —
+            encrypting/decrypting a token raises a clear error rather
+            than the app failing to start. Generate one with
+            `python -c "from cryptography.fernet import Fernet;
+            print(Fernet.generate_key().decode())"`.
         enable_scheduler: Whether the in-process APScheduler jobs
             (metrics collection + optimization evaluation, PRD.md build
             step 10) start with the app. Defaults on; the test suite
@@ -59,6 +68,7 @@ class Settings(BaseSettings):
     meta_app_id: str | None = None
     meta_app_secret: str | None = None
     meta_redirect_uri: str | None = None
+    meta_token_encryption_key: str | None = None
     enable_scheduler: bool = True
 
     @property
