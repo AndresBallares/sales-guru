@@ -13,7 +13,12 @@
 #
 # Setup (manual, one-time, do this yourself in the Render dashboard):
 #   1. New > Blueprint, point it at this repo.
-#   2. Render creates both services below and assigns them URLs.
+#   2. Render creates both services below and assigns them URLs. The
+#      FRONTEND_URL/BACKEND_URL/CORS_ORIGINS/VITE_API_URL values below
+#      assume Render's default "<service name>.onrender.com" pattern — if
+#      either service ends up on a different hostname (custom domain, name
+#      collision), update these four values to match before relying on
+#      cross-origin login or Meta OAuth/image fetches.
 #   3. Set the real DATABASE_URL secret on sales-guru-backend (a managed
 #      Postgres instance — see PRD.md §6, SQLite is dev-only).
 #   4. No deploy hooks or GitHub secrets are needed for CI-gating; checksPass
@@ -37,6 +42,12 @@ services:
         value: production
       - key: DATABASE_URL
         sync: false
+      - key: FRONTEND_URL
+        value: https://sales-guru-frontend.onrender.com
+      - key: BACKEND_URL
+        value: https://sales-guru-backend.onrender.com
+      - key: CORS_ORIGINS
+        value: https://sales-guru-frontend.onrender.com
 
   - type: web
     runtime: static
@@ -48,3 +59,6 @@ services:
         - frontend/**
     buildCommand: "npm ci && npm run build"
     staticPublishPath: dist
+    envVars:
+      - key: VITE_API_URL
+        value: https://sales-guru-backend.onrender.com

@@ -1,5 +1,7 @@
 """Authentication endpoints."""
 
+from typing import Literal
+
 from fastapi import APIRouter, Cookie, Depends, HTTPException, Response, status
 from prisma.errors import UniqueViolationError
 from prisma.models import User
@@ -22,6 +24,28 @@ _EMAIL_ALREADY_REGISTERED = "Email already registered"
 _INVALID_CREDENTIALS = "Invalid email or password"
 
 
+def _cookie_cross_site_attrs() -> tuple[bool, Literal["lax", "none"]]:
+    """(secure, samesite) for the session cookie, environment-dependent.
+
+    Dev: frontend and backend share localhost (different ports only), a
+    same-site relationship — "lax" works and needs no HTTPS. Production:
+    frontend and backend are separate Render services on different
+    subdomains (PRD.md §6/§4's "known gap" note, resolved 2026-09-02) —
+    a genuinely cross-site relationship, which browsers only send a
+    cookie on if it's "SameSite=None; Secure" (the "Secure" attribute is
+    mandatory whenever SameSite=None, not just recommended — browsers
+    reject the cookie outright otherwise).
+
+    Returns:
+        (secure, samesite) to pass to both set_cookie and delete_cookie —
+        deleting a cookie needs matching attributes to reliably clear it,
+        not just a matching name.
+    """
+    if get_settings().environment == "production":
+        return True, "none"
+    return False, "lax"
+
+
 def _set_session_cookie(response: Response, token: str) -> None:
     """Attach a session cookie to the response.
 
@@ -29,13 +53,13 @@ def _set_session_cookie(response: Response, token: str) -> None:
         response: The response to attach the cookie to.
         token: The raw session token.
     """
-    settings = get_settings()
+    secure, samesite = _cookie_cross_site_attrs()
     response.set_cookie(
         key=SESSION_COOKIE_NAME,
         value=token,
         httponly=True,
-        secure=settings.environment == "production",
-        samesite="lax",
+        secure=secure,
+        samesite=samesite,
         max_age=int(SESSION_TTL.total_seconds()),
     )
 
@@ -127,7 +151,8 @@ async def logout(
     """
     if session is not None:
         await delete_session(session)
-    response.delete_cookie(SESSION_COOKIE_NAME)
+    secure, samesite = _cookie_cross_site_attrs()
+    response.delete_cookie(SESSION_COOKIE_NAME, secure=secure, samesite=samesite)
 
 
 @router.get("/me", response_model=UserResponse)

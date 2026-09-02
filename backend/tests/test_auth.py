@@ -1,11 +1,73 @@
 """Tests for authentication endpoints."""
 
+from collections.abc import Iterator
 from unittest.mock import AsyncMock
 
+import httpx2
 import pytest
+from app.core.config import get_settings
 from app.core.db import db
 from fastapi.testclient import TestClient
 from prisma.errors import UniqueViolationError
+
+
+@pytest.fixture
+def production_environment(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    """Run a test as if ENVIRONMENT=production, restoring settings after."""
+    monkeypatch.setenv("ENVIRONMENT", "production")
+    get_settings.cache_clear()
+    yield
+    get_settings.cache_clear()
+
+
+def _session_set_cookie(response: httpx2.Response) -> str:
+    """Return the raw Set-Cookie header for the session cookie."""
+    for raw in response.headers.get_list("set-cookie"):
+        if raw.startswith("session="):
+            return raw
+    raise AssertionError("no session Set-Cookie header found")
+
+
+def test_login_cookie_is_lax_in_development(client: TestClient) -> None:
+    """Dev (same-origin localhost) keeps SameSite=Lax and no Secure flag."""
+    response = client.post(
+        "/auth/signup",
+        json={"email": "dev-cookie@example.com", "password": "supersecret123"},
+    )
+
+    raw = _session_set_cookie(response)
+    assert "samesite=lax" in raw.lower()
+    assert "secure" not in raw.lower()
+
+
+def test_login_cookie_is_none_secure_in_production(
+    client: TestClient, production_environment: None
+) -> None:
+    """Prod (separate Render subdomains) needs SameSite=None; Secure."""
+    response = client.post(
+        "/auth/signup",
+        json={"email": "prod-cookie@example.com", "password": "supersecret123"},
+    )
+
+    raw = _session_set_cookie(response)
+    assert "samesite=none" in raw.lower()
+    assert "secure" in raw.lower()
+
+
+def test_logout_clears_cookie_with_matching_attrs_in_production(
+    client: TestClient, production_environment: None
+) -> None:
+    """Logout's Set-Cookie (deletion) also uses SameSite=None; Secure in prod."""
+    client.post(
+        "/auth/signup",
+        json={"email": "prod-logout@example.com", "password": "supersecret123"},
+    )
+
+    response = client.post("/auth/logout")
+
+    raw = _session_set_cookie(response)
+    assert "samesite=none" in raw.lower()
+    assert "secure" in raw.lower()
 
 
 def test_signup_creates_user(client: TestClient) -> None:
