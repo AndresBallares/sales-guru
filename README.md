@@ -132,7 +132,8 @@ not just a suggestion — coverage thresholds enforce it indirectly.
 
 ## Database schema changes
 
-Schema lives at `backend/prisma/schema.prisma`. To change it:
+Schema lives at `backend/prisma/schema.prisma` (SQLite, local dev). To
+change it:
 
 ```bash
 cd backend
@@ -144,6 +145,28 @@ This generates a migration file under `backend/prisma/migrations/` (commit
 it) and regenerates the client. Never use `prisma db push` outside of quick
 local experimentation — it doesn't produce a migration file, so `migrate
 deploy` (what CI and Render run) won't see the change.
+
+**Production runs on Postgres**, via a second, mirrored schema file at
+`backend/prisma/postgres/schema.prisma` — identical models, only the
+datasource `provider` differs (`postgresql` vs `sqlite`). Prisma migration
+SQL is dialect-specific (SQLite's `AUTOINCREMENT`/`PRAGMA` don't run on
+Postgres), so a single schema.prisma can't serve both, and `render.yaml`'s
+build points `prisma generate`/`migrate deploy` at the Postgres file via
+`--schema`. Whenever you change `schema.prisma`, apply the same model
+change to `prisma/postgres/schema.prisma` and generate its own migration
+against a real Postgres database, e.g. against the Render Postgres
+instance's *External* Database URL from your machine:
+
+```bash
+cd backend
+DATABASE_URL="<postgres external url>" \
+  uv run prisma migrate dev --schema=prisma/postgres/schema.prisma --name <short_description>
+# then restore your local dev client (this just regenerated a Postgres one):
+uv run prisma generate
+```
+
+Commit the new migration file under `backend/prisma/postgres/migrations/`
+alongside the SQLite one.
 
 ## CI / CD
 

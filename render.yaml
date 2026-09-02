@@ -20,7 +20,11 @@
 #      collision), update these four values to match before relying on
 #      cross-origin login or Meta OAuth/image fetches.
 #   3. Set the real DATABASE_URL secret on sales-guru-backend (a managed
-#      Postgres instance — see PRD.md §6, SQLite is dev-only).
+#      Postgres instance — see PRD.md §6, SQLite is dev-only). The build
+#      targets prisma/postgres/schema.prisma (a Postgres-provider mirror of
+#      the SQLite prisma/schema.prisma used for local dev — see that file's
+#      own header comment) via --schema, since a single schema.prisma can't
+#      target both providers (the migration SQL itself is dialect-specific).
 #   4. No deploy hooks or GitHub secrets are needed for CI-gating; checksPass
 #      reads GitHub check runs directly.
 
@@ -35,7 +39,7 @@ services:
     buildFilter:
       paths:
         - backend/**
-    buildCommand: "uv sync --locked && uv run prisma generate && uv run prisma migrate deploy"
+    buildCommand: "uv sync --locked && uv run prisma generate --schema=prisma/postgres/schema.prisma && uv run prisma migrate deploy --schema=prisma/postgres/schema.prisma"
     startCommand: "uv run uvicorn app.main:app --host 0.0.0.0 --port $PORT"
     envVars:
       - key: ENVIRONMENT

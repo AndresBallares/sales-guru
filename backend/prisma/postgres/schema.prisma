@@ -1,4 +1,13 @@
-// Sales Guru database schema.
+// Sales Guru database schema — PRODUCTION (Postgres) copy.
+//
+// This mirrors ../schema.prisma (the SQLite schema used for local dev)
+// model-for-model — only the datasource provider differs. A single
+// schema.prisma can't target both providers at once (the migration SQL
+// itself is dialect-specific: SQLite's AUTOINCREMENT/PRAGMA statements
+// don't run on Postgres), so render.yaml's build points `prisma generate`/
+// `migrate deploy` at this file via `--schema=prisma/postgres/schema.prisma`
+// instead. Keep the two model definitions in sync by hand when either
+// changes — see README.md's Database schema changes section.
 //
 // Hierarchy: User -> Organization -> Business -> {Product, Audience, Campaign}
 // Campaign -> AdSet -> Ad -> Creative mirrors the Meta Marketing API's own
@@ -8,16 +17,13 @@
 // Scope: MVP core loop only (PRD.md §2, §5). Subscription is a thin stub —
 // no billing logic reads/writes it until the post-MVP billing step.
 //
-// SQLite has no native enum support, so status/objective fields below are
-// plain strings, validated as enums at the application layer (app/schemas)
-// so behavior stays identical once swapped to Postgres.
-//
-// This is the local-dev schema (SQLite). Production runs on Postgres via
-// the mirrored schema at prisma/postgres/schema.prisma — keep both in
-// sync by hand when models change (see README.md).
+// Status/objective fields below are plain strings rather than native
+// enums, validated as enums at the application layer (app/schemas) —
+// kept as strings here too (rather than switching to Postgres native
+// enums) so the two schemas stay identical apart from the datasource.
 
 datasource db {
-  provider = "sqlite"
+  provider = "postgresql"
   url      = env("DATABASE_URL")
 }
 
