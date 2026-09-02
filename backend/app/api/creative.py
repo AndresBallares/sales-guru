@@ -2,7 +2,9 @@
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from prisma.models import Campaign, Creative
+from prisma.types import CreativeUpdateInput
 
+from app.api.product_image import product_image_url
 from app.core.authz import get_owned_campaign
 from app.core.db import db
 from app.schemas.creative import CreativeResponse
@@ -39,6 +41,7 @@ def _to_response(creative: Creative) -> CreativeResponse:
             "creativeAngle": creative.creativeAngle,
             "imagePrompt": creative.imagePrompt,
             "videoPrompt": creative.videoPrompt,
+            "imageUrl": creative.imageUrl,
             "status": creative.status,
             "createdAt": creative.createdAt,
         }
@@ -148,6 +151,12 @@ async def select_creative(
     campaign back to PENDING_APPROVAL too, since the approved content just
     changed.
 
+    If the campaign's product has at least one uploaded photo (PRD.md §2
+    step 4) and this creative doesn't already have an image, the
+    product's oldest photo is attached here as imageUrl — the natural
+    checkpoint moment before publish, and the point where the frontend
+    can show the user what image the ad will actually use.
+
     Args:
         creative_id: The creative to select.
         campaign: The campaign, resolved and ownership-checked by
@@ -171,9 +180,14 @@ async def select_creative(
         where={"campaignId": campaign.id, "NOT": [{"id": creative.id}]},
         data={"status": "REJECTED"},
     )
-    updated = await db.creative.update(
-        where={"id": creative.id}, data={"status": "SELECTED"}
-    )
+    update_data: CreativeUpdateInput = {"status": "SELECTED"}
+    if creative.imageUrl is None and campaign.productId is not None:
+        product_image = await db.productimage.find_first(
+            where={"productId": campaign.productId}, order={"createdAt": "asc"}
+        )
+        if product_image is not None:
+            update_data["imageUrl"] = product_image_url(product_image.id)
+    updated = await db.creative.update(where={"id": creative.id}, data=update_data)
     assert updated is not None  # just fetched above, can't vanish mid-request
 
     await db.campaign.update(

@@ -62,5 +62,6 @@ class CreativeResponse(CamelCaseModel):
     creative_angle: str | None
     image_prompt: str | None
     video_prompt: str | None
+    image_url: str | None
     status: CreativeStatus
     created_at: datetime

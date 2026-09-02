@@ -339,6 +339,69 @@ def test_select_creative_advances_the_campaign_to_pending_approval(
     assert campaigns[0]["status"] == "PENDING_APPROVAL"
 
 
+def test_select_creative_attaches_the_products_first_photo(
+    client: TestClient,
+) -> None:
+    """Selecting a creative auto-attaches the campaign's product's oldest
+    uploaded photo as imageUrl (PRD.md §2 step 4) — the natural checkpoint
+    before publish."""
+    _signed_up_client(client)
+    business_id = _create_business(client)
+    product_id = client.post(
+        f"/businesses/{business_id}/products", json={"description": "Ring"}
+    ).json()["id"]
+    image = client.post(
+        f"/businesses/{business_id}/products/{product_id}/images",
+        files={"file": ("ring.jpg", b"\xff\xd8\xff\xe0fake", "image/jpeg")},
+    ).json()
+    campaign_id = client.post(
+        f"/businesses/{business_id}/campaigns",
+        json={"objective": "SALES", "productId": product_id},
+    ).json()["id"]
+    _generate_strategy(client, business_id, campaign_id)
+    generated = client.post(
+        f"/businesses/{business_id}/campaigns/{campaign_id}/creatives"
+    ).json()
+
+    response = client.post(
+        f"/businesses/{business_id}/campaigns/{campaign_id}"
+        f"/creatives/{generated[0]['id']}/select"
+    )
+
+    assert response.status_code == 200
+    assert response.json()["imageUrl"] == (
+        f"http://localhost:8000/product-images/{image['id']}"
+    )
+
+
+def test_select_creative_leaves_image_null_without_any_uploaded(
+    client: TestClient,
+) -> None:
+    """A product with no uploaded photos leaves imageUrl null, unchanged
+    from before this feature — publish already tolerates a null imageUrl."""
+    _signed_up_client(client)
+    business_id = _create_business(client)
+    product_id = client.post(
+        f"/businesses/{business_id}/products", json={"description": "Ring"}
+    ).json()["id"]
+    campaign_id = client.post(
+        f"/businesses/{business_id}/campaigns",
+        json={"objective": "SALES", "productId": product_id},
+    ).json()["id"]
+    _generate_strategy(client, business_id, campaign_id)
+    generated = client.post(
+        f"/businesses/{business_id}/campaigns/{campaign_id}/creatives"
+    ).json()
+
+    response = client.post(
+        f"/businesses/{business_id}/campaigns/{campaign_id}"
+        f"/creatives/{generated[0]['id']}/select"
+    )
+
+    assert response.status_code == 200
+    assert response.json()["imageUrl"] is None
+
+
 def test_full_flow_can_be_approved_after_selecting_an_ad(client: TestClient) -> None:
     """End to end: strategy -> creatives -> select -> approve."""
     _signed_up_client(client)

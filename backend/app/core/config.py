@@ -26,6 +26,14 @@ class Settings(BaseSettings):
             redirect target at the end of the Meta OAuth callback (the
             callback is hit directly by Meta, not via the frontend's own
             API client, so it can't rely on CORS_ORIGINS for this).
+        backend_url: Base URL of this API itself. Only used to build the
+            absolute, publicly-fetchable URL for a stored ProductImage
+            (app/api/product_image.py) — Meta's own servers fetch that
+            URL directly for ad creative images, not through the
+            browser, so a relative path won't do. In dev this is
+            "http://localhost:8000", which Meta genuinely cannot
+            reach — a known limitation, not a bug (image-backed ad
+            creatives only really work once deployed).
         meta_app_id: Meta App ID for the OAuth connection (PRD.md build
             step 6). None until set — the connect endpoint raises a clear
             error rather than the app failing to start.
@@ -47,6 +55,7 @@ class Settings(BaseSettings):
     cors_origins: str = "http://localhost:5173"
     anthropic_api_key: str | None = None
     frontend_url: str = "http://localhost:5173"
+    backend_url: str = "http://localhost:8000"
     meta_app_id: str | None = None
     meta_app_secret: str | None = None
     meta_redirect_uri: str | None = None

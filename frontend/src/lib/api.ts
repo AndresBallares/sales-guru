@@ -39,6 +39,12 @@ export interface ProductCreateInput {
   url?: string
 }
 
+export interface ProductImage {
+  id: string
+  url: string
+  createdAt: string
+}
+
 export interface Audience {
   id: string
   description: string
@@ -138,11 +144,15 @@ function extractErrorMessage(body: unknown): string | null {
 }
 
 async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
+  // A FormData body (file upload) needs the browser to set its own
+  // multipart Content-Type with the boundary — forcing application/json
+  // here would break it.
+  const isFormData = options.body instanceof FormData
   const response = await fetch(`${API_URL}${path}`, {
     ...options,
     credentials: 'include',
     headers: {
-      'Content-Type': 'application/json',
+      ...(isFormData ? {} : { 'Content-Type': 'application/json' }),
       ...options.headers,
     },
   })
@@ -214,6 +224,39 @@ export function createProduct(
 
 export function listProducts(businessId: string): Promise<Product[]> {
   return request<Product[]>(`/businesses/${businessId}/products`)
+}
+
+export function uploadProductImage(
+  businessId: string,
+  productId: string,
+  file: File,
+): Promise<ProductImage> {
+  const formData = new FormData()
+  formData.append('file', file)
+  return request<ProductImage>(
+    `/businesses/${businessId}/products/${productId}/images`,
+    { method: 'POST', body: formData },
+  )
+}
+
+export function listProductImages(
+  businessId: string,
+  productId: string,
+): Promise<ProductImage[]> {
+  return request<ProductImage[]>(
+    `/businesses/${businessId}/products/${productId}/images`,
+  )
+}
+
+export function deleteProductImage(
+  businessId: string,
+  productId: string,
+  imageId: string,
+): Promise<void> {
+  return request<void>(
+    `/businesses/${businessId}/products/${productId}/images/${imageId}`,
+    { method: 'DELETE' },
+  )
 }
 
 export function createAudience(

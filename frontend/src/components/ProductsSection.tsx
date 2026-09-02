@@ -1,5 +1,14 @@
-import { useCallback, useEffect, useState, type FormEvent } from 'react'
-import { ApiError, createProduct, listProducts, type Product } from '../lib/api'
+import { useCallback, useEffect, useState, type ChangeEvent, type FormEvent } from 'react'
+import {
+  ApiError,
+  createProduct,
+  deleteProductImage,
+  listProductImages,
+  listProducts,
+  uploadProductImage,
+  type Product,
+  type ProductImage,
+} from '../lib/api'
 
 export function ProductsSection({ businessId }: { businessId: string }) {
   const [products, setProducts] = useState<Product[]>([])
@@ -15,11 +24,24 @@ export function ProductsSection({ businessId }: { businessId: string }) {
   const [formError, setFormError] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
 
+  const [images, setImages] = useState<Record<string, ProductImage[]>>({})
+  const [uploadingId, setUploadingId] = useState<string | null>(null)
+  const [imageErrors, setImageErrors] = useState<Record<string, string>>({})
+  const [deletingImageId, setDeletingImageId] = useState<string | null>(null)
+
   const refresh = useCallback(async () => {
     setLoading(true)
     try {
-      setProducts(await listProducts(businessId))
+      const loaded = await listProducts(businessId)
+      setProducts(loaded)
       setListError(null)
+      const entries = await Promise.all(
+        loaded.map(
+          async (product) =>
+            [product.id, await listProductImages(businessId, product.id)] as const,
+        ),
+      )
+      setImages(Object.fromEntries(entries))
     } catch (err) {
       setListError(err instanceof ApiError ? err.message : 'Could not load products.')
     } finally {
@@ -58,6 +80,48 @@ export function ProductsSection({ businessId }: { businessId: string }) {
     }
   }
 
+  async function handleUpload(productId: string, event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0]
+    event.target.value = ''
+    if (!file) return
+
+    setUploadingId(productId)
+    setImageErrors((prev) => ({ ...prev, [productId]: '' }))
+    try {
+      const image = await uploadProductImage(businessId, productId, file)
+      setImages((prev) => ({
+        ...prev,
+        [productId]: [...(prev[productId] ?? []), image],
+      }))
+    } catch (err) {
+      setImageErrors((prev) => ({
+        ...prev,
+        [productId]: err instanceof ApiError ? err.message : 'Could not upload image.',
+      }))
+    } finally {
+      setUploadingId(null)
+    }
+  }
+
+  async function handleDeleteImage(productId: string, imageId: string) {
+    setDeletingImageId(imageId)
+    setImageErrors((prev) => ({ ...prev, [productId]: '' }))
+    try {
+      await deleteProductImage(businessId, productId, imageId)
+      setImages((prev) => ({
+        ...prev,
+        [productId]: (prev[productId] ?? []).filter((img) => img.id !== imageId),
+      }))
+    } catch (err) {
+      setImageErrors((prev) => ({
+        ...prev,
+        [productId]: err instanceof ApiError ? err.message : 'Could not delete image.',
+      }))
+    } finally {
+      setDeletingImageId(null)
+    }
+  }
+
   return (
     <>
       <section>
@@ -72,9 +136,49 @@ export function ProductsSection({ businessId }: { businessId: string }) {
           <p>No products yet — add your first one below.</p>
         )}
         <ul>
-          {products.map((product) => (
-            <li key={product.id}>{product.description}</li>
-          ))}
+          {products.map((product) => {
+            const productImages = images[product.id] ?? []
+            const imageError = imageErrors[product.id]
+            return (
+              <li key={product.id}>
+                {product.description}
+                <div>
+                  {productImages.map((image) => (
+                    <span key={image.id} style={{ display: 'inline-block' }}>
+                      <img
+                        src={image.url}
+                        alt={product.description}
+                        width={80}
+                        height={80}
+                        style={{ objectFit: 'cover' }}
+                      />
+                      <button
+                        type="button"
+                        onClick={() => void handleDeleteImage(product.id, image.id)}
+                        disabled={deletingImageId === image.id}
+                      >
+                        {deletingImageId === image.id ? 'Removing…' : 'Remove'}
+                      </button>
+                    </span>
+                  ))}
+                </div>
+                <label htmlFor={`upload-${product.id}`}>Add a photo</label>
+                <input
+                  id={`upload-${product.id}`}
+                  type="file"
+                  accept="image/jpeg,image/png,image/webp"
+                  disabled={uploadingId === product.id}
+                  onChange={(event) => void handleUpload(product.id, event)}
+                />
+                {uploadingId === product.id && <p>Uploading…</p>}
+                {imageError && (
+                  <p className="form-error" role="alert">
+                    {imageError}
+                  </p>
+                )}
+              </li>
+            )
+          })}
         </ul>
       </section>
 

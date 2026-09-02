@@ -16,6 +16,8 @@ from app.api.meta import router as meta_router
 from app.api.metric import router as metric_router
 from app.api.optimization import router as optimization_router
 from app.api.product import router as product_router
+from app.api.product_image import router as product_image_router
+from app.api.product_image import serve_router as product_image_serve_router
 from app.api.strategy import router as strategy_router
 from app.api.test_evaluation import router as test_evaluation_router
 from app.core.config import get_settings
@@ -56,6 +58,8 @@ app.add_middleware(
 app.include_router(auth_router)
 app.include_router(business_router)
 app.include_router(product_router)
+app.include_router(product_image_router)
+app.include_router(product_image_serve_router)
 app.include_router(audience_router)
 app.include_router(campaign_router)
 app.include_router(strategy_router)

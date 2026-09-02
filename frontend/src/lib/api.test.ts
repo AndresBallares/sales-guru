@@ -9,6 +9,7 @@ import {
   createCampaign,
   createProduct,
   createRecommendation,
+  deleteProductImage,
   disconnectMeta,
   finalizeMetaConnection,
   getBusiness,
@@ -20,8 +21,10 @@ import {
   listMetaAdAccounts,
   listMetaPages,
   listMetrics,
+  listProductImages,
   listProducts,
   listRecommendations,
+  uploadProductImage,
   login,
   logout,
   publishCampaign,
@@ -235,6 +238,70 @@ describe('listProducts', () => {
     await expect(listProducts('biz-1')).resolves.toEqual([])
     const [url] = fetchMock.mock.calls[0]
     expect(url).toContain('/businesses/biz-1/products')
+  })
+})
+
+describe('uploadProductImage', () => {
+  it('uploads via multipart form data, without forcing a JSON Content-Type', async () => {
+    const image = {
+      id: 'img-1',
+      url: 'http://localhost:8000/product-images/img-1',
+      createdAt: '2026-09-02T00:00:00Z',
+    }
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(jsonResponse(image, 201))
+    vi.stubGlobal('fetch', fetchMock)
+    const file = new File(['fake image bytes'], 'ring.jpg', { type: 'image/jpeg' })
+
+    await expect(uploadProductImage('biz-1', 'prod-1', file)).resolves.toEqual(image)
+
+    const [url, options] = fetchMock.mock.calls[0]
+    expect(url).toContain('/businesses/biz-1/products/prod-1/images')
+    expect(options).toBeDefined()
+    const body = options?.body
+    expect(body).toBeInstanceOf(FormData)
+    expect((body as FormData).get('file')).toBe(file)
+    const headers = options?.headers as Record<string, string> | undefined
+    expect(headers?.['Content-Type']).toBeUndefined()
+  })
+
+  it('throws ApiError when the upload is rejected', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi
+        .fn<typeof fetch>()
+        .mockResolvedValue(jsonResponse({ detail: 'Image exceeds the 5MB limit' }, 400)),
+    )
+    const file = new File(['fake'], 'ring.jpg', { type: 'image/jpeg' })
+
+    await expect(uploadProductImage('biz-1', 'prod-1', file)).rejects.toMatchObject({
+      status: 400,
+      message: 'Image exceeds the 5MB limit',
+    })
+  })
+})
+
+describe('listProductImages', () => {
+  it('returns the list of images for a product', async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(jsonResponse([]))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(listProductImages('biz-1', 'prod-1')).resolves.toEqual([])
+    const [url] = fetchMock.mock.calls[0]
+    expect(url).toContain('/businesses/biz-1/products/prod-1/images')
+  })
+})
+
+describe('deleteProductImage', () => {
+  it('sends a DELETE request for the image', async () => {
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(new Response(null, { status: 204 }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(deleteProductImage('biz-1', 'prod-1', 'img-1')).resolves.toBeUndefined()
+    const [url, options] = fetchMock.mock.calls[0]
+    expect(url).toContain('/businesses/biz-1/products/prod-1/images/img-1')
+    expect(options?.method).toBe('DELETE')
   })
 })
 

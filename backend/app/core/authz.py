@@ -1,13 +1,14 @@
 """Shared authorization dependencies for resource-ownership checks."""
 
 from fastapi import Depends, HTTPException, status
-from prisma.models import Business, Campaign, User
+from prisma.models import Business, Campaign, Product, User
 
 from app.core.db import db
 from app.core.session import get_current_user
 
 _BUSINESS_NOT_FOUND = "Business not found"
 _CAMPAIGN_NOT_FOUND = "Campaign not found"
+_PRODUCT_NOT_FOUND = "Product not found"
 
 
 async def get_owned_organization_id(
@@ -89,3 +90,32 @@ async def get_owned_campaign(
             status_code=status.HTTP_404_NOT_FOUND, detail=_CAMPAIGN_NOT_FOUND
         )
     return campaign
+
+
+async def get_owned_product(
+    product_id: str,
+    business: Business = Depends(get_owned_business),
+) -> Product:
+    """Resolve a product by id, scoped to a business owned by the current user.
+
+    Args:
+        product_id: The product id from the request path.
+        business: The parent business, resolved and ownership-checked by
+            get_owned_business.
+
+    Returns:
+        The product, if it exists and belongs to this business.
+
+    Raises:
+        HTTPException: 404 if the product doesn't exist or belongs to a
+            different business — same "not found" reasoning as
+            get_owned_business.
+    """
+    product = await db.product.find_first(
+        where={"id": product_id, "businessId": business.id}
+    )
+    if product is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=_PRODUCT_NOT_FOUND
+        )
+    return product

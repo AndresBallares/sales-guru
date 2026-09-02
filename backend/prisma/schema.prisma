@@ -113,12 +113,20 @@ model Product {
   updatedAt   DateTime       @updatedAt
 }
 
+// Image bytes live in the row itself (Option A, confirmed 2026-09-02) —
+// no object storage account/credentials needed at MVP scale, and it
+// survives Render's ephemeral filesystem since Postgres persists.
+// Served publicly (no auth) at GET /product-images/{id} — app/api/
+// product_image.py — since Meta's own servers fetch this URL directly
+// for ad creative images (app/services/meta.py's link_data.picture),
+// not through the browser with the user's session cookie.
 model ProductImage {
-  id        String   @id @default(cuid())
-  product   Product  @relation(fields: [productId], references: [id])
-  productId String
-  url       String
-  createdAt DateTime @default(now())
+  id          String   @id @default(cuid())
+  product     Product  @relation(fields: [productId], references: [id])
+  productId   String
+  data        Bytes
+  contentType String
+  createdAt   DateTime @default(now())
 }
 
 // Same no-separate-name convention as Product — `description` ("Who buys?")
