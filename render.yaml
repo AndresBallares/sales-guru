@@ -27,6 +27,15 @@
 #      target both providers (the migration SQL itself is dialect-specific).
 #   4. No deploy hooks or GitHub secrets are needed for CI-gating; checksPass
 #      reads GitHub check runs directly.
+#
+# PRISMA_BINARY_CACHE_DIR: prisma-client-py's default binary cache lives
+# under the build user's home directory (~/.cache/prisma-python), which is
+# outside the project directory Render actually ships to the running
+# instance — the query engine binary `prisma generate` downloads during
+# the build is then missing at runtime (BinaryNotFoundError on startup,
+# confirmed against a real deploy 2026-09-02). Pointing the cache at a
+# project-relative path fixes it, since that path IS part of what gets
+# deployed.
 
 services:
   - type: web
@@ -52,6 +61,8 @@ services:
         value: https://sales-guru-backend.onrender.com
       - key: CORS_ORIGINS
         value: https://sales-guru-frontend.onrender.com
+      - key: PRISMA_BINARY_CACHE_DIR
+        value: .prisma-cache
 
   - type: web
     runtime: static
