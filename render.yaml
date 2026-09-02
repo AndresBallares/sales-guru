@@ -77,3 +77,13 @@ services:
     envVars:
       - key: VITE_API_URL
         value: https://sales-guru-backend.onrender.com
+    routes:
+      # App.tsx uses react-router's BrowserRouter (real History API routes,
+      # not hash-based) — a static host serving files directly 404s on any
+      # deep link or hard refresh (e.g. /businesses/:id) since no such file
+      # exists on disk. Confirmed against a real deploy 2026-09-02. This
+      # rewrite serves index.html for every path so React Router can take
+      # over client-side routing.
+      - type: rewrite
+        source: /*
+        destination: /index.html
