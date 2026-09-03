@@ -64,6 +64,20 @@ describe('SignupPage', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent('Email already registered')
   })
 
+  it('toggles the password field between hidden and visible text', async () => {
+    const user = userEvent.setup()
+    renderSignupPage()
+
+    const passwordInput = screen.getByLabelText('Password')
+    expect(passwordInput).toHaveAttribute('type', 'password')
+
+    await user.click(screen.getByRole('button', { name: 'Show' }))
+    expect(passwordInput).toHaveAttribute('type', 'text')
+
+    await user.click(screen.getByRole('button', { name: 'Hide' }))
+    expect(passwordInput).toHaveAttribute('type', 'password')
+  })
+
   it('shows a generic error message for a non-API failure', async () => {
     mockedApi.signup.mockRejectedValue(new TypeError('Failed to fetch'))
     const user = userEvent.setup()

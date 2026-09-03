@@ -344,6 +344,36 @@ textarea {
   resize: vertical;
 }
 
+.password-field {
+  position: relative;
+  display: flex;
+}
+
+.password-field input {
+  padding-right: 3.5rem;
+}
+
+.password-toggle {
+  position: absolute;
+  top: 50%;
+  right: 0.75rem;
+  transform: translateY(-50%);
+  align-self: auto;
+  background: transparent;
+  color: var(--accent);
+  border: none;
+  padding: 0;
+  min-height: 0;
+  font-weight: 500;
+  font-size: 0.85rem;
+}
+
+.password-toggle:hover:not(:disabled) {
+  background: transparent;
+  box-shadow: none;
+  text-decoration: underline;
+}
+
 /* ---------- Buttons ---------- */
 
 button {
