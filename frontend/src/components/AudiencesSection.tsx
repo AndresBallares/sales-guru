@@ -1,7 +1,13 @@
 import { useCallback, useEffect, useState, type FormEvent } from 'react'
 import { ApiError, createAudience, listAudiences, type Audience } from '../lib/api'
 
-export function AudiencesSection({ businessId }: { businessId: string }) {
+export function AudiencesSection({
+  businessId,
+  onAudiencesChange,
+}: {
+  businessId: string
+  onAudiencesChange?: (audiences: Audience[]) => void
+}) {
   const [audiences, setAudiences] = useState<Audience[]>([])
   const [loading, setLoading] = useState(true)
   const [listError, setListError] = useState<string | null>(null)
@@ -19,14 +25,16 @@ export function AudiencesSection({ businessId }: { businessId: string }) {
   const refresh = useCallback(async () => {
     setLoading(true)
     try {
-      setAudiences(await listAudiences(businessId))
+      const loaded = await listAudiences(businessId)
+      setAudiences(loaded)
+      onAudiencesChange?.(loaded)
       setListError(null)
     } catch (err) {
       setListError(err instanceof ApiError ? err.message : 'Could not load audiences.')
     } finally {
       setLoading(false)
     }
-  }, [businessId])
+  }, [businessId, onAudiencesChange])
 
   useEffect(() => {
     void refresh()

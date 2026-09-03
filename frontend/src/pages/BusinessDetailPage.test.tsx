@@ -15,6 +15,7 @@ vi.mock('../lib/api', async (importOriginal) => {
     getMe: vi.fn<typeof actual.getMe>(),
     getBusiness: vi.fn<typeof actual.getBusiness>(),
     listProducts: vi.fn<typeof actual.listProducts>(),
+    listProductImages: vi.fn<typeof actual.listProductImages>(),
     listAudiences: vi.fn<typeof actual.listAudiences>(),
     listCampaigns: vi.fn<typeof actual.listCampaigns>(),
     getMetaConnection: vi.fn<typeof actual.getMetaConnection>(),
@@ -36,6 +37,7 @@ beforeEach(() => {
   mockedApi.getMe.mockResolvedValue({ id: '1', email: 'owner@example.com' })
   mockedApi.getBusiness.mockResolvedValue(business)
   mockedApi.listProducts.mockResolvedValue([])
+  mockedApi.listProductImages.mockResolvedValue([])
   mockedApi.listAudiences.mockResolvedValue([])
   mockedApi.listCampaigns.mockResolvedValue([])
   mockedApi.getMetaConnection.mockRejectedValue(
@@ -56,14 +58,66 @@ function renderPage() {
 }
 
 describe('BusinessDetailPage', () => {
-  it('shows the business name and renders all onboarding sections', async () => {
+  it('starts on the product step for a business with no products yet', async () => {
     renderPage()
 
     expect(await screen.findByRole('heading', { name: 'Acme Widgets' })).toBeInTheDocument()
     expect(await screen.findByRole('heading', { name: 'Products' })).toBeInTheDocument()
-    expect(await screen.findByRole('heading', { name: 'Audiences' })).toBeInTheDocument()
-    expect(await screen.findByRole('heading', { name: 'Meta Ads' })).toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: 'Audiences' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: 'Meta Ads' })).not.toBeInTheDocument()
     expect(await screen.findByRole('heading', { name: 'Campaigns' })).toBeInTheDocument()
+  })
+
+  it('moves straight to the audience step once a product already exists', async () => {
+    mockedApi.listProducts.mockResolvedValue([
+      {
+        id: 'prod-1',
+        description: 'Handmade leather wallets',
+        price: 49.99,
+        margin: null,
+        features: null,
+        benefits: null,
+        url: null,
+      },
+    ])
+
+    renderPage()
+
+    expect(await screen.findByRole('heading', { name: 'Audiences' })).toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: 'Products' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: 'Meta Ads' })).not.toBeInTheDocument()
+  })
+
+  it('moves straight to Meta Ads once a product and an audience already exist', async () => {
+    mockedApi.listProducts.mockResolvedValue([
+      {
+        id: 'prod-1',
+        description: 'Handmade leather wallets',
+        price: 49.99,
+        margin: null,
+        features: null,
+        benefits: null,
+        url: null,
+      },
+    ])
+    mockedApi.listAudiences.mockResolvedValue([
+      {
+        id: 'aud-1',
+        description: 'Busy professionals, 30-55',
+        ageMin: 30,
+        ageMax: 55,
+        location: null,
+        interests: null,
+        problem: null,
+        desire: null,
+      },
+    ])
+
+    renderPage()
+
+    expect(await screen.findByRole('heading', { name: 'Meta Ads' })).toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: 'Products' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: 'Audiences' })).not.toBeInTheDocument()
   })
 
   it('shows an error if the business fails to load', async () => {

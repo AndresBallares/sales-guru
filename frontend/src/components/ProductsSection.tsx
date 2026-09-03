@@ -10,7 +10,13 @@ import {
   type ProductImage,
 } from '../lib/api'
 
-export function ProductsSection({ businessId }: { businessId: string }) {
+export function ProductsSection({
+  businessId,
+  onProductsChange,
+}: {
+  businessId: string
+  onProductsChange?: (products: Product[]) => void
+}) {
   const [products, setProducts] = useState<Product[]>([])
   const [loading, setLoading] = useState(true)
   const [listError, setListError] = useState<string | null>(null)
@@ -34,6 +40,7 @@ export function ProductsSection({ businessId }: { businessId: string }) {
     try {
       const loaded = await listProducts(businessId)
       setProducts(loaded)
+      onProductsChange?.(loaded)
       setListError(null)
       const entries = await Promise.all(
         loaded.map(
@@ -47,7 +54,7 @@ export function ProductsSection({ businessId }: { businessId: string }) {
     } finally {
       setLoading(false)
     }
-  }, [businessId])
+  }, [businessId, onProductsChange])
 
   useEffect(() => {
     void refresh()

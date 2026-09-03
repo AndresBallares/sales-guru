@@ -114,6 +114,30 @@ describe('ProductsSection', () => {
     expect(await screen.findByText('Handmade wallets')).toBeInTheDocument()
   })
 
+  it('reports its loaded products to the parent, initially and after creating one', async () => {
+    const created = {
+      id: 'prod-1',
+      description: 'Handmade wallets',
+      price: null,
+      margin: null,
+      features: null,
+      benefits: null,
+      url: null,
+    }
+    mockedApi.listProducts.mockResolvedValueOnce([]).mockResolvedValueOnce([created])
+    mockedApi.createProduct.mockResolvedValue(created)
+    const onProductsChange = vi.fn<(products: api.Product[]) => void>()
+    const user = userEvent.setup()
+
+    render(<ProductsSection businessId="biz-1" onProductsChange={onProductsChange} />)
+    await waitFor(() => expect(onProductsChange).toHaveBeenCalledWith([]))
+
+    await user.type(screen.getByLabelText('What do you sell?'), 'Handmade wallets')
+    await user.click(screen.getByRole('button', { name: 'Add product' }))
+
+    await waitFor(() => expect(onProductsChange).toHaveBeenCalledWith([created]))
+  })
+
   it('converts numeric fields and shows an error if creation fails', async () => {
     mockedApi.listProducts.mockResolvedValue([])
     mockedApi.createProduct.mockRejectedValue(new api.ApiError(422, 'Invalid price'))

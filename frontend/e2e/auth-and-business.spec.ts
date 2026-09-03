@@ -45,8 +45,8 @@ test('sign up, create a business, log out, log back in', async ({ page }) => {
   await page.getByLabel('Price').fill('49.99')
   await page.getByRole('button', { name: 'Add product' }).click()
 
-  await expect(page.getByText('Handmade leather wallets')).toBeVisible()
-
+  // Adding a product moves straight to the audience step — the product
+  // step (and the product itself) is no longer shown on screen.
   await expect(page.getByText('No audiences yet')).toBeVisible()
   await page.getByLabel('Who buys?').fill('Busy professionals, 30-55')
   await page.getByLabel('Age min').fill('30')
@@ -54,7 +54,10 @@ test('sign up, create a business, log out, log back in', async ({ page }) => {
   await page.getByLabel('Location').fill('New York')
   await page.getByRole('button', { name: 'Add audience' }).click()
 
-  await expect(page.getByText('Busy professionals, 30-55')).toBeVisible()
+  // Adding an audience moves straight to the Meta Ads step — the
+  // audience step (and the audience itself) is no longer shown on screen.
+  await expect(page.getByRole('heading', { name: 'Meta Ads' })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Connect Meta Ads' })).toBeVisible()
 
   await expect(page.getByText('No campaigns yet')).toBeVisible()
   // Focusing the dropdowns triggers a refetch (see CampaignsSection) so the

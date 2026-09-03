@@ -103,6 +103,31 @@ describe('AudiencesSection', () => {
     expect(await screen.findByText('Busy parents')).toBeInTheDocument()
   })
 
+  it('reports its loaded audiences to the parent, initially and after creating one', async () => {
+    const created = {
+      id: 'aud-1',
+      description: 'Busy parents',
+      ageMin: null,
+      ageMax: null,
+      location: null,
+      interests: null,
+      problem: null,
+      desire: null,
+    }
+    mockedApi.listAudiences.mockResolvedValueOnce([]).mockResolvedValueOnce([created])
+    mockedApi.createAudience.mockResolvedValue(created)
+    const onAudiencesChange = vi.fn<(audiences: api.Audience[]) => void>()
+    const user = userEvent.setup()
+
+    render(<AudiencesSection businessId="biz-1" onAudiencesChange={onAudiencesChange} />)
+    await waitFor(() => expect(onAudiencesChange).toHaveBeenCalledWith([]))
+
+    await user.type(screen.getByLabelText('Who buys?'), 'Busy parents')
+    await user.click(screen.getByRole('button', { name: 'Add audience' }))
+
+    await waitFor(() => expect(onAudiencesChange).toHaveBeenCalledWith([created]))
+  })
+
   it('converts numeric fields and shows an error if creation fails', async () => {
     mockedApi.listAudiences.mockResolvedValue([])
     mockedApi.createAudience.mockRejectedValue(new api.ApiError(422, 'Invalid age range'))

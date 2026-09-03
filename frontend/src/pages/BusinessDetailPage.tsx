@@ -4,13 +4,17 @@ import { AudiencesSection } from '../components/AudiencesSection'
 import { CampaignsSection } from '../components/CampaignsSection'
 import { MetaConnectionSection } from '../components/MetaConnectionSection'
 import { ProductsSection } from '../components/ProductsSection'
-import { ApiError, getBusiness, type Business } from '../lib/api'
+import { ApiError, getBusiness, type Audience, type Business, type Product } from '../lib/api'
 
 export function BusinessDetailPage() {
   const { businessId } = useParams<{ businessId: string }>()
 
   const [business, setBusiness] = useState<Business | null>(null)
   const [businessError, setBusinessError] = useState<string | null>(null)
+  // null = not loaded yet; once loaded, a business that already has one
+  // moves straight past that step — same reasoning for both.
+  const [products, setProducts] = useState<Product[] | null>(null)
+  const [audiences, setAudiences] = useState<Audience[] | null>(null)
 
   useEffect(() => {
     if (!businessId) {
@@ -37,9 +41,13 @@ export function BusinessDetailPage() {
 
       {businessId && (
         <>
-          <ProductsSection businessId={businessId} />
-          <AudiencesSection businessId={businessId} />
-          <MetaConnectionSection businessId={businessId} />
+          {products === null || products.length === 0 ? (
+            <ProductsSection businessId={businessId} onProductsChange={setProducts} />
+          ) : audiences === null || audiences.length === 0 ? (
+            <AudiencesSection businessId={businessId} onAudiencesChange={setAudiences} />
+          ) : (
+            <MetaConnectionSection businessId={businessId} />
+          )}
           <CampaignsSection businessId={businessId} />
         </>
       )}
