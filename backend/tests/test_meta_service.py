@@ -346,6 +346,30 @@ async def test_create_meta_ad_set_returns_the_new_id(
     assert '"targeting_automation": {"advantage_audience": 0}' in data["targeting"]
     assert '"geo_locations": {"countries": ["US"]}' in data["targeting"]
     assert "promoted_object" not in data
+    assert "end_time" not in data
+
+
+@pytest.mark.asyncio
+async def test_create_meta_ad_set_sends_end_time_as_iso8601_utc_when_given(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A given end_time is sent as Meta's documented ISO 8601 UTC format."""
+    client = _mock_client_returning(monkeypatch, _FakeResponse({"id": "adset_123"}))
+
+    await meta.create_meta_ad_set(
+        access_token="token",
+        ad_account_id="act_1",
+        name="Vegas Bridal Push",
+        meta_campaign_id="campaign_123",
+        daily_budget_cents=2500,
+        optimization_goal="OFFSITE_CONVERSIONS",
+        age_min=30,
+        age_max=55,
+        end_time=datetime(2026, 3, 24, 23, 59, 59, tzinfo=UTC),
+    )
+
+    _url, data = client.calls[0]
+    assert data["end_time"] == "2026-03-24T23:59:59+0000"
 
 
 @pytest.mark.asyncio
@@ -1095,6 +1119,33 @@ async def test_pause_meta_ad_raises_on_failure(monkeypatch: pytest.MonkeyPatch) 
 
     with pytest.raises(meta.MetaConnectionError, match="Meta API call failed"):
         await meta.pause_meta_ad(access_token="token", meta_ad_id="ad_123")
+
+
+@pytest.mark.asyncio
+async def test_pause_meta_ad_set_sends_the_paused_status(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Pausing an ad set POSTs status=PAUSED to the ad set's own node."""
+    client = _mock_client_returning(monkeypatch, _FakeResponse({"success": True}))
+
+    await meta.pause_meta_ad_set(access_token="token", meta_ad_set_id="adset_123")
+
+    url, data = client.calls[0]
+    assert url == "https://graph.facebook.com/v21.0/adset_123"
+    assert data["status"] == "PAUSED"
+    assert data["access_token"] == "token"
+
+
+@pytest.mark.asyncio
+async def test_pause_meta_ad_set_raises_on_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A Graph API failure surfaces as MetaConnectionError."""
+    fake_client = _FakeAsyncClient(error=httpx.ConnectError("boom"))
+    monkeypatch.setattr(httpx, "AsyncClient", lambda: fake_client)
+
+    with pytest.raises(meta.MetaConnectionError, match="Meta API call failed"):
+        await meta.pause_meta_ad_set(access_token="token", meta_ad_set_id="adset_123")
 
 
 @pytest.mark.asyncio

@@ -17,6 +17,7 @@ from app.schemas.campaign import CampaignCreateRequest, CampaignResponse
 from app.schemas.strategy import StrategyContentAdapter
 from app.services.event_venues import EVENT_VENUES, default_event_window
 from app.services.meta import MetaConnectionError
+from app.services.publish import pause_campaign as pause_campaign_on_meta
 from app.services.publish import publish_campaign_to_meta, requires_pixel
 
 router = APIRouter(prefix="/businesses/{business_id}/campaigns", tags=["campaigns"])
@@ -26,9 +27,11 @@ _AUDIENCE_NOT_FOUND = "Audience not found"
 _EVENT_VENUE_NOT_FOUND = "Unknown event venue"
 _NOT_READY_FOR_APPROVAL = "Select an ad creative before approving this campaign"
 _NOT_READY_FOR_PUBLISH = "Approve this campaign before publishing"
+_NOT_LIVE_TO_PAUSE = "Only a live campaign can be paused"
 _META_NOT_CONNECTED = (
     "Connect Meta Ads and select an ad account and Page before publishing"
 )
+_META_NOT_CONNECTED_TO_PAUSE = "No Meta connection found for this campaign's business"
 _NO_CREATIVE_SELECTED = "Select an ad creative before publishing"
 _NO_DESTINATION_URL = (
     "Set a product URL or business website before publishing — Meta requires "
@@ -60,6 +63,7 @@ def _to_response(campaign: Campaign) -> CampaignResponse:
         event_venue_key=campaign.eventVenueKey,
         start_date=campaign.startDate,
         end_date=campaign.endDate,
+        paused_reason=campaign.pausedReason,
     )
 
 
@@ -331,6 +335,57 @@ async def publish_campaign(
         )
     except MetaConnectionError as exc:
         await db.campaign.update(where={"id": campaign.id}, data={"status": "FAILED"})
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)
+        ) from exc
+
+    return _to_response(updated)
+
+
+@router.post("/{campaign_id}/pause", response_model=CampaignResponse)
+async def pause_campaign(
+    campaign: Campaign = Depends(get_owned_campaign),
+) -> CampaignResponse:
+    """Manually pause every AdSet in a live campaign — the one-click "stop" action.
+
+    Deliberately campaign-wide and immediate — distinct from the
+    Optimizer's PAUSE_AD recommendation flow (app/api/optimization.py),
+    which pauses one Ad and always needs a human's explicit approval
+    first. This *is* the explicit human action; no separate approval
+    step, no LLM involved (app/services/publish.py's pause_campaign).
+    Same underlying function the scheduled duration-elapsed job and the
+    total-spend circuit breaker call (app/services/optimization_jobs.py)
+    — those set a different, specific pausedReason.
+
+    Args:
+        campaign: The campaign, resolved and ownership-checked by
+            get_owned_campaign.
+
+    Returns:
+        The now-PAUSED campaign.
+
+    Raises:
+        HTTPException: 400 if the campaign isn't LIVE, or Meta isn't
+            connected for its business; 500 if the Meta API call fails
+            (any AdSets already paused before the failure stay paused).
+    """
+    if campaign.status != "LIVE":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=_NOT_LIVE_TO_PAUSE
+        )
+
+    connection = await get_meta_connection(campaign.businessId)
+    if connection is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=_META_NOT_CONNECTED_TO_PAUSE,
+        )
+
+    try:
+        updated = await pause_campaign_on_meta(
+            campaign=campaign, connection=connection, reason="Manually paused"
+        )
+    except MetaConnectionError as exc:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)
         ) from exc

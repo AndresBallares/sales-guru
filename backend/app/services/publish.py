@@ -27,7 +27,10 @@ DATA_DRIVEN_STRATEGY campaign is unaffected — still exactly one AdSet/Ad,
 same as before.
 """
 
+from datetime import UTC, datetime, timedelta
+
 from prisma.models import Campaign, Creative, MetaConnection
+from prisma.types import CampaignUpdateInput
 
 from app.core.db import db
 from app.schemas.strategy import (
@@ -156,6 +159,7 @@ async def _publish_single_variant(
     optimization_goal: str,
     pixel_id: str | None,
     custom_location: CustomLocation | None,
+    end_time: datetime | None,
 ) -> None:
     """DATA_DRIVEN_STRATEGY (and pre-"Phase C" TEST_PLAN) path — one AdSet/Ad."""
     audience = primary_audience(strategy)
@@ -179,6 +183,7 @@ async def _publish_single_variant(
         custom_location=custom_location,
         resolved_locations=resolved_locations,
         interests=_resolve_interests(audience),
+        end_time=end_time,
     )
     meta_ad_id = await meta.create_meta_ad(
         access_token=connection.accessToken,
@@ -225,6 +230,7 @@ async def _publish_test_plan_variant(
     optimization_goal: str,
     pixel_id: str | None,
     custom_location: CustomLocation | None,
+    end_time: datetime | None,
 ) -> None:
     """Publish one TEST_PLAN audience variant as its own real AdSet/Ad.
 
@@ -256,6 +262,7 @@ async def _publish_test_plan_variant(
         resolved_locations=resolved_locations,
         interests=_resolve_interests(variant.targeting),
         advantage_audience=1 if variant.is_baseline else 0,
+        end_time=end_time,
     )
     meta_ad_id = await meta.create_meta_ad(
         access_token=connection.accessToken,
@@ -342,7 +349,8 @@ async def publish_campaign_to_meta(
             website).
 
     Returns:
-        The campaign, now LIVE with metaCampaignId set.
+        The campaign, now LIVE with metaCampaignId set (and endDate, if
+        one was computed and wasn't already set).
 
     Raises:
         MetaConnectionError: If any Graph API call fails. The campaign's
@@ -359,6 +367,16 @@ async def publish_campaign_to_meta(
     object_name = campaign.name or f"Sales Guru campaign {campaign.id}"
     pixel_id = connection.pixelId if requires_pixel(campaign.objective) else None
     custom_location = _resolve_custom_location(campaign)
+
+    # An event venue's window (campaign.endDate, PRD.md build step 11)
+    # always wins when set, for either plan type. Otherwise a TEST_PLAN
+    # gets one computed from its own duration_days, starting now (when
+    # it's actually going live) — a DATA_DRIVEN_STRATEGY with no event
+    # venue has no duration concept at all and keeps running
+    # indefinitely, same as before this parameter existed.
+    end_time = campaign.endDate
+    if end_time is None and strategy.plan_type == "TEST_PLAN":
+        end_time = datetime.now(UTC) + timedelta(days=strategy.duration_days)
 
     meta_campaign_id = await meta.create_meta_campaign(
         access_token=connection.accessToken,
@@ -394,6 +412,7 @@ async def publish_campaign_to_meta(
                 optimization_goal=optimization_goal,
                 pixel_id=pixel_id,
                 custom_location=custom_location,
+                end_time=end_time,
             )
     else:
         await _publish_single_variant(
@@ -408,11 +427,76 @@ async def publish_campaign_to_meta(
             optimization_goal=optimization_goal,
             pixel_id=pixel_id,
             custom_location=custom_location,
+            end_time=end_time,
+        )
+
+    update_data: CampaignUpdateInput = {
+        "status": "LIVE",
+        "metaCampaignId": meta_campaign_id,
+    }
+    if end_time is not None:
+        update_data["endDate"] = end_time
+    updated = await db.campaign.update(where={"id": campaign.id}, data=update_data)
+    assert updated is not None  # just fetched by the caller, can't vanish mid-request
+    return updated
+
+
+async def pause_campaign(
+    *, campaign: Campaign, connection: MetaConnection, reason: str
+) -> Campaign:
+    """Pause every live AdSet in a campaign — the campaign-wide "stop spending" action.
+
+    Distinct from the Optimizer's PAUSE_AD recommendation
+    (app/services/optimization_jobs.py's apply_recommendation), which
+    pauses exactly one Ad and always requires a human's explicit
+    approval first. This pauses at the AdSet level (stopping every Ad
+    under it, TEST_PLAN's two variants included) and is never gated on
+    LLM confidence — it's called directly by a human's manual pause
+    click (app/api/campaign.py), the scheduled duration-elapsed job, and
+    the deterministic total-spend circuit breaker (both in
+    app/services/optimization_jobs.py).
+
+    Args:
+        campaign: The campaign to pause. Caller is responsible for
+            confirming it's actually LIVE.
+        connection: The business's Meta connection (already confirmed to
+            have a usable accessToken by the caller).
+        reason: Human-readable explanation stored on
+            Campaign.pausedReason, so the UI can show *why* — e.g.
+            "Manually paused", "Test window ended (10 days)", or
+            "Total spend $1,042.10 exceeded the $1,000.00 planned
+            budget".
+
+    Returns:
+        The campaign, now PAUSED.
+
+    Raises:
+        MetaConnectionError: If any Graph API call fails. Ad sets already
+            paused before the failure stay paused — this doesn't roll
+            back, same "no failed-publish rollback" known simplification
+            as the rest of this module.
+    """
+    ad_sets = await db.adset.find_many(where={"campaignId": campaign.id})
+    live_ad_set_ids: list[str] = []
+    for ad_set in ad_sets:
+        if ad_set.metaAdSetId is None:
+            continue
+        await meta.pause_meta_ad_set(
+            access_token=connection.accessToken, meta_ad_set_id=ad_set.metaAdSetId
+        )
+        live_ad_set_ids.append(ad_set.id)
+
+    if live_ad_set_ids:
+        await db.adset.update_many(
+            where={"id": {"in": live_ad_set_ids}}, data={"status": "PAUSED"}
+        )
+        await db.ad.update_many(
+            where={"adSetId": {"in": live_ad_set_ids}}, data={"status": "PAUSED"}
         )
 
     updated = await db.campaign.update(
         where={"id": campaign.id},
-        data={"status": "LIVE", "metaCampaignId": meta_campaign_id},
+        data={"status": "PAUSED", "pausedReason": reason},
     )
     assert updated is not None  # just fetched by the caller, can't vanish mid-request
     return updated

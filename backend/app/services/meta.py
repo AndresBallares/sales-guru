@@ -359,6 +359,7 @@ async def create_meta_ad_set(
     resolved_locations: list[ResolvedGeoLocation] | None = None,
     interests: list[dict[str, str]] | None = None,
     advantage_audience: int = 0,
+    end_time: datetime | None = None,
 ) -> str:
     """Create a live AdSet object on Meta, under an already-created campaign.
 
@@ -423,6 +424,21 @@ async def create_meta_ad_set(
             interest targeting — the broad-baseline case).
         advantage_audience: 0 (default) for explicit-only targeting, 1 to
             let Meta expand delivery beyond what's specified here.
+        end_time: When to have Meta itself stop delivery, if the campaign
+            has a planned end (a TEST_PLAN's duration_days, or an event
+            venue's window — app/services/publish.py's
+            publish_campaign_to_meta computes this once and passes it to
+            every AdSet it creates). None leaves the ad set running
+            indefinitely on its daily budget, same as before this
+            parameter existed. Sent as ISO 8601 UTC
+            ("2026-03-24T23:59:59+0000", Meta's documented format) — not
+            yet verified against a real live publish, same "confirm
+            against the real API before trusting it" caution as the
+            geo/interest params above. Independent of the scheduled
+            duration-elapsed auto-pause job — that's a same-effect
+            backstop for a campaign published before this parameter
+            existed, or in case Meta doesn't actually honor end_time as
+            documented.
 
     Returns:
         The new Meta ad set id.
@@ -475,6 +491,8 @@ async def create_meta_ad_set(
         data["promoted_object"] = json.dumps(
             {"pixel_id": pixel_id, "custom_event_type": "PURCHASE"}
         )
+    if end_time is not None:
+        data["end_time"] = end_time.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%S+0000")
     body = await _post_json(
         f"{_GRAPH_BASE_URL}/{ad_account_id}/adsets",
         data,
@@ -867,6 +885,30 @@ async def pause_meta_ad(*, access_token: str, meta_ad_id: str) -> None:
     """
     await _post_json(
         f"{_GRAPH_BASE_URL}/{meta_ad_id}",
+        {"access_token": access_token, "status": "PAUSED"},
+    )
+
+
+async def pause_meta_ad_set(*, access_token: str, meta_ad_set_id: str) -> None:
+    """Pause a live ad set on Meta.
+
+    Manual campaign pause, duration-elapsed auto-pause, and the
+    total-spend circuit breaker all pause at the AdSet level, not
+    per-Ad — see app/services/publish.py's pause_campaign.
+
+    Same shape as pause_meta_ad, one level up the object hierarchy —
+    pausing an AdSet stops delivery for every Ad under it regardless of
+    each Ad's own status field.
+
+    Args:
+        access_token: The business's Meta access token.
+        meta_ad_set_id: The Meta ad set id to pause (AdSet.metaAdSetId).
+
+    Raises:
+        MetaConnectionError: If the call fails.
+    """
+    await _post_json(
+        f"{_GRAPH_BASE_URL}/{meta_ad_set_id}",
         {"access_token": access_token, "status": "PAUSED"},
     )
 

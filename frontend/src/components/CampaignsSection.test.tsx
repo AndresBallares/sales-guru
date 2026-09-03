@@ -19,6 +19,7 @@ vi.mock('../lib/api', async (importOriginal) => {
     selectCreative: vi.fn<typeof actual.selectCreative>(),
     approveCampaign: vi.fn<typeof actual.approveCampaign>(),
     publishCampaign: vi.fn<typeof actual.publishCampaign>(),
+    pauseCampaign: vi.fn<typeof actual.pauseCampaign>(),
     listMetrics: vi.fn<typeof actual.listMetrics>(),
     refreshMetrics: vi.fn<typeof actual.refreshMetrics>(),
     createRecommendation: vi.fn<typeof actual.createRecommendation>(),
@@ -289,6 +290,7 @@ describe('CampaignsSection', () => {
         eventVenueKey: null,
         startDate: null,
         endDate: null,
+        pausedReason: null,
       },
     ])
 
@@ -310,6 +312,7 @@ describe('CampaignsSection', () => {
         eventVenueKey: null,
         startDate: null,
         endDate: null,
+        pausedReason: null,
       },
     ])
 
@@ -402,6 +405,7 @@ describe('CampaignsSection', () => {
           eventVenueKey: null,
           startDate: null,
           endDate: null,
+          pausedReason: null,
         },
       ])
     mockedApi.listProducts.mockResolvedValue([
@@ -438,6 +442,7 @@ describe('CampaignsSection', () => {
       eventVenueKey: null,
       startDate: null,
       endDate: null,
+      pausedReason: null,
     })
     const user = userEvent.setup()
 
@@ -474,6 +479,7 @@ describe('CampaignsSection', () => {
         eventVenueKey: 'jck_las_vegas',
         startDate: '2027-06-01T00:00:00Z',
         endDate: '2027-06-04T00:00:00Z',
+        pausedReason: null,
       },
     ])
     mockedApi.createCampaign.mockResolvedValue({
@@ -487,6 +493,7 @@ describe('CampaignsSection', () => {
       eventVenueKey: 'jck_las_vegas',
       startDate: '2027-06-01T00:00:00Z',
       endDate: '2027-06-04T00:00:00Z',
+      pausedReason: null,
     })
     const user = userEvent.setup()
 
@@ -536,6 +543,7 @@ describe('CampaignsSection', () => {
         eventVenueKey: null,
         startDate: null,
         endDate: null,
+        pausedReason: null,
       },
     ])
     mockedApi.createStrategy.mockResolvedValue(FAKE_STRATEGY)
@@ -571,6 +579,7 @@ describe('CampaignsSection', () => {
         eventVenueKey: null,
         startDate: null,
         endDate: null,
+        pausedReason: null,
       },
     ])
     mockedApi.createStrategy.mockRejectedValue(
@@ -601,6 +610,7 @@ describe('CampaignsSection', () => {
         eventVenueKey: null,
         startDate: null,
         endDate: null,
+        pausedReason: null,
       },
     ])
     mockedApi.createStrategy
@@ -636,6 +646,7 @@ describe('CampaignsSection', () => {
         eventVenueKey: null,
         startDate: null,
         endDate: null,
+        pausedReason: null,
       },
     ])
     mockedApi.createStrategy.mockResolvedValue({
@@ -676,6 +687,7 @@ describe('CampaignsSection', () => {
         eventVenueKey: null,
         startDate: null,
         endDate: null,
+        pausedReason: null,
       },
     ])
     mockedApi.getStrategy.mockResolvedValue(FAKE_STRATEGY)
@@ -699,6 +711,7 @@ describe('CampaignsSection', () => {
         eventVenueKey: null,
         startDate: null,
         endDate: null,
+        pausedReason: null,
       },
     ])
     mockedApi.getStrategy.mockResolvedValue(FAKE_STRATEGY)
@@ -735,6 +748,7 @@ describe('CampaignsSection', () => {
         eventVenueKey: null,
         startDate: null,
         endDate: null,
+        pausedReason: null,
       },
     ])
     mockedApi.getStrategy.mockResolvedValue(FAKE_STRATEGY)
@@ -766,6 +780,7 @@ describe('CampaignsSection', () => {
         eventVenueKey: null,
         startDate: null,
         endDate: null,
+        pausedReason: null,
       },
     ])
     mockedApi.getStrategy.mockResolvedValue(FAKE_STRATEGY)
@@ -789,6 +804,7 @@ describe('CampaignsSection', () => {
       eventVenueKey: null,
       startDate: null,
       endDate: null,
+      pausedReason: null,
     }
     mockedApi.listCampaigns.mockResolvedValueOnce([draftCampaign])
     mockedApi.listCampaigns.mockResolvedValueOnce([
@@ -838,6 +854,7 @@ describe('CampaignsSection', () => {
         eventVenueKey: null,
         startDate: null,
         endDate: null,
+        pausedReason: null,
       },
     ])
     mockedApi.getStrategy.mockResolvedValue(FAKE_STRATEGY)
@@ -866,6 +883,7 @@ describe('CampaignsSection', () => {
         eventVenueKey: null,
         startDate: null,
         endDate: null,
+        pausedReason: null,
       },
     ])
     mockedApi.listCampaigns.mockResolvedValueOnce([
@@ -880,6 +898,7 @@ describe('CampaignsSection', () => {
         eventVenueKey: null,
         startDate: null,
         endDate: null,
+        pausedReason: null,
       },
     ])
     mockedApi.getStrategy.mockResolvedValue(FAKE_STRATEGY)
@@ -895,6 +914,7 @@ describe('CampaignsSection', () => {
       eventVenueKey: null,
       startDate: null,
       endDate: null,
+      pausedReason: null,
     })
     mockedApi.publishCampaign.mockResolvedValue({
       id: 'camp-1',
@@ -907,6 +927,7 @@ describe('CampaignsSection', () => {
       eventVenueKey: null,
       startDate: null,
       endDate: null,
+      pausedReason: null,
     })
     const user = userEvent.setup()
 
@@ -923,6 +944,140 @@ describe('CampaignsSection', () => {
     expect(screen.getByText(/meta_campaign_1/)).toBeInTheDocument()
   })
 
+  it('pauses a live campaign and shows the paused reason', async () => {
+    mockedApi.listCampaigns.mockResolvedValueOnce([
+      {
+        id: 'camp-1',
+        name: null,
+        objective: 'SALES',
+        status: 'LIVE',
+        productId: null,
+        audienceId: null,
+        metaCampaignId: 'meta_campaign_1',
+        eventVenueKey: null,
+        startDate: null,
+        endDate: null,
+        pausedReason: null,
+      },
+    ])
+    mockedApi.listCampaigns.mockResolvedValueOnce([
+      {
+        id: 'camp-1',
+        name: null,
+        objective: 'SALES',
+        status: 'PAUSED',
+        productId: null,
+        audienceId: null,
+        metaCampaignId: 'meta_campaign_1',
+        eventVenueKey: null,
+        startDate: null,
+        endDate: null,
+        pausedReason: 'Manually paused',
+      },
+    ])
+    mockedApi.pauseCampaign.mockResolvedValue({
+      id: 'camp-1',
+      name: null,
+      objective: 'SALES',
+      status: 'PAUSED',
+      productId: null,
+      audienceId: null,
+      metaCampaignId: 'meta_campaign_1',
+      eventVenueKey: null,
+      startDate: null,
+      endDate: null,
+      pausedReason: 'Manually paused',
+    })
+    const user = userEvent.setup()
+
+    render(<CampaignsSection businessId="biz-1" />)
+    await screen.findByText(/Live on Meta/)
+
+    await user.click(screen.getByRole('button', { name: 'Pause campaign' }))
+
+    expect(mockedApi.pauseCampaign).toHaveBeenCalledWith('biz-1', 'camp-1')
+    expect(await screen.findByText('Paused — Manually paused')).toBeInTheDocument()
+    expect(screen.queryByText(/Live on Meta/)).not.toBeInTheDocument()
+  })
+
+  it('shows an error if pausing fails', async () => {
+    mockedApi.listCampaigns.mockResolvedValue([
+      {
+        id: 'camp-1',
+        name: null,
+        objective: 'SALES',
+        status: 'LIVE',
+        productId: null,
+        audienceId: null,
+        metaCampaignId: 'meta_campaign_1',
+        eventVenueKey: null,
+        startDate: null,
+        endDate: null,
+        pausedReason: null,
+      },
+    ])
+    mockedApi.pauseCampaign.mockRejectedValue(
+      new api.ApiError(500, 'Meta API call failed'),
+    )
+    const user = userEvent.setup()
+
+    render(<CampaignsSection businessId="biz-1" />)
+    await screen.findByText(/Live on Meta/)
+
+    await user.click(screen.getByRole('button', { name: 'Pause campaign' }))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Meta API call failed')
+  })
+
+  it('falls back to a generic message for a non-ApiError pause failure', async () => {
+    mockedApi.listCampaigns.mockResolvedValue([
+      {
+        id: 'camp-1',
+        name: null,
+        objective: 'SALES',
+        status: 'LIVE',
+        productId: null,
+        audienceId: null,
+        metaCampaignId: 'meta_campaign_1',
+        eventVenueKey: null,
+        startDate: null,
+        endDate: null,
+        pausedReason: null,
+      },
+    ])
+    mockedApi.pauseCampaign.mockRejectedValue(new Error('network down'))
+    const user = userEvent.setup()
+
+    render(<CampaignsSection businessId="biz-1" />)
+    await screen.findByText(/Live on Meta/)
+
+    await user.click(screen.getByRole('button', { name: 'Pause campaign' }))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Could not pause campaign.')
+  })
+
+  it('shows "Paused" with no reason when pausedReason is null', async () => {
+    mockedApi.listCampaigns.mockResolvedValue([
+      {
+        id: 'camp-1',
+        name: null,
+        objective: 'SALES',
+        status: 'PAUSED',
+        productId: null,
+        audienceId: null,
+        metaCampaignId: 'meta_campaign_1',
+        eventVenueKey: null,
+        startDate: null,
+        endDate: null,
+        pausedReason: null,
+      },
+    ])
+
+    render(<CampaignsSection businessId="biz-1" />)
+
+    expect(await screen.findByText('Paused')).toBeInTheDocument()
+  })
+
   it('retries publishing a failed campaign without re-approving', async () => {
     mockedApi.listCampaigns.mockResolvedValue([
       {
@@ -936,6 +1091,7 @@ describe('CampaignsSection', () => {
         eventVenueKey: null,
         startDate: null,
         endDate: null,
+        pausedReason: null,
       },
     ])
     mockedApi.getStrategy.mockResolvedValue(FAKE_STRATEGY)
@@ -951,6 +1107,7 @@ describe('CampaignsSection', () => {
       eventVenueKey: null,
       startDate: null,
       endDate: null,
+      pausedReason: null,
     })
     const user = userEvent.setup()
 
@@ -977,6 +1134,7 @@ describe('CampaignsSection', () => {
         eventVenueKey: null,
         startDate: null,
         endDate: null,
+        pausedReason: null,
       },
     ])
     mockedApi.getStrategy.mockResolvedValue(FAKE_STRATEGY)
@@ -1003,6 +1161,7 @@ describe('CampaignsSection', () => {
         eventVenueKey: null,
         startDate: null,
         endDate: null,
+        pausedReason: null,
       },
     ])
     mockedApi.getStrategy.mockResolvedValue(FAKE_STRATEGY)
@@ -1036,6 +1195,7 @@ describe('CampaignsSection', () => {
         eventVenueKey: null,
         startDate: null,
         endDate: null,
+        pausedReason: null,
       },
     ])
     mockedApi.getStrategy.mockResolvedValue(FAKE_STRATEGY)
@@ -1051,6 +1211,7 @@ describe('CampaignsSection', () => {
       eventVenueKey: null,
       startDate: null,
       endDate: null,
+      pausedReason: null,
     })
     mockedApi.publishCampaign.mockRejectedValue(
       new api.ApiError(400, 'Connect Meta Ads and select an ad account and Page before publishing'),
@@ -1080,6 +1241,7 @@ describe('CampaignsSection', () => {
         eventVenueKey: null,
         startDate: null,
         endDate: null,
+        pausedReason: null,
       },
     ])
     mockedApi.listMetrics.mockResolvedValue([fakeMetric()])
@@ -1105,6 +1267,7 @@ describe('CampaignsSection', () => {
         eventVenueKey: null,
         startDate: null,
         endDate: null,
+        pausedReason: null,
       },
     ])
     mockedApi.refreshMetrics.mockResolvedValue(
@@ -1134,6 +1297,7 @@ describe('CampaignsSection', () => {
         eventVenueKey: null,
         startDate: null,
         endDate: null,
+        pausedReason: null,
       },
     ])
     mockedApi.refreshMetrics.mockRejectedValue(
@@ -1162,6 +1326,7 @@ describe('CampaignsSection', () => {
         eventVenueKey: null,
         startDate: null,
         endDate: null,
+        pausedReason: null,
       },
     ])
 
@@ -1186,6 +1351,7 @@ describe('CampaignsSection', () => {
         eventVenueKey: null,
         startDate: null,
         endDate: null,
+        pausedReason: null,
       },
     ])
     mockedApi.listRecommendations.mockResolvedValue([fakeRecommendation()])
@@ -1214,6 +1380,7 @@ describe('CampaignsSection', () => {
         eventVenueKey: null,
         startDate: null,
         endDate: null,
+        pausedReason: null,
       },
     ])
     mockedApi.createRecommendation.mockResolvedValue(fakeRecommendation())
@@ -1241,6 +1408,7 @@ describe('CampaignsSection', () => {
         eventVenueKey: null,
         startDate: null,
         endDate: null,
+        pausedReason: null,
       },
     ])
     mockedApi.createRecommendation.mockRejectedValue(
@@ -1269,6 +1437,7 @@ describe('CampaignsSection', () => {
         eventVenueKey: null,
         startDate: null,
         endDate: null,
+        pausedReason: null,
       },
     ])
     mockedApi.listRecommendations.mockResolvedValue([fakeRecommendation()])
@@ -1302,6 +1471,7 @@ describe('CampaignsSection', () => {
         eventVenueKey: null,
         startDate: null,
         endDate: null,
+        pausedReason: null,
       },
     ])
     mockedApi.listRecommendations.mockResolvedValue([fakeRecommendation()])
@@ -1335,6 +1505,7 @@ describe('CampaignsSection', () => {
         eventVenueKey: null,
         startDate: null,
         endDate: null,
+        pausedReason: null,
       },
     ])
     mockedApi.listRecommendations.mockResolvedValue([fakeRecommendation()])
@@ -1364,6 +1535,7 @@ describe('CampaignsSection', () => {
         eventVenueKey: null,
         startDate: null,
         endDate: null,
+        pausedReason: null,
       },
     ])
     mockedApi.listRecommendations.mockResolvedValue([fakeRecommendation()])
@@ -1393,6 +1565,7 @@ describe('CampaignsSection', () => {
         eventVenueKey: null,
         startDate: null,
         endDate: null,
+        pausedReason: null,
       },
     ])
     mockedApi.listRecommendations.mockResolvedValue([
@@ -1419,6 +1592,7 @@ describe('CampaignsSection', () => {
         eventVenueKey: null,
         startDate: null,
         endDate: null,
+        pausedReason: null,
       },
     ])
     mockedApi.listRecommendations.mockResolvedValue([
@@ -1443,6 +1617,7 @@ describe('CampaignsSection', () => {
         eventVenueKey: null,
         startDate: null,
         endDate: null,
+        pausedReason: null,
       },
     ])
     mockedApi.listRecommendations.mockResolvedValue([
@@ -1468,6 +1643,7 @@ describe('CampaignsSection', () => {
         eventVenueKey: null,
         startDate: null,
         endDate: null,
+        pausedReason: null,
       },
     ])
 
@@ -1490,6 +1666,7 @@ describe('CampaignsSection', () => {
         eventVenueKey: null,
         startDate: null,
         endDate: null,
+        pausedReason: null,
       },
     ])
     mockedApi.getStrategy.mockResolvedValue({
@@ -1521,6 +1698,7 @@ describe('CampaignsSection', () => {
         eventVenueKey: null,
         startDate: null,
         endDate: null,
+        pausedReason: null,
       },
     ])
     mockedApi.getStrategy.mockResolvedValue({
@@ -1554,6 +1732,7 @@ describe('CampaignsSection', () => {
         eventVenueKey: null,
         startDate: null,
         endDate: null,
+        pausedReason: null,
       },
     ])
     mockedApi.getStrategy.mockResolvedValue({
@@ -1590,6 +1769,7 @@ describe('CampaignsSection', () => {
         eventVenueKey: null,
         startDate: null,
         endDate: null,
+        pausedReason: null,
       },
     ])
 

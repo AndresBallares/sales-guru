@@ -7,11 +7,17 @@ logic, guardrails). Same "pure service vs. DB-touching orchestration"
 split already used for publish (app/services/meta.py vs.
 app/services/publish.py).
 
-Two jobs, in-process, no new infrastructure (confirmed with the user
+Three jobs, in-process, no new infrastructure (confirmed with the user
 2026-08-09 — see PRD.md build step 10):
 
-- collect_metrics_for_all_live_campaigns: every 15 min, pure collection,
-  the "Metrics Collector" tier. Makes zero decisions.
+- collect_metrics_for_all_live_campaigns: every 15 min, the "Metrics
+  Collector" tier. Also runs one deterministic, non-LLM decision right
+  after collection — the total-spend circuit breaker
+  (_enforce_spend_circuit_breaker) — since it needs the same
+  freshly-fetched spend figure the collection step already has. Not "zero
+  decisions" as originally scoped; this is a hard guardrail, not an
+  optimization judgment call, so it stays in the collection job rather
+  than waiting for the hourly evaluation cycle below.
 - evaluate_all_live_campaigns: every 60 min, the "Trigger/Scheduler" +
   "Daily Optimization" tiers collapsed into one job — checks the Event +
   Time + Data Sufficiency gate per campaign, and only actually spends an
@@ -19,6 +25,12 @@ Two jobs, in-process, no new infrastructure (confirmed with the user
   Running the gate-check hourly (rather than one job every ~6h and a
   separate one every ~24h) keeps both cadences responsive without a
   third scheduled job.
+- pause_expired_campaigns: every 60 min, deterministic backstop for a
+  campaign's planned end date (Campaign.endDate — a TEST_PLAN's
+  duration_days, or an event venue's window) — Meta is sent an end_time
+  at publish time (app/services/publish.py) and should stop delivery
+  itself, but this catches a campaign published before that parameter
+  existed, or in case Meta doesn't actually honor it as documented.
 
 generate_and_store_recommendation is also called directly by the manual
 "generate now" endpoint (app/api/optimization.py) — a user explicitly
@@ -39,7 +51,13 @@ import json
 import logging
 from datetime import UTC, datetime
 
-from prisma.models import Campaign, Metric, OptimizationRecommendation, TestEvaluation
+from prisma.models import (
+    Campaign,
+    MetaConnection,
+    Metric,
+    OptimizationRecommendation,
+    TestEvaluation,
+)
 from prisma.types import MetricCreateInput
 
 from app.core.db import db
@@ -54,6 +72,7 @@ from app.services.meta import (
     pause_meta_ad,
     update_meta_ad_set_budget,
 )
+from app.services.publish import pause_campaign
 
 logger = logging.getLogger(__name__)
 
@@ -143,14 +162,97 @@ async def _collect_metrics_for_campaign(campaign: Campaign, access_token: str) -
         )
 
 
+async def _latest_total_spend(campaign_id: str) -> float:
+    """Sum the most recent spend snapshot per AdSet (or the campaign-level one).
+
+    Metric.spend is Meta's own lifetime-to-date figure for whatever
+    object it was fetched for (app/services/meta.py's _fetch_insights
+    docstring) — never a delta — so the latest row per distinct
+    adSetId group already is that group's full spend so far. A TEST_PLAN
+    with two real per-variant AdSets ("Phase C") stores one row per
+    variant; summing both variants' latest gives the campaign's true
+    combined spend. Any other campaign has exactly one group (adSetId
+    None, the campaign-level aggregate), so this reduces to that one
+    row's own spend.
+
+    Args:
+        campaign_id: The campaign to sum.
+
+    Returns:
+        Total spend across the latest snapshot of every AdSet (or 0.0 if
+        nothing has been collected yet).
+    """
+    metrics = await db.metric.find_many(
+        where={"campaignId": campaign_id}, order={"fetchedAt": "desc"}
+    )
+    latest_by_group: dict[str | None, Metric] = {}
+    for metric in metrics:
+        latest_by_group.setdefault(metric.adSetId, metric)
+    return sum(metric.spend for metric in latest_by_group.values())
+
+
+async def _enforce_spend_circuit_breaker(
+    campaign: Campaign, connection: MetaConnection
+) -> None:
+    """Deterministic, non-LLM guardrail: auto-pause a TEST_PLAN that overspent its plan.
+
+    Only TEST_PLAN campaigns have a fixed total_budget to check against
+    — a DATA_DRIVEN_STRATEGY has no such ceiling (open-ended by design,
+    scaled up/down by its own scaling_trigger instead) and is skipped
+    entirely. Never an LLM judgment call, same "backend rules apply
+    before/instead of the LLM" principle as apply_budget_guardrail
+    (app/services/optimizer.py) — this doesn't even involve the
+    Optimizer Agent.
+
+    Args:
+        campaign: The live campaign to check. Caller has already
+            confirmed it's LIVE and Meta-connected.
+        connection: The business's Meta connection, for the actual pause
+            call if the breaker fires.
+
+    Raises:
+        MetaConnectionError: If pausing fails partway through — same
+            "already-paused AdSets stay paused, no rollback" behavior as
+            pause_campaign itself.
+    """
+    strategy = await db.strategy.find_unique(where={"campaignId": campaign.id})
+    if strategy is None:
+        return
+    content = StrategyContentAdapter.validate_json(strategy.content)
+    if content.plan_type != "TEST_PLAN":
+        return
+
+    total_spend = await _latest_total_spend(campaign.id)
+    if total_spend <= content.total_budget:
+        return
+
+    logger.warning(
+        "Circuit breaker: campaign %s spent $%.2f, exceeding its $%.2f planned budget",
+        campaign.id,
+        total_spend,
+        content.total_budget,
+    )
+    await pause_campaign(
+        campaign=campaign,
+        connection=connection,
+        reason=(
+            f"Total spend ${total_spend:,.2f} exceeded the "
+            f"${content.total_budget:,.2f} planned budget"
+        ),
+    )
+
+
 async def collect_metrics_for_all_live_campaigns() -> None:
-    """Pure collection for every live, Meta-connected campaign.
+    """Collect fresh metrics, then run the total-spend circuit breaker.
 
     Skips (logs, doesn't raise) any campaign whose Meta call fails, so
     one bad campaign never blocks the rest of the batch — unlike the
     manual "Refresh results" endpoint (app/api/metric.py), which is
     user-triggered and should surface a failure immediately instead of
-    silently skipping.
+    silently skipping. The circuit breaker check still runs even when
+    this cycle's own fetch failed — it compares against whatever's
+    already stored, since a prior cycle's spend crossing the threshold
+    is still valid grounds to pause.
     """
     campaigns = await db.campaign.find_many(where={"status": "LIVE"})
     for campaign in campaigns:
@@ -160,6 +262,10 @@ async def collect_metrics_for_all_live_campaigns() -> None:
         if connection is None:
             continue
         await _collect_metrics_for_campaign(campaign, connection.accessToken)
+        try:
+            await _enforce_spend_circuit_breaker(campaign, connection)
+        except MetaConnectionError:
+            logger.warning("Circuit breaker pause failed for campaign %s", campaign.id)
 
 
 async def apply_recommendation(
@@ -393,6 +499,44 @@ async def evaluate_all_live_campaigns() -> None:
         except optimizer.OptimizerError:
             logger.warning(
                 "Optimization evaluation failed for campaign %s", campaign.id
+            )
+
+
+async def pause_expired_campaigns() -> None:
+    """Auto-pause every live campaign whose planned end date has passed.
+
+    Deterministic backstop for Campaign.endDate — Meta is sent an
+    end_time at publish time (app/services/publish.py's
+    publish_campaign_to_meta) and should stop delivery on its own, but
+    this catches a campaign published before that parameter existed, or
+    in case Meta doesn't actually honor it as documented (not yet
+    verified against a real live publish). Applies to any campaign with
+    an endDate in the past regardless of plan type — a TEST_PLAN's
+    computed duration_days window and an event venue's explicit window
+    (PRD.md build step 11) both set Campaign.endDate the same way, so
+    one check covers both. A DATA_DRIVEN_STRATEGY with no event venue
+    has no endDate at all and is never touched by this job.
+
+    One campaign's Meta failure doesn't block the rest of the batch,
+    same "skip and log" pattern as collect_metrics_for_all_live_campaigns.
+    """
+    now = datetime.now(UTC)
+    campaigns = await db.campaign.find_many(
+        where={"status": "LIVE", "endDate": {"lt": now}}
+    )
+    for campaign in campaigns:
+        connection = await get_meta_connection(campaign.businessId)
+        if connection is None:
+            continue
+        try:
+            await pause_campaign(
+                campaign=campaign,
+                connection=connection,
+                reason="Planned end date reached",
+            )
+        except MetaConnectionError:
+            logger.warning(
+                "Duration-elapsed auto-pause failed for campaign %s", campaign.id
             )
 
 

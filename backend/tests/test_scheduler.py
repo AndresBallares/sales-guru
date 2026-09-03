@@ -15,12 +15,16 @@ from app.core import scheduler as scheduler_module
 
 
 @pytest.mark.asyncio
-async def test_start_scheduler_registers_both_jobs() -> None:
-    """Both periodic jobs are registered under their expected ids."""
+async def test_start_scheduler_registers_all_three_jobs() -> None:
+    """All three periodic jobs are registered under their expected ids."""
     scheduler_module.start_scheduler()
 
     job_ids = {job.id for job in scheduler_module.scheduler.get_jobs()}
-    assert job_ids == {"collect_metrics", "evaluate_campaigns"}
+    assert job_ids == {
+        "collect_metrics",
+        "evaluate_campaigns",
+        "pause_expired_campaigns",
+    }
     assert scheduler_module.scheduler.running
 
     scheduler_module.stop_scheduler()
@@ -33,7 +37,11 @@ async def test_start_scheduler_is_idempotent() -> None:
     scheduler_module.start_scheduler()
 
     job_ids = [job.id for job in scheduler_module.scheduler.get_jobs()]
-    assert sorted(job_ids) == ["collect_metrics", "evaluate_campaigns"]
+    assert sorted(job_ids) == [
+        "collect_metrics",
+        "evaluate_campaigns",
+        "pause_expired_campaigns",
+    ]
 
     scheduler_module.stop_scheduler()
 

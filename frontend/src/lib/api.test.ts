@@ -27,6 +27,7 @@ import {
   uploadProductImage,
   login,
   logout,
+  pauseCampaign,
   publishCampaign,
   refreshMetrics,
   rejectRecommendation,
@@ -426,6 +427,42 @@ describe('publishCampaign', () => {
     await expect(publishCampaign('biz-1', 'camp-1')).rejects.toMatchObject({
       status: 400,
       message: 'Approve this campaign before publishing',
+    })
+  })
+})
+
+describe('pauseCampaign', () => {
+  it('returns the now-paused campaign', async () => {
+    const campaign = {
+      id: '1',
+      name: null,
+      objective: 'SALES' as const,
+      status: 'PAUSED',
+      productId: null,
+      audienceId: null,
+      metaCampaignId: 'meta_campaign_1',
+      pausedReason: 'Manually paused',
+    }
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(jsonResponse(campaign))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(pauseCampaign('biz-1', 'camp-1')).resolves.toEqual(campaign)
+    const [url, options] = fetchMock.mock.calls[0]
+    expect(url).toContain('/businesses/biz-1/campaigns/camp-1/pause')
+    expect(options?.method).toBe('POST')
+  })
+
+  it('throws ApiError when pausing fails', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi
+        .fn<typeof fetch>()
+        .mockResolvedValue(jsonResponse({ detail: 'Only a live campaign can be paused' }, 400)),
+    )
+
+    await expect(pauseCampaign('biz-1', 'camp-1')).rejects.toMatchObject({
+      status: 400,
+      message: 'Only a live campaign can be paused',
     })
   })
 })

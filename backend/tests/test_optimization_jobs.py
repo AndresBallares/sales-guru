@@ -329,6 +329,8 @@ def mock_services(monkeypatch: pytest.MonkeyPatch) -> dict[str, AsyncMock]:
     monkeypatch.setattr(
         meta_service_module, "create_meta_ad", AsyncMock(return_value="meta_ad_1")
     )
+    pause_ad_set = AsyncMock(return_value=None)
+    monkeypatch.setattr(meta_service_module, "pause_meta_ad_set", pause_ad_set)
 
     insights = AsyncMock(
         return_value=CampaignInsights(
@@ -336,7 +338,7 @@ def mock_services(monkeypatch: pytest.MonkeyPatch) -> dict[str, AsyncMock]:
         )
     )
     monkeypatch.setattr(optimization_jobs, "fetch_campaign_insights", insights)
-    return {"insights": insights}
+    return {"insights": insights, "pause_ad_set": pause_ad_set}
 
 
 # --- collect_metrics_for_all_live_campaigns ---------------------------------
@@ -469,6 +471,163 @@ def test_collect_metrics_one_variant_failing_doesnt_block_the_other(
     ).json()
     assert len(listed) == 1
     assert listed[0]["impressions"] == 200
+
+
+# --- _enforce_spend_circuit_breaker (via collect_metrics_for_all_live_campaigns) --
+
+
+def _campaign_status(
+    client: TestClient, business_id: str, campaign_id: str
+) -> dict[str, object]:
+    """Fetch one campaign's current API representation, by id."""
+    campaigns = client.get(f"/businesses/{business_id}/campaigns").json()
+    return next(c for c in campaigns if c["id"] == campaign_id)
+
+
+def test_circuit_breaker_pauses_a_test_plan_that_exceeded_its_total_budget(
+    client: TestClient,
+    mock_services: dict[str, AsyncMock],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Combined spend across both variants exceeding total_budget ($1,000
+    for the fake test plan: $50/day x 2 variants x 10 days) auto-pauses
+    the campaign — deterministic, no LLM call involved."""
+    monkeypatch.setattr(
+        meta_service_module,
+        "create_meta_ad_set",
+        AsyncMock(side_effect=["meta_adset_a", "meta_adset_b"]),
+    )
+    ad_set_insights = AsyncMock(
+        side_effect=[
+            CampaignInsights(impressions=100, clicks=50, spend=600.0, conversions=10),
+            CampaignInsights(impressions=100, clicks=50, spend=600.0, conversions=10),
+        ]
+    )
+    monkeypatch.setattr(optimization_jobs, "fetch_ad_set_insights", ad_set_insights)
+    _signed_up_client(client)
+    business_id = _create_business(client)
+    _connect_meta(client, business_id)
+    campaign_id = _publish_test_plan_campaign(client, business_id, monkeypatch)
+
+    _run(client, optimization_jobs.collect_metrics_for_all_live_campaigns)
+
+    campaign = _campaign_status(client, business_id, campaign_id)
+    assert campaign["status"] == "PAUSED"
+    paused_reason = str(campaign["pausedReason"])
+    assert "1,200.00" in paused_reason
+    assert "1,000.00" in paused_reason
+    assert mock_services["pause_ad_set"].await_count == 2
+    paused_ids = {
+        c.kwargs["meta_ad_set_id"] for c in mock_services["pause_ad_set"].call_args_list
+    }
+    assert paused_ids == {"meta_adset_a", "meta_adset_b"}
+
+
+def test_circuit_breaker_leaves_a_test_plan_under_budget_live(
+    client: TestClient,
+    mock_services: dict[str, AsyncMock],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Combined spend still under total_budget doesn't trigger anything."""
+    monkeypatch.setattr(
+        meta_service_module,
+        "create_meta_ad_set",
+        AsyncMock(side_effect=["meta_adset_a", "meta_adset_b"]),
+    )
+    ad_set_insights = AsyncMock(
+        side_effect=[
+            CampaignInsights(impressions=100, clicks=50, spend=400.0, conversions=10),
+            CampaignInsights(impressions=100, clicks=50, spend=400.0, conversions=10),
+        ]
+    )
+    monkeypatch.setattr(optimization_jobs, "fetch_ad_set_insights", ad_set_insights)
+    _signed_up_client(client)
+    business_id = _create_business(client)
+    _connect_meta(client, business_id)
+    campaign_id = _publish_test_plan_campaign(client, business_id, monkeypatch)
+
+    _run(client, optimization_jobs.collect_metrics_for_all_live_campaigns)
+
+    campaign = _campaign_status(client, business_id, campaign_id)
+    assert campaign["status"] == "LIVE"
+    assert campaign["pausedReason"] is None
+    mock_services["pause_ad_set"].assert_not_awaited()
+
+
+def test_circuit_breaker_never_touches_a_data_driven_strategy_campaign(
+    client: TestClient, mock_services: dict[str, AsyncMock]
+) -> None:
+    """DATA_DRIVEN_STRATEGY has no total_budget concept — no spend level
+    triggers an auto-pause, however high."""
+    mock_services["insights"].return_value = CampaignInsights(
+        impressions=100000, clicks=5000, spend=999999.0, conversions=100
+    )
+    business_id, campaign_id = _live_campaign(client)
+
+    _run(client, optimization_jobs.collect_metrics_for_all_live_campaigns)
+
+    campaign = _campaign_status(client, business_id, campaign_id)
+    assert campaign["status"] == "LIVE"
+    mock_services["pause_ad_set"].assert_not_awaited()
+
+
+# --- pause_expired_campaigns -------------------------------------------------
+
+
+async def _set_end_date(campaign_id: str, end_date: datetime) -> None:
+    """Set a campaign's endDate directly via a fresh connection."""
+    seeder = Prisma()
+    await seeder.connect()
+    await seeder.campaign.update(where={"id": campaign_id}, data={"endDate": end_date})
+    await seeder.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_pause_expired_campaigns_pauses_one_past_its_end_date(
+    client: TestClient, mock_services: dict[str, AsyncMock]
+) -> None:
+    """A live campaign whose endDate is in the past gets auto-paused."""
+    business_id, campaign_id = _live_campaign(client)
+    await _set_end_date(campaign_id, datetime.now(UTC) - timedelta(days=1))
+
+    _run(client, optimization_jobs.pause_expired_campaigns)
+
+    campaign = _campaign_status(client, business_id, campaign_id)
+    assert campaign["status"] == "PAUSED"
+    assert campaign["pausedReason"] == "Planned end date reached"
+    mock_services["pause_ad_set"].assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_pause_expired_campaigns_leaves_a_future_end_date_live(
+    client: TestClient, mock_services: dict[str, AsyncMock]
+) -> None:
+    """A live campaign whose endDate hasn't arrived yet is untouched."""
+    business_id, campaign_id = _live_campaign(client)
+    await _set_end_date(campaign_id, datetime.now(UTC) + timedelta(days=1))
+
+    _run(client, optimization_jobs.pause_expired_campaigns)
+
+    campaign = _campaign_status(client, business_id, campaign_id)
+    assert campaign["status"] == "LIVE"
+    mock_services["pause_ad_set"].assert_not_awaited()
+
+
+def test_pause_expired_campaigns_leaves_a_campaign_with_no_end_date_live(
+    client: TestClient, mock_services: dict[str, AsyncMock]
+) -> None:
+    """A campaign with no endDate at all (no event venue, DATA_DRIVEN_STRATEGY)
+    runs indefinitely — never touched by this job."""
+    _signed_up_client(client)
+    business_id = _create_business(client)
+    _connect_meta(client, business_id)
+    campaign_id = _publish_campaign(client, business_id)
+
+    _run(client, optimization_jobs.pause_expired_campaigns)
+
+    campaign = _campaign_status(client, business_id, campaign_id)
+    assert campaign["status"] == "LIVE"
+    mock_services["pause_ad_set"].assert_not_awaited()
 
 
 # --- generate_and_store_recommendation --------------------------------------

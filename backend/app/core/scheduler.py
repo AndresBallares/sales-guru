@@ -13,13 +13,14 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from app.services.optimization_jobs import (
     collect_metrics_for_all_live_campaigns,
     evaluate_all_live_campaigns,
+    pause_expired_campaigns,
 )
 
 scheduler = AsyncIOScheduler()
 
 
 def start_scheduler() -> None:
-    """Register and start the two periodic jobs.
+    """Register and start the three periodic jobs.
 
     Safe to call multiple times — replace_existing means re-registering
     an already-scheduled job id just updates it instead of duplicating.
@@ -36,6 +37,13 @@ def start_scheduler() -> None:
         "interval",
         minutes=60,
         id="evaluate_campaigns",
+        replace_existing=True,
+    )
+    scheduler.add_job(
+        pause_expired_campaigns,
+        "interval",
+        minutes=60,
+        id="pause_expired_campaigns",
         replace_existing=True,
     )
     if not scheduler.running:

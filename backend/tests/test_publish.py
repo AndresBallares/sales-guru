@@ -266,12 +266,15 @@ def mock_services(monkeypatch: pytest.MonkeyPatch) -> dict[str, AsyncMock]:
     )
     create_ad = AsyncMock(return_value="meta_ad_1")
     monkeypatch.setattr(meta_service_module, "create_meta_ad", create_ad)
+    pause_ad_set = AsyncMock(return_value=None)
+    monkeypatch.setattr(meta_service_module, "pause_meta_ad_set", pause_ad_set)
 
     return {
         "create_campaign": create_campaign,
         "create_ad_set": create_ad_set,
         "create_ad_creative": create_ad_creative,
         "create_ad": create_ad,
+        "pause_ad_set": pause_ad_set,
     }
 
 
@@ -566,6 +569,83 @@ def test_publish_uses_broad_geo_for_a_non_event_campaign(
     assert kwargs["custom_location"] is None
 
 
+def test_publish_sends_no_end_time_for_a_data_driven_strategy(
+    client: TestClient, mock_services: dict[str, AsyncMock]
+) -> None:
+    """A DATA_DRIVEN_STRATEGY campaign with no event venue has no duration
+    concept — it publishes with no end_time, running indefinitely."""
+    business_id, campaign_id = _ready_campaign(client)
+
+    response = client.post(f"/businesses/{business_id}/campaigns/{campaign_id}/publish")
+
+    assert response.status_code == 200
+    assert response.json()["endDate"] is None
+    _, kwargs = mock_services["create_ad_set"].call_args
+    assert kwargs["end_time"] is None
+
+
+def test_publish_computes_end_time_from_duration_days_for_a_test_plan(
+    client: TestClient,
+    mock_services: dict[str, AsyncMock],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A TEST_PLAN with no event venue gets an end_time computed from its
+    own duration_days, starting from publish time — and that computed
+    date is persisted on the campaign, not just sent to Meta."""
+    mock_services["create_ad_set"].side_effect = ["meta_adset_a", "meta_adset_b"]
+    mock_services["create_ad"].side_effect = ["meta_ad_a", "meta_ad_b"]
+    before_publish = datetime.now(UTC)
+    business_id, campaign_id = _ready_campaign(
+        client, monkeypatch=monkeypatch, test_plan=True
+    )
+
+    response = client.post(f"/businesses/{business_id}/campaigns/{campaign_id}/publish")
+
+    assert response.status_code == 200
+    end_date = response.json()["endDate"]
+    assert end_date is not None
+    parsed_end_date = datetime.fromisoformat(end_date)
+    assert parsed_end_date > before_publish + timedelta(days=9)
+    assert parsed_end_date < before_publish + timedelta(days=11)
+
+    # SQLite storage rounds sub-millisecond precision, so the round-tripped
+    # endDate and the raw end_time kwarg sent to Meta differ by a few
+    # microseconds — a real, expected artifact of the DB round trip, not a
+    # bug; compare within a generous tolerance instead of exact equality.
+    for call in mock_services["create_ad_set"].call_args_list:
+        assert abs(call.kwargs["end_time"] - parsed_end_date) < timedelta(seconds=1)
+
+
+def test_publish_uses_the_campaigns_existing_end_date_for_an_event_venue_test_plan(
+    client: TestClient,
+    mock_services: dict[str, AsyncMock],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An event-venue TEST_PLAN already has a real endDate from its venue
+    window (PRD.md build step 11) — publish uses that directly instead of
+    computing a new one from duration_days."""
+    mock_services["create_ad_set"].side_effect = ["meta_adset_a", "meta_adset_b"]
+    mock_services["create_ad"].side_effect = ["meta_ad_a", "meta_ad_b"]
+    business_id, campaign_id = _ready_campaign(
+        client,
+        event_venue_key="jck_las_vegas",
+        monkeypatch=monkeypatch,
+        test_plan=True,
+    )
+    existing_end_date = client.get(f"/businesses/{business_id}/campaigns").json()[0][
+        "endDate"
+    ]
+    assert existing_end_date is not None
+
+    response = client.post(f"/businesses/{business_id}/campaigns/{campaign_id}/publish")
+
+    assert response.status_code == 200
+    assert response.json()["endDate"] == existing_end_date
+    parsed_end_date = datetime.fromisoformat(existing_end_date)
+    for call in mock_services["create_ad_set"].call_args_list:
+        assert call.kwargs["end_time"] == parsed_end_date
+
+
 def test_publish_resolves_real_locations_when_the_audience_has_any(
     client: TestClient,
     mock_services: dict[str, AsyncMock],
@@ -729,5 +809,116 @@ def test_publish_400s_once_already_live(client: TestClient) -> None:
     client.post(f"/businesses/{business_id}/campaigns/{campaign_id}/publish")
 
     response = client.post(f"/businesses/{business_id}/campaigns/{campaign_id}/publish")
+
+    assert response.status_code == 400
+
+
+def test_pause_requires_a_session(client: TestClient) -> None:
+    """Pausing with no session cookie returns 401."""
+    response = client.post("/businesses/some-id/campaigns/some-id/pause")
+
+    assert response.status_code == 401
+
+
+def test_pause_404s_for_a_nonexistent_campaign(client: TestClient) -> None:
+    """Pausing a nonexistent campaign returns 404."""
+    _signed_up_client(client)
+    business_id = _create_business(client)
+
+    response = client.post(f"/businesses/{business_id}/campaigns/does-not-exist/pause")
+
+    assert response.status_code == 404
+
+
+def test_pause_400s_for_a_campaign_thats_not_live(client: TestClient) -> None:
+    """A DRAFT campaign (never published) can't be paused."""
+    _signed_up_client(client)
+    business_id = _create_business(client)
+    campaign_id = _create_campaign(client, business_id)
+
+    response = client.post(f"/businesses/{business_id}/campaigns/{campaign_id}/pause")
+
+    assert response.status_code == 400
+    assert "live" in response.json()["detail"].lower()
+
+
+@pytest.mark.asyncio
+async def test_pause_succeeds_and_pauses_every_adset_in_a_test_plan_campaign(
+    client: TestClient,
+    mock_services: dict[str, AsyncMock],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """One pause call stops every AdSet in a two-variant TEST_PLAN campaign,
+    not just one — distinct from the Optimizer's single-Ad PAUSE_AD — and
+    the local mirror (AdSet/Ad rows) reflects it too, not just Meta."""
+    mock_services["create_ad_set"].side_effect = ["meta_adset_a", "meta_adset_b"]
+    mock_services["create_ad"].side_effect = ["meta_ad_a", "meta_ad_b"]
+    business_id, campaign_id = _ready_campaign(
+        client, monkeypatch=monkeypatch, test_plan=True
+    )
+    client.post(f"/businesses/{business_id}/campaigns/{campaign_id}/publish")
+
+    response = client.post(f"/businesses/{business_id}/campaigns/{campaign_id}/pause")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "PAUSED"
+    assert body["pausedReason"] == "Manually paused"
+    assert mock_services["pause_ad_set"].await_count == 2
+    paused_ids = {
+        c.kwargs["meta_ad_set_id"] for c in mock_services["pause_ad_set"].call_args_list
+    }
+    assert paused_ids == {"meta_adset_a", "meta_adset_b"}
+
+    seeder = Prisma()
+    await seeder.connect()
+    ad_sets = await seeder.adset.find_many(where={"campaignId": campaign_id})
+    ads = await seeder.ad.find_many(where={"adSetId": {"in": [a.id for a in ad_sets]}})
+    await seeder.disconnect()
+    assert len(ad_sets) == 2
+    assert all(a.status == "PAUSED" for a in ad_sets)
+    assert len(ads) == 2
+    assert all(a.status == "PAUSED" for a in ads)
+
+
+def test_pause_500s_when_the_meta_call_fails(
+    client: TestClient, mock_services: dict[str, AsyncMock]
+) -> None:
+    """A Graph API failure surfaces as 500, not a silent no-op."""
+    from app.services.meta import MetaConnectionError
+
+    business_id, campaign_id = _ready_campaign(client)
+    client.post(f"/businesses/{business_id}/campaigns/{campaign_id}/publish")
+    mock_services["pause_ad_set"].side_effect = MetaConnectionError("boom")
+
+    response = client.post(f"/businesses/{business_id}/campaigns/{campaign_id}/pause")
+
+    assert response.status_code == 500
+
+
+def test_pause_400s_if_meta_was_disconnected_after_publishing(
+    client: TestClient, mock_services: dict[str, AsyncMock]
+) -> None:
+    """A campaign can be LIVE with its Meta connection later removed
+    (DELETE .../meta) — pausing then 400s instead of crashing."""
+    business_id, campaign_id = _ready_campaign(client)
+    client.post(f"/businesses/{business_id}/campaigns/{campaign_id}/publish")
+    client.delete(f"/businesses/{business_id}/meta")
+
+    response = client.post(f"/businesses/{business_id}/campaigns/{campaign_id}/pause")
+
+    assert response.status_code == 400
+    assert "meta connection" in response.json()["detail"].lower()
+
+
+def test_pause_400s_once_already_paused(
+    client: TestClient, mock_services: dict[str, AsyncMock]
+) -> None:
+    """A campaign that's already PAUSED can't be paused again."""
+    business_id, campaign_id = _ready_campaign(client)
+    client.post(f"/businesses/{business_id}/campaigns/{campaign_id}/publish")
+    client.post(f"/businesses/{business_id}/campaigns/{campaign_id}/pause")
+
+    response = client.post(f"/businesses/{business_id}/campaigns/{campaign_id}/pause")
 
     assert response.status_code == 400

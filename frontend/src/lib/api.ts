@@ -79,6 +79,7 @@ export interface Campaign {
   eventVenueKey: string | null
   startDate: string | null
   endDate: string | null
+  pausedReason: string | null
 }
 
 export interface CampaignCreateInput {
@@ -295,6 +296,12 @@ export function approveCampaign(businessId: string, campaignId: string): Promise
 
 export function publishCampaign(businessId: string, campaignId: string): Promise<Campaign> {
   return request<Campaign>(`/businesses/${businessId}/campaigns/${campaignId}/publish`, {
+    method: 'POST',
+  })
+}
+
+export function pauseCampaign(businessId: string, campaignId: string): Promise<Campaign> {
+  return request<Campaign>(`/businesses/${businessId}/campaigns/${campaignId}/pause`, {
     method: 'POST',
   })
 }

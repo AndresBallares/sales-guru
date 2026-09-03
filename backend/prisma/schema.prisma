@@ -241,6 +241,13 @@ model Campaign {
   // recommendation), so the data-sufficiency gate's "time elapsed" leg
   // has something to measure even on runs that produce nothing.
   lastOptimizationCheckAt DateTime?
+  // Set whenever a campaign is paused, by any path — a manual pause
+  // (app/api/campaign.py), the scheduled end-date-elapsed job, or the
+  // deterministic total-spend circuit breaker
+  // (app/services/optimization_jobs.py) — so the UI can show *why* a
+  // campaign stopped, not just that it did. Null for a campaign that
+  // was never paused.
+  pausedReason            String?
   createdAt               DateTime                     @default(now())
   updatedAt               DateTime                     @updatedAt
 }

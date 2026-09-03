@@ -17,6 +17,7 @@ import {
   listProducts,
   listRecommendations,
   listTestEvaluations,
+  pauseCampaign,
   publishCampaign,
   refreshMetrics,
   rejectRecommendation,
@@ -89,6 +90,8 @@ export function CampaignsSection({ businessId }: { businessId: string }) {
 
   const [approvingId, setApprovingId] = useState<string | null>(null)
   const [approveErrors, setApproveErrors] = useState<Record<string, string>>({})
+  const [pausingId, setPausingId] = useState<string | null>(null)
+  const [pauseErrors, setPauseErrors] = useState<Record<string, string>>({})
 
   const [metrics, setMetrics] = useState<Record<string, Metric[]>>({})
   const [refreshingMetricsId, setRefreshingMetricsId] = useState<string | null>(null)
@@ -343,6 +346,28 @@ export function CampaignsSection({ businessId }: { businessId: string }) {
     }
   }
 
+  // The one-click "stop spending" action — pauses every AdSet in the
+  // campaign, not just one Ad (distinct from an Optimizer PAUSE_AD
+  // recommendation, which only ever pauses one). No confirmation dialog
+  // here on purpose: this is itself the explicit, deliberate action, and
+  // it's always reversible on Meta's side (a paused AdSet can be
+  // resumed there) even though this app doesn't yet offer a resume button.
+  async function handlePause(campaignId: string) {
+    setPausingId(campaignId)
+    setPauseErrors((prev) => ({ ...prev, [campaignId]: '' }))
+    try {
+      await pauseCampaign(businessId, campaignId)
+      await refresh()
+    } catch (err) {
+      setPauseErrors((prev) => ({
+        ...prev,
+        [campaignId]: err instanceof ApiError ? err.message : 'Could not pause campaign.',
+      }))
+    } finally {
+      setPausingId(null)
+    }
+  }
+
   async function handleRefreshMetrics(campaignId: string) {
     setRefreshingMetricsId(campaignId)
     setMetricErrors((prev) => ({ ...prev, [campaignId]: '' }))
@@ -460,10 +485,12 @@ export function CampaignsSection({ businessId }: { businessId: string }) {
             const campaignCreatives = creatives[campaign.id] ?? []
             const creativeError = creativeErrors[campaign.id]
             const approveError = approveErrors[campaign.id]
+            const pauseError = pauseErrors[campaign.id]
             const canPublish = ['PENDING_APPROVAL', 'APPROVED', 'FAILED'].includes(
               campaign.status,
             )
             const isLive = campaign.status === 'LIVE'
+            const isPaused = campaign.status === 'PAUSED'
             const campaignMetrics = metrics[campaign.id] ?? []
             const metricError = metricErrors[campaign.id]
             const latestMetric = campaignMetrics[0]
@@ -811,6 +838,18 @@ export function CampaignsSection({ businessId }: { businessId: string }) {
                     </p>
                     <button
                       type="button"
+                      onClick={() => handlePause(campaign.id)}
+                      disabled={pausingId === campaign.id}
+                    >
+                      {pausingId === campaign.id ? 'Pausing…' : 'Pause campaign'}
+                    </button>
+                    {pauseError && (
+                      <p className="form-error" role="alert">
+                        {pauseError}
+                      </p>
+                    )}
+                    <button
+                      type="button"
                       onClick={() => handleRefreshMetrics(campaign.id)}
                       disabled={refreshingMetricsId === campaign.id}
                     >
@@ -969,6 +1008,12 @@ export function CampaignsSection({ businessId }: { businessId: string }) {
                       </div>
                     )}
                   </div>
+                )}
+                {isPaused && (
+                  <p>
+                    Paused
+                    {campaign.pausedReason ? ` — ${campaign.pausedReason}` : ''}
+                  </p>
                 )}
               </li>
             )
