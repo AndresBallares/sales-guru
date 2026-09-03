@@ -1,6 +1,6 @@
 import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { MemoryRouter } from 'react-router-dom'
+import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { DashboardPage } from './DashboardPage'
 import { AuthProvider } from '../context/AuthContext'
@@ -27,9 +27,12 @@ beforeEach(() => {
 
 function renderDashboard() {
   render(
-    <MemoryRouter>
+    <MemoryRouter initialEntries={['/']}>
       <AuthProvider>
-        <DashboardPage />
+        <Routes>
+          <Route path="/" element={<DashboardPage />} />
+          <Route path="/businesses/:businessId" element={<p>Business detail page</p>} />
+        </Routes>
       </AuthProvider>
     </MemoryRouter>,
   )
@@ -70,17 +73,8 @@ describe('DashboardPage', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent('Server error')
   })
 
-  it('creates a business and refreshes the list', async () => {
-    mockedApi.listBusinesses.mockResolvedValueOnce([]).mockResolvedValueOnce([
-      {
-        id: '1',
-        name: 'Acme Widgets',
-        website: null,
-        industry: null,
-        location: null,
-        description: null,
-      },
-    ])
+  it('creates a business and navigates straight to its detail page', async () => {
+    mockedApi.listBusinesses.mockResolvedValue([])
     mockedApi.createBusiness.mockResolvedValue({
       id: '1',
       name: 'Acme Widgets',
@@ -110,7 +104,9 @@ describe('DashboardPage', () => {
         description: 'We make widgets.',
       }),
     )
-    expect(await screen.findByText('Acme Widgets')).toBeInTheDocument()
+    // Lands on the new business's own page — not left behind on a
+    // cleared, dead-end create-business form.
+    expect(await screen.findByText('Business detail page')).toBeInTheDocument()
   })
 
   it('shows an error if creating a business fails', async () => {

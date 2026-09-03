@@ -1,10 +1,11 @@
 import { useEffect, useState, type FormEvent } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import { ApiError, createBusiness, listBusinesses, type Business } from '../lib/api'
 
 export function DashboardPage() {
   const { user, logout } = useAuth()
+  const navigate = useNavigate()
 
   const [businesses, setBusinesses] = useState<Business[]>([])
   const [loadingBusinesses, setLoadingBusinesses] = useState(true)
@@ -39,19 +40,14 @@ export function DashboardPage() {
     setFormError(null)
     setSubmitting(true)
     try {
-      await createBusiness({
+      const business = await createBusiness({
         name,
         website: website || undefined,
         industry: industry || undefined,
         location: location || undefined,
         description: description || undefined,
       })
-      setName('')
-      setWebsite('')
-      setIndustry('')
-      setLocation('')
-      setDescription('')
-      await refreshBusinesses()
+      navigate(`/businesses/${business.id}`)
     } catch (err) {
       setFormError(err instanceof ApiError ? err.message : 'Could not create business.')
     } finally {
