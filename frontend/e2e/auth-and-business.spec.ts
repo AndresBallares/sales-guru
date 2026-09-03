@@ -33,14 +33,13 @@ test('sign up, create a business, log out, log back in', async ({ page }) => {
   await page.getByLabel('Location').fill('CDMX')
   await page.getByRole('button', { name: 'Create business' }).click()
 
-  await expect(page.getByText('Acme Widgets — Manufacturing · CDMX')).toBeVisible()
-
-  const dashboardResults = await new AxeBuilder({ page }).analyze()
-  expect(dashboardResults.violations).toEqual([])
-
-  await page.getByRole('link', { name: 'Acme Widgets' }).click()
+  // Creating a business navigates straight to its own detail page — no
+  // dead-end empty form left behind on the dashboard.
   await expect(page.getByRole('heading', { name: 'Acme Widgets' })).toBeVisible()
   await expect(page.getByText('No products yet')).toBeVisible()
+
+  const businessDetailResults = await new AxeBuilder({ page }).analyze()
+  expect(businessDetailResults.violations).toEqual([])
 
   await page.getByLabel('What do you sell?').fill('Handmade leather wallets')
   await page.getByLabel('Price').fill('49.99')
@@ -69,11 +68,15 @@ test('sign up, create a business, log out, log back in', async ({ page }) => {
 
   await expect(page.getByText('Spring Wallet Sale — Sales — DRAFT')).toBeVisible()
 
-  const businessDetailResults = await new AxeBuilder({ page }).analyze()
-  expect(businessDetailResults.violations).toEqual([])
+  const campaignResults = await new AxeBuilder({ page }).analyze()
+  expect(campaignResults.violations).toEqual([])
 
   await page.getByRole('link', { name: '← Back to dashboard' }).click()
   await expect(page.getByRole('heading', { name: 'Sales Guru' })).toBeVisible()
+  await expect(page.getByText('Acme Widgets — Manufacturing · CDMX')).toBeVisible()
+
+  const dashboardResults = await new AxeBuilder({ page }).analyze()
+  expect(dashboardResults.violations).toEqual([])
 
   await page.getByRole('button', { name: 'Log out' }).click()
   await expect(page.getByRole('heading', { name: 'Log in' })).toBeVisible()
