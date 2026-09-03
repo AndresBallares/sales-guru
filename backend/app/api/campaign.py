@@ -64,6 +64,7 @@ def _to_response(campaign: Campaign) -> CampaignResponse:
         start_date=campaign.startDate,
         end_date=campaign.endDate,
         paused_reason=campaign.pausedReason,
+        daily_spend_flag=campaign.dailySpendFlag,
     )
 
 

@@ -40,12 +40,14 @@ from app.schemas.strategy import (
     NormalizedMetrics,
     TargetAudience,
     TestPlanContent,
+    UnitEconomicsFields,
 )
 from app.schemas.test_evaluation import GeneratedTestEvaluation
 from app.services import meta as meta_service_module
 from app.services import optimization_jobs
 from app.services import optimizer as optimizer_module
 from app.services import strategist as strategist_module
+from app.services.benchmarks import JEWELRY_META_BENCHMARKS
 from app.services.meta import CampaignInsights, MetaConnectionError
 from fastapi.testclient import TestClient
 from prisma import Prisma
@@ -256,6 +258,7 @@ async def _seed_metric(
     conversions: int = 8,
     ad_set_id: str | None = None,
     cac: float | None = None,
+    purchases: int | None = None,
 ) -> None:
     """Insert a Metric snapshot with a controlled fetchedAt via a fresh connection."""
     seeder = Prisma()
@@ -269,6 +272,7 @@ async def _seed_metric(
             "spend": spend,
             "conversions": conversions,
             "cac": cac,
+            "purchases": purchases,
             "fetchedAt": fetched_at,
         }
     )
@@ -569,6 +573,241 @@ def test_circuit_breaker_never_touches_a_data_driven_strategy_campaign(
     campaign = _campaign_status(client, business_id, campaign_id)
     assert campaign["status"] == "LIVE"
     mock_services["pause_ad_set"].assert_not_awaited()
+
+
+# --- _enforce_cac_circuit_breaker (via collect_metrics_for_all_live_campaigns) ---
+
+
+@pytest.mark.asyncio
+async def test_cac_circuit_breaker_pauses_when_rolling_cac_exceeds_2x_target(
+    client: TestClient, mock_services: dict[str, AsyncMock]
+) -> None:
+    """Rolling 3-day CAC blowing past 2x the target (the jewelry benchmark
+    median, $55, since the default fake strategy has no product unit
+    economics) auto-pauses — deterministic, no LLM call involved."""
+    business_id, campaign_id = _live_campaign(client)
+    await _seed_metric(
+        campaign_id,
+        fetched_at=datetime.now(UTC) - timedelta(days=4),
+        spend=0.0,
+        conversions=0,
+        purchases=0,
+    )
+    mock_services["insights"].return_value = CampaignInsights(
+        impressions=1000, clicks=100, spend=1200.0, conversions=10, purchases=10
+    )
+
+    _run(client, optimization_jobs.collect_metrics_for_all_live_campaigns)
+
+    campaign = _campaign_status(client, business_id, campaign_id)
+    assert campaign["status"] == "PAUSED"
+    assert "Rolling 3-day CAC" in str(campaign["pausedReason"])
+    mock_services["pause_ad_set"].assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_cac_circuit_breaker_leaves_a_campaign_within_target_live(
+    client: TestClient, mock_services: dict[str, AsyncMock]
+) -> None:
+    """A rolling CAC within 2x the target doesn't trigger anything."""
+    business_id, campaign_id = _live_campaign(client)
+    await _seed_metric(
+        campaign_id,
+        fetched_at=datetime.now(UTC) - timedelta(days=4),
+        spend=0.0,
+        conversions=0,
+        purchases=0,
+    )
+    mock_services["insights"].return_value = CampaignInsights(
+        impressions=1000, clicks=100, spend=500.0, conversions=10, purchases=10
+    )
+
+    _run(client, optimization_jobs.collect_metrics_for_all_live_campaigns)
+
+    campaign = _campaign_status(client, business_id, campaign_id)
+    assert campaign["status"] == "LIVE"
+    mock_services["pause_ad_set"].assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_cac_circuit_breaker_pauses_on_real_spend_with_zero_purchases(
+    client: TestClient, mock_services: dict[str, AsyncMock]
+) -> None:
+    """Real spend with zero purchases over the window is worse than any
+    finite CAC ratio — not silently skipped as "can't compute"."""
+    business_id, campaign_id = _live_campaign(client)
+    await _seed_metric(
+        campaign_id,
+        fetched_at=datetime.now(UTC) - timedelta(days=4),
+        spend=0.0,
+        conversions=0,
+        purchases=0,
+    )
+    mock_services["insights"].return_value = CampaignInsights(
+        impressions=1000, clicks=100, spend=150.0, conversions=0, purchases=0
+    )
+
+    _run(client, optimization_jobs.collect_metrics_for_all_live_campaigns)
+
+    campaign = _campaign_status(client, business_id, campaign_id)
+    assert campaign["status"] == "PAUSED"
+    assert "zero purchases" in str(campaign["pausedReason"])
+
+
+@pytest.mark.asyncio
+async def test_cac_circuit_breaker_skips_below_the_minimum_rolling_spend(
+    client: TestClient, mock_services: dict[str, AsyncMock]
+) -> None:
+    """A rolling window with less than $100 of spend isn't trusted yet,
+    however bad the ratio looks."""
+    business_id, campaign_id = _live_campaign(client)
+    await _seed_metric(
+        campaign_id,
+        fetched_at=datetime.now(UTC) - timedelta(days=4),
+        spend=1195.0,
+        conversions=10,
+        purchases=10,
+    )
+    mock_services["insights"].return_value = CampaignInsights(
+        impressions=1000, clicks=100, spend=1200.0, conversions=10, purchases=10
+    )
+
+    _run(client, optimization_jobs.collect_metrics_for_all_live_campaigns)
+
+    campaign = _campaign_status(client, business_id, campaign_id)
+    assert campaign["status"] == "LIVE"
+    mock_services["pause_ad_set"].assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_cac_circuit_breaker_uses_the_products_own_target_cac(
+    client: TestClient,
+    mock_services: dict[str, AsyncMock],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A campaign with real product unit economics is judged against its
+    own target_cac, not the industry benchmark — never blended."""
+    strategy_with_economics = _FAKE_STRATEGY.model_copy(
+        update={
+            "unit_economics": UnitEconomicsFields(
+                gross_profit=200.0,
+                breakeven_cac=200.0,
+                target_cac=1000.0,
+                breakeven_roas=2.5,
+            )
+        }
+    )
+    monkeypatch.setattr(
+        strategy_module,
+        "generate_strategy",
+        AsyncMock(return_value=strategy_with_economics),
+    )
+    _signed_up_client(client)
+    business_id = _create_business(client)
+    _connect_meta(client, business_id)
+    campaign_id = _publish_campaign(client, business_id)
+
+    await _seed_metric(
+        campaign_id,
+        fetched_at=datetime.now(UTC) - timedelta(days=4),
+        spend=0.0,
+        conversions=0,
+        purchases=0,
+    )
+    # $1200 for 10 purchases = $120 CAC — under 2x this product's own
+    # $1,000 target, even though it would blow well past 2x the $55
+    # jewelry benchmark median.
+    mock_services["insights"].return_value = CampaignInsights(
+        impressions=1000, clicks=100, spend=1200.0, conversions=10, purchases=10
+    )
+
+    _run(client, optimization_jobs.collect_metrics_for_all_live_campaigns)
+
+    campaign = _campaign_status(client, business_id, campaign_id)
+    assert campaign["status"] == "LIVE"
+    assert JEWELRY_META_BENCHMARKS.cac.median < 120 / 2  # sanity: benchmark would fire
+
+
+# --- _enforce_daily_spend_flag (via collect_metrics_for_all_live_campaigns) ---
+
+
+@pytest.mark.asyncio
+async def test_daily_spend_flag_set_when_a_days_spend_exceeds_1_25x_budget(
+    client: TestClient, mock_services: dict[str, AsyncMock]
+) -> None:
+    """A single day's spend over 1.25x the ad set's daily budget flags the
+    campaign — a monitoring signal, never a pause."""
+    business_id, campaign_id = _live_campaign(client)
+    await _seed_metric(
+        campaign_id,
+        fetched_at=datetime.now(UTC) - timedelta(days=1, hours=1),
+        spend=0.0,
+        conversions=0,
+    )
+    # The fake strategy's DATA_DRIVEN_STRATEGY budget_recommendation.daily
+    # is $25 — 1.25x that is $31.25.
+    mock_services["insights"].return_value = CampaignInsights(
+        impressions=1000, clicks=100, spend=40.0, conversions=2
+    )
+
+    _run(client, optimization_jobs.collect_metrics_for_all_live_campaigns)
+
+    campaign = _campaign_status(client, business_id, campaign_id)
+    assert campaign["status"] == "LIVE"
+    assert campaign["dailySpendFlag"] is not None
+    assert "1.25x" in str(campaign["dailySpendFlag"])
+    mock_services["pause_ad_set"].assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_daily_spend_flag_stays_clear_within_budget(
+    client: TestClient, mock_services: dict[str, AsyncMock]
+) -> None:
+    """A day's spend within 1.25x the budget never sets the flag."""
+    business_id, campaign_id = _live_campaign(client)
+    await _seed_metric(
+        campaign_id,
+        fetched_at=datetime.now(UTC) - timedelta(days=1, hours=1),
+        spend=0.0,
+        conversions=0,
+    )
+    mock_services["insights"].return_value = CampaignInsights(
+        impressions=1000, clicks=100, spend=20.0, conversions=2
+    )
+
+    _run(client, optimization_jobs.collect_metrics_for_all_live_campaigns)
+
+    campaign = _campaign_status(client, business_id, campaign_id)
+    assert campaign["dailySpendFlag"] is None
+
+
+@pytest.mark.asyncio
+async def test_daily_spend_flag_clears_once_no_longer_overspending(
+    client: TestClient, mock_services: dict[str, AsyncMock]
+) -> None:
+    """The flag is refreshed every cycle — it clears once the condition
+    that set it no longer holds, rather than staying stuck."""
+    business_id, campaign_id = _live_campaign(client)
+    seeder = Prisma()
+    await seeder.connect()
+    await seeder.campaign.update(
+        where={"id": campaign_id}, data={"dailySpendFlag": "stale flag from before"}
+    )
+    await seeder.disconnect()
+    await _seed_metric(
+        campaign_id,
+        fetched_at=datetime.now(UTC) - timedelta(days=1, hours=1),
+        spend=0.0,
+        conversions=0,
+    )
+    mock_services["insights"].return_value = CampaignInsights(
+        impressions=1000, clicks=100, spend=20.0, conversions=2
+    )
+
+    _run(client, optimization_jobs.collect_metrics_for_all_live_campaigns)
+
+    campaign = _campaign_status(client, business_id, campaign_id)
+    assert campaign["dailySpendFlag"] is None
 
 
 # --- pause_expired_campaigns -------------------------------------------------

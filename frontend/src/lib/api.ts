@@ -80,6 +80,7 @@ export interface Campaign {
   startDate: string | null
   endDate: string | null
   pausedReason: string | null
+  dailySpendFlag: string | null
 }
 
 export interface CampaignCreateInput {

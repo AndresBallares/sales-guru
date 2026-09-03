@@ -41,6 +41,7 @@ from app.schemas.strategy import (
     primary_audience,
 )
 from app.services import geo, meta
+from app.services.benchmarks import JEWELRY_META_BENCHMARKS
 from app.services.event_venues import EVENT_VENUES
 from app.services.interests import INTERESTS
 from app.services.meta import CustomLocation, ResolvedGeoLocation
@@ -160,6 +161,7 @@ async def _publish_single_variant(
     pixel_id: str | None,
     custom_location: CustomLocation | None,
     end_time: datetime | None,
+    target_cac_cents: int,
 ) -> None:
     """DATA_DRIVEN_STRATEGY (and pre-"Phase C" TEST_PLAN) path — one AdSet/Ad."""
     audience = primary_audience(strategy)
@@ -184,6 +186,7 @@ async def _publish_single_variant(
         resolved_locations=resolved_locations,
         interests=_resolve_interests(audience),
         end_time=end_time,
+        target_cac_cents=target_cac_cents,
     )
     meta_ad_id = await meta.create_meta_ad(
         access_token=connection.accessToken,
@@ -231,6 +234,7 @@ async def _publish_test_plan_variant(
     pixel_id: str | None,
     custom_location: CustomLocation | None,
     end_time: datetime | None,
+    target_cac_cents: int,
 ) -> None:
     """Publish one TEST_PLAN audience variant as its own real AdSet/Ad.
 
@@ -263,6 +267,7 @@ async def _publish_test_plan_variant(
         interests=_resolve_interests(variant.targeting),
         advantage_audience=1 if variant.is_baseline else 0,
         end_time=end_time,
+        target_cac_cents=target_cac_cents,
     )
     meta_ad_id = await meta.create_meta_ad(
         access_token=connection.accessToken,
@@ -378,6 +383,20 @@ async def publish_campaign_to_meta(
     if end_time is None and strategy.plan_type == "TEST_PLAN":
         end_time = datetime.now(UTC) + timedelta(days=strategy.duration_days)
 
+    # The campaign's own product economics win when available (never
+    # blended with the industry benchmark — same "two separate numbers,
+    # picked from, not averaged" principle as the TEST_PLAN success
+    # criteria, app/services/strategist.py's _build_success_criteria);
+    # the jewelry CAC benchmark median is the fallback so every campaign
+    # always publishes with a real cost cap, not just ones with a priced
+    # product.
+    target_cac = (
+        strategy.unit_economics.target_cac
+        if strategy.unit_economics is not None
+        else JEWELRY_META_BENCHMARKS.cac.median
+    )
+    target_cac_cents = round(target_cac * 100)
+
     meta_campaign_id = await meta.create_meta_campaign(
         access_token=connection.accessToken,
         ad_account_id=ad_account_id,
@@ -413,6 +432,7 @@ async def publish_campaign_to_meta(
                 pixel_id=pixel_id,
                 custom_location=custom_location,
                 end_time=end_time,
+                target_cac_cents=target_cac_cents,
             )
     else:
         await _publish_single_variant(
@@ -428,6 +448,7 @@ async def publish_campaign_to_meta(
             pixel_id=pixel_id,
             custom_location=custom_location,
             end_time=end_time,
+            target_cac_cents=target_cac_cents,
         )
 
     update_data: CampaignUpdateInput = {

@@ -360,6 +360,7 @@ async def create_meta_ad_set(
     interests: list[dict[str, str]] | None = None,
     advantage_audience: int = 0,
     end_time: datetime | None = None,
+    target_cac_cents: int | None = None,
 ) -> str:
     """Create a live AdSet object on Meta, under an already-created campaign.
 
@@ -377,11 +378,18 @@ async def create_meta_ad_set(
     this flag whenever explicit targeting is given at all, so it's always
     sent explicitly rather than left unset.
 
-    bid_strategy is fixed to LOWEST_COST_WITHOUT_CAP (automatic bidding,
-    no manual cap) — also newly required by Meta (same date), and the
-    only strategy that needs no additional bid_amount/bid_constraints
-    input, consistent with this app not collecting manual bid input
-    anywhere.
+    bid_strategy is COST_CAP when target_cac_cents is given — Meta bids
+    to stay near that per-result cost rather than chasing the lowest
+    cost regardless of price (requested and confirmed 2026-09-03, a
+    guardrail complementing the deterministic rolling-CAC circuit
+    breaker in app/services/optimization_jobs.py, since Meta itself
+    doesn't guarantee adherence to a cost cap). Falls back to
+    LOWEST_COST_WITHOUT_CAP (automatic bidding, no manual cap, this
+    app's original default) when no target is given at all — the caller
+    (app/services/publish.py) always resolves one in practice (the
+    campaign's own product economics, or the jewelry CAC benchmark
+    median as a fallback), so this only matters for a caller that
+    deliberately opts out.
 
     Args:
         access_token: The business's Meta access token.
@@ -439,6 +447,12 @@ async def create_meta_ad_set(
             backstop for a campaign published before this parameter
             existed, or in case Meta doesn't actually honor end_time as
             documented.
+        target_cac_cents: The per-result cost to bid toward (COST_CAP's
+            `bid_amount`), in the ad account's minor currency unit —
+            same cents convention as daily_budget_cents. None uses
+            LOWEST_COST_WITHOUT_CAP instead (no cap at all). Not yet
+            verified against a real live publish, same caution as
+            end_time above.
 
     Returns:
         The new Meta ad set id.
@@ -483,10 +497,14 @@ async def create_meta_ad_set(
         "daily_budget": str(daily_budget_cents),
         "billing_event": "IMPRESSIONS",
         "optimization_goal": optimization_goal,
-        "bid_strategy": "LOWEST_COST_WITHOUT_CAP",
+        "bid_strategy": "COST_CAP"
+        if target_cac_cents is not None
+        else "LOWEST_COST_WITHOUT_CAP",
         "targeting": targeting,
         "status": "ACTIVE",
     }
+    if target_cac_cents is not None:
+        data["bid_amount"] = str(target_cac_cents)
     if pixel_id is not None:
         data["promoted_object"] = json.dumps(
             {"pixel_id": pixel_id, "custom_event_type": "PURCHASE"}
@@ -627,6 +645,13 @@ class CampaignInsights(NamedTuple):
     cac: float | None = None
     purchase_value: float | None = None
     roas: float | None = None
+    # Purchase-specific count (_PURCHASE_ACTION_TYPES below), distinct
+    # from the broader `conversions` sum — stored so a rolling-window CAC
+    # (spend delta / purchases delta between two snapshots) can be
+    # computed later; `cac` above is only ever a lifetime-to-date ratio,
+    # not something deltas can be taken of directly (app/services/
+    # optimization_jobs.py's CAC circuit breaker).
+    purchases: int | None = None
 
 
 # Meta's own action_type values for the funnel steps the extended metric
@@ -743,6 +768,7 @@ async def _fetch_insights(
         cac=(spend / purchases) if purchases else None,
         purchase_value=purchase_value if action_values else None,
         roas=(purchase_value / spend) if spend and action_values else None,
+        purchases=purchases if actions else None,
     )
 
 

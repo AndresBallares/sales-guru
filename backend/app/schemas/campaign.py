@@ -47,3 +47,4 @@ class CampaignResponse(CamelCaseModel):
     start_date: datetime | None
     end_date: datetime | None
     paused_reason: str | None
+    daily_spend_flag: str | None

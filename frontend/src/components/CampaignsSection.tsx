@@ -836,6 +836,9 @@ export function CampaignsSection({ businessId }: { businessId: string }) {
                       Live on Meta
                       {campaign.metaCampaignId ? ` (id: ${campaign.metaCampaignId})` : ''}
                     </p>
+                    {campaign.dailySpendFlag && (
+                      <p role="alert">⚠ {campaign.dailySpendFlag}</p>
+                    )}
                     <button
                       type="button"
                       onClick={() => handlePause(campaign.id)}

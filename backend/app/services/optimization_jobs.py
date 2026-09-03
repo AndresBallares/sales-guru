@@ -11,13 +11,21 @@ Three jobs, in-process, no new infrastructure (confirmed with the user
 2026-08-09 — see PRD.md build step 10):
 
 - collect_metrics_for_all_live_campaigns: every 15 min, the "Metrics
-  Collector" tier. Also runs one deterministic, non-LLM decision right
-  after collection — the total-spend circuit breaker
-  (_enforce_spend_circuit_breaker) — since it needs the same
-  freshly-fetched spend figure the collection step already has. Not "zero
-  decisions" as originally scoped; this is a hard guardrail, not an
-  optimization judgment call, so it stays in the collection job rather
-  than waiting for the hourly evaluation cycle below.
+  Collector" tier. Also runs three deterministic, non-LLM decisions right
+  after collection, since they need the same freshly-fetched numbers the
+  collection step already has — not "zero decisions" as originally
+  scoped; these are hard guardrails, not optimization judgment calls, so
+  they stay in the collection job rather than waiting for the hourly
+  evaluation cycle below:
+  - _enforce_spend_circuit_breaker — a TEST_PLAN's combined spend
+    exceeding its fixed total_budget auto-pauses it.
+  - _enforce_cac_circuit_breaker — a rolling 3-day CAC (any plan type)
+    blowing past 2x the target CAC (the campaign's own product
+    economics, or the jewelry benchmark median as a fallback) auto-pauses
+    it too, once at least $100 of rolling spend makes the ratio trustworthy.
+  - _enforce_daily_spend_flag — a monitoring-only signal (never pauses):
+    any AdSet's own last-24h spend exceeding 1.25x its daily budget sets
+    Campaign.dailySpendFlag, cleared back to null once it's no longer true.
 - evaluate_all_live_campaigns: every 60 min, the "Trigger/Scheduler" +
   "Daily Optimization" tiers collapsed into one job — checks the Event +
   Time + Data Sufficiency gate per campaign, and only actually spends an
@@ -49,9 +57,10 @@ needed.
 
 import json
 import logging
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from prisma.models import (
+    AdSet,
     Campaign,
     MetaConnection,
     Metric,
@@ -64,6 +73,7 @@ from app.core.db import db
 from app.core.meta_connection import get_meta_connection
 from app.schemas.strategy import StrategyContentAdapter, TestPlanContent
 from app.services import optimizer
+from app.services.benchmarks import JEWELRY_META_BENCHMARKS
 from app.services.meta import (
     CampaignInsights,
     MetaConnectionError,
@@ -104,6 +114,7 @@ def _metric_create_data(
         "cac": insights.cac,
         "purchaseValue": insights.purchase_value,
         "roas": insights.roas,
+        "purchases": insights.purchases,
     }
 
 
@@ -242,17 +253,199 @@ async def _enforce_spend_circuit_breaker(
     )
 
 
+async def _grouped_metrics(campaign_id: str) -> dict[str | None, list[Metric]]:
+    """Every Metric snapshot for a campaign, grouped by adSetId.
+
+    None is the group key for the campaign-level aggregate stream.
+    """
+    metrics = await db.metric.find_many(where={"campaignId": campaign_id})
+    groups: dict[str | None, list[Metric]] = {}
+    for metric in metrics:
+        groups.setdefault(metric.adSetId, []).append(metric)
+    return groups
+
+
+_MIN_ROLLING_SPEND_FOR_CAC_CHECK = 100.0
+_CAC_OVERSPEND_MULTIPLE = 2.0
+_ROLLING_CAC_WINDOW = timedelta(days=3)
+
+
+async def _rolling_spend_and_purchases(
+    campaign_id: str, window: timedelta, *, now: datetime | None = None
+) -> tuple[float, int] | None:
+    """Combined (delta_spend, delta_purchases) over `window`, summed across every group.
+
+    Each AdSet group (or the single campaign-level group, adSetId None)
+    is deltaed independently against its own snapshot nearest `window`
+    ago, then summed — same "one variant's own trend, summed for a
+    campaign-wide total" reasoning as _latest_total_spend, just windowed
+    instead of lifetime-to-date.
+
+    Args:
+        campaign_id: The campaign to check.
+        window: How far back to look (e.g. 3 days for the CAC breaker).
+        now: Injectable for tests; defaults to the real current time.
+
+    Returns:
+        None if no group has any snapshot old enough for a real window
+        yet (not "zero spend" — genuinely not enough history to trust).
+    """
+    now = now or datetime.now(UTC)
+    cutoff = now - window
+    groups = await _grouped_metrics(campaign_id)
+    total_spend = 0.0
+    total_purchases = 0
+    any_window = False
+    for group_metrics in groups.values():
+        latest = max(group_metrics, key=lambda m: m.fetchedAt)
+        baseline = optimizer.nearest_metric_at_or_before(group_metrics, cutoff)
+        if baseline is None or baseline.id == latest.id:
+            continue
+        any_window = True
+        total_spend += latest.spend - baseline.spend
+        total_purchases += (latest.purchases or 0) - (baseline.purchases or 0)
+    return (total_spend, total_purchases) if any_window else None
+
+
+async def _enforce_cac_circuit_breaker(
+    campaign: Campaign, connection: MetaConnection
+) -> None:
+    """Deterministic, non-LLM guardrail: auto-pause a campaign with a blown-up CAC.
+
+    Complements _enforce_spend_circuit_breaker (a fixed total budget, TEST_PLAN
+    only) with an efficiency check that applies to any live campaign,
+    either plan type — target_cac is a product-level concept, not a
+    TEST_PLAN-specific one. Never an LLM judgment call, same "backend
+    rules apply before/instead of the LLM" principle throughout this
+    build.
+
+    Args:
+        campaign: The live campaign to check. Caller has already
+            confirmed it's LIVE and Meta-connected.
+        connection: The business's Meta connection, for the actual pause
+            call if the breaker fires.
+
+    Raises:
+        MetaConnectionError: If pausing fails partway through.
+    """
+    strategy = await db.strategy.find_unique(where={"campaignId": campaign.id})
+    if strategy is None:
+        return
+    content = StrategyContentAdapter.validate_json(strategy.content)
+    # The campaign's own product economics win when available — never
+    # blended with the industry benchmark (app/services/strategist.py's
+    # _build_success_criteria) — the benchmark median is the fallback so
+    # this check still means something for a campaign with no priced
+    # product.
+    target_cac = (
+        content.unit_economics.target_cac
+        if content.unit_economics is not None
+        else JEWELRY_META_BENCHMARKS.cac.median
+    )
+
+    window = await _rolling_spend_and_purchases(campaign.id, _ROLLING_CAC_WINDOW)
+    if window is None:
+        return
+    delta_spend, delta_purchases = window
+    if delta_spend < _MIN_ROLLING_SPEND_FOR_CAC_CHECK:
+        return
+
+    if delta_purchases > 0:
+        rolling_cac = delta_spend / delta_purchases
+        if rolling_cac <= target_cac * _CAC_OVERSPEND_MULTIPLE:
+            return
+        reason = (
+            f"Rolling 3-day CAC ${rolling_cac:,.2f} exceeded "
+            f"{_CAC_OVERSPEND_MULTIPLE:g}x the ${target_cac:,.2f} target "
+            f"(${delta_spend:,.2f} spent for {delta_purchases} purchases)"
+        )
+    else:
+        # Real spend, zero purchases over the whole window — worse than
+        # any finite CAC ratio, not silently skipped as "can't compute."
+        reason = (
+            f"${delta_spend:,.2f} spent over the last 3 days with zero "
+            f"purchases (target CAC ${target_cac:,.2f})"
+        )
+
+    logger.warning("CAC circuit breaker: campaign %s — %s", campaign.id, reason)
+    await pause_campaign(campaign=campaign, connection=connection, reason=reason)
+
+
+_DAILY_OVERSPEND_MULTIPLE = 1.25
+_DAILY_SPEND_WINDOW = timedelta(days=1)
+
+
+def _real_ad_set_group_key(ad_set: AdSet, real_ad_set_count: int) -> str | None:
+    """The Metric.adSetId this AdSet's own snapshots are actually tagged with.
+
+    Per-AdSet collection (Phase C) tags rows with the AdSet's own id only
+    once a campaign has 2+ real variant AdSets (_collect_metrics_for_campaign);
+    a campaign with exactly one real AdSet still collects at the
+    campaign level (adSetId None) — same fallback that function uses,
+    mirrored here so this AdSet's own daily spend can be found at all.
+    """
+    return ad_set.id if real_ad_set_count >= 2 else None
+
+
+async def _enforce_daily_spend_flag(campaign: Campaign) -> None:
+    """Deterministic monitoring signal — never pauses, just flags.
+
+    Meta's own daily-budget pacing can overspend up to ~25% on a given
+    day, evened out across a calendar week (Meta's own documented
+    policy) — a single day over that isn't itself cause to stop the
+    campaign, just to surface. Refreshed every cycle: set (or updated)
+    while any AdSet's own last-24h spend exceeds 1.25x its configured
+    daily budget, cleared back to null once none do — so this always
+    reflects current state, not a one-time stuck alert.
+
+    Args:
+        campaign: The live campaign to check.
+    """
+    ad_sets = await db.adset.find_many(where={"campaignId": campaign.id})
+    real_ad_sets = [a for a in ad_sets if a.metaAdSetId is not None]
+    groups = await _grouped_metrics(campaign.id)
+    cutoff = datetime.now(UTC) - _DAILY_SPEND_WINDOW
+
+    overspending: list[str] = []
+    for ad_set in real_ad_sets:
+        group_metrics = groups.get(
+            _real_ad_set_group_key(ad_set, len(real_ad_sets)), []
+        )
+        if not group_metrics:
+            continue
+        latest = max(group_metrics, key=lambda m: m.fetchedAt)
+        baseline = optimizer.nearest_metric_at_or_before(group_metrics, cutoff)
+        if baseline is None or baseline.id == latest.id:
+            continue
+        delta_spend = latest.spend - baseline.spend
+        if delta_spend > ad_set.budget * _DAILY_OVERSPEND_MULTIPLE:
+            overspending.append(
+                f"{ad_set.name}: ${delta_spend:,.2f} vs "
+                f"${ad_set.budget:,.2f}/day budget"
+            )
+
+    flag = (
+        "Daily spend above 1.25x budget — " + "; ".join(overspending)
+        if overspending
+        else None
+    )
+    if flag != campaign.dailySpendFlag:
+        await db.campaign.update(
+            where={"id": campaign.id}, data={"dailySpendFlag": flag}
+        )
+
+
 async def collect_metrics_for_all_live_campaigns() -> None:
-    """Collect fresh metrics, then run the total-spend circuit breaker.
+    """Collect fresh metrics, then run the deterministic spend guardrails.
 
     Skips (logs, doesn't raise) any campaign whose Meta call fails, so
     one bad campaign never blocks the rest of the batch — unlike the
     manual "Refresh results" endpoint (app/api/metric.py), which is
     user-triggered and should surface a failure immediately instead of
-    silently skipping. The circuit breaker check still runs even when
-    this cycle's own fetch failed — it compares against whatever's
-    already stored, since a prior cycle's spend crossing the threshold
-    is still valid grounds to pause.
+    silently skipping. The guardrail checks still run even when this
+    cycle's own fetch failed — they compare against whatever's already
+    stored, since a prior cycle's numbers crossing a threshold is still
+    valid grounds to act.
     """
     campaigns = await db.campaign.find_many(where={"status": "LIVE"})
     for campaign in campaigns:
@@ -264,6 +457,16 @@ async def collect_metrics_for_all_live_campaigns() -> None:
         await _collect_metrics_for_campaign(campaign, connection.accessToken)
         try:
             await _enforce_spend_circuit_breaker(campaign, connection)
+            # Re-fetch: the total-spend breaker above may have just paused
+            # it, and the CAC breaker/daily flag below have no business
+            # running against a campaign that's no longer LIVE (a second
+            # breaker firing on the same stale in-memory `campaign` would
+            # otherwise re-pause an already-paused campaign and overwrite
+            # its real pausedReason).
+            current = await db.campaign.find_unique(where={"id": campaign.id})
+            if current is not None and current.status == "LIVE":
+                await _enforce_cac_circuit_breaker(current, connection)
+                await _enforce_daily_spend_flag(current)
         except MetaConnectionError:
             logger.warning("Circuit breaker pause failed for campaign %s", campaign.id)
 

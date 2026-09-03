@@ -347,6 +347,32 @@ async def test_create_meta_ad_set_returns_the_new_id(
     assert '"geo_locations": {"countries": ["US"]}' in data["targeting"]
     assert "promoted_object" not in data
     assert "end_time" not in data
+    assert "bid_amount" not in data
+
+
+@pytest.mark.asyncio
+async def test_create_meta_ad_set_uses_cost_cap_when_a_target_cac_is_given(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A given target_cac_cents switches bid_strategy to COST_CAP with that
+    bid_amount."""
+    client = _mock_client_returning(monkeypatch, _FakeResponse({"id": "adset_123"}))
+
+    await meta.create_meta_ad_set(
+        access_token="token",
+        ad_account_id="act_1",
+        name="Vegas Bridal Push",
+        meta_campaign_id="campaign_123",
+        daily_budget_cents=2500,
+        optimization_goal="OFFSITE_CONVERSIONS",
+        age_min=30,
+        age_max=55,
+        target_cac_cents=5500,
+    )
+
+    _url, data = client.calls[0]
+    assert data["bid_strategy"] == "COST_CAP"
+    assert data["bid_amount"] == "5500"
 
 
 @pytest.mark.asyncio

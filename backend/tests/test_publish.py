@@ -29,10 +29,12 @@ from app.schemas.strategy import (
     TargetAudience,
     TargetLocation,
     TestPlanContent,
+    UnitEconomicsFields,
 )
 from app.services import geo as geo_module
 from app.services import meta as meta_service_module
 from app.services import strategist as strategist_module
+from app.services.benchmarks import JEWELRY_META_BENCHMARKS
 from app.services.event_venues import EVENT_VENUES
 from app.services.meta import ResolvedGeoLocation
 from app.services.publish import requires_pixel
@@ -582,6 +584,53 @@ def test_publish_sends_no_end_time_for_a_data_driven_strategy(
     assert response.json()["endDate"] is None
     _, kwargs = mock_services["create_ad_set"].call_args
     assert kwargs["end_time"] is None
+
+
+def test_publish_uses_the_jewelry_cac_benchmark_as_the_default_bid_cap(
+    client: TestClient, mock_services: dict[str, AsyncMock]
+) -> None:
+    """No product unit economics (the default fake strategy has none) falls
+    back to the jewelry CAC benchmark median as the COST_CAP bid_amount —
+    never left uncapped."""
+    business_id, campaign_id = _ready_campaign(client)
+
+    response = client.post(f"/businesses/{business_id}/campaigns/{campaign_id}/publish")
+
+    assert response.status_code == 200
+    _, kwargs = mock_services["create_ad_set"].call_args
+    assert kwargs["target_cac_cents"] == round(JEWELRY_META_BENCHMARKS.cac.median * 100)
+
+
+def test_publish_uses_the_products_own_target_cac_when_available(
+    client: TestClient,
+    mock_services: dict[str, AsyncMock],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A campaign with real product unit economics uses its own target_cac
+    as the COST_CAP bid_amount, not the industry benchmark — the two are
+    never blended (app/services/strategist.py's _build_success_criteria)."""
+    strategy_with_economics = _FAKE_STRATEGY.model_copy(
+        update={
+            "unit_economics": UnitEconomicsFields(
+                gross_profit=200.0,
+                breakeven_cac=200.0,
+                target_cac=66.0,
+                breakeven_roas=2.5,
+            )
+        }
+    )
+    monkeypatch.setattr(
+        strategy_module,
+        "generate_strategy",
+        AsyncMock(return_value=strategy_with_economics),
+    )
+    business_id, campaign_id = _ready_campaign(client)
+
+    response = client.post(f"/businesses/{business_id}/campaigns/{campaign_id}/publish")
+
+    assert response.status_code == 200
+    _, kwargs = mock_services["create_ad_set"].call_args
+    assert kwargs["target_cac_cents"] == 6600
 
 
 def test_publish_computes_end_time_from_duration_days_for_a_test_plan(

@@ -248,6 +248,16 @@ model Campaign {
   // campaign stopped, not just that it did. Null for a campaign that
   // was never paused.
   pausedReason            String?
+  // A live, self-clearing warning — not a pause — for a daily spend
+  // sanity check (app/services/optimization_jobs.py, confirmed
+  // 2026-09-03): Meta's own daily-budget pacing can overspend up to
+  // ~25% on a given day (evened out across a calendar week, by Meta's
+  // own documented policy), so a single day over that isn't itself
+  // cause to stop the campaign — just to flag it. Refreshed every
+  // collection cycle: set (or updated) while any AdSet's own last-24h
+  // spend exceeds 1.25x its configured daily budget, cleared back to
+  // null once none do.
+  dailySpendFlag          String?
   createdAt               DateTime                     @default(now())
   updatedAt               DateTime                     @updatedAt
 }
@@ -383,6 +393,13 @@ model Metric {
   cac              Float?
   purchaseValue    Float?
   roas             Float?
+  // Purchase-specific count, distinct from the broader `conversions`
+  // sum — `cac` above is a lifetime-to-date ratio, not something a
+  // rolling window can delta directly, so the raw count is stored too
+  // (spend delta / purchases delta between two snapshots gives a real
+  // rolling-window CAC — app/services/optimization_jobs.py's CAC
+  // circuit breaker, confirmed 2026-09-03).
+  purchases        Int?
   fetchedAt   DateTime @default(now())
 }
 

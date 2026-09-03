@@ -291,6 +291,7 @@ describe('CampaignsSection', () => {
         startDate: null,
         endDate: null,
         pausedReason: null,
+        dailySpendFlag: null,
       },
     ])
 
@@ -313,6 +314,7 @@ describe('CampaignsSection', () => {
         startDate: null,
         endDate: null,
         pausedReason: null,
+        dailySpendFlag: null,
       },
     ])
 
@@ -406,6 +408,7 @@ describe('CampaignsSection', () => {
           startDate: null,
           endDate: null,
           pausedReason: null,
+          dailySpendFlag: null,
         },
       ])
     mockedApi.listProducts.mockResolvedValue([
@@ -443,6 +446,7 @@ describe('CampaignsSection', () => {
       startDate: null,
       endDate: null,
       pausedReason: null,
+      dailySpendFlag: null,
     })
     const user = userEvent.setup()
 
@@ -480,6 +484,7 @@ describe('CampaignsSection', () => {
         startDate: '2027-06-01T00:00:00Z',
         endDate: '2027-06-04T00:00:00Z',
         pausedReason: null,
+        dailySpendFlag: null,
       },
     ])
     mockedApi.createCampaign.mockResolvedValue({
@@ -494,6 +499,7 @@ describe('CampaignsSection', () => {
       startDate: '2027-06-01T00:00:00Z',
       endDate: '2027-06-04T00:00:00Z',
       pausedReason: null,
+      dailySpendFlag: null,
     })
     const user = userEvent.setup()
 
@@ -544,6 +550,7 @@ describe('CampaignsSection', () => {
         startDate: null,
         endDate: null,
         pausedReason: null,
+        dailySpendFlag: null,
       },
     ])
     mockedApi.createStrategy.mockResolvedValue(FAKE_STRATEGY)
@@ -580,6 +587,7 @@ describe('CampaignsSection', () => {
         startDate: null,
         endDate: null,
         pausedReason: null,
+        dailySpendFlag: null,
       },
     ])
     mockedApi.createStrategy.mockRejectedValue(
@@ -611,6 +619,7 @@ describe('CampaignsSection', () => {
         startDate: null,
         endDate: null,
         pausedReason: null,
+        dailySpendFlag: null,
       },
     ])
     mockedApi.createStrategy
@@ -647,6 +656,7 @@ describe('CampaignsSection', () => {
         startDate: null,
         endDate: null,
         pausedReason: null,
+        dailySpendFlag: null,
       },
     ])
     mockedApi.createStrategy.mockResolvedValue({
@@ -688,6 +698,7 @@ describe('CampaignsSection', () => {
         startDate: null,
         endDate: null,
         pausedReason: null,
+        dailySpendFlag: null,
       },
     ])
     mockedApi.getStrategy.mockResolvedValue(FAKE_STRATEGY)
@@ -712,6 +723,7 @@ describe('CampaignsSection', () => {
         startDate: null,
         endDate: null,
         pausedReason: null,
+        dailySpendFlag: null,
       },
     ])
     mockedApi.getStrategy.mockResolvedValue(FAKE_STRATEGY)
@@ -749,6 +761,7 @@ describe('CampaignsSection', () => {
         startDate: null,
         endDate: null,
         pausedReason: null,
+        dailySpendFlag: null,
       },
     ])
     mockedApi.getStrategy.mockResolvedValue(FAKE_STRATEGY)
@@ -781,6 +794,7 @@ describe('CampaignsSection', () => {
         startDate: null,
         endDate: null,
         pausedReason: null,
+        dailySpendFlag: null,
       },
     ])
     mockedApi.getStrategy.mockResolvedValue(FAKE_STRATEGY)
@@ -805,6 +819,7 @@ describe('CampaignsSection', () => {
       startDate: null,
       endDate: null,
       pausedReason: null,
+      dailySpendFlag: null,
     }
     mockedApi.listCampaigns.mockResolvedValueOnce([draftCampaign])
     mockedApi.listCampaigns.mockResolvedValueOnce([
@@ -855,6 +870,7 @@ describe('CampaignsSection', () => {
         startDate: null,
         endDate: null,
         pausedReason: null,
+        dailySpendFlag: null,
       },
     ])
     mockedApi.getStrategy.mockResolvedValue(FAKE_STRATEGY)
@@ -884,6 +900,7 @@ describe('CampaignsSection', () => {
         startDate: null,
         endDate: null,
         pausedReason: null,
+        dailySpendFlag: null,
       },
     ])
     mockedApi.listCampaigns.mockResolvedValueOnce([
@@ -899,6 +916,7 @@ describe('CampaignsSection', () => {
         startDate: null,
         endDate: null,
         pausedReason: null,
+        dailySpendFlag: null,
       },
     ])
     mockedApi.getStrategy.mockResolvedValue(FAKE_STRATEGY)
@@ -915,6 +933,7 @@ describe('CampaignsSection', () => {
       startDate: null,
       endDate: null,
       pausedReason: null,
+      dailySpendFlag: null,
     })
     mockedApi.publishCampaign.mockResolvedValue({
       id: 'camp-1',
@@ -928,6 +947,7 @@ describe('CampaignsSection', () => {
       startDate: null,
       endDate: null,
       pausedReason: null,
+      dailySpendFlag: null,
     })
     const user = userEvent.setup()
 
@@ -958,6 +978,7 @@ describe('CampaignsSection', () => {
         startDate: null,
         endDate: null,
         pausedReason: null,
+        dailySpendFlag: null,
       },
     ])
     mockedApi.listCampaigns.mockResolvedValueOnce([
@@ -973,6 +994,7 @@ describe('CampaignsSection', () => {
         startDate: null,
         endDate: null,
         pausedReason: 'Manually paused',
+        dailySpendFlag: null,
       },
     ])
     mockedApi.pauseCampaign.mockResolvedValue({
@@ -987,6 +1009,7 @@ describe('CampaignsSection', () => {
       startDate: null,
       endDate: null,
       pausedReason: 'Manually paused',
+      dailySpendFlag: null,
     })
     const user = userEvent.setup()
 
@@ -1014,6 +1037,7 @@ describe('CampaignsSection', () => {
         startDate: null,
         endDate: null,
         pausedReason: null,
+        dailySpendFlag: null,
       },
     ])
     mockedApi.pauseCampaign.mockRejectedValue(
@@ -1043,6 +1067,7 @@ describe('CampaignsSection', () => {
         startDate: null,
         endDate: null,
         pausedReason: null,
+        dailySpendFlag: null,
       },
     ])
     mockedApi.pauseCampaign.mockRejectedValue(new Error('network down'))
@@ -1070,12 +1095,64 @@ describe('CampaignsSection', () => {
         startDate: null,
         endDate: null,
         pausedReason: null,
+        dailySpendFlag: null,
       },
     ])
 
     render(<CampaignsSection businessId="biz-1" />)
 
     expect(await screen.findByText('Paused')).toBeInTheDocument()
+  })
+
+  it('shows a daily-spend warning on a live campaign without pausing anything', async () => {
+    mockedApi.listCampaigns.mockResolvedValue([
+      {
+        id: 'camp-1',
+        name: null,
+        objective: 'SALES',
+        status: 'LIVE',
+        productId: null,
+        audienceId: null,
+        metaCampaignId: 'meta_campaign_1',
+        eventVenueKey: null,
+        startDate: null,
+        endDate: null,
+        pausedReason: null,
+        dailySpendFlag: 'Daily spend above 1.25x budget — Broad: $65.00 vs $50.00/day budget',
+      },
+    ])
+
+    render(<CampaignsSection businessId="biz-1" />)
+
+    expect(
+      await screen.findByText(/Daily spend above 1\.25x budget/),
+    ).toBeInTheDocument()
+    expect(screen.getByText(/Live on Meta/)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Pause campaign' })).toBeInTheDocument()
+  })
+
+  it('shows no daily-spend warning when dailySpendFlag is null', async () => {
+    mockedApi.listCampaigns.mockResolvedValue([
+      {
+        id: 'camp-1',
+        name: null,
+        objective: 'SALES',
+        status: 'LIVE',
+        productId: null,
+        audienceId: null,
+        metaCampaignId: 'meta_campaign_1',
+        eventVenueKey: null,
+        startDate: null,
+        endDate: null,
+        pausedReason: null,
+        dailySpendFlag: null,
+      },
+    ])
+
+    render(<CampaignsSection businessId="biz-1" />)
+    await screen.findByText(/Live on Meta/)
+
+    expect(screen.queryByText(/Daily spend above/)).not.toBeInTheDocument()
   })
 
   it('retries publishing a failed campaign without re-approving', async () => {
@@ -1092,6 +1169,7 @@ describe('CampaignsSection', () => {
         startDate: null,
         endDate: null,
         pausedReason: null,
+        dailySpendFlag: null,
       },
     ])
     mockedApi.getStrategy.mockResolvedValue(FAKE_STRATEGY)
@@ -1108,6 +1186,7 @@ describe('CampaignsSection', () => {
       startDate: null,
       endDate: null,
       pausedReason: null,
+      dailySpendFlag: null,
     })
     const user = userEvent.setup()
 
@@ -1135,6 +1214,7 @@ describe('CampaignsSection', () => {
         startDate: null,
         endDate: null,
         pausedReason: null,
+        dailySpendFlag: null,
       },
     ])
     mockedApi.getStrategy.mockResolvedValue(FAKE_STRATEGY)
@@ -1162,6 +1242,7 @@ describe('CampaignsSection', () => {
         startDate: null,
         endDate: null,
         pausedReason: null,
+        dailySpendFlag: null,
       },
     ])
     mockedApi.getStrategy.mockResolvedValue(FAKE_STRATEGY)
@@ -1196,6 +1277,7 @@ describe('CampaignsSection', () => {
         startDate: null,
         endDate: null,
         pausedReason: null,
+        dailySpendFlag: null,
       },
     ])
     mockedApi.getStrategy.mockResolvedValue(FAKE_STRATEGY)
@@ -1212,6 +1294,7 @@ describe('CampaignsSection', () => {
       startDate: null,
       endDate: null,
       pausedReason: null,
+      dailySpendFlag: null,
     })
     mockedApi.publishCampaign.mockRejectedValue(
       new api.ApiError(400, 'Connect Meta Ads and select an ad account and Page before publishing'),
@@ -1242,6 +1325,7 @@ describe('CampaignsSection', () => {
         startDate: null,
         endDate: null,
         pausedReason: null,
+        dailySpendFlag: null,
       },
     ])
     mockedApi.listMetrics.mockResolvedValue([fakeMetric()])
@@ -1268,6 +1352,7 @@ describe('CampaignsSection', () => {
         startDate: null,
         endDate: null,
         pausedReason: null,
+        dailySpendFlag: null,
       },
     ])
     mockedApi.refreshMetrics.mockResolvedValue(
@@ -1298,6 +1383,7 @@ describe('CampaignsSection', () => {
         startDate: null,
         endDate: null,
         pausedReason: null,
+        dailySpendFlag: null,
       },
     ])
     mockedApi.refreshMetrics.mockRejectedValue(
@@ -1327,6 +1413,7 @@ describe('CampaignsSection', () => {
         startDate: null,
         endDate: null,
         pausedReason: null,
+        dailySpendFlag: null,
       },
     ])
 
@@ -1352,6 +1439,7 @@ describe('CampaignsSection', () => {
         startDate: null,
         endDate: null,
         pausedReason: null,
+        dailySpendFlag: null,
       },
     ])
     mockedApi.listRecommendations.mockResolvedValue([fakeRecommendation()])
@@ -1381,6 +1469,7 @@ describe('CampaignsSection', () => {
         startDate: null,
         endDate: null,
         pausedReason: null,
+        dailySpendFlag: null,
       },
     ])
     mockedApi.createRecommendation.mockResolvedValue(fakeRecommendation())
@@ -1409,6 +1498,7 @@ describe('CampaignsSection', () => {
         startDate: null,
         endDate: null,
         pausedReason: null,
+        dailySpendFlag: null,
       },
     ])
     mockedApi.createRecommendation.mockRejectedValue(
@@ -1438,6 +1528,7 @@ describe('CampaignsSection', () => {
         startDate: null,
         endDate: null,
         pausedReason: null,
+        dailySpendFlag: null,
       },
     ])
     mockedApi.listRecommendations.mockResolvedValue([fakeRecommendation()])
@@ -1472,6 +1563,7 @@ describe('CampaignsSection', () => {
         startDate: null,
         endDate: null,
         pausedReason: null,
+        dailySpendFlag: null,
       },
     ])
     mockedApi.listRecommendations.mockResolvedValue([fakeRecommendation()])
@@ -1506,6 +1598,7 @@ describe('CampaignsSection', () => {
         startDate: null,
         endDate: null,
         pausedReason: null,
+        dailySpendFlag: null,
       },
     ])
     mockedApi.listRecommendations.mockResolvedValue([fakeRecommendation()])
@@ -1536,6 +1629,7 @@ describe('CampaignsSection', () => {
         startDate: null,
         endDate: null,
         pausedReason: null,
+        dailySpendFlag: null,
       },
     ])
     mockedApi.listRecommendations.mockResolvedValue([fakeRecommendation()])
@@ -1566,6 +1660,7 @@ describe('CampaignsSection', () => {
         startDate: null,
         endDate: null,
         pausedReason: null,
+        dailySpendFlag: null,
       },
     ])
     mockedApi.listRecommendations.mockResolvedValue([
@@ -1593,6 +1688,7 @@ describe('CampaignsSection', () => {
         startDate: null,
         endDate: null,
         pausedReason: null,
+        dailySpendFlag: null,
       },
     ])
     mockedApi.listRecommendations.mockResolvedValue([
@@ -1618,6 +1714,7 @@ describe('CampaignsSection', () => {
         startDate: null,
         endDate: null,
         pausedReason: null,
+        dailySpendFlag: null,
       },
     ])
     mockedApi.listRecommendations.mockResolvedValue([
@@ -1644,6 +1741,7 @@ describe('CampaignsSection', () => {
         startDate: null,
         endDate: null,
         pausedReason: null,
+        dailySpendFlag: null,
       },
     ])
 
@@ -1667,6 +1765,7 @@ describe('CampaignsSection', () => {
         startDate: null,
         endDate: null,
         pausedReason: null,
+        dailySpendFlag: null,
       },
     ])
     mockedApi.getStrategy.mockResolvedValue({
@@ -1699,6 +1798,7 @@ describe('CampaignsSection', () => {
         startDate: null,
         endDate: null,
         pausedReason: null,
+        dailySpendFlag: null,
       },
     ])
     mockedApi.getStrategy.mockResolvedValue({
@@ -1733,6 +1833,7 @@ describe('CampaignsSection', () => {
         startDate: null,
         endDate: null,
         pausedReason: null,
+        dailySpendFlag: null,
       },
     ])
     mockedApi.getStrategy.mockResolvedValue({
@@ -1770,6 +1871,7 @@ describe('CampaignsSection', () => {
         startDate: null,
         endDate: null,
         pausedReason: null,
+        dailySpendFlag: null,
       },
     ])
 
