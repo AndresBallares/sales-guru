@@ -28,13 +28,14 @@ generator client {
 }
 
 model User {
-  id             String         @id @default(cuid())
-  email          String         @unique
-  hashedPassword String
-  organizations  Organization[]
-  sessions       Session[]
-  createdAt      DateTime       @default(now())
-  updatedAt      DateTime       @updatedAt
+  id                  String               @id @default(cuid())
+  email               String               @unique
+  hashedPassword      String
+  organizations       Organization[]
+  sessions            Session[]
+  passwordResetTokens PasswordResetToken[]
+  createdAt           DateTime             @default(now())
+  updatedAt           DateTime             @updatedAt
 }
 
 // tokenHash, not the raw session token, is stored — same defense-in-depth
@@ -47,6 +48,24 @@ model Session {
   tokenHash String   @unique
   expiresAt DateTime
   createdAt DateTime @default(now())
+}
+
+// tokenHash, not the raw reset token, is stored — same defense-in-depth
+// principle as Session.tokenHash. usedAt (nullable) marks a token
+// consumed — either because it was actually used to reset the password,
+// or because a newer request superseded it (only the latest link a user
+// requested should ever work) — rows are never deleted, so
+// PasswordResetToken.createdAt can still answer "how many times has this
+// user requested a reset in the last hour" for rate-limiting even after
+// older tokens are superseded.
+model PasswordResetToken {
+  id        String    @id @default(cuid())
+  user      User      @relation(fields: [userId], references: [id])
+  userId    String
+  tokenHash String    @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
 }
 
 model Organization {

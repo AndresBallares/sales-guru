@@ -37,6 +37,7 @@ _BACKEND_ROOT = Path(__file__).resolve().parent.parent
 # just needs a new entry whenever a model is added; no ordering to get
 # wrong or forget to update.
 _ALL_TABLES = (
+    "passwordresettoken",
     "session",
     "metric",
     "optimizationrecommendation",
