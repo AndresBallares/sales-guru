@@ -96,6 +96,49 @@ def test_signup_rejects_duplicate_email(client: TestClient) -> None:
     assert second.status_code == 409
 
 
+def test_signup_lowercases_the_email(client: TestClient) -> None:
+    """A mixed-case email is stored (and returned) lowercase."""
+    response = client.post(
+        "/auth/signup",
+        json={"email": "MixedCase@Example.com", "password": "supersecret123"},
+    )
+
+    assert response.status_code == 201
+    assert response.json()["email"] == "mixedcase@example.com"
+
+
+def test_signup_rejects_duplicate_email_case_insensitively(client: TestClient) -> None:
+    """A different-cased duplicate of an existing email is still rejected."""
+    first = client.post(
+        "/auth/signup",
+        json={"email": "dupe-case@example.com", "password": "supersecret123"},
+    )
+    assert first.status_code == 201
+
+    second = client.post(
+        "/auth/signup",
+        json={"email": "Dupe-Case@Example.com", "password": "supersecret123"},
+    )
+    assert second.status_code == 409
+
+
+def test_login_matches_regardless_of_email_case(client: TestClient) -> None:
+    """Logging in with a different-cased email than used at signup still works."""
+    client.post(
+        "/auth/signup",
+        json={"email": "casetest@example.com", "password": "supersecret123"},
+    )
+    client.post("/auth/logout")
+
+    response = client.post(
+        "/auth/login",
+        json={"email": "CaseTest@Example.com", "password": "supersecret123"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["email"] == "casetest@example.com"
+
+
 def test_signup_rejects_short_password(client: TestClient) -> None:
     """A password under the minimum length is rejected with 422."""
     response = client.post(
