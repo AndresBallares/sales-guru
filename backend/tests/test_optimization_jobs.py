@@ -495,7 +495,9 @@ def test_circuit_breaker_pauses_a_test_plan_that_exceeded_its_total_budget(
 ) -> None:
     """Combined spend across both variants exceeding total_budget ($1,000
     for the fake test plan: $50/day x 2 variants x 10 days) auto-pauses
-    the campaign — deterministic, no LLM call involved."""
+    the campaign — deterministic, no LLM call involved. Also auto-
+    triggers a test evaluation right away, stopReason
+    TOTAL_SPEND_CIRCUIT_BREAKER."""
     monkeypatch.setattr(
         meta_service_module,
         "create_meta_ad_set",
@@ -508,6 +510,11 @@ def test_circuit_breaker_pauses_a_test_plan_that_exceeded_its_total_budget(
         ]
     )
     monkeypatch.setattr(optimization_jobs, "fetch_ad_set_insights", ad_set_insights)
+    monkeypatch.setattr(
+        optimizer_module,
+        "evaluate_test_plan",
+        AsyncMock(return_value=_VALID_TEST_EVALUATION),
+    )
     _signed_up_client(client)
     business_id = _create_business(client)
     _connect_meta(client, business_id)
@@ -525,6 +532,12 @@ def test_circuit_breaker_pauses_a_test_plan_that_exceeded_its_total_budget(
         c.kwargs["meta_ad_set_id"] for c in mock_services["pause_ad_set"].call_args_list
     }
     assert paused_ids == {"meta_adset_a", "meta_adset_b"}
+
+    evaluations = client.get(
+        f"/businesses/{business_id}/campaigns/{campaign_id}/test-evaluation"
+    ).json()
+    assert len(evaluations) == 1
+    assert evaluations[0]["stopReason"] == "TOTAL_SPEND_CIRCUIT_BREAKER"
 
 
 def test_circuit_breaker_leaves_a_test_plan_under_budget_live(
@@ -603,6 +616,78 @@ async def test_cac_circuit_breaker_pauses_when_rolling_cac_exceeds_2x_target(
     assert campaign["status"] == "PAUSED"
     assert "Rolling 3-day CAC" in str(campaign["pausedReason"])
     mock_services["pause_ad_set"].assert_awaited_once()
+
+    # DATA_DRIVEN_STRATEGY (the default fake strategy _live_campaign
+    # publishes) has no test hypothesis to evaluate — only TEST_PLAN
+    # campaigns get an auto-evaluation after a circuit-breaker pause.
+    evaluations = client.get(
+        f"/businesses/{business_id}/campaigns/{campaign_id}/test-evaluation"
+    ).json()
+    assert evaluations == []
+
+
+@pytest.mark.asyncio
+async def test_cac_circuit_breaker_auto_evaluates_a_test_plan_it_pauses(
+    client: TestClient,
+    mock_services: dict[str, AsyncMock],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Unlike the total-spend breaker (TEST_PLAN only), the CAC breaker
+    applies to any plan type — but only a TEST_PLAN it pauses gets an
+    auto-evaluation right away, stopReason CAC_CIRCUIT_BREAKER."""
+    monkeypatch.setattr(
+        meta_service_module,
+        "create_meta_ad_set",
+        AsyncMock(side_effect=["meta_adset_a", "meta_adset_b"]),
+    )
+    monkeypatch.setattr(
+        optimizer_module,
+        "evaluate_test_plan",
+        AsyncMock(return_value=_VALID_TEST_EVALUATION),
+    )
+    _signed_up_client(client)
+    business_id = _create_business(client)
+    _connect_meta(client, business_id)
+    campaign_id = _publish_test_plan_campaign(client, business_id, monkeypatch)
+    ad_sets_by_variant = await _fetch_ad_sets_by_variant(campaign_id)
+
+    old = datetime.now(UTC) - timedelta(days=4)
+    for ad_set_id in ad_sets_by_variant.values():
+        await _seed_metric(
+            campaign_id,
+            fetched_at=old,
+            ad_set_id=ad_set_id,
+            spend=0.0,
+            conversions=0,
+            purchases=0,
+        )
+    # $400/variant ($800 combined) stays under the $1,000 total_budget, so
+    # the total-spend breaker doesn't fire first — only 3 purchases each
+    # ($6 combined) pushes the rolling CAC ($800/6 ≈ $133) past 2x the
+    # $55 benchmark target ($110).
+    ad_set_insights = AsyncMock(
+        side_effect=[
+            CampaignInsights(
+                impressions=1000, clicks=100, spend=400.0, conversions=3, purchases=3
+            ),
+            CampaignInsights(
+                impressions=1000, clicks=100, spend=400.0, conversions=3, purchases=3
+            ),
+        ]
+    )
+    monkeypatch.setattr(optimization_jobs, "fetch_ad_set_insights", ad_set_insights)
+
+    _run(client, optimization_jobs.collect_metrics_for_all_live_campaigns)
+
+    campaign = _campaign_status(client, business_id, campaign_id)
+    assert campaign["status"] == "PAUSED"
+    assert "Rolling 3-day CAC" in str(campaign["pausedReason"])
+
+    evaluations = client.get(
+        f"/businesses/{business_id}/campaigns/{campaign_id}/test-evaluation"
+    ).json()
+    assert len(evaluations) == 1
+    assert evaluations[0]["stopReason"] == "CAC_CIRCUIT_BREAKER"
 
 
 @pytest.mark.asyncio
@@ -835,6 +920,100 @@ async def test_pause_expired_campaigns_pauses_one_past_its_end_date(
     assert campaign["status"] == "PAUSED"
     assert campaign["pausedReason"] == "Planned end date reached"
     mock_services["pause_ad_set"].assert_awaited_once()
+
+    # DATA_DRIVEN_STRATEGY (the default fake strategy _live_campaign
+    # publishes) has no test hypothesis to evaluate.
+    evaluations = client.get(
+        f"/businesses/{business_id}/campaigns/{campaign_id}/test-evaluation"
+    ).json()
+    assert evaluations == []
+
+
+@pytest.mark.asyncio
+async def test_pause_expired_campaigns_auto_evaluates_a_test_plan_it_pauses(
+    client: TestClient,
+    mock_services: dict[str, AsyncMock],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Auto-pausing a TEST_PLAN once its duration has elapsed also
+    records its verdict right away, stopReason TEST_DURATION_ELAPSED."""
+    monkeypatch.setattr(
+        optimizer_module,
+        "evaluate_test_plan",
+        AsyncMock(return_value=_VALID_TEST_EVALUATION),
+    )
+    _signed_up_client(client)
+    business_id = _create_business(client)
+    _connect_meta(client, business_id)
+    campaign_id = _publish_test_plan_campaign(client, business_id, monkeypatch)
+    await _seed_metric(campaign_id, fetched_at=datetime.now(UTC), spend=500.0)
+    await _set_end_date(campaign_id, datetime.now(UTC) - timedelta(days=1))
+
+    _run(client, optimization_jobs.pause_expired_campaigns)
+
+    campaign = _campaign_status(client, business_id, campaign_id)
+    assert campaign["status"] == "PAUSED"
+
+    evaluations = client.get(
+        f"/businesses/{business_id}/campaigns/{campaign_id}/test-evaluation"
+    ).json()
+    assert len(evaluations) == 1
+    assert evaluations[0]["stopReason"] == "TEST_DURATION_ELAPSED"
+
+
+@pytest.mark.asyncio
+async def test_pause_expired_campaigns_skips_evaluation_without_any_metrics(
+    client: TestClient,
+    mock_services: dict[str, AsyncMock],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A TEST_PLAN paused before metric collection ever ran has nothing
+    to evaluate yet — the auto-pause still succeeds."""
+    _signed_up_client(client)
+    business_id = _create_business(client)
+    _connect_meta(client, business_id)
+    campaign_id = _publish_test_plan_campaign(client, business_id, monkeypatch)
+    await _set_end_date(campaign_id, datetime.now(UTC) - timedelta(days=1))
+
+    _run(client, optimization_jobs.pause_expired_campaigns)
+
+    campaign = _campaign_status(client, business_id, campaign_id)
+    assert campaign["status"] == "PAUSED"
+    evaluations = client.get(
+        f"/businesses/{business_id}/campaigns/{campaign_id}/test-evaluation"
+    ).json()
+    assert evaluations == []
+
+
+@pytest.mark.asyncio
+async def test_auto_evaluation_failure_after_pause_is_logged_not_raised(
+    client: TestClient,
+    mock_services: dict[str, AsyncMock],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An LLM failure during the auto-evaluation half doesn't undo the
+    pause or crash the job — the campaign stays safely paused, and a
+    human can still evaluate manually later."""
+    monkeypatch.setattr(
+        optimizer_module,
+        "evaluate_test_plan",
+        AsyncMock(side_effect=optimizer_module.OptimizerError("boom")),
+    )
+    _signed_up_client(client)
+    business_id = _create_business(client)
+    _connect_meta(client, business_id)
+    campaign_id = _publish_test_plan_campaign(client, business_id, monkeypatch)
+    await _seed_metric(campaign_id, fetched_at=datetime.now(UTC), spend=500.0)
+    await _set_end_date(campaign_id, datetime.now(UTC) - timedelta(days=1))
+
+    _run(client, optimization_jobs.pause_expired_campaigns)
+
+    campaign = _campaign_status(client, business_id, campaign_id)
+    assert campaign["status"] == "PAUSED"
+    evaluations = client.get(
+        f"/businesses/{business_id}/campaigns/{campaign_id}/test-evaluation"
+    ).json()
+    assert evaluations == []
 
 
 @pytest.mark.asyncio
@@ -1353,7 +1532,6 @@ _VALID_TEST_EVALUATION = GeneratedTestEvaluation(
     key_findings=["CTR is within the typical range for this vertical."],
     recommended_action="continue_testing",
     reasoning="Not enough conversion volume yet to read economic indicators.",
-    confidence="LOW",
 )
 
 
@@ -1386,6 +1564,7 @@ async def test_generate_and_store_test_evaluation_insufficient_data(
     assert result.hypothesisResult == "INCONCLUSIVE"
     assert result.winningVariant is None
     assert result.recommendedAction == "continue_testing"
+    assert result.stopReason == "MANUAL"
     evaluate.assert_not_awaited()
 
 
@@ -1419,6 +1598,7 @@ async def test_generate_and_store_test_evaluation_sufficient_data(
     assert result.recommendedAction == "continue_testing"
     assert result.hypothesisResult == "INCONCLUSIVE"
     assert result.winningVariant is None
+    assert result.stopReason == "MANUAL"
     evaluate.assert_awaited_once()
 
 
@@ -1476,6 +1656,9 @@ async def test_generate_and_store_test_evaluation_real_two_variant_comparison(
     assert result.winningVariant == "hypothesis_audience"
     assert result.hypothesisResult == "SUPPORTED"
     assert result.recommendedAction == "prefer_hypothesis"
+    # 10 conversions and $250 spent each — clears both the confident-
+    # conversion floor and 2x the (benchmark-fallback) $55 target CAC.
+    assert result.confidence == "CONFIDENT"
     evaluate.assert_awaited_once()
     _, kwargs = evaluate.call_args
     assert kwargs["hypothesis_metric"] is not None
@@ -1527,6 +1710,7 @@ async def test_generate_and_store_test_evaluation_prefers_the_broad_baseline(
     assert result.winningVariant == "broad_baseline"
     assert result.hypothesisResult == "REJECTED"
     assert result.recommendedAction == "prefer_broad"
+    assert result.confidence == "CONFIDENT"
 
 
 @pytest.mark.asyncio

@@ -41,10 +41,10 @@ from app.schemas.strategy import (
     primary_audience,
 )
 from app.services import geo, meta
-from app.services.benchmarks import JEWELRY_META_BENCHMARKS
 from app.services.event_venues import EVENT_VENUES
 from app.services.interests import INTERESTS
 from app.services.meta import CustomLocation, ResolvedGeoLocation
+from app.services.optimizer import resolve_target_cac
 
 # No user input collects this yet, so each objective gets a reasonable
 # Meta optimization_goal default rather than leaving it unset (the AdSet
@@ -383,19 +383,7 @@ async def publish_campaign_to_meta(
     if end_time is None and strategy.plan_type == "TEST_PLAN":
         end_time = datetime.now(UTC) + timedelta(days=strategy.duration_days)
 
-    # The campaign's own product economics win when available (never
-    # blended with the industry benchmark — same "two separate numbers,
-    # picked from, not averaged" principle as the TEST_PLAN success
-    # criteria, app/services/strategist.py's _build_success_criteria);
-    # the jewelry CAC benchmark median is the fallback so every campaign
-    # always publishes with a real cost cap, not just ones with a priced
-    # product.
-    target_cac = (
-        strategy.unit_economics.target_cac
-        if strategy.unit_economics is not None
-        else JEWELRY_META_BENCHMARKS.cac.median
-    )
-    target_cac_cents = round(target_cac * 100)
+    target_cac_cents = round(resolve_target_cac(strategy.unit_economics) * 100)
 
     meta_campaign_id = await meta.create_meta_campaign(
         access_token=connection.accessToken,

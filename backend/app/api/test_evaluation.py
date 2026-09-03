@@ -51,6 +51,7 @@ def _to_response(evaluation: TestEvaluation) -> TestEvaluationResponse:
             "keyFindings": json.loads(evaluation.keyFindings),
             "recommendedAction": evaluation.recommendedAction,
             "reasoning": evaluation.reasoning,
+            "stopReason": evaluation.stopReason,
             "createdAt": evaluation.createdAt,
         }
     )

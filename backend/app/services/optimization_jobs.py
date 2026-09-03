@@ -26,6 +26,11 @@ Three jobs, in-process, no new infrastructure (confirmed with the user
   - _enforce_daily_spend_flag — a monitoring-only signal (never pauses):
     any AdSet's own last-24h spend exceeding 1.25x its daily budget sets
     Campaign.dailySpendFlag, cleared back to null once it's no longer true.
+  Both circuit breakers, when they pause a TEST_PLAN campaign, also call
+  _auto_evaluate_after_pause right away (stop_reason
+  "TOTAL_SPEND_CIRCUIT_BREAKER"/"CAC_CIRCUIT_BREAKER") — a test's verdict
+  gets recorded the moment it stops, not whenever a human next remembers
+  to click "Evaluate now."
 - evaluate_all_live_campaigns: every 60 min, the "Trigger/Scheduler" +
   "Daily Optimization" tiers collapsed into one job — checks the Event +
   Time + Data Sufficiency gate per campaign, and only actually spends an
@@ -38,7 +43,10 @@ Three jobs, in-process, no new infrastructure (confirmed with the user
   duration_days, or an event venue's window) — Meta is sent an end_time
   at publish time (app/services/publish.py) and should stop delivery
   itself, but this catches a campaign published before that parameter
-  existed, or in case Meta doesn't actually honor it as documented.
+  existed, or in case Meta doesn't actually honor it as documented. Same
+  _auto_evaluate_after_pause call as the circuit breakers above
+  (stop_reason "TEST_DURATION_ELAPSED") when the expired campaign turns
+  out to be a TEST_PLAN.
 
 generate_and_store_recommendation is also called directly by the manual
 "generate now" endpoint (app/api/optimization.py) — a user explicitly
@@ -72,8 +80,8 @@ from prisma.types import MetricCreateInput
 from app.core.db import db
 from app.core.meta_connection import get_meta_connection
 from app.schemas.strategy import StrategyContentAdapter, TestPlanContent
+from app.schemas.test_evaluation import StopReason
 from app.services import optimizer
-from app.services.benchmarks import JEWELRY_META_BENCHMARKS
 from app.services.meta import (
     CampaignInsights,
     MetaConnectionError,
@@ -202,6 +210,33 @@ async def _latest_total_spend(campaign_id: str) -> float:
     return sum(metric.spend for metric in latest_by_group.values())
 
 
+async def _auto_evaluate_after_pause(
+    campaign: Campaign, test_plan: TestPlanContent, stop_reason: StopReason
+) -> None:
+    """Record a TEST_PLAN's verdict right after an auto-pause path stops it.
+
+    Best-effort: an evaluation failure here (OptimizerError, from the LLM
+    call for the qualitative half of the evaluation) is logged, not
+    raised — the campaign is already safely paused either way, and a
+    human can still trigger evaluation manually (app/api/
+    test_evaluation.py) if this attempt fails. Skips silently if no
+    Metric row exists yet at all (nothing to evaluate).
+    """
+    has_metrics = await db.metric.find_first(where={"campaignId": campaign.id})
+    if has_metrics is None:
+        return
+    try:
+        await generate_and_store_test_evaluation(
+            campaign, test_plan, stop_reason=stop_reason
+        )
+    except optimizer.OptimizerError:
+        logger.warning(
+            "Auto-evaluation failed for campaign %s (stop_reason=%s)",
+            campaign.id,
+            stop_reason,
+        )
+
+
 async def _enforce_spend_circuit_breaker(
     campaign: Campaign, connection: MetaConnection
 ) -> None:
@@ -243,7 +278,7 @@ async def _enforce_spend_circuit_breaker(
         total_spend,
         content.total_budget,
     )
-    await pause_campaign(
+    paused = await pause_campaign(
         campaign=campaign,
         connection=connection,
         reason=(
@@ -251,6 +286,7 @@ async def _enforce_spend_circuit_breaker(
             f"${content.total_budget:,.2f} planned budget"
         ),
     )
+    await _auto_evaluate_after_pause(paused, content, "TOTAL_SPEND_CIRCUIT_BREAKER")
 
 
 async def _grouped_metrics(campaign_id: str) -> dict[str | None, list[Metric]]:
@@ -332,16 +368,7 @@ async def _enforce_cac_circuit_breaker(
     if strategy is None:
         return
     content = StrategyContentAdapter.validate_json(strategy.content)
-    # The campaign's own product economics win when available — never
-    # blended with the industry benchmark (app/services/strategist.py's
-    # _build_success_criteria) — the benchmark median is the fallback so
-    # this check still means something for a campaign with no priced
-    # product.
-    target_cac = (
-        content.unit_economics.target_cac
-        if content.unit_economics is not None
-        else JEWELRY_META_BENCHMARKS.cac.median
-    )
+    target_cac = optimizer.resolve_target_cac(content.unit_economics)
 
     window = await _rolling_spend_and_purchases(campaign.id, _ROLLING_CAC_WINDOW)
     if window is None:
@@ -368,7 +395,11 @@ async def _enforce_cac_circuit_breaker(
         )
 
     logger.warning("CAC circuit breaker: campaign %s — %s", campaign.id, reason)
-    await pause_campaign(campaign=campaign, connection=connection, reason=reason)
+    paused = await pause_campaign(
+        campaign=campaign, connection=connection, reason=reason
+    )
+    if content.plan_type == "TEST_PLAN":
+        await _auto_evaluate_after_pause(paused, content, "CAC_CIRCUIT_BREAKER")
 
 
 _DAILY_OVERSPEND_MULTIPLE = 1.25
@@ -732,7 +763,7 @@ async def pause_expired_campaigns() -> None:
         if connection is None:
             continue
         try:
-            await pause_campaign(
+            paused = await pause_campaign(
                 campaign=campaign,
                 connection=connection,
                 reason="Planned end date reached",
@@ -741,6 +772,14 @@ async def pause_expired_campaigns() -> None:
             logger.warning(
                 "Duration-elapsed auto-pause failed for campaign %s", campaign.id
             )
+            continue
+
+        strategy = await db.strategy.find_unique(where={"campaignId": campaign.id})
+        if strategy is None:
+            continue
+        content = StrategyContentAdapter.validate_json(strategy.content)
+        if content.plan_type == "TEST_PLAN":
+            await _auto_evaluate_after_pause(paused, content, "TEST_DURATION_ELAPSED")
 
 
 async def _variant_ad_sets(campaign_id: str) -> tuple[str | None, str | None]:
@@ -770,30 +809,41 @@ def _insufficient_data_reasoning(
 
 
 async def generate_and_store_test_evaluation(
-    campaign: Campaign, test_plan: TestPlanContent
+    campaign: Campaign,
+    test_plan: TestPlanContent,
+    *,
+    stop_reason: StopReason = "MANUAL",
 ) -> TestEvaluation:
     """Evaluate a TEST_PLAN campaign against its real Metric history, and store it.
 
-    Manual "evaluate now" only today (app/api/test_evaluation.py) — not
-    yet wired into the scheduler alongside evaluate_all_live_campaigns
-    above (a deliberate scoping choice for "Phase B," confirmed
-    2026-09-01, kept separate so this addition stays reviewable).
+    Called both by a human's manual "evaluate now" (app/api/
+    test_evaluation.py, stop_reason defaults to "MANUAL") and
+    automatically, right after either of the two auto-pause paths stops a
+    TEST_PLAN campaign (pause_expired_campaigns and the CAC/spend circuit
+    breakers below, each passing their own stop_reason) — a paused test
+    should have its verdict recorded without a human needing to remember
+    to click evaluate.
 
     Once both of the TEST_PLAN's real AdSets (PRD.md build step 5 "Phase
     C") have collected their own per-variant Metric snapshots (step 10's
     per-AdSet collection, confirmed 2026-09-02), this compares them for
     real — winning_variant/hypothesis_result become non-null/non-
     "INCONCLUSIVE" once both have enough conversion volume
-    (optimizer.compute_test_result). Any campaign missing either piece
-    (published before "Phase C", or per-variant collection just hasn't
-    run yet) falls back to the original single-metric-pool behavior,
-    unchanged.
+    (optimizer.compute_test_result), and confidence becomes a real
+    deterministic read of that same sample size
+    (optimizer.compute_test_confidence). Any campaign missing either
+    piece (published before "Phase C", or per-variant collection just
+    hasn't run yet) falls back to the original single-metric-pool
+    behavior, confidence fixed at "LOW" since no real variant comparison
+    is possible at all.
 
     Args:
         campaign: The live campaign to evaluate. Caller is responsible
             for confirming it's LIVE, has a TEST_PLAN strategy, and has
             at least one Metric row.
         test_plan: The campaign's parsed TEST_PLAN.
+        stop_reason: Why this evaluation is running — a human's manual
+            click, or which auto-pause path triggered it.
 
     Returns:
         The newly stored evaluation — always created, even when the
@@ -879,6 +929,7 @@ async def generate_and_store_test_evaluation(
                     spend_fraction=spend_fraction,
                     duration_fraction=duration_fraction,
                 ),
+                "stopReason": stop_reason,
             }
         )
 
@@ -893,6 +944,7 @@ async def generate_and_store_test_evaluation(
     winning_variant: str | None = None
     hypothesis_result = "INCONCLUSIVE"
     recommended_action: str = generated.recommended_action
+    confidence: str = "LOW"
     if hypothesis_metric is not None:
         winning_variant, hypothesis_result = optimizer.compute_test_result(
             baseline_metric=latest, hypothesis_metric=hypothesis_metric
@@ -901,16 +953,22 @@ async def generate_and_store_test_evaluation(
             recommended_action = "prefer_hypothesis"
         elif winning_variant == "broad_baseline":
             recommended_action = "prefer_broad"
+        confidence = optimizer.compute_test_confidence(
+            baseline_metric=latest,
+            hypothesis_metric=hypothesis_metric,
+            target_cac=optimizer.resolve_target_cac(test_plan.unit_economics),
+        )
 
     return await db.testevaluation.create(
         data={
             "campaignId": campaign.id,
             "status": "SUFFICIENT_DATA",
             "winningVariant": winning_variant,
-            "confidence": generated.confidence,
+            "confidence": confidence,
             "hypothesisResult": hypothesis_result,
             "keyFindings": json.dumps(generated.key_findings),
             "recommendedAction": recommended_action,
             "reasoning": generated.reasoning,
+            "stopReason": stop_reason,
         }
     )

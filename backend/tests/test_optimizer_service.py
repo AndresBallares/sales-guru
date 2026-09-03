@@ -22,6 +22,7 @@ from app.schemas.strategy import (
     UnitEconomicsFields,
 )
 from app.services import optimizer, strategist
+from app.services.benchmarks import JEWELRY_META_BENCHMARKS
 from prisma.models import AdSet, Business, Campaign, Metric
 
 _NOW = datetime(2026, 8, 9, 12, 0, tzinfo=UTC)
@@ -588,7 +589,6 @@ _VALID_TEST_EVALUATION_INPUT: dict[str, Any] = {
     "keyFindings": ["CTR is within the typical range for this vertical."],
     "recommendedAction": "continue_testing",
     "reasoning": "Not enough conversion volume yet to read economic indicators.",
-    "confidence": "LOW",
 }
 
 
@@ -761,6 +761,80 @@ def test_compute_test_result_inconclusive_on_an_exact_tie() -> None:
 
     assert winner is None
     assert result == "INCONCLUSIVE"
+
+
+# --- resolve_target_cac -------------------------------------------------------
+
+
+def test_resolve_target_cac_uses_the_products_own_economics_when_available() -> None:
+    """The business's own real target CAC wins over the benchmark."""
+    unit_economics = UnitEconomicsFields(
+        gross_profit=200.0, breakeven_cac=200.0, target_cac=42.0, breakeven_roas=2.5
+    )
+
+    assert optimizer.resolve_target_cac(unit_economics) == 42.0
+
+
+def test_resolve_target_cac_falls_back_to_the_benchmark_median() -> None:
+    """No priced product (no unit_economics) falls back to the jewelry
+    benchmark median, never left unset."""
+    assert optimizer.resolve_target_cac(None) == JEWELRY_META_BENCHMARKS.cac.median
+
+
+# --- compute_test_confidence --------------------------------------------------
+
+
+def test_compute_test_confidence_low_below_the_conversion_floor() -> None:
+    """Fewer than MIN_CONVERSIONS_TO_COMPARE_VARIANTS on either side is
+    LOW — same floor compute_test_result uses to stay INCONCLUSIVE."""
+    baseline = _fake_metric(conversions=1, spend=500.0)
+    hypothesis = _fake_metric(conversions=10, spend=500.0)
+
+    confidence = optimizer.compute_test_confidence(
+        baseline_metric=baseline, hypothesis_metric=hypothesis, target_cac=50.0
+    )
+
+    assert confidence == "LOW"
+
+
+def test_compute_test_confidence_directional_below_the_confident_conversion_floor() -> (
+    None
+):
+    """3-9 conversions each side, even with plenty of spend, is directional
+    only — a real read, but on a thin sample."""
+    baseline = _fake_metric(conversions=5, spend=500.0)
+    hypothesis = _fake_metric(conversions=5, spend=500.0)
+
+    confidence = optimizer.compute_test_confidence(
+        baseline_metric=baseline, hypothesis_metric=hypothesis, target_cac=50.0
+    )
+
+    assert confidence == "DIRECTIONAL"
+
+
+def test_compute_test_confidence_directional_below_the_spend_floor() -> None:
+    """10+ conversions on both sides, but one hasn't spent 2x target CAC
+    yet, stays directional — not enough real spend behind the CAC yet."""
+    baseline = _fake_metric(conversions=10, spend=99.0)
+    hypothesis = _fake_metric(conversions=10, spend=500.0)
+
+    confidence = optimizer.compute_test_confidence(
+        baseline_metric=baseline, hypothesis_metric=hypothesis, target_cac=50.0
+    )
+
+    assert confidence == "DIRECTIONAL"
+
+
+def test_compute_test_confidence_confident_once_both_gates_clear() -> None:
+    """10+ conversions and >= 2x target CAC spent on both sides is confident."""
+    baseline = _fake_metric(conversions=10, spend=100.0)
+    hypothesis = _fake_metric(conversions=15, spend=150.0)
+
+    confidence = optimizer.compute_test_confidence(
+        baseline_metric=baseline, hypothesis_metric=hypothesis, target_cac=50.0
+    )
+
+    assert confidence == "CONFIDENT"
 
 
 # --- _format_criterion_line --------------------------------------------------
@@ -952,7 +1026,6 @@ async def test_evaluate_test_plan_returns_the_parsed_evaluation(
     )
 
     assert result.recommended_action == "continue_testing"
-    assert result.confidence == "LOW"
     assert result.key_findings == ["CTR is within the typical range for this vertical."]
 
 

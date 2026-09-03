@@ -242,6 +242,7 @@ function fakeTestEvaluation(
     keyFindings: ['CTR is within the typical range for this vertical.'],
     recommendedAction: 'continue_testing',
     reasoning: 'Not enough conversion volume yet to read economic indicators.',
+    stopReason: 'MANUAL',
     createdAt: '2026-09-01T00:00:00Z',
     ...overrides,
   }

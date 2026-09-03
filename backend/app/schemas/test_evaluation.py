@@ -16,8 +16,28 @@ from typing import Literal
 from app.schemas.base import CamelCaseModel
 
 TestEvaluationStatus = Literal["SUFFICIENT_DATA", "INSUFFICIENT_DATA"]
-Confidence = Literal["LOW", "MEDIUM", "HIGH"]
+# LOW: below MIN_CONVERSIONS_TO_COMPARE_VARIANTS on either side (no real
+# comparison at all — compute_test_result stays INCONCLUSIVE here too).
+# DIRECTIONAL: both sides clear that floor, a first real read, but haven't
+# yet cleared MIN_CONVERSIONS_FOR_CONFIDENT_RESULT conversions and
+# MIN_SPEND_MULTIPLE_OF_TARGET_CAC x target CAC spent on both sides.
+# CONFIDENT: both gates cleared on both variants. Backend-computed
+# (app/services/optimizer.py's compute_test_confidence) from real
+# conversion/spend volume, never the LLM's self-assessment — declaring how
+# much to trust an A/B test's CAC comparison is a deterministic read of
+# sample size, not a judgment call.
+Confidence = Literal["LOW", "DIRECTIONAL", "CONFIDENT"]
 HypothesisResult = Literal["SUPPORTED", "REJECTED", "INCONCLUSIVE"]
+# Why a TEST_PLAN evaluation ran — MANUAL is a human's "Evaluate now"
+# click; the other three are the two auto-pause paths
+# (app/services/optimization_jobs.py) each auto-triggering an evaluation
+# right after they pause a TEST_PLAN campaign.
+StopReason = Literal[
+    "MANUAL",
+    "TEST_DURATION_ELAPSED",
+    "TOTAL_SPEND_CIRCUIT_BREAKER",
+    "CAC_CIRCUIT_BREAKER",
+]
 
 # What the LLM may choose — diagnostic/iteration actions only, never a
 # variant-preference call. Declaring an A/B test's winner is a
@@ -50,22 +70,22 @@ RecommendedAction = Literal[
 class GeneratedTestEvaluation(CamelCaseModel):
     """The fields the LLM generates for a TEST_PLAN evaluation, as a forced tool call.
 
-    confidence is the model's own self-assessment, same pattern as
-    GeneratedRecommendation.risk (app/schemas/optimization.py).
-    status/winning_variant/hypothesis_result are deliberately NOT
-    generated here — they're backend-computed/fixed (see
-    app/services/optimizer.py's evaluate_test_plan/compute_test_result)
-    — asking the model to self-report whether its own analysis has
-    "enough data," or to name a winning variant, is exactly the kind of
-    deterministic-or-impossible calculation PRD.md's Optimizer Agent
-    responsibilities say the LLM must not own — true regardless of
-    whether real per-variant data exists yet.
+    status/winning_variant/hypothesis_result/confidence are deliberately
+    NOT generated here — they're backend-computed/fixed (see
+    app/services/optimizer.py's evaluate_test_plan/compute_test_result/
+    compute_test_confidence) — asking the model to self-report whether its
+    own analysis has "enough data," to name a winning variant, or to rate
+    its own confidence is exactly the kind of deterministic-or-impossible
+    calculation PRD.md's Optimizer Agent responsibilities say the LLM must
+    not own — true regardless of whether real per-variant data exists yet.
+    confidence in particular is a direct read of sample size (conversions
+    and spend against the target CAC), not a qualitative judgment call
+    like GeneratedRecommendation.risk (app/schemas/optimization.py) is.
     """
 
     key_findings: list[str]
     recommended_action: GeneratedRecommendedAction
     reasoning: str
-    confidence: Confidence
 
 
 class TestEvaluationResponse(CamelCaseModel):
@@ -87,4 +107,5 @@ class TestEvaluationResponse(CamelCaseModel):
     key_findings: list[str]
     recommended_action: RecommendedAction
     reasoning: str
+    stop_reason: StopReason
     created_at: datetime

@@ -996,6 +996,9 @@ export function CampaignsSection({ businessId }: { businessId: string }) {
                                   {' — '}
                                   recommended: {evaluation.recommendedAction.replaceAll('_', ' ')}
                                 </p>
+                                <p>
+                                  triggered by: {evaluation.stopReason.toLowerCase().replaceAll('_', ' ')}
+                                </p>
                                 <p>{evaluation.reasoning}</p>
                                 {evaluation.keyFindings.length > 0 && (
                                   <ul>

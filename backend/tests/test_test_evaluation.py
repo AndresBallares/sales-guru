@@ -211,7 +211,7 @@ async def _seed_test_evaluation(campaign_id: str, **overrides: object) -> str:
         "campaignId": campaign_id,
         "status": "SUFFICIENT_DATA",
         "winningVariant": None,
-        "confidence": "MEDIUM",
+        "confidence": "DIRECTIONAL",
         "hypothesisResult": "INCONCLUSIVE",
         "keyFindings": json.dumps(["CTR is within the typical range."]),
         "recommendedAction": "continue_testing",

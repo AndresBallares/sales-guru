@@ -501,5 +501,6 @@ model TestEvaluation {
   keyFindings       String
   recommendedAction String
   reasoning         String
+  stopReason        String   @default("MANUAL")
   createdAt         DateTime @default(now())
 }

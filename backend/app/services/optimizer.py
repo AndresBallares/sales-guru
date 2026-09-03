@@ -39,9 +39,9 @@ from prisma.models import AdSet, Business, Campaign, Metric
 
 from app.core.config import get_settings
 from app.schemas.optimization import GeneratedRecommendation
-from app.schemas.strategy import SuccessCriterion, TestPlanContent
-from app.schemas.test_evaluation import GeneratedTestEvaluation
-from app.services.benchmarks import classify_performance_zone
+from app.schemas.strategy import SuccessCriterion, TestPlanContent, UnitEconomicsFields
+from app.schemas.test_evaluation import Confidence, GeneratedTestEvaluation
+from app.services.benchmarks import JEWELRY_META_BENCHMARKS, classify_performance_zone
 
 _MODEL = "claude-sonnet-5"
 _MAX_TOKENS = 1024
@@ -630,6 +630,80 @@ def compute_test_result(
     return None, "INCONCLUSIVE"
 
 
+def resolve_target_cac(unit_economics: UnitEconomicsFields | None) -> float:
+    """The campaign's own product economics, or the benchmark median as a fallback.
+
+    Never blended — the business's own real target CAC wins whenever it's
+    known (a priced product with a margin); the industry benchmark median
+    is the fallback so every campaign still has a real cost cap to bid
+    and evaluate against, not just ones with priced products. Same "two
+    separate numbers, picked from, not averaged" principle as
+    app/services/strategist.py's _build_success_criteria, reused here for
+    every other place that needed this exact resolution
+    (app/services/publish.py, this module's _enforce_cac_circuit_breaker
+    equivalent in app/services/optimization_jobs.py, and
+    compute_test_confidence below).
+    """
+    return (
+        unit_economics.target_cac
+        if unit_economics is not None
+        else JEWELRY_META_BENCHMARKS.cac.median
+    )
+
+
+# A confident CAC comparison needs real volume on both sides — 10x the
+# bare minimum used to call a result SUPPORTED/REJECTED at all
+# (MIN_CONVERSIONS_TO_COMPARE_VARIANTS), same "directional vs. confident"
+# split as any A/B test with a small sample.
+MIN_CONVERSIONS_FOR_CONFIDENT_RESULT = 10
+
+# Below 2x the target CAC spent, a variant hasn't bought enough traffic
+# for its CAC to mean much yet, even with enough raw conversions to clear
+# MIN_CONVERSIONS_FOR_CONFIDENT_RESULT.
+MIN_SPEND_MULTIPLE_OF_TARGET_CAC = 2.0
+
+
+def compute_test_confidence(
+    *, baseline_metric: Metric, hypothesis_metric: Metric, target_cac: float
+) -> Confidence:
+    """Deterministic confidence tier for a two-variant TEST_PLAN comparison.
+
+    Never an LLM self-assessment (see GeneratedTestEvaluation's docstring)
+    — this is a direct read of sample size, not a judgment call. Always
+    call this alongside compute_test_result, using the same two metrics,
+    so the confidence label describes the same comparison the winner was
+    computed from.
+
+    Args:
+        baseline_metric: The broad-baseline AdSet's most recent snapshot.
+        hypothesis_metric: The hypothesis-driven AdSet's most recent
+            snapshot.
+        target_cac: The campaign's own target CAC (resolve_target_cac).
+
+    Returns:
+        "LOW" if either side hasn't cleared MIN_CONVERSIONS_TO_COMPARE_VARIANTS
+        (compute_test_result itself stays INCONCLUSIVE here). "DIRECTIONAL"
+        once both clear that floor — a real read, but on a thin sample.
+        "CONFIDENT" only once both sides have also cleared
+        MIN_CONVERSIONS_FOR_CONFIDENT_RESULT conversions and spent at least
+        MIN_SPEND_MULTIPLE_OF_TARGET_CAC x target_cac.
+    """
+    if (
+        baseline_metric.conversions < MIN_CONVERSIONS_TO_COMPARE_VARIANTS
+        or hypothesis_metric.conversions < MIN_CONVERSIONS_TO_COMPARE_VARIANTS
+    ):
+        return "LOW"
+    spend_floor = MIN_SPEND_MULTIPLE_OF_TARGET_CAC * target_cac
+    if (
+        baseline_metric.conversions >= MIN_CONVERSIONS_FOR_CONFIDENT_RESULT
+        and hypothesis_metric.conversions >= MIN_CONVERSIONS_FOR_CONFIDENT_RESULT
+        and baseline_metric.spend >= spend_floor
+        and hypothesis_metric.spend >= spend_floor
+    ):
+        return "CONFIDENT"
+    return "DIRECTIONAL"
+
+
 def _format_criterion_line(
     criterion: SuccessCriterion, actual_value: float | None
 ) -> str:
@@ -843,8 +917,7 @@ def _build_test_evaluation_prompt(
         "test_new_creative, investigate_offer_or_landing_page, "
         "investigate_checkout_or_purchase_friction — never prefer_broad "
         "or prefer_hypothesis, that determination is made separately from "
-        "your output. Submit your evaluation using the provided tool, "
-        "including your own confidence (LOW/MEDIUM/HIGH).",
+        "your output. Submit your evaluation using the provided tool.",
     ]
     return "\n".join(lines)
 

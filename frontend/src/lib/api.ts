@@ -739,13 +739,21 @@ export function rejectRecommendation(
 // publishing ("Phase C") is built, so no comparison is possible yet.
 
 export type TestEvaluationStatus = 'SUFFICIENT_DATA' | 'INSUFFICIENT_DATA'
-export type TestEvaluationConfidence = 'LOW' | 'MEDIUM' | 'HIGH'
+// Backend-computed from real conversion/spend volume, never an LLM
+// self-assessment — see backend/app/services/optimizer.py's
+// compute_test_confidence.
+export type TestEvaluationConfidence = 'LOW' | 'DIRECTIONAL' | 'CONFIDENT'
 export type HypothesisResult = 'SUPPORTED' | 'REJECTED' | 'INCONCLUSIVE'
 export type TestEvaluationAction =
   | 'continue_testing'
   | 'test_new_creative'
   | 'investigate_offer_or_landing_page'
   | 'investigate_checkout_or_purchase_friction'
+export type TestEvaluationStopReason =
+  | 'MANUAL'
+  | 'TEST_DURATION_ELAPSED'
+  | 'TOTAL_SPEND_CIRCUIT_BREAKER'
+  | 'CAC_CIRCUIT_BREAKER'
 
 export interface TestEvaluation {
   id: string
@@ -757,6 +765,7 @@ export interface TestEvaluation {
   keyFindings: string[]
   recommendedAction: TestEvaluationAction
   reasoning: string
+  stopReason: TestEvaluationStopReason
   createdAt: string
 }
 
