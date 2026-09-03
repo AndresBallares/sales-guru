@@ -98,11 +98,11 @@ Once live, manual click-through testing against the real production deploy (2026
    ```
    BenchmarkRange = {low, median, high, source, as_of, direction}
    ```
-   `classify_performance_zone(value, benchmark)` maps a value to one of four zones — `needs_attention` (worst) → `within_acceptable_range` → `strong` → `exceptional` (best) — resolved by `direction` so this reads correctly for both higher-is-better metrics (CTR, CVR, ROAS) and lower-is-better ones (CPM, CAC, CPC); not yet wired into anything live (that's the Optimizer, Phase B). Current Meta/jewelry ranges, user-validated median with an estimated ±20% band (no independently-sourced percentile data exists yet — revisit if real percentile benchmarks become available):
+   `classify_performance_zone(value, benchmark)` maps a value to one of four zones — `needs_attention` (worst) → `within_acceptable_range` → `strong` → `exceptional` (best) — resolved by `direction` so this reads correctly for both higher-is-better metrics (CTR, CVR, ROAS) and lower-is-better ones (CPM, CAC, CPC); not yet wired into anything live (that's the Optimizer, Phase B). Current Meta/jewelry ranges (CTR/CPM/CVR: user-validated median with an estimated ±20% band, no independently-sourced percentile data exists yet — revisit if real percentile benchmarks become available; CAC: low/median/high each given directly by the user 2026-09-03, not a computed band):
    - CTR: 1.94%–2.90% (median 2.42%, higher is better)
    - CPM: $7.49–$11.23 (median $9.36, lower is better)
    - Conversion rate: 0.68%–1.02% (median 0.85%, higher is better)
-   - CAC: $36.40–$54.60 (median **$45.50**, lower is better)
+   - CAC: $45.00–$65.00 (median **$55.00**, lower is better)
 
    Google Ads figures (sourced from wordstream.com) stay flat points, not ranges — informational grounding only, never acted on or measured against, since this product only publishes to Meta: CTR 6.64%, CPC $4.44, conversion rate 4.50%, cost per lead $97.51.
 

@@ -133,6 +133,13 @@ _META_SOURCE = (
 )
 _META_AS_OF = "2026-08-31"
 
+# CAC's low/median/high were each given directly by the user (2026-09-03),
+# not derived as a +/-20% band like the other three metrics above — kept
+# as its own source/as_of pair so this distinction stays honest rather
+# than implying a uniform methodology across all four metrics.
+_CAC_SOURCE = "User-provided low/median/high for jewelry & accessories (2026-09-03)."
+_CAC_AS_OF = "2026-09-03"
+
 
 class MetaJewelryBenchmarks(NamedTuple):
     """Meta/Facebook ad benchmark ranges for the jewelry & accessories industry."""
@@ -169,11 +176,11 @@ JEWELRY_META_BENCHMARKS = MetaJewelryBenchmarks(
         direction="higher_is_better",
     ),
     cac=BenchmarkRange(
-        low=36.40,
-        median=45.50,
-        high=54.60,
-        source=_META_SOURCE,
-        as_of=_META_AS_OF,
+        low=45.0,
+        median=55.0,
+        high=65.0,
+        source=_CAC_SOURCE,
+        as_of=_CAC_AS_OF,
         direction="lower_is_better",
     ),
 )
