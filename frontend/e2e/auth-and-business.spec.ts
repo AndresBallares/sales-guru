@@ -16,6 +16,34 @@ test('login page has no detectable accessibility violations', async ({ page }) =
   expect(results.violations).toEqual([])
 })
 
+// Regression coverage for a real incident: a user signed up, and the
+// password they'd just set didn't work on a later login — never fully
+// root-caused (the backend's own hash/verify round-trip checked out fine
+// in isolation), so this exercises the whole real path start to finish —
+// actual browser form fields, actual submit, actual backend — isolated
+// from the much longer combined flow below so a regression here fails
+// fast and unambiguously, not buried under business/product/audience/
+// campaign assertions.
+test('signs up, logs out, and logs back in with the same password', async ({ page }) => {
+  const email = uniqueEmail()
+  const password = 'supersecret123'
+
+  await page.goto('/signup')
+  await page.getByLabel('Email').fill(email)
+  await page.getByLabel('Password').fill(password)
+  await page.getByRole('button', { name: 'Sign up' }).click()
+  await expect(page.getByText(`Signed in as ${email}`)).toBeVisible()
+
+  await page.getByRole('button', { name: 'Log out' }).click()
+  await expect(page.getByRole('heading', { name: 'Log in' })).toBeVisible()
+
+  await page.getByLabel('Email').fill(email)
+  await page.getByLabel('Password').fill(password)
+  await page.getByRole('button', { name: 'Log in' }).click()
+
+  await expect(page.getByText(`Signed in as ${email}`)).toBeVisible()
+})
+
 test('sign up, create a business, log out, log back in', async ({ page }) => {
   const email = uniqueEmail()
   const password = 'supersecret123'
