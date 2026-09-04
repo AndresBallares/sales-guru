@@ -316,6 +316,47 @@ main > section > form,
   border-radius: var(--radius-card);
 }
 
+/* A mockup of how the selected ad will actually look once published,
+   not a data table of its fields — image, then headline/body/description
+   in decreasing emphasis, then the CTA styled like Meta's own button. */
+.ad-preview {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  max-width: 360px;
+  padding: 1rem;
+  background: var(--surface-hover);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card);
+}
+
+.ad-preview img {
+  width: 100%;
+  height: auto;
+  border-radius: calc(var(--radius-card) - 0.25rem);
+}
+
+.ad-preview-headline {
+  font-weight: 700;
+  font-size: 1.05rem;
+}
+
+.ad-preview-description {
+  color: var(--text-secondary);
+  font-size: 0.85rem;
+}
+
+.ad-preview-cta {
+  align-self: flex-start;
+  margin-top: 0.25rem;
+  padding: 0.6rem 1.25rem;
+  background: var(--primary);
+  color: white;
+  border-radius: 999px;
+  font-weight: 600;
+  font-size: 0.85rem;
+}
+
 /* ---------- Form fields ---------- */
 
 .field {
