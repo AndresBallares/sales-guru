@@ -284,9 +284,17 @@ main > section {
   gap: 1rem;
 }
 
-main > section > form {
+main > section > form,
+.meta-step {
   display: flex;
   flex-direction: column;
+  gap: 1rem;
+}
+
+.button-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
   gap: 1rem;
 }
 

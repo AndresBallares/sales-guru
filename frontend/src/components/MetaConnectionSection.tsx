@@ -191,7 +191,7 @@ export function MetaConnectionSection({
       )}
 
       {!loading && pending && (
-        <div>
+        <div className="meta-step">
           <p>Choose which ad account and Page to use for this business.</p>
           <div className="field">
             <label htmlFor="meta-ad-account">Ad account</label>
@@ -234,7 +234,7 @@ export function MetaConnectionSection({
       )}
 
       {!loading && connection !== null && !pending && (
-        <div>
+        <div className="meta-step">
           <p>
             Connected — ad account <strong>{connection.adAccountId}</strong>, Page{' '}
             <strong>{connection.pageId}</strong>.
@@ -269,22 +269,28 @@ export function MetaConnectionSection({
                   {pixelError}
                 </p>
               )}
-              <button
-                type="button"
-                onClick={handleSetPixel}
-                disabled={settingPixel || !selectedPixelId}
-              >
-                {settingPixel ? 'Saving…' : 'Save Pixel'}
-              </button>
-              <button type="button" className="link-button" onClick={() => setPixelSkipped(true)}>
-                Skip for now
-              </button>
             </div>
           )}
 
-          <button type="button" onClick={handleDisconnect} disabled={disconnecting}>
-            {disconnecting ? 'Disconnecting…' : 'Disconnect'}
-          </button>
+          <div className="button-row">
+            <button type="button" onClick={handleDisconnect} disabled={disconnecting}>
+              {disconnecting ? 'Disconnecting…' : 'Disconnect'}
+            </button>
+            {!connection.pixelId && (
+              <>
+                <button
+                  type="button"
+                  onClick={handleSetPixel}
+                  disabled={settingPixel || !selectedPixelId}
+                >
+                  {settingPixel ? 'Saving…' : 'Save Pixel'}
+                </button>
+                <button type="button" className="link-button" onClick={() => setPixelSkipped(true)}>
+                  Skip for now
+                </button>
+              </>
+            )}
+          </div>
         </div>
       )}
     </section>
