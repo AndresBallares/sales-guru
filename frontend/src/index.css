@@ -374,6 +374,22 @@ textarea {
   text-decoration: underline;
 }
 
+.link-button {
+  background: transparent;
+  color: var(--accent);
+  border: none;
+  padding: 0;
+  min-height: 0;
+  font-weight: 500;
+  font-size: 0.85rem;
+}
+
+.link-button:hover:not(:disabled) {
+  background: transparent;
+  box-shadow: none;
+  text-decoration: underline;
+}
+
 /* ---------- Buttons ---------- */
 
 button {
