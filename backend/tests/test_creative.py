@@ -402,6 +402,81 @@ def test_select_creative_leaves_image_null_without_any_uploaded(
     assert response.json()["imageUrl"] is None
 
 
+def test_select_creative_attaches_an_explicitly_chosen_photo(
+    client: TestClient,
+) -> None:
+    """A product_image_id in the request body wins over the oldest-photo
+    default — the user explicitly picked which photo the ad should use."""
+    _signed_up_client(client)
+    business_id = _create_business(client)
+    product_id = client.post(
+        f"/businesses/{business_id}/products", json={"description": "Ring"}
+    ).json()["id"]
+    older_image = client.post(
+        f"/businesses/{business_id}/products/{product_id}/images",
+        files={"file": ("older.jpg", b"\xff\xd8\xff\xe0fake", "image/jpeg")},
+    ).json()
+    chosen_image = client.post(
+        f"/businesses/{business_id}/products/{product_id}/images",
+        files={"file": ("chosen.jpg", b"\xff\xd8\xff\xe0fake", "image/jpeg")},
+    ).json()
+    campaign_id = client.post(
+        f"/businesses/{business_id}/campaigns",
+        json={"objective": "SALES", "productId": product_id},
+    ).json()["id"]
+    _generate_strategy(client, business_id, campaign_id)
+    generated = client.post(
+        f"/businesses/{business_id}/campaigns/{campaign_id}/creatives"
+    ).json()
+
+    response = client.post(
+        f"/businesses/{business_id}/campaigns/{campaign_id}"
+        f"/creatives/{generated[0]['id']}/select",
+        json={"productImageId": chosen_image["id"]},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["imageUrl"] == (
+        f"http://localhost:8000/product-images/{chosen_image['id']}"
+    )
+    assert older_image["id"] != chosen_image["id"]
+
+
+def test_select_creative_404s_for_a_product_image_from_another_product(
+    client: TestClient,
+) -> None:
+    """A product_image_id that doesn't belong to the campaign's product is
+    rejected, not silently attached."""
+    _signed_up_client(client)
+    business_id = _create_business(client)
+    product_id = client.post(
+        f"/businesses/{business_id}/products", json={"description": "Ring"}
+    ).json()["id"]
+    other_product_id = client.post(
+        f"/businesses/{business_id}/products", json={"description": "Necklace"}
+    ).json()["id"]
+    other_image = client.post(
+        f"/businesses/{business_id}/products/{other_product_id}/images",
+        files={"file": ("necklace.jpg", b"\xff\xd8\xff\xe0fake", "image/jpeg")},
+    ).json()
+    campaign_id = client.post(
+        f"/businesses/{business_id}/campaigns",
+        json={"objective": "SALES", "productId": product_id},
+    ).json()["id"]
+    _generate_strategy(client, business_id, campaign_id)
+    generated = client.post(
+        f"/businesses/{business_id}/campaigns/{campaign_id}/creatives"
+    ).json()
+
+    response = client.post(
+        f"/businesses/{business_id}/campaigns/{campaign_id}"
+        f"/creatives/{generated[0]['id']}/select",
+        json={"productImageId": other_image["id"]},
+    )
+
+    assert response.status_code == 404
+
+
 def test_full_flow_can_be_approved_after_selecting_an_ad(client: TestClient) -> None:
     """End to end: strategy -> creatives -> select -> approve."""
     _signed_up_client(client)

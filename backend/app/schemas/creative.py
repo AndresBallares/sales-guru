@@ -49,6 +49,17 @@ class GeneratedCreativeBatch(CamelCaseModel):
     )
 
 
+class SelectCreativeRequest(CamelCaseModel):
+    """Optional body for POST .../creatives/{id}/select.
+
+    product_image_id names a specific uploaded photo to attach as the
+    creative's imageUrl, overriding the endpoint's default "oldest
+    uploaded photo" pick — omit to keep that default behavior.
+    """
+
+    product_image_id: str | None = None
+
+
 class CreativeResponse(CamelCaseModel):
     """Public-facing representation of a stored Creative."""
 

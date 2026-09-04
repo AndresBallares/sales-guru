@@ -529,6 +529,7 @@ export interface Creative {
   creativeAngle: string | null
   imagePrompt: string | null
   videoPrompt: string | null
+  imageUrl: string | null
   status: CreativeStatus
   createdAt: string
 }
@@ -547,10 +548,14 @@ export function selectCreative(
   businessId: string,
   campaignId: string,
   creativeId: string,
+  productImageId?: string,
 ): Promise<Creative> {
   return request<Creative>(
     `/businesses/${businessId}/campaigns/${campaignId}/creatives/${creativeId}/select`,
-    { method: 'POST' },
+    {
+      method: 'POST',
+      ...(productImageId ? { body: JSON.stringify({ productImageId }) } : {}),
+    },
   )
 }
 

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState, type FormEvent } from 'react'
+import { useCallback, useEffect, useState, type ChangeEvent, type FormEvent } from 'react'
 import {
   ApiError,
   approveCampaign,
@@ -14,6 +14,7 @@ import {
   listCampaigns,
   listCreatives,
   listMetrics,
+  listProductImages,
   listProducts,
   listRecommendations,
   listTestEvaluations,
@@ -22,6 +23,7 @@ import {
   refreshMetrics,
   rejectRecommendation,
   selectCreative,
+  uploadProductImage,
   type ActionType,
   type Audience,
   type Campaign,
@@ -29,6 +31,7 @@ import {
   type Metric,
   type Objective,
   type Product,
+  type ProductImage,
   type Recommendation,
   type StrategyContent,
   type TargetLocation,
@@ -87,6 +90,18 @@ export function CampaignsSection({ businessId }: { businessId: string }) {
   const [generatingCreativesId, setGeneratingCreativesId] = useState<string | null>(null)
   const [creativeErrors, setCreativeErrors] = useState<Record<string, string>>({})
   const [selectingId, setSelectingId] = useState<string | null>(null)
+
+  // Keyed by campaign id — lets the user pick which product photo this
+  // campaign's ad should use (see handleSelectCreative) before generating.
+  const [chosenImages, setChosenImages] = useState<Record<string, ProductImage>>({})
+  const [imageMenuId, setImageMenuId] = useState<string | null>(null)
+  const [libraryId, setLibraryId] = useState<string | null>(null)
+  const [loadingLibraryId, setLoadingLibraryId] = useState<string | null>(null)
+  // Keyed by product id, not campaign id — the same product's library is
+  // shared across every campaign that sells it.
+  const [productImages, setProductImages] = useState<Record<string, ProductImage[]>>({})
+  const [uploadingImageId, setUploadingImageId] = useState<string | null>(null)
+  const [imageErrors, setImageErrors] = useState<Record<string, string>>({})
 
   const [approvingId, setApprovingId] = useState<string | null>(null)
   const [approveErrors, setApproveErrors] = useState<Record<string, string>>({})
@@ -299,10 +314,72 @@ export function CampaignsSection({ businessId }: { businessId: string }) {
     }
   }
 
+  function handleToggleImageMenu(campaignId: string) {
+    setImageMenuId((prev) => (prev === campaignId ? null : campaignId))
+    setLibraryId(null)
+  }
+
+  async function handleUploadCampaignImage(
+    campaignId: string,
+    productId: string,
+    event: ChangeEvent<HTMLInputElement>,
+  ) {
+    const file = event.target.files?.[0]
+    event.target.value = ''
+    if (!file) return
+
+    setUploadingImageId(campaignId)
+    setImageErrors((prev) => ({ ...prev, [campaignId]: '' }))
+    try {
+      const image = await uploadProductImage(businessId, productId, file)
+      setChosenImages((prev) => ({ ...prev, [campaignId]: image }))
+      setProductImages((prev) => ({
+        ...prev,
+        [productId]: [...(prev[productId] ?? []), image],
+      }))
+      setImageMenuId(null)
+    } catch (err) {
+      setImageErrors((prev) => ({
+        ...prev,
+        [campaignId]: err instanceof ApiError ? err.message : 'Could not upload image.',
+      }))
+    } finally {
+      setUploadingImageId(null)
+    }
+  }
+
+  async function handleOpenLibrary(campaignId: string, productId: string) {
+    setLibraryId(campaignId)
+    setLoadingLibraryId(campaignId)
+    setImageErrors((prev) => ({ ...prev, [campaignId]: '' }))
+    try {
+      const images = await listProductImages(businessId, productId)
+      setProductImages((prev) => ({ ...prev, [productId]: images }))
+    } catch (err) {
+      setImageErrors((prev) => ({
+        ...prev,
+        [campaignId]: err instanceof ApiError ? err.message : 'Could not load photo library.',
+      }))
+    } finally {
+      setLoadingLibraryId(null)
+    }
+  }
+
+  function handleChooseLibraryImage(campaignId: string, image: ProductImage) {
+    setChosenImages((prev) => ({ ...prev, [campaignId]: image }))
+    setImageMenuId(null)
+    setLibraryId(null)
+  }
+
   async function handleSelectCreative(campaignId: string, creativeId: string) {
     setSelectingId(creativeId)
     try {
-      const updated = await selectCreative(businessId, campaignId, creativeId)
+      const updated = await selectCreative(
+        businessId,
+        campaignId,
+        creativeId,
+        chosenImages[campaignId]?.id,
+      )
       setCreatives((prev) => ({
         ...prev,
         [campaignId]: (prev[campaignId] ?? []).map((c) =>
@@ -498,6 +575,13 @@ export function CampaignsSection({ businessId }: { businessId: string }) {
             const analyzeError = analyzeErrors[campaign.id]
             const campaignTestEvaluations = testEvaluations[campaign.id] ?? []
             const evaluateError = evaluateErrors[campaign.id]
+            const chosenImage = chosenImages[campaign.id]
+            const imageError = imageErrors[campaign.id]
+            // Own name (not just campaign.productId inline below) so its
+            // narrowed non-null type survives into the JSX callbacks that
+            // close over it — a plain property access re-widens to
+            // `string | null` inside a nested closure.
+            const campaignProductId = campaign.productId
             return (
               <li key={campaign.id}>
                 {campaign.name ? `${campaign.name} — ` : ''}
@@ -740,17 +824,93 @@ export function CampaignsSection({ businessId }: { businessId: string }) {
                 )}
                 {strategy && (
                   <div>
-                    <button
-                      type="button"
-                      onClick={() => handleGenerateCreatives(campaign.id)}
-                      disabled={generatingCreativesId === campaign.id}
-                    >
-                      {generatingCreativesId === campaign.id
-                        ? 'Generating…'
-                        : campaignCreatives.length > 0
-                          ? 'Regenerate ads'
-                          : 'Generate ads'}
-                    </button>
+                    <div className="button-row">
+                      {campaignProductId && (
+                        <div className="image-picker">
+                          <button type="button" onClick={() => handleToggleImageMenu(campaign.id)}>
+                            {chosenImage ? 'Change image' : 'Upload Image'}
+                          </button>
+                          {imageMenuId === campaign.id && (
+                            <div className="image-menu">
+                              <label htmlFor={`campaign-image-upload-${campaign.id}`}>
+                                Upload from computer
+                              </label>
+                              <input
+                                id={`campaign-image-upload-${campaign.id}`}
+                                type="file"
+                                accept="image/jpeg,image/png,image/webp"
+                                disabled={uploadingImageId === campaign.id}
+                                onChange={(event) =>
+                                  void handleUploadCampaignImage(
+                                    campaign.id,
+                                    campaignProductId,
+                                    event,
+                                  )
+                                }
+                              />
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  void handleOpenLibrary(campaign.id, campaignProductId)
+                                }
+                              >
+                                Choose from library
+                              </button>
+                            </div>
+                          )}
+                          {uploadingImageId === campaign.id && <p>Uploading…</p>}
+                          {libraryId === campaign.id && (
+                            <div aria-label="Choose a photo from your library">
+                              {loadingLibraryId === campaign.id && <p>Loading…</p>}
+                              {loadingLibraryId !== campaign.id &&
+                                (productImages[campaignProductId] ?? []).length === 0 && (
+                                  <p>No photos uploaded for this product yet.</p>
+                                )}
+                              {(productImages[campaignProductId] ?? []).map((image) => (
+                                <button
+                                  key={image.id}
+                                  type="button"
+                                  onClick={() => handleChooseLibraryImage(campaign.id, image)}
+                                >
+                                  <img
+                                    src={image.url}
+                                    alt="Product option"
+                                    width={60}
+                                    height={60}
+                                    style={{ objectFit: 'cover' }}
+                                  />
+                                </button>
+                              ))}
+                            </div>
+                          )}
+                          {chosenImage && (
+                            <img
+                              src={chosenImage.url}
+                              alt="Chosen for this ad"
+                              width={60}
+                              height={60}
+                              style={{ objectFit: 'cover' }}
+                            />
+                          )}
+                          {imageError && (
+                            <p className="form-error" role="alert">
+                              {imageError}
+                            </p>
+                          )}
+                        </div>
+                      )}
+                      <button
+                        type="button"
+                        onClick={() => handleGenerateCreatives(campaign.id)}
+                        disabled={generatingCreativesId === campaign.id}
+                      >
+                        {generatingCreativesId === campaign.id
+                          ? 'Generating…'
+                          : campaignCreatives.length > 0
+                            ? 'Regenerate ads'
+                            : 'Generate ads'}
+                      </button>
+                    </div>
                     {creativeError && (
                       <p className="form-error" role="alert">
                         {creativeError}
@@ -766,6 +926,15 @@ export function CampaignsSection({ businessId }: { businessId: string }) {
                                 {c.status}
                               </strong>
                             </p>
+                            {c.imageUrl && (
+                              <img
+                                src={c.imageUrl}
+                                alt={`Creative ${VARIANT_LETTERS[index] ?? index + 1}`}
+                                width={160}
+                                height={160}
+                                style={{ objectFit: 'cover' }}
+                              />
+                            )}
                             <p>
                               <strong>Headline:</strong> {c.headline}
                             </p>
