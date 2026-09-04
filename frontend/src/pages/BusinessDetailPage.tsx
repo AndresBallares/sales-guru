@@ -15,6 +15,7 @@ export function BusinessDetailPage() {
   // moves straight past that step — same reasoning for both.
   const [products, setProducts] = useState<Product[] | null>(null)
   const [audiences, setAudiences] = useState<Audience[] | null>(null)
+  const [metaSetupComplete, setMetaSetupComplete] = useState(false)
 
   useEffect(() => {
     if (!businessId) {
@@ -45,10 +46,11 @@ export function BusinessDetailPage() {
             <ProductsSection businessId={businessId} onProductsChange={setProducts} />
           ) : audiences === null || audiences.length === 0 ? (
             <AudiencesSection businessId={businessId} onAudiencesChange={setAudiences} />
+          ) : !metaSetupComplete ? (
+            <MetaConnectionSection businessId={businessId} onSetupComplete={setMetaSetupComplete} />
           ) : (
-            <MetaConnectionSection businessId={businessId} />
+            <CampaignsSection businessId={businessId} />
           )}
-          <CampaignsSection businessId={businessId} />
         </>
       )}
     </main>

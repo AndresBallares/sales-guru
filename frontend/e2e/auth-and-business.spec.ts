@@ -84,23 +84,15 @@ test('sign up, create a business, log out, log back in', async ({ page }) => {
 
   // Adding an audience moves straight to the Meta Ads step — the
   // audience step (and the audience itself) is no longer shown on screen.
+  // The Campaigns step is now gated behind a completed Meta connection
+  // (real OAuth, which this suite can't drive), so Campaigns must NOT
+  // appear alongside it — this is exactly the bug this gating fixed.
   await expect(page.getByRole('heading', { name: 'Meta Ads' })).toBeVisible()
   await expect(page.getByRole('button', { name: 'Connect Meta Ads' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Campaigns' })).not.toBeVisible()
 
-  await expect(page.getByText('No campaigns yet')).toBeVisible()
-  // Focusing the dropdowns triggers a refetch (see CampaignsSection) so the
-  // product/audience just created above actually appear as options.
-  await page.getByLabel('Name', { exact: true }).fill('Spring Wallet Sale')
-  await page.getByLabel('Product').focus()
-  await page.getByLabel('Product').selectOption({ label: 'Handmade leather wallets' })
-  await page.getByLabel('Audience').selectOption({ label: 'Busy professionals, 30-55' })
-  await page.getByLabel('Objective').selectOption({ label: 'Sales' })
-  await page.getByRole('button', { name: 'Create campaign' }).click()
-
-  await expect(page.getByText('Spring Wallet Sale — Sales — DRAFT')).toBeVisible()
-
-  const campaignResults = await new AxeBuilder({ page }).analyze()
-  expect(campaignResults.violations).toEqual([])
+  const metaStepResults = await new AxeBuilder({ page }).analyze()
+  expect(metaStepResults.violations).toEqual([])
 
   await page.getByRole('link', { name: '← Back to dashboard' }).click()
   await expect(page.getByRole('heading', { name: 'Sales Guru' })).toBeVisible()

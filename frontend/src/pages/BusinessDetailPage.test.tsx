@@ -65,7 +65,7 @@ describe('BusinessDetailPage', () => {
     expect(await screen.findByRole('heading', { name: 'Products' })).toBeInTheDocument()
     expect(screen.queryByRole('heading', { name: 'Audiences' })).not.toBeInTheDocument()
     expect(screen.queryByRole('heading', { name: 'Meta Ads' })).not.toBeInTheDocument()
-    expect(await screen.findByRole('heading', { name: 'Campaigns' })).toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: 'Campaigns' })).not.toBeInTheDocument()
   })
 
   it('moves straight to the audience step once a product already exists', async () => {
@@ -118,6 +118,50 @@ describe('BusinessDetailPage', () => {
     expect(await screen.findByRole('heading', { name: 'Meta Ads' })).toBeInTheDocument()
     expect(screen.queryByRole('heading', { name: 'Products' })).not.toBeInTheDocument()
     expect(screen.queryByRole('heading', { name: 'Audiences' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: 'Campaigns' })).not.toBeInTheDocument()
+  })
+
+  it('moves straight to Campaigns once Meta Ads is already fully connected', async () => {
+    mockedApi.listProducts.mockResolvedValue([
+      {
+        id: 'prod-1',
+        description: 'Handmade leather wallets',
+        price: 49.99,
+        margin: null,
+        features: null,
+        benefits: null,
+        url: null,
+      },
+    ])
+    mockedApi.listAudiences.mockResolvedValue([
+      {
+        id: 'aud-1',
+        description: 'Busy professionals, 30-55',
+        ageMin: 30,
+        ageMax: 55,
+        location: null,
+        interests: null,
+        problem: null,
+        desire: null,
+      },
+    ])
+    mockedApi.getMetaConnection.mockResolvedValue({
+      id: 'conn-1',
+      businessId: 'biz-1',
+      metaUserId: 'meta-user-1',
+      adAccountId: 'act_1',
+      pageId: 'page_1',
+      pixelId: 'pixel_1',
+      tokenExpiresAt: '2026-10-01T00:00:00Z',
+      createdAt: '2026-08-08T00:00:00Z',
+    })
+
+    renderPage()
+
+    expect(await screen.findByRole('heading', { name: 'Campaigns' })).toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: 'Products' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: 'Audiences' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: 'Meta Ads' })).not.toBeInTheDocument()
   })
 
   it('shows an error if the business fails to load', async () => {

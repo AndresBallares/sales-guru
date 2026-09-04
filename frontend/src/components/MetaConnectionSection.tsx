@@ -16,12 +16,19 @@ import {
   type MetaPixel,
 } from '../lib/api'
 
-export function MetaConnectionSection({ businessId }: { businessId: string }) {
+export function MetaConnectionSection({
+  businessId,
+  onSetupComplete,
+}: {
+  businessId: string
+  onSetupComplete?: (complete: boolean) => void
+}) {
   const [searchParams, setSearchParams] = useSearchParams()
   const [connection, setConnection] = useState<MetaConnection | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [connecting, setConnecting] = useState(false)
+  const [pixelSkipped, setPixelSkipped] = useState(false)
 
   const [adAccounts, setAdAccounts] = useState<MetaAdAccount[]>([])
   const [pages, setPages] = useState<MetaPage[]>([])
@@ -77,6 +84,14 @@ export function MetaConnectionSection({ businessId }: { businessId: string }) {
   }, [metaStatus, setSearchParams])
 
   const pending = connection !== null && (connection.adAccountId === null || connection.pageId === null)
+
+  // Reported up so the parent can move on to the Campaigns step — either
+  // once a Pixel is actually saved, or once the user explicitly skips it
+  // (the Pixel is optional; see the copy below the picker).
+  const setupComplete = connection !== null && !pending && (connection.pixelId !== null || pixelSkipped)
+  useEffect(() => {
+    onSetupComplete?.(setupComplete)
+  }, [setupComplete, onSetupComplete])
 
   useEffect(() => {
     if (!pending) {
@@ -176,7 +191,7 @@ export function MetaConnectionSection({ businessId }: { businessId: string }) {
       )}
 
       {!loading && pending && (
-        <div>
+        <div className="meta-step">
           <p>Choose which ad account and Page to use for this business.</p>
           <div className="field">
             <label htmlFor="meta-ad-account">Ad account</label>
@@ -219,7 +234,7 @@ export function MetaConnectionSection({ businessId }: { businessId: string }) {
       )}
 
       {!loading && connection !== null && !pending && (
-        <div>
+        <div className="meta-step">
           <p>
             Connected — ad account <strong>{connection.adAccountId}</strong>, Page{' '}
             <strong>{connection.pageId}</strong>.
@@ -254,19 +269,28 @@ export function MetaConnectionSection({ businessId }: { businessId: string }) {
                   {pixelError}
                 </p>
               )}
-              <button
-                type="button"
-                onClick={handleSetPixel}
-                disabled={settingPixel || !selectedPixelId}
-              >
-                {settingPixel ? 'Saving…' : 'Save Pixel'}
-              </button>
             </div>
           )}
 
-          <button type="button" onClick={handleDisconnect} disabled={disconnecting}>
-            {disconnecting ? 'Disconnecting…' : 'Disconnect'}
-          </button>
+          <div className="button-row">
+            <button type="button" onClick={handleDisconnect} disabled={disconnecting}>
+              {disconnecting ? 'Disconnecting…' : 'Disconnect'}
+            </button>
+            {!connection.pixelId && (
+              <>
+                <button
+                  type="button"
+                  onClick={handleSetPixel}
+                  disabled={settingPixel || !selectedPixelId}
+                >
+                  {settingPixel ? 'Saving…' : 'Save Pixel'}
+                </button>
+                <button type="button" className="link-button" onClick={() => setPixelSkipped(true)}>
+                  Skip for now
+                </button>
+              </>
+            )}
+          </div>
         </div>
       )}
     </section>

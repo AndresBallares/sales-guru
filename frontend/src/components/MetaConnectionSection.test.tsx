@@ -21,10 +21,13 @@ vi.mock('../lib/api', async (importOriginal) => {
 })
 const mockedApi = vi.mocked(api)
 
-function renderSection(initialEntry = '/businesses/biz-1') {
+function renderSection(
+  initialEntry = '/businesses/biz-1',
+  onSetupComplete?: (complete: boolean) => void,
+) {
   render(
     <MemoryRouter initialEntries={[initialEntry]}>
-      <MetaConnectionSection businessId="biz-1" />
+      <MetaConnectionSection businessId="biz-1" onSetupComplete={onSetupComplete} />
     </MemoryRouter>,
   )
 }
@@ -253,5 +256,56 @@ describe('MetaConnectionSection', () => {
     renderSection('/businesses/biz-1?meta=error')
 
     expect(await screen.findByText('Could not connect to Meta. Please try again.')).toBeInTheDocument()
+  })
+
+  it('reports setup as incomplete while not connected, pending, or awaiting a Pixel decision', async () => {
+    mockedApi.getMetaConnection.mockResolvedValue(COMPLETE_CONNECTION)
+    const onSetupComplete = vi.fn<(complete: boolean) => void>()
+
+    renderSection('/businesses/biz-1', onSetupComplete)
+    await screen.findByText(/Connected/)
+
+    expect(onSetupComplete).toHaveBeenCalledWith(false)
+    expect(onSetupComplete).not.toHaveBeenCalledWith(true)
+  })
+
+  it('reports setup as complete immediately when a Pixel is already saved', async () => {
+    mockedApi.getMetaConnection.mockResolvedValue({ ...COMPLETE_CONNECTION, pixelId: 'pixel_1' })
+    const onSetupComplete = vi.fn<(complete: boolean) => void>()
+
+    renderSection('/businesses/biz-1', onSetupComplete)
+
+    await waitFor(() => expect(onSetupComplete).toHaveBeenCalledWith(true))
+  })
+
+  it('reports setup as complete once the Pixel is saved', async () => {
+    mockedApi.getMetaConnection.mockResolvedValue(COMPLETE_CONNECTION)
+    mockedApi.listMetaPixels.mockResolvedValue([{ id: 'pixel_1', name: 'Acme Pixel' }])
+    mockedApi.setMetaPixel.mockResolvedValue({ ...COMPLETE_CONNECTION, pixelId: 'pixel_1' })
+    const onSetupComplete = vi.fn<(complete: boolean) => void>()
+    const user = userEvent.setup()
+
+    renderSection('/businesses/biz-1', onSetupComplete)
+    await screen.findByRole('option', { name: 'Acme Pixel' })
+    expect(onSetupComplete).toHaveBeenCalledWith(false)
+
+    await user.selectOptions(screen.getByLabelText('Meta Pixel'), 'pixel_1')
+    await user.click(screen.getByRole('button', { name: 'Save Pixel' }))
+
+    await waitFor(() => expect(onSetupComplete).toHaveBeenLastCalledWith(true))
+  })
+
+  it('reports setup as complete when the Pixel step is skipped', async () => {
+    mockedApi.getMetaConnection.mockResolvedValue(COMPLETE_CONNECTION)
+    const onSetupComplete = vi.fn<(complete: boolean) => void>()
+    const user = userEvent.setup()
+
+    renderSection('/businesses/biz-1', onSetupComplete)
+    await screen.findByRole('button', { name: 'Skip for now' })
+    expect(onSetupComplete).toHaveBeenCalledWith(false)
+
+    await user.click(screen.getByRole('button', { name: 'Skip for now' }))
+
+    await waitFor(() => expect(onSetupComplete).toHaveBeenLastCalledWith(true))
   })
 })
