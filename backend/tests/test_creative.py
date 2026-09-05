@@ -85,7 +85,8 @@ def _create_campaign(
     """
     if product_id is None:
         product_id = client.post(
-            f"/businesses/{business_id}/products", json={"description": "Ring"}
+            f"/businesses/{business_id}/products",
+            json={"description": "Ring", "url": "https://acme.example/ring"},
         ).json()["id"]
     if audience_id is None:
         audience_id = _create_audience(client, business_id)
@@ -376,7 +377,8 @@ def test_select_creative_attaches_the_products_first_photo(
     _signed_up_client(client)
     business_id = _create_business(client)
     product_id = client.post(
-        f"/businesses/{business_id}/products", json={"description": "Ring"}
+        f"/businesses/{business_id}/products",
+        json={"description": "Ring", "url": "https://acme.example/ring"},
     ).json()["id"]
     image = client.post(
         f"/businesses/{business_id}/products/{product_id}/images",
@@ -411,7 +413,8 @@ def test_select_creative_leaves_image_null_without_any_uploaded(
     _signed_up_client(client)
     business_id = _create_business(client)
     product_id = client.post(
-        f"/businesses/{business_id}/products", json={"description": "Ring"}
+        f"/businesses/{business_id}/products",
+        json={"description": "Ring", "url": "https://acme.example/ring"},
     ).json()["id"]
     audience_id = _create_audience(client, business_id)
     campaign_id = client.post(
@@ -440,7 +443,8 @@ def test_select_creative_attaches_an_explicitly_chosen_photo(
     _signed_up_client(client)
     business_id = _create_business(client)
     product_id = client.post(
-        f"/businesses/{business_id}/products", json={"description": "Ring"}
+        f"/businesses/{business_id}/products",
+        json={"description": "Ring", "url": "https://acme.example/ring"},
     ).json()["id"]
     older_image = client.post(
         f"/businesses/{business_id}/products/{product_id}/images",
@@ -481,10 +485,12 @@ def test_select_creative_404s_for_a_product_image_from_another_product(
     _signed_up_client(client)
     business_id = _create_business(client)
     product_id = client.post(
-        f"/businesses/{business_id}/products", json={"description": "Ring"}
+        f"/businesses/{business_id}/products",
+        json={"description": "Ring", "url": "https://acme.example/ring"},
     ).json()["id"]
     other_product_id = client.post(
-        f"/businesses/{business_id}/products", json={"description": "Necklace"}
+        f"/businesses/{business_id}/products",
+        json={"description": "Necklace", "url": "https://acme.example/necklace"},
     ).json()["id"]
     other_image = client.post(
         f"/businesses/{business_id}/products/{other_product_id}/images",
@@ -524,7 +530,8 @@ async def test_select_creative_428s_for_image_attach_when_not_ready(
     _signed_up_client(client)
     business_id = _create_business(client)
     product_id = client.post(
-        f"/businesses/{business_id}/products", json={"description": "Ring"}
+        f"/businesses/{business_id}/products",
+        json={"description": "Ring", "url": "https://acme.example/ring"},
     ).json()["id"]
     image = client.post(
         f"/businesses/{business_id}/products/{product_id}/images",

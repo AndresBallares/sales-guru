@@ -25,10 +25,15 @@ from app.services.event_venues import EVENT_VENUES, default_event_window
 from app.services.meta import MetaConnectionError
 from app.services.publish import pause_campaign as pause_campaign_on_meta
 from app.services.publish import publish_campaign_to_meta, requires_pixel
+from app.services.url_validation import requires_destination_url
 
 router = APIRouter(prefix="/businesses/{business_id}/campaigns", tags=["campaigns"])
 
 _PRODUCT_NOT_FOUND = "Product not found"
+_PRODUCT_MISSING_URL_FOR_OBJECTIVE = (
+    "This product has no destination URL — add one before attaching it to a "
+    "Sales or Traffic campaign, whose ad needs somewhere to send people"
+)
 _AUDIENCE_NOT_FOUND = "Audience not found"
 _EVENT_VENUE_NOT_FOUND = "Unknown event venue"
 _NOT_READY_FOR_APPROVAL = "Select an ad creative before approving this campaign"
@@ -75,8 +80,10 @@ def _to_response(campaign: Campaign) -> CampaignResponse:
     )
 
 
-async def _validate_product(business_id: str, product_id: str | None) -> None:
-    """Confirm a product id, if given, belongs to this business.
+async def _validate_product(
+    business_id: str, product_id: str | None, objective: str
+) -> None:
+    """Confirm a product id, if given, belongs to this business and qualifies.
 
     Scoping the lookup to businessId means a product belonging to a
     different business (even one the current user owns) looks identical to
@@ -86,10 +93,14 @@ async def _validate_product(business_id: str, product_id: str | None) -> None:
     Args:
         business_id: The business the campaign is being created under.
         product_id: The product id from the request, if provided.
+        objective: The campaign's objective — SALES/TRAFFIC campaigns
+            require the bound product to have a destination URL (see
+            app/services/url_validation.py's requires_destination_url).
 
     Raises:
         HTTPException: 404 if product_id is set but doesn't resolve within
-            this business.
+            this business. 422 if it resolves but lacks a URL required by
+            objective.
     """
     if product_id is None:
         return
@@ -99,6 +110,11 @@ async def _validate_product(business_id: str, product_id: str | None) -> None:
     if product is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail=_PRODUCT_NOT_FOUND
+        )
+    if requires_destination_url(objective) and product.url is None:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=_PRODUCT_MISSING_URL_FOR_OBJECTIVE,
         )
 
 
@@ -192,7 +208,7 @@ async def create_campaign(
         HTTPException: 404 if event_venue_key is set but doesn't resolve
             to a curated venue.
     """
-    await _validate_product(business.id, payload.product_id)
+    await _validate_product(business.id, payload.product_id, payload.objective)
     await _validate_audience(business.id, payload.audience_id)
     start_date, end_date = _resolve_event_window(payload)
 
@@ -254,9 +270,11 @@ async def update_campaign(
 
     Raises:
         HTTPException: 404 if product_id/audience_id is given but doesn't
-            belong to this campaign's business.
+            belong to this campaign's business. 422 if product_id resolves
+            but the product lacks a destination URL this campaign's
+            objective requires (see _validate_product).
     """
-    await _validate_product(campaign.businessId, payload.product_id)
+    await _validate_product(campaign.businessId, payload.product_id, campaign.objective)
     await _validate_audience(campaign.businessId, payload.audience_id)
 
     update_data: CampaignUpdateInput = {}

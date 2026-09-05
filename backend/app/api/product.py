@@ -1,14 +1,45 @@
 """Product onboarding endpoints, nested under a business (PRD.md §2 step 3, §7)."""
 
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends, HTTPException, status
 from prisma.models import Business, Product
 
 from app.core.authz import get_owned_business
+from app.core.config import get_settings
 from app.core.db import db
-from app.schemas.product import ProductCreateRequest, ProductResponse
+from app.schemas.product import CheckUrlResponse, ProductCreateRequest, ProductResponse
 from app.services.campaign_readiness import auto_attach_product
+from app.services.url_reachability import check_url_reachable
+from app.services.url_validation import requires_destination_url
 
 router = APIRouter(prefix="/businesses/{business_id}/products", tags=["products"])
+
+_URL_REQUIRED_FOR_OBJECTIVE = (
+    "This business has a Sales or Traffic campaign waiting for a product — "
+    "add a destination URL so its ad has somewhere to send people"
+)
+_REACHABILITY_CHECK_DISABLED = "URL reachability checking is not enabled"
+_PRODUCT_NOT_FOUND = "Product not found"
+_PRODUCT_HAS_NO_URL = "This product has no URL to check"
+
+
+async def _product_url_is_required(business_id: str) -> bool:
+    """Whether any campaign still missing a product needs one with a URL.
+
+    Checked against every campaign missing a product, not just one — the
+    next product created is a candidate for auto-attaching to any/all of
+    them (app/services/campaign_readiness.py's auto_attach_product).
+
+    Args:
+        business_id: The business the product is being created under.
+
+    Returns:
+        True if at least one such campaign's objective requires a URL
+        (SALES/TRAFFIC — see app/services/url_validation.py).
+    """
+    campaigns = await db.campaign.find_many(
+        where={"businessId": business_id, "productId": None}
+    )
+    return any(requires_destination_url(c.objective) for c in campaigns)
 
 
 def _to_response(product: Product) -> ProductResponse:
@@ -47,7 +78,18 @@ async def create_product(
 
     Returns:
         The newly created product.
+
+    Raises:
+        HTTPException: 422 if url is omitted but a Sales/Traffic campaign
+            is waiting for a product (app/services/url_validation.py's
+            requires_destination_url) — its CTA needs somewhere to send
+            people.
     """
+    if payload.url is None and await _product_url_is_required(business.id):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=_URL_REQUIRED_FOR_OBJECTIVE,
+        )
     product = await db.product.create(
         data={
             "businessId": business.id,
@@ -78,3 +120,52 @@ async def list_products(
     """
     products = await db.product.find_many(where={"businessId": business.id})
     return [_to_response(p) for p in products]
+
+
+@router.post("/{product_id}/check-url", response_model=CheckUrlResponse)
+async def check_product_url(
+    product_id: str,
+    business: Business = Depends(get_owned_business),
+) -> CheckUrlResponse:
+    """Check whether a product's destination URL actually resolves (Phase 2).
+
+    Scaffold only — never called automatically on product save, and not
+    part of the publish flow yet (app/services/url_reachability.py).
+    Gated behind Settings.url_reachability_check_enabled, off by default.
+
+    Args:
+        product_id: The product to check.
+        business: The parent business, resolved and ownership-checked by
+            get_owned_business.
+
+    Returns:
+        The reachability outcome.
+
+    Raises:
+        HTTPException: 404 if the flag is off (kept indistinguishable
+            from a genuinely missing route), if the product doesn't
+            belong to this business, or 422 if it has no url set.
+    """
+    if not get_settings().url_reachability_check_enabled:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=_REACHABILITY_CHECK_DISABLED
+        )
+    product = await db.product.find_first(
+        where={"id": product_id, "businessId": business.id}
+    )
+    if product is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=_PRODUCT_NOT_FOUND
+        )
+    if product.url is None:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=_PRODUCT_HAS_NO_URL
+        )
+
+    result = await check_url_reachable(product.url)
+    return CheckUrlResponse(
+        reachable=result.reachable,
+        reason=result.reason,
+        status_code=result.status_code,
+        final_url=result.final_url,
+    )

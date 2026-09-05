@@ -1,5 +1,11 @@
 """Tests for product onboarding endpoints."""
 
+from unittest.mock import AsyncMock
+
+import pytest
+from app.api import product as product_api
+from app.core.config import get_settings
+from app.services.url_reachability import ReachabilityResult
 from fastapi.testclient import TestClient
 
 
@@ -107,6 +113,229 @@ def test_create_product_requires_description(client: TestClient) -> None:
     response = client.post(f"/businesses/{business_id}/products", json={"price": 10})
 
     assert response.status_code == 422
+
+
+def test_create_product_normalizes_a_schemeless_url(client: TestClient) -> None:
+    """A missing scheme is normalized to https:// before storage."""
+    _signed_up_client(client)
+    business_id = _create_business(client)
+
+    response = client.post(
+        f"/businesses/{business_id}/products",
+        json={"description": "Widgets", "url": "acme.example/ring"},
+    )
+
+    assert response.status_code == 201
+    assert response.json()["url"] == "https://acme.example/ring"
+
+
+def test_create_product_rejects_an_invalid_url(client: TestClient) -> None:
+    """A URL that fails validate_destination_url returns a 422."""
+    _signed_up_client(client)
+    business_id = _create_business(client)
+
+    response = client.post(
+        f"/businesses/{business_id}/products",
+        json={"description": "Widgets", "url": "javascript:alert(1)"},
+    )
+
+    assert response.status_code == 422
+
+
+def test_create_product_url_optional_with_no_pending_campaign(
+    client: TestClient,
+) -> None:
+    """With no campaign waiting for a product, url stays optional regardless
+    of objective — there's nothing yet that needs it."""
+    _signed_up_client(client)
+    business_id = _create_business(client)
+    client.post(f"/businesses/{business_id}/campaigns", json={"objective": "AWARENESS"})
+
+    response = client.post(
+        f"/businesses/{business_id}/products", json={"description": "Widgets"}
+    )
+
+    assert response.status_code == 201
+    assert response.json()["url"] is None
+
+
+def test_create_product_url_optional_for_awareness_campaign(
+    client: TestClient,
+) -> None:
+    """A pending AWARENESS campaign doesn't require a product URL."""
+    _signed_up_client(client)
+    business_id = _create_business(client)
+    client.post(f"/businesses/{business_id}/campaigns", json={"objective": "AWARENESS"})
+
+    response = client.post(
+        f"/businesses/{business_id}/products", json={"description": "Widgets"}
+    )
+
+    assert response.status_code == 201
+    assert response.json()["url"] is None
+
+
+def test_create_product_requires_url_for_pending_sales_campaign(
+    client: TestClient,
+) -> None:
+    """A pending SALES campaign's CTA needs somewhere to send people."""
+    _signed_up_client(client)
+    business_id = _create_business(client)
+    client.post(f"/businesses/{business_id}/campaigns", json={"objective": "SALES"})
+
+    response = client.post(
+        f"/businesses/{business_id}/products", json={"description": "Widgets"}
+    )
+
+    assert response.status_code == 422
+
+
+def test_create_product_requires_url_for_pending_traffic_campaign(
+    client: TestClient,
+) -> None:
+    """Same rule for TRAFFIC as for SALES."""
+    _signed_up_client(client)
+    business_id = _create_business(client)
+    client.post(f"/businesses/{business_id}/campaigns", json={"objective": "TRAFFIC"})
+
+    response = client.post(
+        f"/businesses/{business_id}/products", json={"description": "Widgets"}
+    )
+
+    assert response.status_code == 422
+
+
+def test_create_product_with_url_succeeds_for_pending_sales_campaign(
+    client: TestClient,
+) -> None:
+    """Supplying a URL up front satisfies the pending SALES campaign."""
+    _signed_up_client(client)
+    business_id = _create_business(client)
+    client.post(f"/businesses/{business_id}/campaigns", json={"objective": "SALES"})
+
+    response = client.post(
+        f"/businesses/{business_id}/products",
+        json={"description": "Widgets", "url": "https://acme.example/widgets"},
+    )
+
+    assert response.status_code == 201
+
+
+def test_create_product_url_optional_once_a_pending_campaign_already_has_one(
+    client: TestClient,
+) -> None:
+    """Only campaigns still missing a product count toward the requirement."""
+    _signed_up_client(client)
+    business_id = _create_business(client)
+    other_product_id = client.post(
+        f"/businesses/{business_id}/products",
+        json={"description": "Original", "url": "https://acme.example/original"},
+    ).json()["id"]
+    client.post(
+        f"/businesses/{business_id}/campaigns",
+        json={"objective": "SALES", "productId": other_product_id},
+    )
+
+    response = client.post(
+        f"/businesses/{business_id}/products", json={"description": "Widgets"}
+    )
+
+    assert response.status_code == 201
+
+
+def test_check_product_url_404s_when_the_flag_is_off(client: TestClient) -> None:
+    """The scaffold endpoint is invisible until URL_REACHABILITY_CHECK_ENABLED."""
+    _signed_up_client(client)
+    business_id = _create_business(client)
+    product_id = client.post(
+        f"/businesses/{business_id}/products",
+        json={"description": "Widgets", "url": "https://acme.example/widgets"},
+    ).json()["id"]
+
+    response = client.post(f"/businesses/{business_id}/products/{product_id}/check-url")
+
+    assert response.status_code == 404
+
+
+def test_check_product_url_returns_the_reachability_result(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """With the flag on, the endpoint delegates to check_url_reachable."""
+    monkeypatch.setenv("URL_REACHABILITY_CHECK_ENABLED", "true")
+    get_settings.cache_clear()
+    try:
+        _signed_up_client(client)
+        business_id = _create_business(client)
+        product_id = client.post(
+            f"/businesses/{business_id}/products",
+            json={"description": "Widgets", "url": "https://acme.example/widgets"},
+        ).json()["id"]
+        monkeypatch.setattr(
+            product_api,
+            "check_url_reachable",
+            AsyncMock(
+                return_value=ReachabilityResult(
+                    reachable=True,
+                    reason="ok",
+                    status_code=200,
+                    final_url="https://acme.example/widgets",
+                )
+            ),
+        )
+
+        response = client.post(
+            f"/businesses/{business_id}/products/{product_id}/check-url"
+        )
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["reachable"] is True
+        assert body["reason"] == "ok"
+        assert body["statusCode"] == 200
+        assert body["finalUrl"] == "https://acme.example/widgets"
+    finally:
+        get_settings.cache_clear()
+
+
+def test_check_product_url_422s_for_a_product_with_no_url(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Nothing to check if the product has no URL at all."""
+    monkeypatch.setenv("URL_REACHABILITY_CHECK_ENABLED", "true")
+    get_settings.cache_clear()
+    try:
+        _signed_up_client(client)
+        business_id = _create_business(client)
+        product_id = client.post(
+            f"/businesses/{business_id}/products", json={"description": "Widgets"}
+        ).json()["id"]
+
+        response = client.post(
+            f"/businesses/{business_id}/products/{product_id}/check-url"
+        )
+
+        assert response.status_code == 422
+    finally:
+        get_settings.cache_clear()
+
+
+def test_check_product_url_404s_for_a_nonexistent_product(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Same not-found behavior as any other business-scoped resource."""
+    monkeypatch.setenv("URL_REACHABILITY_CHECK_ENABLED", "true")
+    get_settings.cache_clear()
+    try:
+        _signed_up_client(client)
+        business_id = _create_business(client)
+
+        response = client.post(
+            f"/businesses/{business_id}/products/does-not-exist/check-url"
+        )
+
+        assert response.status_code == 404
+    finally:
+        get_settings.cache_clear()
 
 
 def test_list_products_requires_a_session(client: TestClient) -> None:

@@ -163,7 +163,9 @@ def _create_campaign(
     which product/audience, just that the campaign is ready.
     """
     if product_id is None:
-        product_id = _create_product(client, business_id, url=None)
+        product_id = _create_product(
+            client, business_id, url="https://acme.example/product"
+        )
     if audience_id is None:
         audience_id = _create_audience(client, business_id)
     payload = {"objective": "SALES", "productId": product_id, "audienceId": audience_id}
@@ -420,8 +422,18 @@ def test_publish_400s_without_ad_account_and_page_selected(client: TestClient) -
 
 
 def test_publish_400s_without_a_destination_url(client: TestClient) -> None:
-    """No product URL and no business website means nowhere for the ad to link."""
-    business_id, campaign_id = _ready_campaign(client, with_destination_url=False)
+    """No product URL and no business website means nowhere for the ad to link.
+
+    Uses LEADS rather than the default SALES: a SALES/TRAFFIC campaign can
+    no longer even bind a URL-less product (app/services/url_validation.py's
+    requires_destination_url, enforced at campaign-product binding time) —
+    LEADS still needs *some* destination for Meta's ad creative, just not
+    from the product specifically, so business.website's fallback is what's
+    under test here.
+    """
+    business_id, campaign_id = _ready_campaign(
+        client, with_destination_url=False, objective="LEADS"
+    )
 
     response = client.post(f"/businesses/{business_id}/campaigns/{campaign_id}/publish")
 

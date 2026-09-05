@@ -68,6 +68,13 @@ GitHub or Render.
   user-facing flow.
 - **Schema changes**: always `uv run prisma migrate dev --name <desc>`, never
   `prisma db push` — see README.md's Database schema changes section for why.
+- **Destination URLs**: all URL validation goes through
+  `validate_destination_url` (`backend/app/services/url_validation.py`) —
+  never add an ad-hoc regex. It's the single source of truth for format
+  rules (scheme, no localhost/bare IPs, TLD required, normalization) and
+  is called from every place a URL enters the system. The frontend's
+  `frontend/src/lib/urlValidation.ts` mirrors it for inline feedback only;
+  the backend's 422 is always authoritative.
 - **Line endings**: LF, enforced by `.gitattributes` — no action needed.
 - **Commit messages must not attribute authorship to Claude or Anthropic** —
   no `Co-Authored-By: Claude ...` trailer. Enforced by a `commit-msg` hook
