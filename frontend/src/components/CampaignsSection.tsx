@@ -767,20 +767,22 @@ export function CampaignsSection({
                     {needsAdExperienceAnswerId === campaign.id && (
                       <fieldset>
                         <legend>Has this business run advertising campaigns before?</legend>
-                        <button
-                          type="button"
-                          onClick={() => handleGenerateStrategy(campaign.id, true)}
-                          disabled={generatingId === campaign.id}
-                        >
-                          Yes
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => handleGenerateStrategy(campaign.id, false)}
-                          disabled={generatingId === campaign.id}
-                        >
-                          No
-                        </button>
+                        <div className="button-row">
+                          <button
+                            type="button"
+                            onClick={() => handleGenerateStrategy(campaign.id, true)}
+                            disabled={generatingId === campaign.id}
+                          >
+                            Yes
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleGenerateStrategy(campaign.id, false)}
+                            disabled={generatingId === campaign.id}
+                          >
+                            No
+                          </button>
+                        </div>
                       </fieldset>
                     )}
                   </>
