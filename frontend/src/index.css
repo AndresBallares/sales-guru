@@ -298,6 +298,32 @@ main > section > form,
   gap: 1rem;
 }
 
+/* A campaign li is a wrapping flex row (main > section > ul > li below),
+   so a lone Generate strategy button is meant to sit flush right of the
+   campaign summary via the row's justify-content:space-between — that
+   part was fine. The ad-experience fieldset is a separate story: it's a
+   whole labeled question, not a one-line label, so width:100% forces it
+   onto its own full-width line (flex-wrap) instead of crowding next to
+   the button, and the column layout below gives its own pieces (legend,
+   Yes/No) real spacing rather than a bare unstyled <fieldset>. */
+fieldset {
+  border: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.5rem;
+  width: 100%;
+}
+
+legend {
+  padding: 0;
+  font-size: 0.85rem;
+  font-weight: 500;
+  color: var(--text-secondary);
+}
+
 .image-picker {
   display: flex;
   flex-direction: column;
