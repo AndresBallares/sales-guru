@@ -4,6 +4,7 @@ import { ProtectedRoute } from './components/ProtectedRoute'
 import { ThemeToggle } from './components/ThemeToggle'
 import { AuthProvider } from './context/AuthContext'
 import { ThemeProvider } from './context/ThemeContext'
+import { AdPreviewPage } from './pages/AdPreviewPage'
 import { BusinessDetailPage } from './pages/BusinessDetailPage'
 import { DashboardPage } from './pages/DashboardPage'
 import { ForgotPasswordPage } from './pages/ForgotPasswordPage'
@@ -31,6 +32,10 @@ function App() {
             <Route element={<ProtectedRoute />}>
               <Route path="/" element={<DashboardPage />} />
               <Route path="/businesses/:businessId" element={<BusinessDetailPage />} />
+              <Route
+                path="/businesses/:businessId/campaigns/:campaignId/ad"
+                element={<AdPreviewPage />}
+              />
             </Route>
           </Routes>
         </AuthProvider>
