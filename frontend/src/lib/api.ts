@@ -289,6 +289,22 @@ export function listCampaigns(businessId: string): Promise<Campaign[]> {
   return request<Campaign[]>(`/businesses/${businessId}/campaigns`)
 }
 
+export interface CampaignUpdateInput {
+  productId?: string
+  audienceId?: string
+}
+
+export function updateCampaign(
+  businessId: string,
+  campaignId: string,
+  input: CampaignUpdateInput,
+): Promise<Campaign> {
+  return request<Campaign>(`/businesses/${businessId}/campaigns/${campaignId}`, {
+    method: 'PATCH',
+    body: JSON.stringify(input),
+  })
+}
+
 export function approveCampaign(businessId: string, campaignId: string): Promise<Campaign> {
   return request<Campaign>(`/businesses/${businessId}/campaigns/${campaignId}/approve`, {
     method: 'POST',

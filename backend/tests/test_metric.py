@@ -74,9 +74,22 @@ def _create_business(client: TestClient, name: str = "Acme Jewelry") -> str:
 
 
 def _create_campaign(client: TestClient, business_id: str) -> str:
-    """Create a campaign under a business, return its id."""
+    """Create a campaign under a business, return its id.
+
+    Auto-creates a default product/audience — every campaign needs both
+    to generate a strategy now (readiness gate, app/services/
+    campaign_readiness.py).
+    """
+    product_id = client.post(
+        f"/businesses/{business_id}/products", json={"description": "Ring"}
+    ).json()["id"]
+    audience_id = client.post(
+        f"/businesses/{business_id}/audiences",
+        json={"description": "Busy professionals, 30-55"},
+    ).json()["id"]
     response = client.post(
-        f"/businesses/{business_id}/campaigns", json={"objective": "SALES"}
+        f"/businesses/{business_id}/campaigns",
+        json={"objective": "SALES", "productId": product_id, "audienceId": audience_id},
     )
     id_: str = response.json()["id"]
     return id_

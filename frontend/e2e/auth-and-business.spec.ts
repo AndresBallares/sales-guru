@@ -62,19 +62,30 @@ test('sign up, create a business, log out, log back in', async ({ page }) => {
   await page.getByRole('button', { name: 'Create business' }).click()
 
   // Creating a business navigates straight to its own detail page — no
-  // dead-end empty form left behind on the dashboard.
+  // dead-end empty form left behind on the dashboard. Campaign objective
+  // comes first in this flow (matches Meta Ads Manager's own "objective
+  // first" order, confirmed 2026-09-04) — no product/audience needed yet.
   await expect(page.getByRole('heading', { name: 'Acme Widgets' })).toBeVisible()
-  await expect(page.getByText('No products yet')).toBeVisible()
+  await expect(page.getByText('No campaigns yet')).toBeVisible()
 
   const businessDetailResults = await new AxeBuilder({ page }).analyze()
   expect(businessDetailResults.violations).toEqual([])
 
+  await page.getByLabel('Objective').selectOption({ label: 'Sales' })
+  await page.getByRole('button', { name: 'Create campaign' }).click()
+
+  // Creating the campaign moves straight to the product step — the
+  // campaign step (and the campaign itself) is no longer shown on screen.
+  await expect(page.getByText('No products yet')).toBeVisible()
   await page.getByLabel('What do you sell?').fill('Handmade leather wallets')
   await page.getByLabel('Price').fill('49.99')
+  await page.getByLabel(/^URL/).fill('https://acme.example/wallets')
   await page.getByRole('button', { name: 'Add product' }).click()
 
-  // Adding a product moves straight to the audience step — the product
-  // step (and the product itself) is no longer shown on screen.
+  // Adding a product — the campaign's only product — auto-attaches it
+  // (app/services/campaign_readiness.py) and moves straight to the
+  // audience step; the product step (and the product itself) is no
+  // longer shown on screen.
   await expect(page.getByText('No audiences yet')).toBeVisible()
   await page.getByLabel('Who buys?').fill('Busy professionals, 30-55')
   await page.getByLabel('Age min').fill('30')

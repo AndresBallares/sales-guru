@@ -6,6 +6,7 @@ from prisma.models import Audience, Business
 from app.core.authz import get_owned_business
 from app.core.db import db
 from app.schemas.audience import AudienceCreateRequest, AudienceResponse
+from app.services.campaign_readiness import auto_attach_audience
 
 router = APIRouter(prefix="/businesses/{business_id}/audiences", tags=["audiences"])
 
@@ -60,6 +61,7 @@ async def create_audience(
             "desire": payload.desire,
         }
     )
+    await auto_attach_audience(business.id, audience.id)
     return _to_response(audience)
 
 

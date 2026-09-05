@@ -9,12 +9,18 @@ from datetime import UTC, datetime, time
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from prisma.models import Business, Campaign
+from prisma.types import CampaignUpdateInput
 
 from app.core.authz import get_owned_business, get_owned_campaign
 from app.core.db import db
 from app.core.meta_connection import get_meta_connection
-from app.schemas.campaign import CampaignCreateRequest, CampaignResponse
+from app.schemas.campaign import (
+    CampaignCreateRequest,
+    CampaignResponse,
+    CampaignUpdateRequest,
+)
 from app.schemas.strategy import StrategyContentAdapter
+from app.services.campaign_readiness import advance_to_ready_if_complete, is_ready
 from app.services.event_venues import EVENT_VENUES, default_event_window
 from app.services.meta import MetaConnectionError
 from app.services.publish import pause_campaign as pause_campaign_on_meta
@@ -27,6 +33,7 @@ _AUDIENCE_NOT_FOUND = "Audience not found"
 _EVENT_VENUE_NOT_FOUND = "Unknown event venue"
 _NOT_READY_FOR_APPROVAL = "Select an ad creative before approving this campaign"
 _NOT_READY_FOR_PUBLISH = "Approve this campaign before publishing"
+_CAMPAIGN_NOT_READY = "Add a product and an audience to this campaign before publishing"
 _NOT_LIVE_TO_PAUSE = "Only a live campaign can be paused"
 _META_NOT_CONNECTED = (
     "Connect Meta Ads and select an ad account and Page before publishing"
@@ -167,6 +174,11 @@ async def create_campaign(
 ) -> CampaignResponse:
     """Create a campaign under a business owned by the current user.
 
+    Starts DRAFT; if product_id and audience_id are both given here
+    (rather than left for auto-attach or update_campaign to fill in
+    later — see app/services/campaign_readiness.py), it advances straight
+    to READY.
+
     Args:
         payload: The objective (required) and optional product/audience/
             event venue to target.
@@ -196,6 +208,7 @@ async def create_campaign(
             "endDate": end_date,
         }
     )
+    campaign = await advance_to_ready_if_complete(campaign)
     return _to_response(campaign)
 
 
@@ -214,6 +227,53 @@ async def list_campaigns(
     """
     campaigns = await db.campaign.find_many(where={"businessId": business.id})
     return [_to_response(c) for c in campaigns]
+
+
+@router.patch("/{campaign_id}", response_model=CampaignResponse)
+async def update_campaign(
+    payload: CampaignUpdateRequest,
+    campaign: Campaign = Depends(get_owned_campaign),
+) -> CampaignResponse:
+    """Attach a product and/or audience to an existing campaign.
+
+    The objective-first onboarding flow creates a campaign before a
+    product or audience necessarily exists. Most of the time one gets
+    auto-attached the moment the business ends up with exactly one of
+    each (app/services/campaign_readiness.py) — this endpoint is the
+    manual fallback for the rest: several products/audiences to choose
+    from, or correcting a wrong auto-attach.
+
+    Args:
+        payload: A product_id and/or audience_id to set. Omitted fields
+            are left unchanged.
+        campaign: The campaign, resolved and ownership-checked by
+            get_owned_campaign.
+
+    Returns:
+        The updated campaign.
+
+    Raises:
+        HTTPException: 404 if product_id/audience_id is given but doesn't
+            belong to this campaign's business.
+    """
+    await _validate_product(campaign.businessId, payload.product_id)
+    await _validate_audience(campaign.businessId, payload.audience_id)
+
+    update_data: CampaignUpdateInput = {}
+    if payload.product_id is not None:
+        update_data["product"] = {"connect": {"id": payload.product_id}}
+    if payload.audience_id is not None:
+        update_data["audience"] = {"connect": {"id": payload.audience_id}}
+
+    result = campaign
+    if update_data:
+        maybe_updated = await db.campaign.update(
+            where={"id": campaign.id}, data=update_data
+        )
+        assert maybe_updated is not None  # just fetched above, can't vanish mid-request
+        result = await advance_to_ready_if_complete(maybe_updated)
+
+    return _to_response(result)
 
 
 @router.post("/{campaign_id}/approve", response_model=CampaignResponse)
@@ -282,6 +342,10 @@ async def publish_campaign(
     if campaign.status not in ("APPROVED", "FAILED"):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST, detail=_NOT_READY_FOR_PUBLISH
+        )
+    if not is_ready(campaign):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=_CAMPAIGN_NOT_READY
         )
 
     business = await db.business.find_unique(where={"id": campaign.businessId})

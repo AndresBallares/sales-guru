@@ -130,7 +130,33 @@ def _create_business(client: TestClient, name: str = "Acme Widgets") -> str:
 
 
 def _create_campaign(client: TestClient, business_id: str) -> str:
-    """Create a campaign under a business, return its id."""
+    """Create a campaign under a business, return its id.
+
+    Auto-creates a default product/audience — every campaign needs both
+    to generate a strategy now (readiness gate, app/services/
+    campaign_readiness.py).
+    """
+    product_id = client.post(
+        f"/businesses/{business_id}/products", json={"description": "Ring"}
+    ).json()["id"]
+    audience_id = client.post(
+        f"/businesses/{business_id}/audiences",
+        json={"description": "Busy professionals, 30-55"},
+    ).json()["id"]
+    response = client.post(
+        f"/businesses/{business_id}/campaigns",
+        json={"objective": "SALES", "productId": product_id, "audienceId": audience_id},
+    )
+    id_: str = response.json()["id"]
+    return id_
+
+
+def _create_campaign_without_product_or_audience(
+    client: TestClient, business_id: str
+) -> str:
+    """Create a campaign with neither a product nor an audience — for
+    exercising the readiness gate itself (see _create_campaign's
+    docstring for why every other test uses that one instead)."""
     response = client.post(
         f"/businesses/{business_id}/campaigns", json={"objective": "SALES"}
     )
@@ -245,6 +271,26 @@ def test_create_strategy_404s_for_another_users_campaign(client: TestClient) -> 
     )
 
     assert response.status_code == 404
+
+
+def test_create_strategy_428s_without_a_product_and_audience(
+    client: TestClient,
+) -> None:
+    """A campaign created objective-first, before a product/audience
+    exists, can't generate a strategy yet (readiness gate,
+    app/services/campaign_readiness.py)."""
+    _signed_up_client(client)
+    business_id = _create_business(client)
+    campaign_id = _create_campaign_without_product_or_audience(client, business_id)
+
+    response = client.post(
+        f"/businesses/{business_id}/campaigns/{campaign_id}/strategy",
+        json={"hasPriorAdvertisingExperience": True},
+    )
+
+    assert response.status_code == 428
+    assert "product" in response.json()["detail"].lower()
+    assert "audience" in response.json()["detail"].lower()
 
 
 def test_create_strategy_without_meta_or_answer_requires_an_answer(

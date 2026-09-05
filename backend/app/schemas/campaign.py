@@ -33,6 +33,19 @@ class CampaignCreateRequest(CamelCaseModel):
     end_date: datetime | None = None
 
 
+class CampaignUpdateRequest(CamelCaseModel):
+    """Payload for PATCH .../campaigns/{id}.
+
+    Attaches a product and/or audience to an existing campaign — the
+    manual counterpart to auto-attach (app/services/campaign_readiness.py)
+    for when a business has more than one to choose from. Only provided
+    fields change; omitted ones are left as they are, never cleared.
+    """
+
+    product_id: str | None = None
+    audience_id: str | None = None
+
+
 class CampaignResponse(CamelCaseModel):
     """Public-facing representation of a Campaign."""
 

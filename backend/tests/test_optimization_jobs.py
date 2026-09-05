@@ -196,11 +196,23 @@ def _connect_meta(client: TestClient, business_id: str) -> None:
 def _publish_campaign(client: TestClient, business_id: str) -> str:
     """Build and publish one campaign under an already Meta-connected business.
 
+    Auto-creates a default product/audience — every campaign needs both
+    to generate a strategy now (readiness gate, app/services/
+    campaign_readiness.py).
+
     Returns:
         The new campaign's id.
     """
+    product_id = client.post(
+        f"/businesses/{business_id}/products", json={"description": "Ring"}
+    ).json()["id"]
+    audience_id = client.post(
+        f"/businesses/{business_id}/audiences",
+        json={"description": "Busy professionals, 30-55"},
+    ).json()["id"]
     campaign_id: str = client.post(
-        f"/businesses/{business_id}/campaigns", json={"objective": "SALES"}
+        f"/businesses/{business_id}/campaigns",
+        json={"objective": "SALES", "productId": product_id, "audienceId": audience_id},
     ).json()["id"]
     client.post(
         f"/businesses/{business_id}/campaigns/{campaign_id}/strategy",

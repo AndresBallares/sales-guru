@@ -60,10 +60,37 @@ def _create_business(client: TestClient, name: str = "Acme Widgets") -> str:
     return id_
 
 
-def _create_campaign(client: TestClient, business_id: str) -> str:
-    """Create a campaign under a business, return its id."""
+def _create_audience(client: TestClient, business_id: str) -> str:
+    """Create an audience, return its id."""
     response = client.post(
-        f"/businesses/{business_id}/campaigns", json={"objective": "SALES"}
+        f"/businesses/{business_id}/audiences",
+        json={"description": "Busy professionals, 30-55"},
+    )
+    id_: str = response.json()["id"]
+    return id_
+
+
+def _create_campaign(
+    client: TestClient,
+    business_id: str,
+    product_id: str | None = None,
+    audience_id: str | None = None,
+) -> str:
+    """Create a campaign under a business, return its id.
+
+    Auto-creates a default product/audience when not given one — every
+    campaign needs both to generate a strategy now (readiness gate,
+    app/services/campaign_readiness.py).
+    """
+    if product_id is None:
+        product_id = client.post(
+            f"/businesses/{business_id}/products", json={"description": "Ring"}
+        ).json()["id"]
+    if audience_id is None:
+        audience_id = _create_audience(client, business_id)
+    response = client.post(
+        f"/businesses/{business_id}/campaigns",
+        json={"objective": "SALES", "productId": product_id, "audienceId": audience_id},
     )
     id_: str = response.json()["id"]
     return id_
@@ -354,9 +381,10 @@ def test_select_creative_attaches_the_products_first_photo(
         f"/businesses/{business_id}/products/{product_id}/images",
         files={"file": ("ring.jpg", b"\xff\xd8\xff\xe0fake", "image/jpeg")},
     ).json()
+    audience_id = _create_audience(client, business_id)
     campaign_id = client.post(
         f"/businesses/{business_id}/campaigns",
-        json={"objective": "SALES", "productId": product_id},
+        json={"objective": "SALES", "productId": product_id, "audienceId": audience_id},
     ).json()["id"]
     _generate_strategy(client, business_id, campaign_id)
     generated = client.post(
@@ -384,9 +412,10 @@ def test_select_creative_leaves_image_null_without_any_uploaded(
     product_id = client.post(
         f"/businesses/{business_id}/products", json={"description": "Ring"}
     ).json()["id"]
+    audience_id = _create_audience(client, business_id)
     campaign_id = client.post(
         f"/businesses/{business_id}/campaigns",
-        json={"objective": "SALES", "productId": product_id},
+        json={"objective": "SALES", "productId": product_id, "audienceId": audience_id},
     ).json()["id"]
     _generate_strategy(client, business_id, campaign_id)
     generated = client.post(
@@ -420,9 +449,10 @@ def test_select_creative_attaches_an_explicitly_chosen_photo(
         f"/businesses/{business_id}/products/{product_id}/images",
         files={"file": ("chosen.jpg", b"\xff\xd8\xff\xe0fake", "image/jpeg")},
     ).json()
+    audience_id = _create_audience(client, business_id)
     campaign_id = client.post(
         f"/businesses/{business_id}/campaigns",
-        json={"objective": "SALES", "productId": product_id},
+        json={"objective": "SALES", "productId": product_id, "audienceId": audience_id},
     ).json()["id"]
     _generate_strategy(client, business_id, campaign_id)
     generated = client.post(
@@ -459,9 +489,10 @@ def test_select_creative_404s_for_a_product_image_from_another_product(
         f"/businesses/{business_id}/products/{other_product_id}/images",
         files={"file": ("necklace.jpg", b"\xff\xd8\xff\xe0fake", "image/jpeg")},
     ).json()
+    audience_id = _create_audience(client, business_id)
     campaign_id = client.post(
         f"/businesses/{business_id}/campaigns",
-        json={"objective": "SALES", "productId": product_id},
+        json={"objective": "SALES", "productId": product_id, "audienceId": audience_id},
     ).json()["id"]
     _generate_strategy(client, business_id, campaign_id)
     generated = client.post(

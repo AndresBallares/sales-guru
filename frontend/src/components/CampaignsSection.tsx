@@ -23,6 +23,7 @@ import {
   refreshMetrics,
   rejectRecommendation,
   selectCreative,
+  updateCampaign,
   uploadProductImage,
   type ActionType,
   type Audience,
@@ -73,17 +74,29 @@ const CTA_LABELS: Record<Cta, string> = {
 
 const VARIANT_LETTERS = ['A', 'B', 'C', 'D']
 
-export function CampaignsSection({ businessId }: { businessId: string }) {
+export function CampaignsSection({
+  businessId,
+  onCampaignsChange,
+}: {
+  businessId: string
+  onCampaignsChange?: (campaigns: Campaign[]) => void
+}) {
   const [campaigns, setCampaigns] = useState<Campaign[]>([])
   const [products, setProducts] = useState<Product[]>([])
   const [audiences, setAudiences] = useState<Audience[]>([])
   const [loading, setLoading] = useState(true)
   const [listError, setListError] = useState<string | null>(null)
 
+  // The manual fallback for the readiness checklist below — only ever
+  // needed once a business has more than one product/audience, so
+  // auto-attach (app/services/campaign_readiness.py) couldn't guess.
+  const [pickProductId, setPickProductId] = useState<Record<string, string>>({})
+  const [pickAudienceId, setPickAudienceId] = useState<Record<string, string>>({})
+  const [attachingId, setAttachingId] = useState<string | null>(null)
+  const [attachErrors, setAttachErrors] = useState<Record<string, string>>({})
+
   const [name, setName] = useState('')
   const [objective, setObjective] = useState<Objective>('SALES')
-  const [productId, setProductId] = useState('')
-  const [audienceId, setAudienceId] = useState('')
   const [eventVenueKey, setEventVenueKey] = useState('')
   const [startDate, setStartDate] = useState('')
   const [endDate, setEndDate] = useState('')
@@ -151,6 +164,7 @@ export function CampaignsSection({ businessId }: { businessId: string }) {
         listAudiences(businessId),
       ])
       setCampaigns(campaignList)
+      onCampaignsChange?.(campaignList)
       setProducts(productList)
       setAudiences(audienceList)
       setListError(null)
@@ -248,38 +262,31 @@ export function CampaignsSection({ businessId }: { businessId: string }) {
     } finally {
       setLoading(false)
     }
-  }, [businessId])
+  }, [businessId, onCampaignsChange])
 
   useEffect(() => {
     void refresh()
   }, [refresh])
-
-  // Products/audiences are also editable in sibling sections on this same
-  // page — refetch on focus so a product/audience added a moment ago shows
-  // up here without requiring a full page reload.
-  const refreshOptions = useCallback(() => {
-    listProducts(businessId).then(setProducts).catch(() => undefined)
-    listAudiences(businessId).then(setAudiences).catch(() => undefined)
-  }, [businessId])
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     setFormError(null)
     setSubmitting(true)
     try {
+      // No product/audience picked here — objective comes first in this
+      // flow, before either necessarily exists (PRD.md ...). Whichever
+      // shows up first gets auto-attached (app/services/
+      // campaign_readiness.py), or picked manually below once there's
+      // more than one to choose from.
       await createCampaign(businessId, {
         objective,
         name: name || undefined,
-        productId: productId || undefined,
-        audienceId: audienceId || undefined,
         eventVenueKey: eventVenueKey || undefined,
         startDate: startDate || undefined,
         endDate: endDate || undefined,
       })
       setName('')
       setObjective('SALES')
-      setProductId('')
-      setAudienceId('')
       setEventVenueKey('')
       setStartDate('')
       setEndDate('')
@@ -288,6 +295,25 @@ export function CampaignsSection({ businessId }: { businessId: string }) {
       setFormError(err instanceof ApiError ? err.message : 'Could not create campaign.')
     } finally {
       setSubmitting(false)
+    }
+  }
+
+  async function handleAttachToCampaign(
+    campaignId: string,
+    fields: { productId?: string; audienceId?: string },
+  ) {
+    setAttachingId(campaignId)
+    setAttachErrors((prev) => ({ ...prev, [campaignId]: '' }))
+    try {
+      const updated = await updateCampaign(businessId, campaignId, fields)
+      setCampaigns((prev) => prev.map((c) => (c.id === updated.id ? updated : c)))
+    } catch (err) {
+      setAttachErrors((prev) => ({
+        ...prev,
+        [campaignId]: err instanceof ApiError ? err.message : 'Could not update campaign.',
+      }))
+    } finally {
+      setAttachingId(null)
     }
   }
 
@@ -632,40 +658,132 @@ export function CampaignsSection({ businessId }: { businessId: string }) {
                     )}
                   </p>
                 )}
-                <button
-                  type="button"
-                  onClick={() => handleGenerateStrategy(campaign.id)}
-                  disabled={generatingId === campaign.id}
-                >
-                  {generatingId === campaign.id
-                    ? 'Generating…'
-                    : strategy
-                      ? 'Regenerate strategy'
-                      : 'Generate strategy'}
-                </button>
-                {strategyError && (
-                  <p className="form-error" role="alert">
-                    {strategyError}
-                  </p>
-                )}
-                {needsAdExperienceAnswerId === campaign.id && (
-                  <fieldset>
-                    <legend>Has this business run advertising campaigns before?</legend>
+                {campaign.status === 'DRAFT' ? (
+                  <div aria-label={`Campaign readiness for ${campaign.name ?? campaign.id}`}>
+                    <p>Campaign needs:</p>
+                    <ul>
+                      <li>✓ Objective</li>
+                      <li>
+                        {campaign.productId ? '✓' : '✗'} Product
+                        {!campaign.productId && products.length > 1 && (
+                          <>
+                            {' '}
+                            <select
+                              aria-label="Which product?"
+                              value={pickProductId[campaign.id] ?? ''}
+                              onChange={(event) =>
+                                setPickProductId((prev) => ({
+                                  ...prev,
+                                  [campaign.id]: event.target.value,
+                                }))
+                              }
+                            >
+                              <option value="">Which product?</option>
+                              {products.map((product) => (
+                                <option key={product.id} value={product.id}>
+                                  {product.description}
+                                </option>
+                              ))}
+                            </select>
+                            <button
+                              type="button"
+                              onClick={() =>
+                                void handleAttachToCampaign(campaign.id, {
+                                  productId: pickProductId[campaign.id],
+                                })
+                              }
+                              disabled={
+                                !pickProductId[campaign.id] || attachingId === campaign.id
+                              }
+                            >
+                              Attach
+                            </button>
+                          </>
+                        )}
+                      </li>
+                      <li>
+                        {campaign.audienceId ? '✓' : '✗'} Audience
+                        {!campaign.audienceId && audiences.length > 1 && (
+                          <>
+                            {' '}
+                            <select
+                              aria-label="Which audience?"
+                              value={pickAudienceId[campaign.id] ?? ''}
+                              onChange={(event) =>
+                                setPickAudienceId((prev) => ({
+                                  ...prev,
+                                  [campaign.id]: event.target.value,
+                                }))
+                              }
+                            >
+                              <option value="">Which audience?</option>
+                              {audiences.map((audience) => (
+                                <option key={audience.id} value={audience.id}>
+                                  {audience.description}
+                                </option>
+                              ))}
+                            </select>
+                            <button
+                              type="button"
+                              onClick={() =>
+                                void handleAttachToCampaign(campaign.id, {
+                                  audienceId: pickAudienceId[campaign.id],
+                                })
+                              }
+                              disabled={
+                                !pickAudienceId[campaign.id] || attachingId === campaign.id
+                              }
+                            >
+                              Attach
+                            </button>
+                          </>
+                        )}
+                      </li>
+                    </ul>
+                    {attachErrors[campaign.id] && (
+                      <p className="form-error" role="alert">
+                        {attachErrors[campaign.id]}
+                      </p>
+                    )}
+                  </div>
+                ) : (
+                  <>
                     <button
                       type="button"
-                      onClick={() => handleGenerateStrategy(campaign.id, true)}
+                      onClick={() => handleGenerateStrategy(campaign.id)}
                       disabled={generatingId === campaign.id}
                     >
-                      Yes
+                      {generatingId === campaign.id
+                        ? 'Generating…'
+                        : strategy
+                          ? 'Regenerate strategy'
+                          : 'Generate strategy'}
                     </button>
-                    <button
-                      type="button"
-                      onClick={() => handleGenerateStrategy(campaign.id, false)}
-                      disabled={generatingId === campaign.id}
-                    >
-                      No
-                    </button>
-                  </fieldset>
+                    {strategyError && (
+                      <p className="form-error" role="alert">
+                        {strategyError}
+                      </p>
+                    )}
+                    {needsAdExperienceAnswerId === campaign.id && (
+                      <fieldset>
+                        <legend>Has this business run advertising campaigns before?</legend>
+                        <button
+                          type="button"
+                          onClick={() => handleGenerateStrategy(campaign.id, true)}
+                          disabled={generatingId === campaign.id}
+                        >
+                          Yes
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleGenerateStrategy(campaign.id, false)}
+                          disabled={generatingId === campaign.id}
+                        >
+                          No
+                        </button>
+                      </fieldset>
+                    )}
+                  </>
                 )}
                 {strategy && (
                   <div aria-label={`Strategy for ${campaign.name ?? campaign.id}`}>
@@ -1281,38 +1399,6 @@ export function CampaignsSection({ businessId }: { businessId: string }) {
                 {Object.entries(OBJECTIVE_LABELS).map(([value, label]) => (
                   <option key={value} value={value}>
                     {label}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <div className="field">
-              <label htmlFor="product">Product</label>
-              <select
-                id="product"
-                value={productId}
-                onChange={(event) => setProductId(event.target.value)}
-                onFocus={refreshOptions}
-              >
-                <option value="">None</option>
-                {products.map((product) => (
-                  <option key={product.id} value={product.id}>
-                    {product.description}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <div className="field">
-              <label htmlFor="audience">Audience</label>
-              <select
-                id="audience"
-                value={audienceId}
-                onChange={(event) => setAudienceId(event.target.value)}
-                onFocus={refreshOptions}
-              >
-                <option value="">None</option>
-                {audiences.map((audience) => (
-                  <option key={audience.id} value={audience.id}>
-                    {audience.description}
                   </option>
                 ))}
               </select>

@@ -9,6 +9,7 @@ from app.core.authz import get_owned_campaign
 from app.core.db import db
 from app.schemas.creative import CreativeResponse, SelectCreativeRequest
 from app.schemas.strategy import StrategyContentAdapter
+from app.services.campaign_readiness import is_ready
 from app.services.creative import CreativeAgentError, generate_creatives
 
 router = APIRouter(
@@ -19,6 +20,9 @@ router = APIRouter(
 _STRATEGY_REQUIRED = "Generate a strategy for this campaign first"
 _CREATIVE_NOT_FOUND = "Creative not found"
 _PRODUCT_IMAGE_NOT_FOUND = "Product image not found"
+_CAMPAIGN_NOT_READY = (
+    "Add a product and an audience to this campaign before attaching an image"
+)
 
 
 def _to_response(creative: Creative) -> CreativeResponse:
@@ -173,6 +177,11 @@ async def select_creative(
     Raises:
         HTTPException: 404 if no such creative exists on this campaign, or
             if product_image_id doesn't belong to the campaign's product.
+            428 if product_image_id is given but the campaign has no
+            product and audience attached yet (app/services/
+            campaign_readiness.py) — unreachable in the normal flow,
+            since generating a strategy already requires readiness, but
+            checked here too rather than trusted transitively.
     """
     creative = await db.creative.find_first(
         where={"id": creative_id, "campaignId": campaign.id}
@@ -187,6 +196,11 @@ async def select_creative(
         data={"status": "REJECTED"},
     )
     product_image_id = payload.product_image_id if payload is not None else None
+    if product_image_id is not None and not is_ready(campaign):
+        raise HTTPException(
+            status_code=status.HTTP_428_PRECONDITION_REQUIRED,
+            detail=_CAMPAIGN_NOT_READY,
+        )
     update_data: CreativeUpdateInput = {"status": "SELECTED"}
     if product_image_id is not None:
         product_image = (
