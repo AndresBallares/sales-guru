@@ -7,8 +7,9 @@ from prisma.types import CreativeUpdateInput
 from app.api.product_image import product_image_url
 from app.core.authz import get_owned_campaign
 from app.core.db import db
-from app.schemas.creative import CreativeResponse
+from app.schemas.creative import CreativeResponse, SelectCreativeRequest
 from app.schemas.strategy import StrategyContentAdapter
+from app.services.campaign_readiness import is_ready
 from app.services.creative import CreativeAgentError, generate_creatives
 
 router = APIRouter(
@@ -18,6 +19,10 @@ router = APIRouter(
 
 _STRATEGY_REQUIRED = "Generate a strategy for this campaign first"
 _CREATIVE_NOT_FOUND = "Creative not found"
+_PRODUCT_IMAGE_NOT_FOUND = "Product image not found"
+_CAMPAIGN_NOT_READY = (
+    "Add a product and an audience to this campaign before attaching an image"
+)
 
 
 def _to_response(creative: Creative) -> CreativeResponse:
@@ -141,6 +146,7 @@ async def list_creatives(
 @router.post("/{creative_id}/select", response_model=CreativeResponse)
 async def select_creative(
     creative_id: str,
+    payload: SelectCreativeRequest | None = None,
     campaign: Campaign = Depends(get_owned_campaign),
 ) -> CreativeResponse:
     """Mark one creative as the chosen variant, rejecting its siblings.
@@ -151,14 +157,17 @@ async def select_creative(
     campaign back to PENDING_APPROVAL too, since the approved content just
     changed.
 
-    If the campaign's product has at least one uploaded photo (PRD.md §2
-    step 4) and this creative doesn't already have an image, the
-    product's oldest photo is attached here as imageUrl — the natural
-    checkpoint moment before publish, and the point where the frontend
-    can show the user what image the ad will actually use.
+    If payload.product_image_id names a photo, that photo is attached as
+    imageUrl, overriding whatever was there before — the user explicitly
+    chose it. Otherwise, if the campaign's product has at least one
+    uploaded photo (PRD.md §2 step 4) and this creative doesn't already
+    have an image, the product's oldest photo is attached instead — the
+    natural checkpoint moment before publish, and the point where the
+    frontend can show the user what image the ad will actually use.
 
     Args:
         creative_id: The creative to select.
+        payload: Optionally names a specific product photo to attach.
         campaign: The campaign, resolved and ownership-checked by
             get_owned_campaign.
 
@@ -166,7 +175,13 @@ async def select_creative(
         The now-selected creative.
 
     Raises:
-        HTTPException: 404 if no such creative exists on this campaign.
+        HTTPException: 404 if no such creative exists on this campaign, or
+            if product_image_id doesn't belong to the campaign's product.
+            428 if product_image_id is given but the campaign has no
+            product and audience attached yet (app/services/
+            campaign_readiness.py) — unreachable in the normal flow,
+            since generating a strategy already requires readiness, but
+            checked here too rather than trusted transitively.
     """
     creative = await db.creative.find_first(
         where={"id": creative_id, "campaignId": campaign.id}
@@ -180,8 +195,27 @@ async def select_creative(
         where={"campaignId": campaign.id, "NOT": [{"id": creative.id}]},
         data={"status": "REJECTED"},
     )
+    product_image_id = payload.product_image_id if payload is not None else None
+    if product_image_id is not None and not is_ready(campaign):
+        raise HTTPException(
+            status_code=status.HTTP_428_PRECONDITION_REQUIRED,
+            detail=_CAMPAIGN_NOT_READY,
+        )
     update_data: CreativeUpdateInput = {"status": "SELECTED"}
-    if creative.imageUrl is None and campaign.productId is not None:
+    if product_image_id is not None:
+        product_image = (
+            await db.productimage.find_first(
+                where={"id": product_image_id, "productId": campaign.productId}
+            )
+            if campaign.productId is not None
+            else None
+        )
+        if product_image is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail=_PRODUCT_IMAGE_NOT_FOUND
+            )
+        update_data["imageUrl"] = product_image_url(product_image.id)
+    elif creative.imageUrl is None and campaign.productId is not None:
         product_image = await db.productimage.find_first(
             where={"productId": campaign.productId}, order={"createdAt": "asc"}
         )

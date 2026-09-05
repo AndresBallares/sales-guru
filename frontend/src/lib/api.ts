@@ -289,6 +289,22 @@ export function listCampaigns(businessId: string): Promise<Campaign[]> {
   return request<Campaign[]>(`/businesses/${businessId}/campaigns`)
 }
 
+export interface CampaignUpdateInput {
+  productId?: string
+  audienceId?: string
+}
+
+export function updateCampaign(
+  businessId: string,
+  campaignId: string,
+  input: CampaignUpdateInput,
+): Promise<Campaign> {
+  return request<Campaign>(`/businesses/${businessId}/campaigns/${campaignId}`, {
+    method: 'PATCH',
+    body: JSON.stringify(input),
+  })
+}
+
 export function approveCampaign(businessId: string, campaignId: string): Promise<Campaign> {
   return request<Campaign>(`/businesses/${businessId}/campaigns/${campaignId}/approve`, {
     method: 'POST',
@@ -529,6 +545,7 @@ export interface Creative {
   creativeAngle: string | null
   imagePrompt: string | null
   videoPrompt: string | null
+  imageUrl: string | null
   status: CreativeStatus
   createdAt: string
 }
@@ -547,10 +564,14 @@ export function selectCreative(
   businessId: string,
   campaignId: string,
   creativeId: string,
+  productImageId?: string,
 ): Promise<Creative> {
   return request<Creative>(
     `/businesses/${businessId}/campaigns/${campaignId}/creatives/${creativeId}/select`,
-    { method: 'POST' },
+    {
+      method: 'POST',
+      ...(productImageId ? { body: JSON.stringify({ productImageId }) } : {}),
+    },
   )
 }
 

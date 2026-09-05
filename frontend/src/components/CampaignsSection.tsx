@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState, type FormEvent } from 'react'
+import { useCallback, useEffect, useState, type ChangeEvent, type FormEvent } from 'react'
 import {
   ApiError,
   approveCampaign,
@@ -14,6 +14,7 @@ import {
   listCampaigns,
   listCreatives,
   listMetrics,
+  listProductImages,
   listProducts,
   listRecommendations,
   listTestEvaluations,
@@ -22,13 +23,17 @@ import {
   refreshMetrics,
   rejectRecommendation,
   selectCreative,
+  updateCampaign,
+  uploadProductImage,
   type ActionType,
   type Audience,
   type Campaign,
   type Creative,
+  type Cta,
   type Metric,
   type Objective,
   type Product,
+  type ProductImage,
   type Recommendation,
   type StrategyContent,
   type TargetLocation,
@@ -55,19 +60,43 @@ const ACTION_LABELS: Record<ActionType, string> = {
   DECREASE_BUDGET: 'Decrease budget',
 }
 
+const CTA_LABELS: Record<Cta, string> = {
+  SHOP_NOW: 'Shop Now',
+  LEARN_MORE: 'Learn More',
+  SIGN_UP: 'Sign Up',
+  SUBSCRIBE: 'Subscribe',
+  CONTACT_US: 'Contact Us',
+  MESSAGE_PAGE: 'Send Message',
+  GET_OFFER: 'Get Offer',
+  DOWNLOAD: 'Download',
+  BOOK_NOW: 'Book Now',
+}
+
 const VARIANT_LETTERS = ['A', 'B', 'C', 'D']
 
-export function CampaignsSection({ businessId }: { businessId: string }) {
+export function CampaignsSection({
+  businessId,
+  onCampaignsChange,
+}: {
+  businessId: string
+  onCampaignsChange?: (campaigns: Campaign[]) => void
+}) {
   const [campaigns, setCampaigns] = useState<Campaign[]>([])
   const [products, setProducts] = useState<Product[]>([])
   const [audiences, setAudiences] = useState<Audience[]>([])
   const [loading, setLoading] = useState(true)
   const [listError, setListError] = useState<string | null>(null)
 
+  // The manual fallback for the readiness checklist below — only ever
+  // needed once a business has more than one product/audience, so
+  // auto-attach (app/services/campaign_readiness.py) couldn't guess.
+  const [pickProductId, setPickProductId] = useState<Record<string, string>>({})
+  const [pickAudienceId, setPickAudienceId] = useState<Record<string, string>>({})
+  const [attachingId, setAttachingId] = useState<string | null>(null)
+  const [attachErrors, setAttachErrors] = useState<Record<string, string>>({})
+
   const [name, setName] = useState('')
   const [objective, setObjective] = useState<Objective>('SALES')
-  const [productId, setProductId] = useState('')
-  const [audienceId, setAudienceId] = useState('')
   const [eventVenueKey, setEventVenueKey] = useState('')
   const [startDate, setStartDate] = useState('')
   const [endDate, setEndDate] = useState('')
@@ -87,6 +116,22 @@ export function CampaignsSection({ businessId }: { businessId: string }) {
   const [generatingCreativesId, setGeneratingCreativesId] = useState<string | null>(null)
   const [creativeErrors, setCreativeErrors] = useState<Record<string, string>>({})
   const [selectingId, setSelectingId] = useState<string | null>(null)
+  // Once a creative is selected, its campaign collapses to that one ad
+  // (the ad-set preview) instead of the full 4-variant list — keyed by
+  // campaign id, this reopens the list so the user can pick a different
+  // one without regenerating (which would discard the other three).
+  const [showAllCreatives, setShowAllCreatives] = useState<Record<string, boolean>>({})
+
+  // Image controls below the selected ad — keyed by creative id, since
+  // that's the specific ad the chosen photo attaches to.
+  const [imageMenuId, setImageMenuId] = useState<string | null>(null)
+  const [libraryId, setLibraryId] = useState<string | null>(null)
+  const [loadingLibraryId, setLoadingLibraryId] = useState<string | null>(null)
+  // Keyed by product id, not creative id — the same product's library is
+  // shared across every creative (and campaign) that sells it.
+  const [productImages, setProductImages] = useState<Record<string, ProductImage[]>>({})
+  const [uploadingImageId, setUploadingImageId] = useState<string | null>(null)
+  const [imageErrors, setImageErrors] = useState<Record<string, string>>({})
 
   const [approvingId, setApprovingId] = useState<string | null>(null)
   const [approveErrors, setApproveErrors] = useState<Record<string, string>>({})
@@ -119,6 +164,7 @@ export function CampaignsSection({ businessId }: { businessId: string }) {
         listAudiences(businessId),
       ])
       setCampaigns(campaignList)
+      onCampaignsChange?.(campaignList)
       setProducts(productList)
       setAudiences(audienceList)
       setListError(null)
@@ -216,38 +262,31 @@ export function CampaignsSection({ businessId }: { businessId: string }) {
     } finally {
       setLoading(false)
     }
-  }, [businessId])
+  }, [businessId, onCampaignsChange])
 
   useEffect(() => {
     void refresh()
   }, [refresh])
-
-  // Products/audiences are also editable in sibling sections on this same
-  // page — refetch on focus so a product/audience added a moment ago shows
-  // up here without requiring a full page reload.
-  const refreshOptions = useCallback(() => {
-    listProducts(businessId).then(setProducts).catch(() => undefined)
-    listAudiences(businessId).then(setAudiences).catch(() => undefined)
-  }, [businessId])
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     setFormError(null)
     setSubmitting(true)
     try {
+      // No product/audience picked here — objective comes first in this
+      // flow, before either necessarily exists (PRD.md ...). Whichever
+      // shows up first gets auto-attached (app/services/
+      // campaign_readiness.py), or picked manually below once there's
+      // more than one to choose from.
       await createCampaign(businessId, {
         objective,
         name: name || undefined,
-        productId: productId || undefined,
-        audienceId: audienceId || undefined,
         eventVenueKey: eventVenueKey || undefined,
         startDate: startDate || undefined,
         endDate: endDate || undefined,
       })
       setName('')
       setObjective('SALES')
-      setProductId('')
-      setAudienceId('')
       setEventVenueKey('')
       setStartDate('')
       setEndDate('')
@@ -256,6 +295,25 @@ export function CampaignsSection({ businessId }: { businessId: string }) {
       setFormError(err instanceof ApiError ? err.message : 'Could not create campaign.')
     } finally {
       setSubmitting(false)
+    }
+  }
+
+  async function handleAttachToCampaign(
+    campaignId: string,
+    fields: { productId?: string; audienceId?: string },
+  ) {
+    setAttachingId(campaignId)
+    setAttachErrors((prev) => ({ ...prev, [campaignId]: '' }))
+    try {
+      const updated = await updateCampaign(businessId, campaignId, fields)
+      setCampaigns((prev) => prev.map((c) => (c.id === updated.id ? updated : c)))
+    } catch (err) {
+      setAttachErrors((prev) => ({
+        ...prev,
+        [campaignId]: err instanceof ApiError ? err.message : 'Could not update campaign.',
+      }))
+    } finally {
+      setAttachingId(null)
     }
   }
 
@@ -309,6 +367,7 @@ export function CampaignsSection({ businessId }: { businessId: string }) {
           c.id === updated.id ? updated : { ...c, status: 'REJECTED' },
         ),
       }))
+      setShowAllCreatives((prev) => ({ ...prev, [campaignId]: false }))
       // Selecting an ad advances campaign.status to PENDING_APPROVAL on the
       // backend — refresh so the Approve button appears without a reload.
       await refresh()
@@ -319,6 +378,79 @@ export function CampaignsSection({ businessId }: { businessId: string }) {
       }))
     } finally {
       setSelectingId(null)
+    }
+  }
+
+  function handleToggleImageMenu(creativeId: string) {
+    setImageMenuId((prev) => (prev === creativeId ? null : creativeId))
+    setLibraryId(null)
+  }
+
+  async function handleAttachImageToCreative(
+    campaignId: string,
+    creativeId: string,
+    productImageId: string,
+  ) {
+    setImageErrors((prev) => ({ ...prev, [creativeId]: '' }))
+    try {
+      const updated = await selectCreative(businessId, campaignId, creativeId, productImageId)
+      setCreatives((prev) => ({
+        ...prev,
+        [campaignId]: (prev[campaignId] ?? []).map((c) => (c.id === updated.id ? updated : c)),
+      }))
+      setImageMenuId(null)
+      setLibraryId(null)
+    } catch (err) {
+      setImageErrors((prev) => ({
+        ...prev,
+        [creativeId]: err instanceof ApiError ? err.message : 'Could not attach image.',
+      }))
+    }
+  }
+
+  async function handleUploadCreativeImage(
+    campaignId: string,
+    creativeId: string,
+    productId: string,
+    event: ChangeEvent<HTMLInputElement>,
+  ) {
+    const file = event.target.files?.[0]
+    event.target.value = ''
+    if (!file) return
+
+    setUploadingImageId(creativeId)
+    setImageErrors((prev) => ({ ...prev, [creativeId]: '' }))
+    try {
+      const image = await uploadProductImage(businessId, productId, file)
+      setProductImages((prev) => ({
+        ...prev,
+        [productId]: [...(prev[productId] ?? []), image],
+      }))
+      await handleAttachImageToCreative(campaignId, creativeId, image.id)
+    } catch (err) {
+      setImageErrors((prev) => ({
+        ...prev,
+        [creativeId]: err instanceof ApiError ? err.message : 'Could not upload image.',
+      }))
+    } finally {
+      setUploadingImageId(null)
+    }
+  }
+
+  async function handleOpenLibrary(creativeId: string, productId: string) {
+    setLibraryId(creativeId)
+    setLoadingLibraryId(creativeId)
+    setImageErrors((prev) => ({ ...prev, [creativeId]: '' }))
+    try {
+      const images = await listProductImages(businessId, productId)
+      setProductImages((prev) => ({ ...prev, [productId]: images }))
+    } catch (err) {
+      setImageErrors((prev) => ({
+        ...prev,
+        [creativeId]: err instanceof ApiError ? err.message : 'Could not load photo library.',
+      }))
+    } finally {
+      setLoadingLibraryId(null)
     }
   }
 
@@ -498,6 +630,12 @@ export function CampaignsSection({ businessId }: { businessId: string }) {
             const analyzeError = analyzeErrors[campaign.id]
             const campaignTestEvaluations = testEvaluations[campaign.id] ?? []
             const evaluateError = evaluateErrors[campaign.id]
+            const selectedCreative = campaignCreatives.find((c) => c.status === 'SELECTED')
+            // Own name (not just campaign.productId inline below) so its
+            // narrowed non-null type survives into the JSX callbacks that
+            // close over it — a plain property access re-widens to
+            // `string | null` inside a nested closure.
+            const campaignProductId = campaign.productId
             return (
               <li key={campaign.id}>
                 {campaign.name ? `${campaign.name} — ` : ''}
@@ -520,40 +658,132 @@ export function CampaignsSection({ businessId }: { businessId: string }) {
                     )}
                   </p>
                 )}
-                <button
-                  type="button"
-                  onClick={() => handleGenerateStrategy(campaign.id)}
-                  disabled={generatingId === campaign.id}
-                >
-                  {generatingId === campaign.id
-                    ? 'Generating…'
-                    : strategy
-                      ? 'Regenerate strategy'
-                      : 'Generate strategy'}
-                </button>
-                {strategyError && (
-                  <p className="form-error" role="alert">
-                    {strategyError}
-                  </p>
-                )}
-                {needsAdExperienceAnswerId === campaign.id && (
-                  <fieldset>
-                    <legend>Has this business run advertising campaigns before?</legend>
+                {campaign.status === 'DRAFT' ? (
+                  <div aria-label={`Campaign readiness for ${campaign.name ?? campaign.id}`}>
+                    <p>Campaign needs:</p>
+                    <ul>
+                      <li>✓ Objective</li>
+                      <li>
+                        {campaign.productId ? '✓' : '✗'} Product
+                        {!campaign.productId && products.length > 1 && (
+                          <>
+                            {' '}
+                            <select
+                              aria-label="Which product?"
+                              value={pickProductId[campaign.id] ?? ''}
+                              onChange={(event) =>
+                                setPickProductId((prev) => ({
+                                  ...prev,
+                                  [campaign.id]: event.target.value,
+                                }))
+                              }
+                            >
+                              <option value="">Which product?</option>
+                              {products.map((product) => (
+                                <option key={product.id} value={product.id}>
+                                  {product.description}
+                                </option>
+                              ))}
+                            </select>
+                            <button
+                              type="button"
+                              onClick={() =>
+                                void handleAttachToCampaign(campaign.id, {
+                                  productId: pickProductId[campaign.id],
+                                })
+                              }
+                              disabled={
+                                !pickProductId[campaign.id] || attachingId === campaign.id
+                              }
+                            >
+                              Attach
+                            </button>
+                          </>
+                        )}
+                      </li>
+                      <li>
+                        {campaign.audienceId ? '✓' : '✗'} Audience
+                        {!campaign.audienceId && audiences.length > 1 && (
+                          <>
+                            {' '}
+                            <select
+                              aria-label="Which audience?"
+                              value={pickAudienceId[campaign.id] ?? ''}
+                              onChange={(event) =>
+                                setPickAudienceId((prev) => ({
+                                  ...prev,
+                                  [campaign.id]: event.target.value,
+                                }))
+                              }
+                            >
+                              <option value="">Which audience?</option>
+                              {audiences.map((audience) => (
+                                <option key={audience.id} value={audience.id}>
+                                  {audience.description}
+                                </option>
+                              ))}
+                            </select>
+                            <button
+                              type="button"
+                              onClick={() =>
+                                void handleAttachToCampaign(campaign.id, {
+                                  audienceId: pickAudienceId[campaign.id],
+                                })
+                              }
+                              disabled={
+                                !pickAudienceId[campaign.id] || attachingId === campaign.id
+                              }
+                            >
+                              Attach
+                            </button>
+                          </>
+                        )}
+                      </li>
+                    </ul>
+                    {attachErrors[campaign.id] && (
+                      <p className="form-error" role="alert">
+                        {attachErrors[campaign.id]}
+                      </p>
+                    )}
+                  </div>
+                ) : (
+                  <>
                     <button
                       type="button"
-                      onClick={() => handleGenerateStrategy(campaign.id, true)}
+                      onClick={() => handleGenerateStrategy(campaign.id)}
                       disabled={generatingId === campaign.id}
                     >
-                      Yes
+                      {generatingId === campaign.id
+                        ? 'Generating…'
+                        : strategy
+                          ? 'Regenerate strategy'
+                          : 'Generate strategy'}
                     </button>
-                    <button
-                      type="button"
-                      onClick={() => handleGenerateStrategy(campaign.id, false)}
-                      disabled={generatingId === campaign.id}
-                    >
-                      No
-                    </button>
-                  </fieldset>
+                    {strategyError && (
+                      <p className="form-error" role="alert">
+                        {strategyError}
+                      </p>
+                    )}
+                    {needsAdExperienceAnswerId === campaign.id && (
+                      <fieldset>
+                        <legend>Has this business run advertising campaigns before?</legend>
+                        <button
+                          type="button"
+                          onClick={() => handleGenerateStrategy(campaign.id, true)}
+                          disabled={generatingId === campaign.id}
+                        >
+                          Yes
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleGenerateStrategy(campaign.id, false)}
+                          disabled={generatingId === campaign.id}
+                        >
+                          No
+                        </button>
+                      </fieldset>
+                    )}
+                  </>
                 )}
                 {strategy && (
                   <div aria-label={`Strategy for ${campaign.name ?? campaign.id}`}>
@@ -756,58 +986,178 @@ export function CampaignsSection({ businessId }: { businessId: string }) {
                         {creativeError}
                       </p>
                     )}
-                    {campaignCreatives.length > 0 && (
-                      <ul aria-label={`Ad creatives for ${campaign.name ?? campaign.id}`}>
-                        {campaignCreatives.map((c, index) => (
-                          <li key={c.id}>
-                            <p>
-                              <strong>
-                                Creative {VARIANT_LETTERS[index] ?? index + 1} —{' '}
-                                {c.status}
-                              </strong>
-                            </p>
-                            <p>
-                              <strong>Headline:</strong> {c.headline}
-                            </p>
-                            <p>
-                              <strong>Primary text:</strong> {c.bodyText}
-                            </p>
-                            <p>
-                              <strong>Description:</strong> {c.description}
-                            </p>
-                            <p>
-                              <strong>CTA:</strong> {c.cta}
-                            </p>
-                            {c.creativeAngle && (
-                              <p>
-                                <strong>Angle:</strong> {c.creativeAngle}
-                              </p>
+                    {campaignCreatives.length > 0 &&
+                      (selectedCreative && !showAllCreatives[campaign.id] ? (
+                        <div aria-label={`Selected ad for ${campaign.name ?? campaign.id}`}>
+                          <button type="button" disabled>
+                            Selected
+                          </button>
+                          {campaignProductId && (
+                            <div className="image-picker">
+                              <button
+                                type="button"
+                                onClick={() => handleToggleImageMenu(selectedCreative.id)}
+                              >
+                                {selectedCreative.imageUrl ? 'Change image' : 'Upload Image'}
+                              </button>
+                              {imageMenuId === selectedCreative.id && (
+                                <div className="image-menu">
+                                  <label htmlFor={`creative-image-upload-${selectedCreative.id}`}>
+                                    Upload from computer
+                                  </label>
+                                  <input
+                                    id={`creative-image-upload-${selectedCreative.id}`}
+                                    type="file"
+                                    accept="image/jpeg,image/png,image/webp"
+                                    disabled={uploadingImageId === selectedCreative.id}
+                                    onChange={(event) =>
+                                      void handleUploadCreativeImage(
+                                        campaign.id,
+                                        selectedCreative.id,
+                                        campaignProductId,
+                                        event,
+                                      )
+                                    }
+                                  />
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      void handleOpenLibrary(
+                                        selectedCreative.id,
+                                        campaignProductId,
+                                      )
+                                    }
+                                  >
+                                    Choose from library
+                                  </button>
+                                </div>
+                              )}
+                              {uploadingImageId === selectedCreative.id && <p>Uploading…</p>}
+                              {libraryId === selectedCreative.id && (
+                                <div aria-label="Choose a photo from your library">
+                                  {loadingLibraryId === selectedCreative.id && <p>Loading…</p>}
+                                  {loadingLibraryId !== selectedCreative.id &&
+                                    (productImages[campaignProductId] ?? []).length === 0 && (
+                                      <p>No photos uploaded for this product yet.</p>
+                                    )}
+                                  {(productImages[campaignProductId] ?? []).map((image) => (
+                                    <button
+                                      key={image.id}
+                                      type="button"
+                                      onClick={() =>
+                                        void handleAttachImageToCreative(
+                                          campaign.id,
+                                          selectedCreative.id,
+                                          image.id,
+                                        )
+                                      }
+                                    >
+                                      <img
+                                        src={image.url}
+                                        alt="Product option"
+                                        width={60}
+                                        height={60}
+                                        style={{ objectFit: 'cover' }}
+                                      />
+                                    </button>
+                                  ))}
+                                </div>
+                              )}
+                              {imageErrors[selectedCreative.id] && (
+                                <p className="form-error" role="alert">
+                                  {imageErrors[selectedCreative.id]}
+                                </p>
+                              )}
+                            </div>
+                          )}
+                          <div className="ad-preview">
+                            {selectedCreative.imageUrl && (
+                              <img
+                                src={selectedCreative.imageUrl}
+                                alt="Selected ad"
+                                width={320}
+                                height={320}
+                                style={{ objectFit: 'cover' }}
+                              />
                             )}
-                            {c.imagePrompt && (
+                            <p className="ad-preview-headline">{selectedCreative.headline}</p>
+                            <p className="ad-preview-body">{selectedCreative.bodyText}</p>
+                            <p className="ad-preview-description">
+                              {selectedCreative.description}
+                            </p>
+                            <p className="ad-preview-cta">{CTA_LABELS[selectedCreative.cta]}</p>
+                          </div>
+                          <button
+                            type="button"
+                            className="link-button"
+                            onClick={() =>
+                              setShowAllCreatives((prev) => ({ ...prev, [campaign.id]: true }))
+                            }
+                          >
+                            Choose a different ad
+                          </button>
+                        </div>
+                      ) : (
+                        <ul aria-label={`Ad creatives for ${campaign.name ?? campaign.id}`}>
+                          {campaignCreatives.map((c, index) => (
+                            <li key={c.id}>
                               <p>
-                                <strong>Image prompt:</strong> {c.imagePrompt}
+                                <strong>
+                                  Creative {VARIANT_LETTERS[index] ?? index + 1} —{' '}
+                                  {c.status}
+                                </strong>
                               </p>
-                            )}
-                            {c.videoPrompt && (
+                              {c.imageUrl && (
+                                <img
+                                  src={c.imageUrl}
+                                  alt={`Creative ${VARIANT_LETTERS[index] ?? index + 1}`}
+                                  width={160}
+                                  height={160}
+                                  style={{ objectFit: 'cover' }}
+                                />
+                              )}
                               <p>
-                                <strong>Video prompt:</strong> {c.videoPrompt}
+                                <strong>Headline:</strong> {c.headline}
                               </p>
-                            )}
-                            <button
-                              type="button"
-                              onClick={() => handleSelectCreative(campaign.id, c.id)}
-                              disabled={c.status === 'SELECTED' || selectingId === c.id}
-                            >
-                              {c.status === 'SELECTED'
-                                ? 'Selected'
-                                : selectingId === c.id
-                                  ? 'Selecting…'
-                                  : 'Select this ad'}
-                            </button>
-                          </li>
-                        ))}
-                      </ul>
-                    )}
+                              <p>
+                                <strong>Primary text:</strong> {c.bodyText}
+                              </p>
+                              <p>
+                                <strong>Description:</strong> {c.description}
+                              </p>
+                              <p>
+                                <strong>CTA:</strong> {CTA_LABELS[c.cta]}
+                              </p>
+                              {c.creativeAngle && (
+                                <p>
+                                  <strong>Angle:</strong> {c.creativeAngle}
+                                </p>
+                              )}
+                              {c.imagePrompt && (
+                                <p>
+                                  <strong>Image prompt:</strong> {c.imagePrompt}
+                                </p>
+                              )}
+                              {c.videoPrompt && (
+                                <p>
+                                  <strong>Video prompt:</strong> {c.videoPrompt}
+                                </p>
+                              )}
+                              <button
+                                type="button"
+                                onClick={() => handleSelectCreative(campaign.id, c.id)}
+                                disabled={c.status === 'SELECTED' || selectingId === c.id}
+                              >
+                                {c.status === 'SELECTED'
+                                  ? 'Selected'
+                                  : selectingId === c.id
+                                    ? 'Selecting…'
+                                    : 'Select this ad'}
+                              </button>
+                            </li>
+                          ))}
+                        </ul>
+                      ))}
                   </div>
                 )}
                 {canPublish && (
@@ -1027,111 +1377,81 @@ export function CampaignsSection({ businessId }: { businessId: string }) {
         </ul>
       </section>
 
-      <section>
-        <h2>Create a campaign</h2>
-        <form onSubmit={handleSubmit} noValidate>
-          <div className="field">
-            <label htmlFor="campaign-name">Name</label>
-            <input
-              id="campaign-name"
-              value={name}
-              onChange={(event) => setName(event.target.value)}
-            />
-          </div>
-          <div className="field">
-            <label htmlFor="objective">Objective</label>
-            <select
-              id="objective"
-              value={objective}
-              onChange={(event) => setObjective(event.target.value as Objective)}
-            >
-              {Object.entries(OBJECTIVE_LABELS).map(([value, label]) => (
-                <option key={value} value={value}>
-                  {label}
-                </option>
-              ))}
-            </select>
-          </div>
-          <div className="field">
-            <label htmlFor="product">Product</label>
-            <select
-              id="product"
-              value={productId}
-              onChange={(event) => setProductId(event.target.value)}
-              onFocus={refreshOptions}
-            >
-              <option value="">None</option>
-              {products.map((product) => (
-                <option key={product.id} value={product.id}>
-                  {product.description}
-                </option>
-              ))}
-            </select>
-          </div>
-          <div className="field">
-            <label htmlFor="audience">Audience</label>
-            <select
-              id="audience"
-              value={audienceId}
-              onChange={(event) => setAudienceId(event.target.value)}
-              onFocus={refreshOptions}
-            >
-              <option value="">None</option>
-              {audiences.map((audience) => (
-                <option key={audience.id} value={audience.id}>
-                  {audience.description}
-                </option>
-              ))}
-            </select>
-          </div>
-          <div className="field">
-            <label htmlFor="event-venue">Event venue</label>
-            <select
-              id="event-venue"
-              value={eventVenueKey}
-              onChange={(event) => setEventVenueKey(event.target.value)}
-            >
-              <option value="">None — broad US targeting</option>
-              {EVENT_VENUES.map((venue) => (
-                <option key={venue.key} value={venue.key}>
-                  {venue.label}
-                </option>
-              ))}
-            </select>
-          </div>
-          {eventVenueKey && (
-            <>
-              <div className="field">
-                <label htmlFor="event-start-date">Start date</label>
-                <input
-                  id="event-start-date"
-                  type="date"
-                  value={startDate}
-                  onChange={(event) => setStartDate(event.target.value)}
-                />
-              </div>
-              <div className="field">
-                <label htmlFor="event-end-date">End date</label>
-                <input
-                  id="event-end-date"
-                  type="date"
-                  value={endDate}
-                  onChange={(event) => setEndDate(event.target.value)}
-                />
-              </div>
-              <p>Leave dates blank to default to the venue's typical window.</p>
-            </>
-          )}
-          {formError && (
-            <p className="form-error" role="alert">
-              {formError}
-            </p>
-          )}
-          <button type="submit" disabled={submitting}>
-            {submitting ? 'Creating…' : 'Create campaign'}
-          </button>
-        </form>
-      </section>
+      {!loading && !listError && campaigns.length === 0 && (
+        <section>
+          <h2>Create a campaign</h2>
+          <form onSubmit={handleSubmit} noValidate>
+            <div className="field">
+              <label htmlFor="campaign-name">Name</label>
+              <input
+                id="campaign-name"
+                value={name}
+                onChange={(event) => setName(event.target.value)}
+              />
+            </div>
+            <div className="field">
+              <label htmlFor="objective">Objective</label>
+              <select
+                id="objective"
+                value={objective}
+                onChange={(event) => setObjective(event.target.value as Objective)}
+              >
+                {Object.entries(OBJECTIVE_LABELS).map(([value, label]) => (
+                  <option key={value} value={value}>
+                    {label}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="field">
+              <label htmlFor="event-venue">Event venue</label>
+              <select
+                id="event-venue"
+                value={eventVenueKey}
+                onChange={(event) => setEventVenueKey(event.target.value)}
+              >
+                <option value="">None — broad US targeting</option>
+                {EVENT_VENUES.map((venue) => (
+                  <option key={venue.key} value={venue.key}>
+                    {venue.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+            {eventVenueKey && (
+              <>
+                <div className="field">
+                  <label htmlFor="event-start-date">Start date</label>
+                  <input
+                    id="event-start-date"
+                    type="date"
+                    value={startDate}
+                    onChange={(event) => setStartDate(event.target.value)}
+                  />
+                </div>
+                <div className="field">
+                  <label htmlFor="event-end-date">End date</label>
+                  <input
+                    id="event-end-date"
+                    type="date"
+                    value={endDate}
+                    onChange={(event) => setEndDate(event.target.value)}
+                  />
+                </div>
+                <p>Leave dates blank to default to the venue's typical window.</p>
+              </>
+            )}
+            {formError && (
+              <p className="form-error" role="alert">
+                {formError}
+              </p>
+            )}
+            <button type="submit" disabled={submitting}>
+              {submitting ? 'Creating…' : 'Create campaign'}
+            </button>
+          </form>
+        </section>
+      )}
     </>
   )
 }

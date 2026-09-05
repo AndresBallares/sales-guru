@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react'
+import { render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { BusinessDetailPage } from './BusinessDetailPage'
@@ -32,6 +32,21 @@ const business = {
   description: null,
 }
 
+const draftCampaign: api.Campaign = {
+  id: 'camp-1',
+  name: null,
+  objective: 'SALES',
+  status: 'DRAFT',
+  productId: null,
+  audienceId: null,
+  metaCampaignId: null,
+  eventVenueKey: null,
+  startDate: null,
+  endDate: null,
+  pausedReason: null,
+  dailySpendFlag: null,
+}
+
 beforeEach(() => {
   vi.resetAllMocks()
   mockedApi.getMe.mockResolvedValue({ id: '1', email: 'owner@example.com' })
@@ -58,17 +73,29 @@ function renderPage() {
 }
 
 describe('BusinessDetailPage', () => {
-  it('starts on the product step for a business with no products yet', async () => {
+  it('starts on the campaign step for a business with no campaign yet', async () => {
     renderPage()
 
     expect(await screen.findByRole('heading', { name: 'Acme Widgets' })).toBeInTheDocument()
-    expect(await screen.findByRole('heading', { name: 'Products' })).toBeInTheDocument()
+    expect(await screen.findByRole('heading', { name: 'Create a campaign' })).toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: 'Products' })).not.toBeInTheDocument()
     expect(screen.queryByRole('heading', { name: 'Audiences' })).not.toBeInTheDocument()
     expect(screen.queryByRole('heading', { name: 'Meta Ads' })).not.toBeInTheDocument()
-    expect(screen.queryByRole('heading', { name: 'Campaigns' })).not.toBeInTheDocument()
   })
 
-  it('moves straight to the audience step once a product already exists', async () => {
+  it('moves straight to the product step once a campaign already exists', async () => {
+    mockedApi.listCampaigns.mockResolvedValue([draftCampaign])
+
+    renderPage()
+
+    expect(await screen.findByRole('heading', { name: 'Products' })).toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: 'Create a campaign' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: 'Audiences' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: 'Meta Ads' })).not.toBeInTheDocument()
+  })
+
+  it('moves straight to the audience step once a campaign and a product already exist', async () => {
+    mockedApi.listCampaigns.mockResolvedValue([draftCampaign])
     mockedApi.listProducts.mockResolvedValue([
       {
         id: 'prod-1',
@@ -88,7 +115,8 @@ describe('BusinessDetailPage', () => {
     expect(screen.queryByRole('heading', { name: 'Meta Ads' })).not.toBeInTheDocument()
   })
 
-  it('moves straight to Meta Ads once a product and an audience already exist', async () => {
+  it('moves straight to Meta Ads once a campaign, product, and audience already exist', async () => {
+    mockedApi.listCampaigns.mockResolvedValue([draftCampaign])
     mockedApi.listProducts.mockResolvedValue([
       {
         id: 'prod-1',
@@ -118,10 +146,10 @@ describe('BusinessDetailPage', () => {
     expect(await screen.findByRole('heading', { name: 'Meta Ads' })).toBeInTheDocument()
     expect(screen.queryByRole('heading', { name: 'Products' })).not.toBeInTheDocument()
     expect(screen.queryByRole('heading', { name: 'Audiences' })).not.toBeInTheDocument()
-    expect(screen.queryByRole('heading', { name: 'Campaigns' })).not.toBeInTheDocument()
   })
 
-  it('moves straight to Campaigns once Meta Ads is already fully connected', async () => {
+  it('moves straight to the full Campaigns view once Meta Ads is already fully connected', async () => {
+    mockedApi.listCampaigns.mockResolvedValue([draftCampaign])
     mockedApi.listProducts.mockResolvedValue([
       {
         id: 'prod-1',
@@ -158,10 +186,16 @@ describe('BusinessDetailPage', () => {
 
     renderPage()
 
-    expect(await screen.findByRole('heading', { name: 'Campaigns' })).toBeInTheDocument()
-    expect(screen.queryByRole('heading', { name: 'Products' })).not.toBeInTheDocument()
-    expect(screen.queryByRole('heading', { name: 'Audiences' })).not.toBeInTheDocument()
-    expect(screen.queryByRole('heading', { name: 'Meta Ads' })).not.toBeInTheDocument()
+    // "Campaigns" is ambiguous mid-transition — the step-1 create-form
+    // instance has the same heading — so wait for the whole settled state
+    // instead of any single element appearing.
+    await waitFor(() => {
+      expect(screen.getByText('Sales — DRAFT')).toBeInTheDocument()
+      expect(screen.queryByRole('heading', { name: 'Create a campaign' })).not.toBeInTheDocument()
+      expect(screen.queryByRole('heading', { name: 'Products' })).not.toBeInTheDocument()
+      expect(screen.queryByRole('heading', { name: 'Audiences' })).not.toBeInTheDocument()
+      expect(screen.queryByRole('heading', { name: 'Meta Ads' })).not.toBeInTheDocument()
+    })
   })
 
   it('shows an error if the business fails to load', async () => {

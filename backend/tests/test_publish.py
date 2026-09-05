@@ -129,8 +129,8 @@ def _create_business(
     return id_
 
 
-def _create_product(client: TestClient, business_id: str, url: str) -> str:
-    """Create a product with a destination URL, return its id."""
+def _create_product(client: TestClient, business_id: str, url: str | None) -> str:
+    """Create a product, optionally with a destination URL, return its id."""
     response = client.post(
         f"/businesses/{business_id}/products",
         json={"description": "Custom emerald rings", "url": url},
@@ -139,13 +139,34 @@ def _create_product(client: TestClient, business_id: str, url: str) -> str:
     return id_
 
 
+def _create_audience(client: TestClient, business_id: str) -> str:
+    """Create an audience, return its id."""
+    response = client.post(
+        f"/businesses/{business_id}/audiences",
+        json={"description": "Busy professionals, 30-55"},
+    )
+    id_: str = response.json()["id"]
+    return id_
+
+
 def _create_campaign(
-    client: TestClient, business_id: str, product_id: str | None = None
+    client: TestClient,
+    business_id: str,
+    product_id: str | None = None,
+    audience_id: str | None = None,
 ) -> str:
-    """Create a campaign under a business, return its id."""
-    payload: dict[str, str] = {"objective": "SALES"}
-    if product_id:
-        payload["productId"] = product_id
+    """Create a campaign under a business, return its id.
+
+    Auto-creates a default product/audience when not given one — every
+    campaign needs both to generate a strategy now (readiness gate,
+    app/services/campaign_readiness.py), and most callers here don't care
+    which product/audience, just that the campaign is ready.
+    """
+    if product_id is None:
+        product_id = _create_product(client, business_id, url=None)
+    if audience_id is None:
+        audience_id = _create_audience(client, business_id)
+    payload = {"objective": "SALES", "productId": product_id, "audienceId": audience_id}
     response = client.post(f"/businesses/{business_id}/campaigns", json=payload)
     id_: str = response.json()["id"]
     return id_
@@ -208,7 +229,17 @@ def _ready_campaign(
     business_id = _create_business(
         client, website="https://acme.example" if with_destination_url else None
     )
-    payload: dict[str, str] = {"objective": objective}
+    product_id = _create_product(
+        client,
+        business_id,
+        url="https://acme.example/product" if with_destination_url else None,
+    )
+    audience_id = _create_audience(client, business_id)
+    payload: dict[str, str] = {
+        "objective": objective,
+        "productId": product_id,
+        "audienceId": audience_id,
+    }
     if event_venue_key is not None:
         payload["eventVenueKey"] = event_venue_key
     campaign_id: str = client.post(

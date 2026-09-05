@@ -6,6 +6,7 @@ from prisma.models import Business, Product
 from app.core.authz import get_owned_business
 from app.core.db import db
 from app.schemas.product import ProductCreateRequest, ProductResponse
+from app.services.campaign_readiness import auto_attach_product
 
 router = APIRouter(prefix="/businesses/{business_id}/products", tags=["products"])
 
@@ -58,6 +59,7 @@ async def create_product(
             "url": payload.url,
         }
     )
+    await auto_attach_product(business.id, product.id)
     return _to_response(product)
 
 

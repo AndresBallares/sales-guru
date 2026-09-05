@@ -12,13 +12,15 @@ Functional reference for scope/pricing: saleads.ai/es/subscribe. Sales Guru is a
 
 The MVP is this end-to-end flow, in order. Each step is a fully working component before moving to the next (see §5, Build order).
 
+**Objective-first (confirmed 2026-09-04):** selecting a campaign's objective is the *first* thing a user does after creating a business, ahead of describing a product or defining an audience — an objective (SALES/LEADS/TRAFFIC/MESSAGES/AWARENESS) needs no product/audience in view to be meaningful, and this matches Meta Ads Manager's own objective-first flow, reducing the gap between this app's mental model and the platform it publishes to. See §5 step 4's note for the full mechanics (auto-attach, the manual fallback, readiness gating).
+
 1. **Create account** — sign up / log in
 2. **Create business** — business profile (see §7 for exact fields)
-3. **Describe product & define audience** — what the business sells, and who buys it (see §7 for exact fields)
-4. **Upload images** — product/brand image assets, used as ad creative input
-5. **Select objective** — campaign goal (see §7 for the exact value set — maps to Meta Ads campaign objectives)
+3. **Select objective** — campaign goal (see §7 for the exact value set — maps to Meta Ads campaign objectives); no product/audience picker at this point, since neither necessarily exists yet
+4. **Describe product & define audience** — what the business sells, and who buys it (see §7 for exact fields); whichever is unambiguous (the business has exactly one) auto-attaches to the campaign from step 3
+5. **Upload images** — product/brand image assets, used as ad creative input
 6. **Connect Meta Ads** — OAuth into the user's Meta Business account, select ad account + Page
-7. **AI generates strategy** — targeting, budget, objective-specific recommendations grounded in the business profile + product description
+7. **AI generates strategy** — targeting, budget, objective-specific recommendations grounded in the business profile + product description; requires the campaign to have a product and audience attached (see §5 step 4's readiness-gate note)
 8. **AI generates ads** — ad copy variants + ad creative (composed from uploaded images and/or AI-generated), grounded in the strategy
 9. **User approves** — review the generated strategy + ads; a single explicit **"Approve & Publish"** action is the only thing that triggers step 10 — approving never silently publishes on its own (see the checkpoint note under §5 step 8)
 10. **Campaign goes live** — publish via the Meta Marketing API (create campaign / ad set / ad)
@@ -70,6 +72,12 @@ Once live, manual click-through testing against the real production deploy (2026
    - **Wired into creative selection, not publish:** `POST .../creatives/{id}/select` (`app/api/creative.py`) auto-attaches the campaign's product's oldest uploaded photo as `Creative.imageUrl` when one exists and the creative doesn't already have one — the natural checkpoint moment before publish, and the point where the frontend can show the user what image the ad will actually use (`imageUrl` is now exposed on `CreativeResponse`, previously absent). `app/services/publish.py` already passed `creative.imageUrl` through to `create_meta_ad_creative` unconditionally — that plumbing existed since step 8 but had nothing to send until now.
    - **Not yet verified against a real live publish:** Meta actually fetching our served URL for `link_data.picture` — same "flag it, don't assume" caution already applied to the event-venue radius and the geo-taxonomy cities/regions shape.
 4. **Objective + Meta Ads connection** — objective selector done: `POST/GET /businesses/{id}/campaigns` (`CampaignsSection`), objective is one of the fixed PRD.md §7 values, campaign optionally references a product/audience from the same business (cross-business references 404, scoped lookup). *(done)*
+
+   **Objective-first onboarding reorder, auto-attach, and readiness gating (confirmed 2026-09-04, `done`):** `BusinessDetailPage`'s step order changed so campaign creation (objective only — the create-campaign form dropped its Product/Audience dropdowns entirely) is the first step after creating a business, ahead of Product/Audience onboarding (step 3 above) — see §2's note for the product reasoning. A campaign created this way starts `DRAFT` with `productId`/`audienceId` both null.
+   - **Auto-attach, not just an edit button.** `app/services/campaign_readiness.py`'s `auto_attach_product`/`auto_attach_audience` run inside `create_product`/`create_audience` (`app/api/product.py`/`app/api/audience.py`): the moment a business ends up with exactly one product (or audience), it's attached to every campaign still missing one, no user action needed. With two or more, auto-attach can't guess which one and leaves the campaign alone.
+   - **Manual fallback:** `PATCH /businesses/{id}/campaigns/{id}` (`update_campaign`) sets `productId`/`audienceId` explicitly (only-provided-fields-change semantics) — the frontend surfaces this as an inline "which one?" picker, shown only when there's real ambiguity (2+ products/audiences to choose from).
+   - **`Campaign.status` gains a `READY` value** between `DRAFT` and `STRATEGY_GENERATED` (still a plain `String` column, no migration) — `advance_to_ready_if_complete` flips it once both product and audience are set, whether via auto-attach, the PATCH endpoint, or being given both at creation time. Purely informational for the frontend's readiness checklist ("Campaign needs: ✓ Objective, ✗ Product, ✗ Audience") — never the source of truth for gating.
+   - **Hard readiness gates, checked on the real fields (never the status flag), at every point an incomplete campaign could otherwise slip through:** `POST .../campaigns/{id}/strategy` (428), attaching an image via `POST .../creatives/{id}/select`'s `productImageId` path (428), and `POST .../campaigns/{id}/publish` (400). The strategy gate is the natural chokepoint — creative generation already requires a strategy to exist — but publish and image-attach are gated too, as defense in depth against any future path that creates an incomplete campaign, not just today's UI flow.
 5. **AI strategy generation** — LLM call grounded in business/product/objective, stored strategy record *(done)*
 
    **Two-mode agent (confirmed 2026-08-31):** the Strategist Agent (`app/services/strategist.py`) generates one of two distinct plan shapes, decided by the backend (never the LLM), same "backend decides, agent never invents it" reasoning as `Campaign.objective` being fixed input: **TEST_PLAN** for a business with no meaningful advertising history, **DATA_DRIVEN_STRATEGY** for one with real historical performance (a full strategy plus `keyLearnings`/`recommendedAdjustments`/`scalingTrigger` — distinct from the live Optimization Agent, step 10 below, which reacts to *this* campaign's own live metrics rather than *other* past campaigns).
@@ -118,7 +126,7 @@ Once live, manual click-through testing against the real production deploy (2026
 7. **Approval flow** — review/edit UI, explicit user approval gate before publish *(done)*
 8. **Campaign publish** — Meta Marketing API integration to create live campaign/ad set/ad from approved content, using the ad account/Page selected in step 6. *(done)* `POST .../campaigns/{id}/publish` (`app/services/publish.py`) creates Campaign → AdSet → AdCreative → Ad on Meta in sequence, mirrors them locally (first-ever `AdSet`/`Ad` rows), and moves `Campaign.status` to `LIVE` (or `FAILED`, retryable). Frontend's single **"Approve & Publish"** button calls approve (if still `PENDING_APPROVAL`) then publish in one user-triggered flow, satisfying the checkpoint requirement below without ever auto-publishing on its own.
    **Checkpoint requirement (confirmed 2026-08-08):** AI creates campaign → user reviews → single explicit "Approve & Publish" action → Meta API call — done, see above. The `autoPublish`-style toggle proposed here to later disable the checkpoint was *not* built — no auto-publish code path exists yet for it to gate, so an unused flag would just be dead weight (YAGNI). Add it when auto-publish is actually being built, not before.
-   **Known simplifications, not addressed yet:** ad creatives publish without an image whenever `Creative.imageUrl` is unset — no longer "always," since step 4's real photo upload (confirmed 2026-09-02) auto-attaches one at selection time when the product has any, but a product with zero uploaded photos (or AI-generated images, still deferred) still publishes image-less; a failed publish never rolls back any Meta objects it already created (e.g. campaign created, ad set creation fails) — manual cleanup on Meta may be needed after a `FAILED` retry (confirmed in real end-to-end testing 2026-08-29, not just theoretical). The `LEADS` objective's optimization goal likely also needs its own `promoted_object` (a Lead Form id, a different mechanism than a Pixel) — unverified, still a gap; only the `SALES`/`OFFSITE_CONVERSIONS` case below has been confirmed against the real API and resolved. Age-range-only targeting with no interest/location resolution (PRD.md §7's "resolve free text at publish time" gap) — the gap this note originally flagged — is closed as of step 5's interest resolution (confirmed 2026-09-02) and geo-taxonomy resolution (confirmed 2026-09-02).
+   **Known simplifications, not addressed yet:** ad creatives publish without an image whenever `Creative.imageUrl` is unset — no longer "always," since §2 step 5's real photo upload (confirmed 2026-09-02) auto-attaches one at selection time when the product has any, but a product with zero uploaded photos (or AI-generated images, still deferred) still publishes image-less; a failed publish never rolls back any Meta objects it already created (e.g. campaign created, ad set creation fails) — manual cleanup on Meta may be needed after a `FAILED` retry (confirmed in real end-to-end testing 2026-08-29, not just theoretical). The `LEADS` objective's optimization goal likely also needs its own `promoted_object` (a Lead Form id, a different mechanism than a Pixel) — unverified, still a gap; only the `SALES`/`OFFSITE_CONVERSIONS` case below has been confirmed against the real API and resolved. Age-range-only targeting with no interest/location resolution (PRD.md §7's "resolve free text at publish time" gap) — the gap this note originally flagged — is closed as of step 5's interest resolution (confirmed 2026-09-02) and geo-taxonomy resolution (confirmed 2026-09-02).
 
    **Pixel decision (resolved 2026-08-29):** `OFFSITE_CONVERSIONS` (used by the `SALES` objective) needs a `promoted_object` — a Meta Pixel id plus a `custom_event_type` — on AdSet creation. Resolved by adding an optional `MetaConnection.pixelId`, selected as its own follow-up step after the ad account/Page are finalized (`GET/POST .../meta/pixel(s)` in `app/api/meta.py` — Pixels are ad-account-scoped, so the picker can only run once an ad account is chosen; not bundled into the initial `finalize` call). `app/services/publish.py`'s `requires_pixel()` gates which objectives need one (currently just `OFFSITE_CONVERSIONS`); `app/api/campaign.py`'s publish endpoint 400s with a clear message if a conversion-tracking objective is published without a Pixel configured. `custom_event_type` is fixed to `PURCHASE` — no per-campaign event-type selection yet, since nothing in the product surfaces other event types.
 
@@ -218,7 +226,7 @@ strategy generation degrades gracefully with less context):
 | Ubicación (location) | |
 | Descripción (description) | |
 
-**Product** (step 3) — no separate name field; `description` ("What do you
+**Product** (§2 step 4) — no separate name field; `description` ("What do you
 sell?") doubles as its identity, truncated for display in lists:
 
 | Field | Notes |
@@ -230,7 +238,7 @@ sell?") doubles as its identity, truncated for display in lists:
 | Benefits | freeform text, same reasoning |
 | URL | product page link, distinct from Business.website; this is the actual destination URL Meta requires on traffic/conversion ads |
 
-**Audience** ("who buys" — step 3) — same no-separate-name convention as
+**Audience** ("who buys" — §2 step 4) — same no-separate-name convention as
 Product; `description` ("Who buys?") is the identity:
 
 | Field | Notes |
@@ -242,7 +250,7 @@ Product; `description` ("Who buys?") is the identity:
 | Problem | feeds strategy/copywriting AI (classic problem/desire direct-response framework) |
 | Desire | feeds strategy/copywriting AI |
 
-**Campaign objective** (step 5) — maps directly to Meta's own campaign
+**Campaign objective** (§2 step 3) — maps directly to Meta's own campaign
 objectives:
 
 | Field | `Campaign.objective` value |

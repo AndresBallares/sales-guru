@@ -9,9 +9,12 @@ vi.mock('../lib/api', async (importOriginal) => {
   return {
     ...actual,
     createCampaign: vi.fn<typeof actual.createCampaign>(),
+    updateCampaign: vi.fn<typeof actual.updateCampaign>(),
     listCampaigns: vi.fn<typeof actual.listCampaigns>(),
     listProducts: vi.fn<typeof actual.listProducts>(),
     listAudiences: vi.fn<typeof actual.listAudiences>(),
+    uploadProductImage: vi.fn<typeof actual.uploadProductImage>(),
+    listProductImages: vi.fn<typeof actual.listProductImages>(),
     createStrategy: vi.fn<typeof actual.createStrategy>(),
     getStrategy: vi.fn<typeof actual.getStrategy>(),
     createCreatives: vi.fn<typeof actual.createCreatives>(),
@@ -72,6 +75,7 @@ function fakeCreative(overrides: Partial<api.Creative> = {}): api.Creative {
     creativeAngle: 'Craftsmanship',
     imagePrompt: 'A close-up of a hand-set emerald ring on dark velvet',
     videoPrompt: 'A jeweler setting an emerald into a ring, slow motion',
+    imageUrl: null,
     status: 'GENERATED',
     createdAt: '2026-08-08T00:00:00Z',
     ...overrides,
@@ -342,58 +346,7 @@ describe('CampaignsSection', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent('Server error')
   })
 
-  it('populates the product and audience dropdowns', async () => {
-    mockedApi.listCampaigns.mockResolvedValue([])
-    mockedApi.listProducts.mockResolvedValue([
-      {
-        id: 'prod-1',
-        description: 'Handmade wallets',
-        price: null,
-        margin: null,
-        features: null,
-        benefits: null,
-        url: null,
-      },
-    ])
-    mockedApi.listAudiences.mockResolvedValue([
-      {
-        id: 'aud-1',
-        description: 'Busy parents',
-        ageMin: null,
-        ageMax: null,
-        location: null,
-        interests: null,
-        problem: null,
-        desire: null,
-      },
-    ])
-
-    render(<CampaignsSection businessId="biz-1" />)
-
-    await screen.findByText(/No campaigns yet/)
-    expect(
-      screen.getByRole('option', { name: 'Handmade wallets' }),
-    ).toBeInTheDocument()
-    expect(screen.getByRole('option', { name: 'Busy parents' })).toBeInTheDocument()
-  })
-
-  it('refetches product and audience options when a dropdown is focused', async () => {
-    mockedApi.listCampaigns.mockResolvedValue([])
-    const user = userEvent.setup()
-
-    render(<CampaignsSection businessId="biz-1" />)
-    await screen.findByText(/No campaigns yet/)
-
-    expect(mockedApi.listProducts).toHaveBeenCalledTimes(1)
-    expect(mockedApi.listAudiences).toHaveBeenCalledTimes(1)
-
-    await user.click(screen.getByLabelText('Product'))
-
-    await waitFor(() => expect(mockedApi.listProducts).toHaveBeenCalledTimes(2))
-    expect(mockedApi.listAudiences).toHaveBeenCalledTimes(2)
-  })
-
-  it('creates a campaign with the entered name, selected objective, product, and audience', async () => {
+  it('creates a campaign with the entered name and selected objective', async () => {
     mockedApi.listCampaigns
       .mockResolvedValueOnce([])
       .mockResolvedValueOnce([
@@ -402,8 +355,8 @@ describe('CampaignsSection', () => {
           name: 'Spring Sale',
           objective: 'LEADS',
           status: 'DRAFT',
-          productId: 'prod-1',
-          audienceId: 'aud-1',
+          productId: null,
+          audienceId: null,
           metaCampaignId: null,
           eventVenueKey: null,
           startDate: null,
@@ -412,36 +365,13 @@ describe('CampaignsSection', () => {
           dailySpendFlag: null,
         },
       ])
-    mockedApi.listProducts.mockResolvedValue([
-      {
-        id: 'prod-1',
-        description: 'Handmade wallets',
-        price: null,
-        margin: null,
-        features: null,
-        benefits: null,
-        url: null,
-      },
-    ])
-    mockedApi.listAudiences.mockResolvedValue([
-      {
-        id: 'aud-1',
-        description: 'Busy parents',
-        ageMin: null,
-        ageMax: null,
-        location: null,
-        interests: null,
-        problem: null,
-        desire: null,
-      },
-    ])
     mockedApi.createCampaign.mockResolvedValue({
       id: 'camp-1',
       name: 'Spring Sale',
       objective: 'LEADS',
       status: 'DRAFT',
-      productId: 'prod-1',
-      audienceId: 'aud-1',
+      productId: null,
+      audienceId: null,
       metaCampaignId: null,
       eventVenueKey: null,
       startDate: null,
@@ -456,19 +386,25 @@ describe('CampaignsSection', () => {
 
     await user.type(screen.getByLabelText('Name'), 'Spring Sale')
     await user.selectOptions(screen.getByLabelText('Objective'), 'LEADS')
-    await user.selectOptions(screen.getByLabelText('Product'), 'prod-1')
-    await user.selectOptions(screen.getByLabelText('Audience'), 'aud-1')
     await user.click(screen.getByRole('button', { name: 'Create campaign' }))
 
     await waitFor(() =>
       expect(mockedApi.createCampaign).toHaveBeenCalledWith('biz-1', {
         objective: 'LEADS',
         name: 'Spring Sale',
-        productId: 'prod-1',
-        audienceId: 'aud-1',
       }),
     )
     expect(await screen.findByText('Spring Sale — Leads — DRAFT')).toBeInTheDocument()
+  })
+
+  it('does not offer a Product or Audience field on the create-campaign form', async () => {
+    mockedApi.listCampaigns.mockResolvedValue([])
+
+    render(<CampaignsSection businessId="biz-1" />)
+
+    await screen.findByText(/No campaigns yet/)
+    expect(screen.queryByLabelText('Product')).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('Audience')).not.toBeInTheDocument()
   })
 
   it('creates an event-venue campaign with the selected venue and dates', async () => {
@@ -537,7 +473,7 @@ describe('CampaignsSection', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent('Product not found')
   })
 
-  it('generates a strategy for a campaign and displays it', async () => {
+  it('hides the Create a campaign form once the business already has a campaign', async () => {
     mockedApi.listCampaigns.mockResolvedValue([
       {
         id: 'camp-1',
@@ -554,11 +490,204 @@ describe('CampaignsSection', () => {
         dailySpendFlag: null,
       },
     ])
+
+    render(<CampaignsSection businessId="biz-1" />)
+
+    expect(await screen.findByRole('heading', { name: 'Campaigns' })).toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: 'Create a campaign' })).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('Name', { exact: true })).not.toBeInTheDocument()
+  })
+
+  const draftCampaignFixture: api.Campaign = {
+    id: 'camp-1',
+    name: null,
+    objective: 'SALES',
+    status: 'DRAFT',
+    productId: null,
+    audienceId: null,
+    metaCampaignId: null,
+    eventVenueKey: null,
+    startDate: null,
+    endDate: null,
+    pausedReason: null,
+    dailySpendFlag: null,
+  }
+
+  it('shows a readiness checklist for a DRAFT campaign missing a product and audience', async () => {
+    mockedApi.listCampaigns.mockResolvedValue([draftCampaignFixture])
+
+    render(<CampaignsSection businessId="biz-1" />)
+
+    const checklist = await screen.findByLabelText('Campaign readiness for camp-1')
+    expect(checklist).toHaveTextContent('✓ Objective')
+    expect(checklist).toHaveTextContent('✗ Product')
+    expect(checklist).toHaveTextContent('✗ Audience')
+    expect(screen.queryByRole('button', { name: 'Generate strategy' })).not.toBeInTheDocument()
+  })
+
+  it('does not show a manual product/audience picker with zero or one to choose from', async () => {
+    mockedApi.listCampaigns.mockResolvedValue([draftCampaignFixture])
+    mockedApi.listProducts.mockResolvedValue([
+      {
+        id: 'prod-1',
+        description: 'Handmade wallets',
+        price: null,
+        margin: null,
+        features: null,
+        benefits: null,
+        url: null,
+      },
+    ])
+
+    render(<CampaignsSection businessId="biz-1" />)
+
+    await screen.findByLabelText('Campaign readiness for camp-1')
+    expect(screen.queryByLabelText('Which product?')).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('Which audience?')).not.toBeInTheDocument()
+  })
+
+  it('lets the user manually attach a product when there are several to choose from', async () => {
+    mockedApi.listCampaigns.mockResolvedValue([draftCampaignFixture])
+    mockedApi.listProducts.mockResolvedValue([
+      {
+        id: 'prod-1',
+        description: 'Handmade wallets',
+        price: null,
+        margin: null,
+        features: null,
+        benefits: null,
+        url: null,
+      },
+      {
+        id: 'prod-2',
+        description: 'Leather belts',
+        price: null,
+        margin: null,
+        features: null,
+        benefits: null,
+        url: null,
+      },
+    ])
+    mockedApi.updateCampaign.mockResolvedValue({
+      ...draftCampaignFixture,
+      productId: 'prod-2',
+    })
+    const user = userEvent.setup()
+
+    render(<CampaignsSection businessId="biz-1" />)
+    await screen.findByLabelText('Campaign readiness for camp-1')
+
+    await user.selectOptions(screen.getByLabelText('Which product?'), 'prod-2')
+    await user.click(screen.getAllByRole('button', { name: 'Attach' })[0])
+
+    await waitFor(() =>
+      expect(mockedApi.updateCampaign).toHaveBeenCalledWith('biz-1', 'camp-1', {
+        productId: 'prod-2',
+      }),
+    )
+    expect(await screen.findByText('✓ Product')).toBeInTheDocument()
+  })
+
+  it('lets the user manually attach an audience when there are several to choose from', async () => {
+    mockedApi.listCampaigns.mockResolvedValue([draftCampaignFixture])
+    mockedApi.listAudiences.mockResolvedValue([
+      {
+        id: 'aud-1',
+        description: 'Busy professionals',
+        ageMin: null,
+        ageMax: null,
+        location: null,
+        interests: null,
+        problem: null,
+        desire: null,
+      },
+      {
+        id: 'aud-2',
+        description: 'Students',
+        ageMin: null,
+        ageMax: null,
+        location: null,
+        interests: null,
+        problem: null,
+        desire: null,
+      },
+    ])
+    mockedApi.updateCampaign.mockResolvedValue({
+      ...draftCampaignFixture,
+      audienceId: 'aud-2',
+    })
+    const user = userEvent.setup()
+
+    render(<CampaignsSection businessId="biz-1" />)
+    await screen.findByLabelText('Campaign readiness for camp-1')
+
+    await user.selectOptions(screen.getByLabelText('Which audience?'), 'aud-2')
+    await user.click(screen.getByRole('button', { name: 'Attach' }))
+
+    await waitFor(() =>
+      expect(mockedApi.updateCampaign).toHaveBeenCalledWith('biz-1', 'camp-1', {
+        audienceId: 'aud-2',
+      }),
+    )
+    expect(await screen.findByText('✓ Audience')).toBeInTheDocument()
+  })
+
+  it('shows an error if manually attaching a product fails', async () => {
+    mockedApi.listCampaigns.mockResolvedValue([draftCampaignFixture])
+    mockedApi.listProducts.mockResolvedValue([
+      {
+        id: 'prod-1',
+        description: 'Handmade wallets',
+        price: null,
+        margin: null,
+        features: null,
+        benefits: null,
+        url: null,
+      },
+      {
+        id: 'prod-2',
+        description: 'Leather belts',
+        price: null,
+        margin: null,
+        features: null,
+        benefits: null,
+        url: null,
+      },
+    ])
+    mockedApi.updateCampaign.mockRejectedValue(new api.ApiError(404, 'Product not found'))
+    const user = userEvent.setup()
+
+    render(<CampaignsSection businessId="biz-1" />)
+    await screen.findByLabelText('Campaign readiness for camp-1')
+
+    await user.selectOptions(screen.getByLabelText('Which product?'), 'prod-2')
+    await user.click(screen.getByRole('button', { name: 'Attach' }))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Product not found')
+  })
+
+  it('generates a strategy for a campaign and displays it', async () => {
+    mockedApi.listCampaigns.mockResolvedValue([
+      {
+        id: 'camp-1',
+        name: null,
+        objective: 'SALES',
+        status: 'READY',
+        productId: 'prod-1',
+        audienceId: 'aud-1',
+        metaCampaignId: null,
+        eventVenueKey: null,
+        startDate: null,
+        endDate: null,
+        pausedReason: null,
+        dailySpendFlag: null,
+      },
+    ])
     mockedApi.createStrategy.mockResolvedValue(FAKE_STRATEGY)
     const user = userEvent.setup()
 
     render(<CampaignsSection businessId="biz-1" />)
-    await screen.findByText('Sales — DRAFT')
+    await screen.findByText('Sales — READY')
 
     await user.click(screen.getByRole('button', { name: 'Generate strategy' }))
 
@@ -580,9 +709,9 @@ describe('CampaignsSection', () => {
         id: 'camp-1',
         name: null,
         objective: 'SALES',
-        status: 'DRAFT',
-        productId: null,
-        audienceId: null,
+        status: 'READY',
+        productId: 'prod-1',
+        audienceId: 'aud-1',
         metaCampaignId: null,
         eventVenueKey: null,
         startDate: null,
@@ -597,7 +726,7 @@ describe('CampaignsSection', () => {
     const user = userEvent.setup()
 
     render(<CampaignsSection businessId="biz-1" />)
-    await screen.findByText('Sales — DRAFT')
+    await screen.findByText('Sales — READY')
 
     await user.click(screen.getByRole('button', { name: 'Generate strategy' }))
 
@@ -612,9 +741,9 @@ describe('CampaignsSection', () => {
         id: 'camp-1',
         name: null,
         objective: 'SALES',
-        status: 'DRAFT',
-        productId: null,
-        audienceId: null,
+        status: 'READY',
+        productId: 'prod-1',
+        audienceId: 'aud-1',
         metaCampaignId: null,
         eventVenueKey: null,
         startDate: null,
@@ -629,7 +758,7 @@ describe('CampaignsSection', () => {
     const user = userEvent.setup()
 
     render(<CampaignsSection businessId="biz-1" />)
-    await screen.findByText('Sales — DRAFT')
+    await screen.findByText('Sales — READY')
 
     await user.click(screen.getByRole('button', { name: 'Generate strategy' }))
     await screen.findByText('Has this business run advertising campaigns before?')
@@ -649,9 +778,9 @@ describe('CampaignsSection', () => {
         id: 'camp-1',
         name: null,
         objective: 'SALES',
-        status: 'DRAFT',
-        productId: null,
-        audienceId: null,
+        status: 'READY',
+        productId: 'prod-1',
+        audienceId: 'aud-1',
         metaCampaignId: null,
         eventVenueKey: null,
         startDate: null,
@@ -669,7 +798,7 @@ describe('CampaignsSection', () => {
     const user = userEvent.setup()
 
     render(<CampaignsSection businessId="biz-1" />)
-    await screen.findByText('Sales — DRAFT')
+    await screen.findByText('Sales — READY')
 
     await user.click(screen.getByRole('button', { name: 'Generate strategy' }))
 
@@ -848,13 +977,395 @@ describe('CampaignsSection', () => {
     await user.click(screen.getAllByRole('button', { name: 'Select this ad' })[0])
 
     expect(mockedApi.selectCreative).toHaveBeenCalledWith('biz-1', 'camp-1', 'creative-1')
+    // Selecting an ad collapses the 4-variant list down to just that one
+    // ad — the ad-set preview — so the sibling variant disappears too.
     expect(await screen.findByRole('button', { name: 'Selected' })).toBeInTheDocument()
+    expect(screen.queryByText('Headline B')).not.toBeInTheDocument()
     // Selecting an ad must refresh the campaign list so its now-current
     // PENDING_APPROVAL status unlocks the Approve & Publish button without
     // a reload.
     expect(
       await screen.findByRole('button', { name: 'Approve & Publish' }),
     ).toBeInTheDocument()
+  })
+
+  it('only shows the Upload Image button for a selected ad once the campaign has a linked product', async () => {
+    mockedApi.listCampaigns.mockResolvedValue([
+      {
+        id: 'camp-1',
+        name: null,
+        objective: 'SALES',
+        status: 'ADS_GENERATED',
+        productId: null,
+        audienceId: null,
+        metaCampaignId: null,
+        eventVenueKey: null,
+        startDate: null,
+        endDate: null,
+        pausedReason: null,
+        dailySpendFlag: null,
+      },
+    ])
+    mockedApi.getStrategy.mockResolvedValue(FAKE_STRATEGY)
+    mockedApi.listCreatives.mockResolvedValue([
+      fakeCreative({ id: 'creative-1', headline: 'Headline A', status: 'SELECTED' }),
+    ])
+
+    render(<CampaignsSection businessId="biz-1" />)
+
+    expect(await screen.findByRole('button', { name: 'Selected' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Upload Image' })).not.toBeInTheDocument()
+  })
+
+  it('uploads a photo from the computer and attaches it to the selected ad', async () => {
+    const campaign = {
+      id: 'camp-1',
+      name: null,
+      objective: 'SALES' as const,
+      status: 'PENDING_APPROVAL',
+      productId: 'prod-1',
+      audienceId: null,
+      metaCampaignId: null,
+      eventVenueKey: null,
+      startDate: null,
+      endDate: null,
+      pausedReason: null,
+      dailySpendFlag: null,
+    }
+    mockedApi.listCampaigns.mockResolvedValue([campaign])
+    mockedApi.getStrategy.mockResolvedValue(FAKE_STRATEGY)
+    mockedApi.listCreatives.mockResolvedValue([
+      fakeCreative({ id: 'creative-1', headline: 'Headline A', status: 'SELECTED' }),
+    ])
+    const uploadedImage: api.ProductImage = {
+      id: 'img-1',
+      url: 'http://localhost:8000/product-images/img-1',
+      createdAt: '2026-08-08T00:00:00Z',
+    }
+    mockedApi.uploadProductImage.mockResolvedValue(uploadedImage)
+    mockedApi.selectCreative.mockResolvedValue(
+      fakeCreative({
+        id: 'creative-1',
+        headline: 'Headline A',
+        status: 'SELECTED',
+        imageUrl: uploadedImage.url,
+      }),
+    )
+    const user = userEvent.setup()
+
+    render(<CampaignsSection businessId="biz-1" />)
+    await screen.findByRole('button', { name: 'Selected' })
+
+    await user.click(screen.getByRole('button', { name: 'Upload Image' }))
+    const file = new File(['fake'], 'ring.jpg', { type: 'image/jpeg' })
+    await user.upload(screen.getByLabelText('Upload from computer'), file)
+
+    await waitFor(() =>
+      expect(mockedApi.uploadProductImage).toHaveBeenCalledWith('biz-1', 'prod-1', file),
+    )
+    expect(mockedApi.selectCreative).toHaveBeenCalledWith(
+      'biz-1',
+      'camp-1',
+      'creative-1',
+      'img-1',
+    )
+    expect(await screen.findByRole('button', { name: 'Change image' })).toBeInTheDocument()
+    expect(screen.getByAltText('Selected ad')).toHaveAttribute('src', uploadedImage.url)
+  })
+
+  it('lets the user choose an existing photo from the library for the selected ad', async () => {
+    const campaign = {
+      id: 'camp-1',
+      name: null,
+      objective: 'SALES' as const,
+      status: 'PENDING_APPROVAL',
+      productId: 'prod-1',
+      audienceId: null,
+      metaCampaignId: null,
+      eventVenueKey: null,
+      startDate: null,
+      endDate: null,
+      pausedReason: null,
+      dailySpendFlag: null,
+    }
+    mockedApi.listCampaigns.mockResolvedValue([campaign])
+    mockedApi.getStrategy.mockResolvedValue(FAKE_STRATEGY)
+    mockedApi.listCreatives.mockResolvedValue([
+      fakeCreative({ id: 'creative-1', headline: 'Headline A', status: 'SELECTED' }),
+    ])
+    const libraryImage: api.ProductImage = {
+      id: 'img-2',
+      url: 'http://localhost:8000/product-images/img-2',
+      createdAt: '2026-08-08T00:00:00Z',
+    }
+    mockedApi.listProductImages.mockResolvedValue([libraryImage])
+    mockedApi.selectCreative.mockResolvedValue(
+      fakeCreative({
+        id: 'creative-1',
+        headline: 'Headline A',
+        status: 'SELECTED',
+        imageUrl: libraryImage.url,
+      }),
+    )
+    const user = userEvent.setup()
+
+    render(<CampaignsSection businessId="biz-1" />)
+    await screen.findByRole('button', { name: 'Selected' })
+
+    await user.click(screen.getByRole('button', { name: 'Upload Image' }))
+    await user.click(screen.getByRole('button', { name: 'Choose from library' }))
+
+    expect(mockedApi.listProductImages).toHaveBeenCalledWith('biz-1', 'prod-1')
+    const libraryOption = await screen.findByAltText('Product option')
+    await user.click(libraryOption)
+
+    expect(mockedApi.selectCreative).toHaveBeenCalledWith(
+      'biz-1',
+      'camp-1',
+      'creative-1',
+      'img-2',
+    )
+    expect(await screen.findByRole('button', { name: 'Change image' })).toBeInTheDocument()
+  })
+
+  it('shows an error if uploading a photo fails', async () => {
+    const campaign = {
+      id: 'camp-1',
+      name: null,
+      objective: 'SALES' as const,
+      status: 'PENDING_APPROVAL',
+      productId: 'prod-1',
+      audienceId: null,
+      metaCampaignId: null,
+      eventVenueKey: null,
+      startDate: null,
+      endDate: null,
+      pausedReason: null,
+      dailySpendFlag: null,
+    }
+    mockedApi.listCampaigns.mockResolvedValue([campaign])
+    mockedApi.getStrategy.mockResolvedValue(FAKE_STRATEGY)
+    mockedApi.listCreatives.mockResolvedValue([
+      fakeCreative({ id: 'creative-1', headline: 'Headline A', status: 'SELECTED' }),
+    ])
+    mockedApi.uploadProductImage.mockRejectedValue(new api.ApiError(500, 'Server error'))
+    const user = userEvent.setup()
+
+    render(<CampaignsSection businessId="biz-1" />)
+    await screen.findByRole('button', { name: 'Selected' })
+
+    await user.click(screen.getByRole('button', { name: 'Upload Image' }))
+    const file = new File(['fake'], 'ring.jpg', { type: 'image/jpeg' })
+    await user.upload(screen.getByLabelText('Upload from computer'), file)
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Server error')
+  })
+
+  it('shows a message when the product has no uploaded photos yet', async () => {
+    const campaign = {
+      id: 'camp-1',
+      name: null,
+      objective: 'SALES' as const,
+      status: 'PENDING_APPROVAL',
+      productId: 'prod-1',
+      audienceId: null,
+      metaCampaignId: null,
+      eventVenueKey: null,
+      startDate: null,
+      endDate: null,
+      pausedReason: null,
+      dailySpendFlag: null,
+    }
+    mockedApi.listCampaigns.mockResolvedValue([campaign])
+    mockedApi.getStrategy.mockResolvedValue(FAKE_STRATEGY)
+    mockedApi.listCreatives.mockResolvedValue([
+      fakeCreative({ id: 'creative-1', headline: 'Headline A', status: 'SELECTED' }),
+    ])
+    mockedApi.listProductImages.mockResolvedValue([])
+    const user = userEvent.setup()
+
+    render(<CampaignsSection businessId="biz-1" />)
+    await screen.findByRole('button', { name: 'Selected' })
+
+    await user.click(screen.getByRole('button', { name: 'Upload Image' }))
+    await user.click(screen.getByRole('button', { name: 'Choose from library' }))
+
+    expect(
+      await screen.findByText('No photos uploaded for this product yet.'),
+    ).toBeInTheDocument()
+  })
+
+  it('lets the user go back to the full list to choose a different ad', async () => {
+    const campaign = {
+      id: 'camp-1',
+      name: null,
+      objective: 'SALES' as const,
+      status: 'PENDING_APPROVAL',
+      productId: null,
+      audienceId: null,
+      metaCampaignId: null,
+      eventVenueKey: null,
+      startDate: null,
+      endDate: null,
+      pausedReason: null,
+      dailySpendFlag: null,
+    }
+    mockedApi.listCampaigns.mockResolvedValue([campaign])
+    mockedApi.getStrategy.mockResolvedValue(FAKE_STRATEGY)
+    mockedApi.listCreatives.mockResolvedValue([
+      fakeCreative({ id: 'creative-1', headline: 'Headline A', status: 'SELECTED' }),
+      fakeCreative({ id: 'creative-2', headline: 'Headline B', status: 'REJECTED' }),
+    ])
+    const user = userEvent.setup()
+
+    render(<CampaignsSection businessId="biz-1" />)
+    await screen.findByRole('button', { name: 'Selected' })
+    expect(screen.queryByText('Headline B')).not.toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'Choose a different ad' }))
+
+    expect(await screen.findByText('Headline B')).toBeInTheDocument()
+    expect(screen.getAllByRole('button', { name: 'Select this ad' })).toHaveLength(1)
+  })
+
+  it('closes the image menu when Upload Image is clicked again', async () => {
+    const campaign = {
+      id: 'camp-1',
+      name: null,
+      objective: 'SALES' as const,
+      status: 'PENDING_APPROVAL',
+      productId: 'prod-1',
+      audienceId: null,
+      metaCampaignId: null,
+      eventVenueKey: null,
+      startDate: null,
+      endDate: null,
+      pausedReason: null,
+      dailySpendFlag: null,
+    }
+    mockedApi.listCampaigns.mockResolvedValue([campaign])
+    mockedApi.getStrategy.mockResolvedValue(FAKE_STRATEGY)
+    mockedApi.listCreatives.mockResolvedValue([
+      fakeCreative({ id: 'creative-1', headline: 'Headline A', status: 'SELECTED' }),
+    ])
+    const user = userEvent.setup()
+
+    render(<CampaignsSection businessId="biz-1" />)
+    await screen.findByRole('button', { name: 'Selected' })
+
+    await user.click(screen.getByRole('button', { name: 'Upload Image' }))
+    expect(screen.getByRole('button', { name: 'Choose from library' })).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'Upload Image' }))
+    expect(screen.queryByRole('button', { name: 'Choose from library' })).not.toBeInTheDocument()
+  })
+
+  it('shows an error if the photo library fails to load', async () => {
+    const campaign = {
+      id: 'camp-1',
+      name: null,
+      objective: 'SALES' as const,
+      status: 'PENDING_APPROVAL',
+      productId: 'prod-1',
+      audienceId: null,
+      metaCampaignId: null,
+      eventVenueKey: null,
+      startDate: null,
+      endDate: null,
+      pausedReason: null,
+      dailySpendFlag: null,
+    }
+    mockedApi.listCampaigns.mockResolvedValue([campaign])
+    mockedApi.getStrategy.mockResolvedValue(FAKE_STRATEGY)
+    mockedApi.listCreatives.mockResolvedValue([
+      fakeCreative({ id: 'creative-1', headline: 'Headline A', status: 'SELECTED' }),
+    ])
+    mockedApi.listProductImages.mockRejectedValue(new Error('Network down'))
+    const user = userEvent.setup()
+
+    render(<CampaignsSection businessId="biz-1" />)
+    await screen.findByRole('button', { name: 'Selected' })
+
+    await user.click(screen.getByRole('button', { name: 'Upload Image' }))
+    await user.click(screen.getByRole('button', { name: 'Choose from library' }))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Could not load photo library.')
+  })
+
+  it('shows an error if attaching a library photo fails', async () => {
+    const campaign = {
+      id: 'camp-1',
+      name: null,
+      objective: 'SALES' as const,
+      status: 'PENDING_APPROVAL',
+      productId: 'prod-1',
+      audienceId: null,
+      metaCampaignId: null,
+      eventVenueKey: null,
+      startDate: null,
+      endDate: null,
+      pausedReason: null,
+      dailySpendFlag: null,
+    }
+    mockedApi.listCampaigns.mockResolvedValue([campaign])
+    mockedApi.getStrategy.mockResolvedValue(FAKE_STRATEGY)
+    mockedApi.listCreatives.mockResolvedValue([
+      fakeCreative({ id: 'creative-1', headline: 'Headline A', status: 'SELECTED' }),
+      fakeCreative({ id: 'creative-2', headline: 'Headline B', status: 'REJECTED' }),
+    ])
+    const libraryImage: api.ProductImage = {
+      id: 'img-2',
+      url: 'http://localhost:8000/product-images/img-2',
+      createdAt: '2026-08-08T00:00:00Z',
+    }
+    mockedApi.listProductImages.mockResolvedValue([libraryImage])
+    mockedApi.selectCreative.mockRejectedValue(new api.ApiError(500, 'Server error'))
+    const user = userEvent.setup()
+
+    render(<CampaignsSection businessId="biz-1" />)
+    await screen.findByRole('button', { name: 'Selected' })
+
+    await user.click(screen.getByRole('button', { name: 'Upload Image' }))
+    await user.click(screen.getByRole('button', { name: 'Choose from library' }))
+    const libraryOption = await screen.findByAltText('Product option')
+    await user.click(libraryOption)
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Server error')
+    // The other (rejected) creative must be left untouched by the failed
+    // attach attempt — still hidden behind the selected-ad collapse.
+    expect(screen.queryByText('Headline B')).not.toBeInTheDocument()
+  })
+
+  it('renders the chosen ad image alongside a generated creative', async () => {
+    mockedApi.listCampaigns.mockResolvedValue([
+      {
+        id: 'camp-1',
+        name: null,
+        objective: 'SALES',
+        status: 'ADS_GENERATED',
+        productId: 'prod-1',
+        audienceId: null,
+        metaCampaignId: null,
+        eventVenueKey: null,
+        startDate: null,
+        endDate: null,
+        pausedReason: null,
+        dailySpendFlag: null,
+      },
+    ])
+    mockedApi.getStrategy.mockResolvedValue(FAKE_STRATEGY)
+    mockedApi.listCreatives.mockResolvedValue([
+      fakeCreative({
+        id: 'creative-1',
+        headline: 'Headline A',
+        imageUrl: 'http://localhost:8000/product-images/img-1',
+      }),
+    ])
+
+    render(<CampaignsSection businessId="biz-1" />)
+
+    const image = await screen.findByAltText('Creative A')
+    expect(image).toHaveAttribute('src', 'http://localhost:8000/product-images/img-1')
   })
 
   it('shows an error if selecting a creative fails', async () => {

@@ -19,6 +19,7 @@ from app.schemas.strategy import (
     StrategyContentAdapter,
     StrategyResponse,
 )
+from app.services.campaign_readiness import is_ready
 from app.services.meta import (
     AccountCampaignInsights,
     MetaConnectionError,
@@ -33,6 +34,9 @@ router = APIRouter(
 )
 
 _STRATEGY_NOT_FOUND = "Strategy not found"
+_CAMPAIGN_NOT_READY = (
+    "Add a product and an audience to this campaign before generating a strategy"
+)
 _ANSWER_REQUIRED = (
     "Has this business run advertising campaigns before? Answer required "
     "before a strategy can be generated."
@@ -76,12 +80,20 @@ async def create_strategy(
         The newly generated strategy.
 
     Raises:
-        HTTPException: 428 if plan-type can't be determined yet (no real
-            Meta history, business hasn't answered the one-time question,
-            and this request didn't answer it either) — the frontend
-            should prompt the user and resubmit with an answer. 500 if the
-            Strategist Agent isn't configured or the LLM call fails.
+        HTTPException: 428 if the campaign has no product and audience
+            attached yet (app/services/campaign_readiness.py), or if
+            plan-type can't be determined yet (no real Meta history,
+            business hasn't answered the one-time question, and this
+            request didn't answer it either) — the frontend should prompt
+            the user and resubmit with an answer. 500 if the Strategist
+            Agent isn't configured or the LLM call fails.
     """
+    if not is_ready(campaign):
+        raise HTTPException(
+            status_code=status.HTTP_428_PRECONDITION_REQUIRED,
+            detail=_CAMPAIGN_NOT_READY,
+        )
+
     business = await db.business.find_unique(where={"id": campaign.businessId})
     assert business is not None  # guaranteed by the FK, not user input
 
