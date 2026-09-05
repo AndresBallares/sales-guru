@@ -1,24 +1,26 @@
 import { useState, type FormEvent } from 'react'
-import { Link, useNavigate } from 'react-router-dom'
-import { useAuth } from '../context/AuthContext'
-import { ApiError } from '../lib/api'
+import { Link, useNavigate, useSearchParams } from 'react-router-dom'
+import { ApiError, resetPassword } from '../lib/api'
 
-export function LoginPage() {
-  const { login } = useAuth()
+export function ResetPasswordPage() {
+  const [searchParams] = useSearchParams()
+  const token = searchParams.get('token')
   const navigate = useNavigate()
-  const [email, setEmail] = useState('')
-  const [password, setPassword] = useState('')
+  const [newPassword, setNewPassword] = useState('')
   const [showPassword, setShowPassword] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
+    if (!token) {
+      return
+    }
     setError(null)
     setSubmitting(true)
     try {
-      await login(email, password)
-      navigate('/')
+      await resetPassword(token, newPassword)
+      navigate('/login')
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Something went wrong. Please try again.')
     } finally {
@@ -26,31 +28,36 @@ export function LoginPage() {
     }
   }
 
+  if (!token) {
+    return (
+      <main className="auth-page">
+        <h1>Reset your password</h1>
+        <p className="form-error" role="alert">
+          This reset link is missing its token — copy the full link from your email, or
+          request a new one.
+        </p>
+        <p>
+          <Link to="/forgot-password">Request a new link</Link>
+        </p>
+      </main>
+    )
+  }
+
   return (
     <main className="auth-page">
-      <h1>Log in</h1>
+      <h1>Reset your password</h1>
       <form onSubmit={handleSubmit} noValidate>
         <div className="field">
-          <label htmlFor="email">Email</label>
-          <input
-            id="email"
-            type="email"
-            autoComplete="email"
-            required
-            value={email}
-            onChange={(event) => setEmail(event.target.value)}
-          />
-        </div>
-        <div className="field">
-          <label htmlFor="password">Password</label>
+          <label htmlFor="new-password">New password</label>
           <div className="password-field">
             <input
-              id="password"
+              id="new-password"
               type={showPassword ? 'text' : 'password'}
-              autoComplete="current-password"
+              autoComplete="new-password"
               required
-              value={password}
-              onChange={(event) => setPassword(event.target.value)}
+              minLength={8}
+              value={newPassword}
+              onChange={(event) => setNewPassword(event.target.value)}
             />
             <button
               type="button"
@@ -62,20 +69,17 @@ export function LoginPage() {
             </button>
           </div>
         </div>
-        <p>
-          <Link to="/forgot-password">Forgot password?</Link>
-        </p>
         {error && (
           <p className="form-error" role="alert">
             {error}
           </p>
         )}
         <button type="submit" disabled={submitting}>
-          {submitting ? 'Logging in…' : 'Log in'}
+          {submitting ? 'Resetting…' : 'Reset password'}
         </button>
       </form>
       <p>
-        No account yet? <Link to="/signup">Sign up</Link>
+        <Link to="/login">Back to log in</Link>
       </p>
     </main>
   )

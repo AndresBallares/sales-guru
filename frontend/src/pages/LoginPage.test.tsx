@@ -78,6 +78,15 @@ describe('LoginPage', () => {
     expect(passwordInput).toHaveAttribute('type', 'password')
   })
 
+  it('links to the forgot-password page', () => {
+    renderLoginPage()
+
+    expect(screen.getByRole('link', { name: 'Forgot password?' })).toHaveAttribute(
+      'href',
+      '/forgot-password',
+    )
+  })
+
   it('shows a generic error message for a non-API failure', async () => {
     mockedApi.login.mockRejectedValue(new TypeError('Failed to fetch'))
     const user = userEvent.setup()

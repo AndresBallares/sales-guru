@@ -10,8 +10,8 @@ def _lowercase_email(value: str) -> str:
 
     Emails are stored lowercase (User.email is @unique, case-sensitive at
     the DB level) so "Foo@Bar.com" and "foo@bar.com" are the same account
-    everywhere — signup, login, and the admin reset script all normalize
-    through this same function.
+    everywhere — signup, login, forgot-password, and the admin reset
+    script all normalize through this same function.
     """
     return value.lower()
 
@@ -32,6 +32,27 @@ class LoginRequest(CamelCaseModel):
     password: str
 
     _normalize_email = field_validator("email")(_lowercase_email)
+
+
+class ForgotPasswordRequest(CamelCaseModel):
+    """Payload to request a password reset link."""
+
+    email: EmailStr
+
+    _normalize_email = field_validator("email")(_lowercase_email)
+
+
+class ResetPasswordRequest(CamelCaseModel):
+    """Payload to actually reset a password, given a valid reset token."""
+
+    token: str
+    new_password: str = Field(min_length=8)
+
+
+class MessageResponse(CamelCaseModel):
+    """A generic human-readable confirmation message."""
+
+    message: str
 
 
 class UserResponse(CamelCaseModel):

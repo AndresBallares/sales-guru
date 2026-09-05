@@ -54,6 +54,13 @@ class Settings(BaseSettings):
             step 10) start with the app. Defaults on; the test suite
             turns it off (conftest.py) so background jobs never fire
             mid-test-run against a database tests are actively resetting.
+        resend_api_key: API key for Resend (app/services/email.py), sending
+            the forgot-password reset link. None until set — requesting a
+            reset raises a clear error rather than the app failing to start.
+        email_from: The "From" address on outgoing email, e.g.
+            "onboarding@resend.dev" (Resend's own sandbox sender, usable
+            with no domain verification — fine for MVP; a verified custom
+            domain address once one exists).
     """
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
@@ -70,6 +77,8 @@ class Settings(BaseSettings):
     meta_redirect_uri: str | None = None
     meta_token_encryption_key: str | None = None
     enable_scheduler: bool = True
+    resend_api_key: str | None = None
+    email_from: str = "onboarding@resend.dev"
 
     @property
     def cors_origins_list(self) -> list[str]:
