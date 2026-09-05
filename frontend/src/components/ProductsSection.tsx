@@ -241,10 +241,16 @@ export function ProductsSection({
             />
           </div>
           <div className="field">
-            <label htmlFor="url">URL</label>
+            <label htmlFor="url">
+              URL{' '}
+              <span className="field-hint">
+                (destination link the ad's CTA button takes people to when clicked)
+              </span>
+            </label>
             <input
               id="url"
               type="url"
+              required
               value={url}
               onChange={(event) => setUrl(event.target.value)}
             />

@@ -372,6 +372,14 @@ main > section > form,
   color: var(--text-secondary);
 }
 
+/* A parenthetical explanation inside a label — higher-contrast than the
+   surrounding label text so it actually reads at a glance, not the same
+   low-contrast secondary tone that makes long inline hints hard to see. */
+.field-hint {
+  color: var(--text);
+  font-weight: 400;
+}
+
 label {
   color: var(--text-secondary);
   font-weight: 500;

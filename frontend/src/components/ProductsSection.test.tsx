@@ -98,7 +98,7 @@ describe('ProductsSection', () => {
     await user.type(screen.getByLabelText('What do you sell?'), 'Handmade wallets')
     await user.type(screen.getByLabelText('Features'), 'Full-grain leather')
     await user.type(screen.getByLabelText('Benefits'), 'Lasts a lifetime')
-    await user.type(screen.getByLabelText('URL'), 'https://acme.example/wallets')
+    await user.type(screen.getByLabelText(/^URL/), 'https://acme.example/wallets')
     await user.click(screen.getByRole('button', { name: 'Add product' }))
 
     await waitFor(() =>
