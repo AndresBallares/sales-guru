@@ -481,6 +481,33 @@ async def test_publish_400s_without_a_selected_creative(client: TestClient) -> N
     assert "select an ad creative" in response.json()["detail"].lower()
 
 
+@pytest.mark.asyncio
+async def test_publish_400s_when_campaign_is_not_ready(client: TestClient) -> None:
+    """Defense in depth: an APPROVED campaign missing its product/audience
+    (shouldn't happen via normal flow — generating a strategy already
+    requires readiness, PRD.md §5 step 4) still fails closed rather than
+    publishing.
+
+    Uses a fresh Prisma() connection to desync the fields directly after
+    the fact, same reasoning as test_publish_400s_without_a_selected_creative.
+    """
+    business_id, campaign_id = _ready_campaign(client)
+
+    seeder = Prisma()
+    await seeder.connect()
+    await seeder.campaign.update(
+        where={"id": campaign_id},
+        data={"product": {"disconnect": True}, "audience": {"disconnect": True}},
+    )
+    await seeder.disconnect()
+
+    response = client.post(f"/businesses/{business_id}/campaigns/{campaign_id}/publish")
+
+    assert response.status_code == 400
+    assert "product" in response.json()["detail"].lower()
+    assert "audience" in response.json()["detail"].lower()
+
+
 def test_publish_succeeds_and_marks_the_campaign_live(
     client: TestClient, mock_services: dict[str, AsyncMock]
 ) -> None:

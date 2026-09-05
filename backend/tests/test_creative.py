@@ -17,6 +17,7 @@ from app.schemas.strategy import (
     TargetAudience,
 )
 from fastapi.testclient import TestClient
+from prisma import Prisma
 
 _FAKE_STRATEGY = DataDrivenStrategyContent(
     objective="SALES",
@@ -506,6 +507,56 @@ def test_select_creative_404s_for_a_product_image_from_another_product(
     )
 
     assert response.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_select_creative_428s_for_image_attach_when_not_ready(
+    client: TestClient,
+) -> None:
+    """Defense in depth: attaching a specific photo requires the campaign
+    to have a product and audience (shouldn't happen via normal flow —
+    generating a strategy already requires readiness, PRD.md §5 step 4).
+
+    Uses a fresh Prisma() connection to desync the fields directly after
+    the fact, same reasoning as test_publish.py's forced-state
+    defense-in-depth tests.
+    """
+    _signed_up_client(client)
+    business_id = _create_business(client)
+    product_id = client.post(
+        f"/businesses/{business_id}/products", json={"description": "Ring"}
+    ).json()["id"]
+    image = client.post(
+        f"/businesses/{business_id}/products/{product_id}/images",
+        files={"file": ("ring.jpg", b"\xff\xd8\xff\xe0fake", "image/jpeg")},
+    ).json()
+    audience_id = _create_audience(client, business_id)
+    campaign_id = client.post(
+        f"/businesses/{business_id}/campaigns",
+        json={"objective": "SALES", "productId": product_id, "audienceId": audience_id},
+    ).json()["id"]
+    _generate_strategy(client, business_id, campaign_id)
+    generated = client.post(
+        f"/businesses/{business_id}/campaigns/{campaign_id}/creatives"
+    ).json()
+
+    seeder = Prisma()
+    await seeder.connect()
+    await seeder.campaign.update(
+        where={"id": campaign_id},
+        data={"product": {"disconnect": True}, "audience": {"disconnect": True}},
+    )
+    await seeder.disconnect()
+
+    response = client.post(
+        f"/businesses/{business_id}/campaigns/{campaign_id}"
+        f"/creatives/{generated[0]['id']}/select",
+        json={"productImageId": image["id"]},
+    )
+
+    assert response.status_code == 428
+    assert "product" in response.json()["detail"].lower()
+    assert "audience" in response.json()["detail"].lower()
 
 
 def test_full_flow_can_be_approved_after_selecting_an_ad(client: TestClient) -> None:
