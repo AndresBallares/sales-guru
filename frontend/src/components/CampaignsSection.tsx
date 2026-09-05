@@ -747,7 +747,7 @@ export function CampaignsSection({
                     )}
                   </div>
                 ) : (
-                  <div className="strategy-step">
+                  <>
                     <button
                       type="button"
                       onClick={() => handleGenerateStrategy(campaign.id)}
@@ -767,25 +767,23 @@ export function CampaignsSection({
                     {needsAdExperienceAnswerId === campaign.id && (
                       <fieldset>
                         <legend>Has this business run advertising campaigns before?</legend>
-                        <div className="button-row">
-                          <button
-                            type="button"
-                            onClick={() => handleGenerateStrategy(campaign.id, true)}
-                            disabled={generatingId === campaign.id}
-                          >
-                            Yes
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => handleGenerateStrategy(campaign.id, false)}
-                            disabled={generatingId === campaign.id}
-                          >
-                            No
-                          </button>
-                        </div>
+                        <button
+                          type="button"
+                          onClick={() => handleGenerateStrategy(campaign.id, true)}
+                          disabled={generatingId === campaign.id}
+                        >
+                          Yes
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleGenerateStrategy(campaign.id, false)}
+                          disabled={generatingId === campaign.id}
+                        >
+                          No
+                        </button>
                       </fieldset>
                     )}
-                  </div>
+                  </>
                 )}
                 {strategy && (
                   <div aria-label={`Strategy for ${campaign.name ?? campaign.id}`}>
