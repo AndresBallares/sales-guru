@@ -1,8 +1,17 @@
 import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
+import type { ReactElement } from 'react'
+import { MemoryRouter } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { CampaignsSection } from './CampaignsSection'
 import * as api from '../lib/api'
+
+// Selecting a creative navigates to its dedicated ad-preview page
+// (useNavigate), which needs a Router in scope even though nothing here
+// asserts on the resulting route.
+function renderCampaigns(ui: ReactElement) {
+  return render(<MemoryRouter>{ui}</MemoryRouter>)
+}
 
 vi.mock('../lib/api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../lib/api')>()
@@ -300,7 +309,7 @@ describe('CampaignsSection', () => {
       },
     ])
 
-    render(<CampaignsSection businessId="biz-1" />)
+    renderCampaigns(<CampaignsSection businessId="biz-1" />)
 
     expect(await screen.findByText('Sales — DRAFT')).toBeInTheDocument()
   })
@@ -323,7 +332,7 @@ describe('CampaignsSection', () => {
       },
     ])
 
-    render(<CampaignsSection businessId="biz-1" />)
+    renderCampaigns(<CampaignsSection businessId="biz-1" />)
 
     expect(
       await screen.findByText('Custom Colombian Emerald Ring — Sales — DRAFT'),
@@ -333,7 +342,7 @@ describe('CampaignsSection', () => {
   it('shows an empty state when there are no campaigns', async () => {
     mockedApi.listCampaigns.mockResolvedValue([])
 
-    render(<CampaignsSection businessId="biz-1" />)
+    renderCampaigns(<CampaignsSection businessId="biz-1" />)
 
     expect(await screen.findByText(/No campaigns yet/)).toBeInTheDocument()
   })
@@ -341,7 +350,7 @@ describe('CampaignsSection', () => {
   it('shows an error if the campaign list fails to load', async () => {
     mockedApi.listCampaigns.mockRejectedValue(new api.ApiError(500, 'Server error'))
 
-    render(<CampaignsSection businessId="biz-1" />)
+    renderCampaigns(<CampaignsSection businessId="biz-1" />)
 
     expect(await screen.findByRole('alert')).toHaveTextContent('Server error')
   })
@@ -381,7 +390,7 @@ describe('CampaignsSection', () => {
     })
     const user = userEvent.setup()
 
-    render(<CampaignsSection businessId="biz-1" />)
+    renderCampaigns(<CampaignsSection businessId="biz-1" />)
     await screen.findByText(/No campaigns yet/)
 
     await user.type(screen.getByLabelText('Name'), 'Spring Sale')
@@ -400,7 +409,7 @@ describe('CampaignsSection', () => {
   it('does not offer a Product or Audience field on the create-campaign form', async () => {
     mockedApi.listCampaigns.mockResolvedValue([])
 
-    render(<CampaignsSection businessId="biz-1" />)
+    renderCampaigns(<CampaignsSection businessId="biz-1" />)
 
     await screen.findByText(/No campaigns yet/)
     expect(screen.queryByLabelText('Product')).not.toBeInTheDocument()
@@ -440,7 +449,7 @@ describe('CampaignsSection', () => {
     })
     const user = userEvent.setup()
 
-    render(<CampaignsSection businessId="biz-1" />)
+    renderCampaigns(<CampaignsSection businessId="biz-1" />)
     await screen.findByText(/No campaigns yet/)
 
     await user.selectOptions(screen.getByLabelText('Event venue'), 'jck_las_vegas')
@@ -465,7 +474,7 @@ describe('CampaignsSection', () => {
     mockedApi.createCampaign.mockRejectedValue(new api.ApiError(404, 'Product not found'))
     const user = userEvent.setup()
 
-    render(<CampaignsSection businessId="biz-1" />)
+    renderCampaigns(<CampaignsSection businessId="biz-1" />)
     await screen.findByText(/No campaigns yet/)
 
     await user.click(screen.getByRole('button', { name: 'Create campaign' }))
@@ -491,7 +500,7 @@ describe('CampaignsSection', () => {
       },
     ])
 
-    render(<CampaignsSection businessId="biz-1" />)
+    renderCampaigns(<CampaignsSection businessId="biz-1" />)
 
     expect(await screen.findByRole('heading', { name: 'Campaigns' })).toBeInTheDocument()
     expect(screen.queryByRole('heading', { name: 'Create a campaign' })).not.toBeInTheDocument()
@@ -516,7 +525,7 @@ describe('CampaignsSection', () => {
   it('shows a readiness checklist for a DRAFT campaign missing a product and audience', async () => {
     mockedApi.listCampaigns.mockResolvedValue([draftCampaignFixture])
 
-    render(<CampaignsSection businessId="biz-1" />)
+    renderCampaigns(<CampaignsSection businessId="biz-1" />)
 
     const checklist = await screen.findByLabelText('Campaign readiness for camp-1')
     expect(checklist).toHaveTextContent('✓ Objective')
@@ -539,7 +548,7 @@ describe('CampaignsSection', () => {
       },
     ])
 
-    render(<CampaignsSection businessId="biz-1" />)
+    renderCampaigns(<CampaignsSection businessId="biz-1" />)
 
     await screen.findByLabelText('Campaign readiness for camp-1')
     expect(screen.queryByLabelText('Which product?')).not.toBeInTheDocument()
@@ -574,7 +583,7 @@ describe('CampaignsSection', () => {
     })
     const user = userEvent.setup()
 
-    render(<CampaignsSection businessId="biz-1" />)
+    renderCampaigns(<CampaignsSection businessId="biz-1" />)
     await screen.findByLabelText('Campaign readiness for camp-1')
 
     await user.selectOptions(screen.getByLabelText('Which product?'), 'prod-2')
@@ -618,7 +627,7 @@ describe('CampaignsSection', () => {
     })
     const user = userEvent.setup()
 
-    render(<CampaignsSection businessId="biz-1" />)
+    renderCampaigns(<CampaignsSection businessId="biz-1" />)
     await screen.findByLabelText('Campaign readiness for camp-1')
 
     await user.selectOptions(screen.getByLabelText('Which audience?'), 'aud-2')
@@ -657,7 +666,7 @@ describe('CampaignsSection', () => {
     mockedApi.updateCampaign.mockRejectedValue(new api.ApiError(404, 'Product not found'))
     const user = userEvent.setup()
 
-    render(<CampaignsSection businessId="biz-1" />)
+    renderCampaigns(<CampaignsSection businessId="biz-1" />)
     await screen.findByLabelText('Campaign readiness for camp-1')
 
     await user.selectOptions(screen.getByLabelText('Which product?'), 'prod-2')
@@ -686,7 +695,7 @@ describe('CampaignsSection', () => {
     mockedApi.createStrategy.mockResolvedValue(FAKE_STRATEGY)
     const user = userEvent.setup()
 
-    render(<CampaignsSection businessId="biz-1" />)
+    renderCampaigns(<CampaignsSection businessId="biz-1" />)
     await screen.findByText('Sales — READY')
 
     await user.click(screen.getByRole('button', { name: 'Generate strategy' }))
@@ -725,7 +734,7 @@ describe('CampaignsSection', () => {
     )
     const user = userEvent.setup()
 
-    render(<CampaignsSection businessId="biz-1" />)
+    renderCampaigns(<CampaignsSection businessId="biz-1" />)
     await screen.findByText('Sales — READY')
 
     await user.click(screen.getByRole('button', { name: 'Generate strategy' }))
@@ -757,7 +766,7 @@ describe('CampaignsSection', () => {
       .mockResolvedValueOnce(FAKE_STRATEGY)
     const user = userEvent.setup()
 
-    render(<CampaignsSection businessId="biz-1" />)
+    renderCampaigns(<CampaignsSection businessId="biz-1" />)
     await screen.findByText('Sales — READY')
 
     await user.click(screen.getByRole('button', { name: 'Generate strategy' }))
@@ -797,7 +806,7 @@ describe('CampaignsSection', () => {
     })
     const user = userEvent.setup()
 
-    render(<CampaignsSection businessId="biz-1" />)
+    renderCampaigns(<CampaignsSection businessId="biz-1" />)
     await screen.findByText('Sales — READY')
 
     await user.click(screen.getByRole('button', { name: 'Generate strategy' }))
@@ -833,7 +842,7 @@ describe('CampaignsSection', () => {
     ])
     mockedApi.getStrategy.mockResolvedValue(FAKE_STRATEGY)
 
-    render(<CampaignsSection businessId="biz-1" />)
+    renderCampaigns(<CampaignsSection businessId="biz-1" />)
 
     expect(await screen.findByText(/Custom emerald rings/)).toBeInTheDocument()
     expect(mockedApi.getStrategy).toHaveBeenCalledWith('biz-1', 'camp-1')
@@ -863,7 +872,7 @@ describe('CampaignsSection', () => {
     ])
     const user = userEvent.setup()
 
-    render(<CampaignsSection businessId="biz-1" />)
+    renderCampaigns(<CampaignsSection businessId="biz-1" />)
     await screen.findByText(/Custom emerald rings/)
 
     await user.click(screen.getByRole('button', { name: 'Generate ads' }))
@@ -900,7 +909,7 @@ describe('CampaignsSection', () => {
     )
     const user = userEvent.setup()
 
-    render(<CampaignsSection businessId="biz-1" />)
+    renderCampaigns(<CampaignsSection businessId="biz-1" />)
     await screen.findByText(/Custom emerald rings/)
 
     await user.click(screen.getByRole('button', { name: 'Generate ads' }))
@@ -930,7 +939,7 @@ describe('CampaignsSection', () => {
     mockedApi.getStrategy.mockResolvedValue(FAKE_STRATEGY)
     mockedApi.listCreatives.mockResolvedValue([fakeCreative()])
 
-    render(<CampaignsSection businessId="biz-1" />)
+    renderCampaigns(<CampaignsSection businessId="biz-1" />)
 
     expect(await screen.findByText('Emeralds With a Story')).toBeInTheDocument()
     expect(mockedApi.listCreatives).toHaveBeenCalledWith('biz-1', 'camp-1')
@@ -971,7 +980,7 @@ describe('CampaignsSection', () => {
     )
     const user = userEvent.setup()
 
-    render(<CampaignsSection businessId="biz-1" />)
+    renderCampaigns(<CampaignsSection businessId="biz-1" />)
     await screen.findByText('Headline A')
 
     await user.click(screen.getAllByRole('button', { name: 'Select this ad' })[0])
@@ -1011,7 +1020,7 @@ describe('CampaignsSection', () => {
       fakeCreative({ id: 'creative-1', headline: 'Headline A', status: 'SELECTED' }),
     ])
 
-    render(<CampaignsSection businessId="biz-1" />)
+    renderCampaigns(<CampaignsSection businessId="biz-1" />)
 
     expect(await screen.findByRole('button', { name: 'Selected' })).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Upload Image' })).not.toBeInTheDocument()
@@ -1053,7 +1062,7 @@ describe('CampaignsSection', () => {
     )
     const user = userEvent.setup()
 
-    render(<CampaignsSection businessId="biz-1" />)
+    renderCampaigns(<CampaignsSection businessId="biz-1" />)
     await screen.findByRole('button', { name: 'Selected' })
 
     await user.click(screen.getByRole('button', { name: 'Upload Image' }))
@@ -1109,7 +1118,7 @@ describe('CampaignsSection', () => {
     )
     const user = userEvent.setup()
 
-    render(<CampaignsSection businessId="biz-1" />)
+    renderCampaigns(<CampaignsSection businessId="biz-1" />)
     await screen.findByRole('button', { name: 'Selected' })
 
     await user.click(screen.getByRole('button', { name: 'Upload Image' }))
@@ -1151,7 +1160,7 @@ describe('CampaignsSection', () => {
     mockedApi.uploadProductImage.mockRejectedValue(new api.ApiError(500, 'Server error'))
     const user = userEvent.setup()
 
-    render(<CampaignsSection businessId="biz-1" />)
+    renderCampaigns(<CampaignsSection businessId="biz-1" />)
     await screen.findByRole('button', { name: 'Selected' })
 
     await user.click(screen.getByRole('button', { name: 'Upload Image' }))
@@ -1184,7 +1193,7 @@ describe('CampaignsSection', () => {
     mockedApi.listProductImages.mockResolvedValue([])
     const user = userEvent.setup()
 
-    render(<CampaignsSection businessId="biz-1" />)
+    renderCampaigns(<CampaignsSection businessId="biz-1" />)
     await screen.findByRole('button', { name: 'Selected' })
 
     await user.click(screen.getByRole('button', { name: 'Upload Image' }))
@@ -1218,7 +1227,7 @@ describe('CampaignsSection', () => {
     ])
     const user = userEvent.setup()
 
-    render(<CampaignsSection businessId="biz-1" />)
+    renderCampaigns(<CampaignsSection businessId="biz-1" />)
     await screen.findByRole('button', { name: 'Selected' })
     expect(screen.queryByText('Headline B')).not.toBeInTheDocument()
 
@@ -1250,7 +1259,7 @@ describe('CampaignsSection', () => {
     ])
     const user = userEvent.setup()
 
-    render(<CampaignsSection businessId="biz-1" />)
+    renderCampaigns(<CampaignsSection businessId="biz-1" />)
     await screen.findByRole('button', { name: 'Selected' })
 
     await user.click(screen.getByRole('button', { name: 'Upload Image' }))
@@ -1283,7 +1292,7 @@ describe('CampaignsSection', () => {
     mockedApi.listProductImages.mockRejectedValue(new Error('Network down'))
     const user = userEvent.setup()
 
-    render(<CampaignsSection businessId="biz-1" />)
+    renderCampaigns(<CampaignsSection businessId="biz-1" />)
     await screen.findByRole('button', { name: 'Selected' })
 
     await user.click(screen.getByRole('button', { name: 'Upload Image' }))
@@ -1322,7 +1331,7 @@ describe('CampaignsSection', () => {
     mockedApi.selectCreative.mockRejectedValue(new api.ApiError(500, 'Server error'))
     const user = userEvent.setup()
 
-    render(<CampaignsSection businessId="biz-1" />)
+    renderCampaigns(<CampaignsSection businessId="biz-1" />)
     await screen.findByRole('button', { name: 'Selected' })
 
     await user.click(screen.getByRole('button', { name: 'Upload Image' }))
@@ -1362,7 +1371,7 @@ describe('CampaignsSection', () => {
       }),
     ])
 
-    render(<CampaignsSection businessId="biz-1" />)
+    renderCampaigns(<CampaignsSection businessId="biz-1" />)
 
     const image = await screen.findByAltText('Creative A')
     expect(image).toHaveAttribute('src', 'http://localhost:8000/product-images/img-1')
@@ -1390,7 +1399,7 @@ describe('CampaignsSection', () => {
     mockedApi.selectCreative.mockRejectedValue(new Error('Network error'))
     const user = userEvent.setup()
 
-    render(<CampaignsSection businessId="biz-1" />)
+    renderCampaigns(<CampaignsSection businessId="biz-1" />)
     await screen.findByText('Emeralds With a Story')
 
     await user.click(screen.getByRole('button', { name: 'Select this ad' }))
@@ -1463,7 +1472,7 @@ describe('CampaignsSection', () => {
     })
     const user = userEvent.setup()
 
-    render(<CampaignsSection businessId="biz-1" />)
+    renderCampaigns(<CampaignsSection businessId="biz-1" />)
     await screen.findByText('Sales — PENDING_APPROVAL')
 
     await user.click(screen.getByRole('button', { name: 'Approve & Publish' }))
@@ -1525,7 +1534,7 @@ describe('CampaignsSection', () => {
     })
     const user = userEvent.setup()
 
-    render(<CampaignsSection businessId="biz-1" />)
+    renderCampaigns(<CampaignsSection businessId="biz-1" />)
     await screen.findByText(/Live on Meta/)
 
     await user.click(screen.getByRole('button', { name: 'Pause campaign' }))
@@ -1557,7 +1566,7 @@ describe('CampaignsSection', () => {
     )
     const user = userEvent.setup()
 
-    render(<CampaignsSection businessId="biz-1" />)
+    renderCampaigns(<CampaignsSection businessId="biz-1" />)
     await screen.findByText(/Live on Meta/)
 
     await user.click(screen.getByRole('button', { name: 'Pause campaign' }))
@@ -1585,7 +1594,7 @@ describe('CampaignsSection', () => {
     mockedApi.pauseCampaign.mockRejectedValue(new Error('network down'))
     const user = userEvent.setup()
 
-    render(<CampaignsSection businessId="biz-1" />)
+    renderCampaigns(<CampaignsSection businessId="biz-1" />)
     await screen.findByText(/Live on Meta/)
 
     await user.click(screen.getByRole('button', { name: 'Pause campaign' }))
@@ -1611,7 +1620,7 @@ describe('CampaignsSection', () => {
       },
     ])
 
-    render(<CampaignsSection businessId="biz-1" />)
+    renderCampaigns(<CampaignsSection businessId="biz-1" />)
 
     expect(await screen.findByText('Paused')).toBeInTheDocument()
   })
@@ -1634,7 +1643,7 @@ describe('CampaignsSection', () => {
       },
     ])
 
-    render(<CampaignsSection businessId="biz-1" />)
+    renderCampaigns(<CampaignsSection businessId="biz-1" />)
 
     expect(
       await screen.findByText(/Daily spend above 1\.25x budget/),
@@ -1661,7 +1670,7 @@ describe('CampaignsSection', () => {
       },
     ])
 
-    render(<CampaignsSection businessId="biz-1" />)
+    renderCampaigns(<CampaignsSection businessId="biz-1" />)
     await screen.findByText(/Live on Meta/)
 
     expect(screen.queryByText(/Daily spend above/)).not.toBeInTheDocument()
@@ -1702,7 +1711,7 @@ describe('CampaignsSection', () => {
     })
     const user = userEvent.setup()
 
-    render(<CampaignsSection businessId="biz-1" />)
+    renderCampaigns(<CampaignsSection businessId="biz-1" />)
 
     await user.click(await screen.findByRole('button', { name: 'Retry publish' }))
 
@@ -1732,7 +1741,7 @@ describe('CampaignsSection', () => {
     mockedApi.getStrategy.mockResolvedValue(FAKE_STRATEGY)
     mockedApi.listCreatives.mockResolvedValue([fakeCreative()])
 
-    render(<CampaignsSection businessId="biz-1" />)
+    renderCampaigns(<CampaignsSection businessId="biz-1" />)
     await screen.findByText('Emeralds With a Story')
 
     expect(
@@ -1764,7 +1773,7 @@ describe('CampaignsSection', () => {
     )
     const user = userEvent.setup()
 
-    render(<CampaignsSection businessId="biz-1" />)
+    renderCampaigns(<CampaignsSection businessId="biz-1" />)
     await screen.findByText('Sales — PENDING_APPROVAL')
 
     await user.click(screen.getByRole('button', { name: 'Approve & Publish' }))
@@ -1813,7 +1822,7 @@ describe('CampaignsSection', () => {
     )
     const user = userEvent.setup()
 
-    render(<CampaignsSection businessId="biz-1" />)
+    renderCampaigns(<CampaignsSection businessId="biz-1" />)
     await screen.findByText('Sales — PENDING_APPROVAL')
 
     await user.click(screen.getByRole('button', { name: 'Approve & Publish' }))
@@ -1842,7 +1851,7 @@ describe('CampaignsSection', () => {
     ])
     mockedApi.listMetrics.mockResolvedValue([fakeMetric()])
 
-    render(<CampaignsSection businessId="biz-1" />)
+    renderCampaigns(<CampaignsSection businessId="biz-1" />)
 
     expect(await screen.findByText(/Live on Meta/)).toBeInTheDocument()
     expect(mockedApi.listMetrics).toHaveBeenCalledWith('biz-1', 'camp-1')
@@ -1872,7 +1881,7 @@ describe('CampaignsSection', () => {
     )
     const user = userEvent.setup()
 
-    render(<CampaignsSection businessId="biz-1" />)
+    renderCampaigns(<CampaignsSection businessId="biz-1" />)
     await screen.findByText(/Live on Meta/)
 
     await user.click(screen.getByRole('button', { name: 'Refresh results' }))
@@ -1903,7 +1912,7 @@ describe('CampaignsSection', () => {
     )
     const user = userEvent.setup()
 
-    render(<CampaignsSection businessId="biz-1" />)
+    renderCampaigns(<CampaignsSection businessId="biz-1" />)
     await screen.findByText(/Live on Meta/)
 
     await user.click(screen.getByRole('button', { name: 'Refresh results' }))
@@ -1929,7 +1938,7 @@ describe('CampaignsSection', () => {
       },
     ])
 
-    render(<CampaignsSection businessId="biz-1" />)
+    renderCampaigns(<CampaignsSection businessId="biz-1" />)
     await screen.findByText('Sales — APPROVED')
 
     expect(
@@ -1956,7 +1965,7 @@ describe('CampaignsSection', () => {
     ])
     mockedApi.listRecommendations.mockResolvedValue([fakeRecommendation()])
 
-    render(<CampaignsSection businessId="biz-1" />)
+    renderCampaigns(<CampaignsSection businessId="biz-1" />)
 
     expect(await screen.findByText('Increase budget')).toBeInTheDocument()
     expect(mockedApi.listRecommendations).toHaveBeenCalledWith('biz-1', 'camp-1')
@@ -1987,7 +1996,7 @@ describe('CampaignsSection', () => {
     mockedApi.createRecommendation.mockResolvedValue(fakeRecommendation())
     const user = userEvent.setup()
 
-    render(<CampaignsSection businessId="biz-1" />)
+    renderCampaigns(<CampaignsSection businessId="biz-1" />)
     await screen.findByText(/Live on Meta/)
 
     await user.click(screen.getByRole('button', { name: 'Analyze now' }))
@@ -2018,7 +2027,7 @@ describe('CampaignsSection', () => {
     )
     const user = userEvent.setup()
 
-    render(<CampaignsSection businessId="biz-1" />)
+    renderCampaigns(<CampaignsSection businessId="biz-1" />)
     await screen.findByText(/Live on Meta/)
 
     await user.click(screen.getByRole('button', { name: 'Analyze now' }))
@@ -2049,7 +2058,7 @@ describe('CampaignsSection', () => {
     )
     const user = userEvent.setup()
 
-    render(<CampaignsSection businessId="biz-1" />)
+    renderCampaigns(<CampaignsSection businessId="biz-1" />)
     await screen.findByText('Increase budget')
 
     await user.click(screen.getByRole('button', { name: 'Approve' }))
@@ -2084,7 +2093,7 @@ describe('CampaignsSection', () => {
     )
     const user = userEvent.setup()
 
-    render(<CampaignsSection businessId="biz-1" />)
+    renderCampaigns(<CampaignsSection businessId="biz-1" />)
     await screen.findByText('Increase budget')
 
     await user.click(screen.getByRole('button', { name: 'Reject' }))
@@ -2119,7 +2128,7 @@ describe('CampaignsSection', () => {
     )
     const user = userEvent.setup()
 
-    render(<CampaignsSection businessId="biz-1" />)
+    renderCampaigns(<CampaignsSection businessId="biz-1" />)
     await screen.findByText('Increase budget')
 
     await user.click(screen.getByRole('button', { name: 'Approve' }))
@@ -2148,7 +2157,7 @@ describe('CampaignsSection', () => {
     mockedApi.rejectRecommendation.mockRejectedValue(new Error('Network error'))
     const user = userEvent.setup()
 
-    render(<CampaignsSection businessId="biz-1" />)
+    renderCampaigns(<CampaignsSection businessId="biz-1" />)
     await screen.findByText('Increase budget')
 
     await user.click(screen.getByRole('button', { name: 'Reject' }))
@@ -2179,7 +2188,7 @@ describe('CampaignsSection', () => {
       fakeRecommendation({ status: 'APPLIED' }),
     ])
 
-    render(<CampaignsSection businessId="biz-1" />)
+    renderCampaigns(<CampaignsSection businessId="biz-1" />)
     await screen.findByText('Increase budget')
 
     expect(screen.queryByRole('button', { name: 'Approve' })).not.toBeInTheDocument()
@@ -2207,7 +2216,7 @@ describe('CampaignsSection', () => {
       fakeRecommendation({ status: 'APPLIED', requiresApproval: false }),
     ])
 
-    render(<CampaignsSection businessId="biz-1" />)
+    renderCampaigns(<CampaignsSection businessId="biz-1" />)
 
     expect(await screen.findByText(/Applied automatically/)).toBeInTheDocument()
   })
@@ -2233,7 +2242,7 @@ describe('CampaignsSection', () => {
       fakeRecommendation({ status: 'APPLIED', requiresApproval: true }),
     ])
 
-    render(<CampaignsSection businessId="biz-1" />)
+    renderCampaigns(<CampaignsSection businessId="biz-1" />)
 
     expect(await screen.findByText(/APPLIED/)).toBeInTheDocument()
     expect(screen.queryByText(/Applied automatically/)).not.toBeInTheDocument()
@@ -2257,7 +2266,7 @@ describe('CampaignsSection', () => {
       },
     ])
 
-    render(<CampaignsSection businessId="biz-1" />)
+    renderCampaigns(<CampaignsSection businessId="biz-1" />)
     await screen.findByText('Sales — APPROVED')
 
     expect(screen.queryByRole('button', { name: 'Analyze now' })).not.toBeInTheDocument()
@@ -2288,7 +2297,7 @@ describe('CampaignsSection', () => {
     })
     mockedApi.listTestEvaluations.mockResolvedValue([fakeTestEvaluation()])
 
-    render(<CampaignsSection businessId="biz-1" />)
+    renderCampaigns(<CampaignsSection businessId="biz-1" />)
 
     expect(await screen.findByText(/SUFFICIENT_DATA/)).toBeInTheDocument()
     expect(
@@ -2322,7 +2331,7 @@ describe('CampaignsSection', () => {
     mockedApi.createTestEvaluation.mockResolvedValue(fakeTestEvaluation())
     const user = userEvent.setup()
 
-    render(<CampaignsSection businessId="biz-1" />)
+    renderCampaigns(<CampaignsSection businessId="biz-1" />)
     await screen.findByText(/Live on Meta/)
 
     await user.click(screen.getByRole('button', { name: 'Evaluate test' }))
@@ -2359,7 +2368,7 @@ describe('CampaignsSection', () => {
     )
     const user = userEvent.setup()
 
-    render(<CampaignsSection businessId="biz-1" />)
+    renderCampaigns(<CampaignsSection businessId="biz-1" />)
     await screen.findByText(/Live on Meta/)
 
     await user.click(screen.getByRole('button', { name: 'Evaluate test' }))
@@ -2387,7 +2396,7 @@ describe('CampaignsSection', () => {
       },
     ])
 
-    render(<CampaignsSection businessId="biz-1" />)
+    renderCampaigns(<CampaignsSection businessId="biz-1" />)
     await screen.findByText(/Live on Meta/)
 
     expect(screen.queryByRole('button', { name: 'Evaluate test' })).not.toBeInTheDocument()

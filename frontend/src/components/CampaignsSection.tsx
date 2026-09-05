@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState, type ChangeEvent, type FormEvent } from 'react'
+import { useNavigate } from 'react-router-dom'
 import {
   ApiError,
   approveCampaign,
@@ -60,7 +61,7 @@ const ACTION_LABELS: Record<ActionType, string> = {
   DECREASE_BUDGET: 'Decrease budget',
 }
 
-const CTA_LABELS: Record<Cta, string> = {
+export const CTA_LABELS: Record<Cta, string> = {
   SHOP_NOW: 'Shop Now',
   LEARN_MORE: 'Learn More',
   SIGN_UP: 'Sign Up',
@@ -81,6 +82,7 @@ export function CampaignsSection({
   businessId: string
   onCampaignsChange?: (campaigns: Campaign[]) => void
 }) {
+  const navigate = useNavigate()
   const [campaigns, setCampaigns] = useState<Campaign[]>([])
   const [products, setProducts] = useState<Product[]>([])
   const [audiences, setAudiences] = useState<Audience[]>([])
@@ -371,6 +373,9 @@ export function CampaignsSection({
       // Selecting an ad advances campaign.status to PENDING_APPROVAL on the
       // backend — refresh so the Approve button appears without a reload.
       await refresh()
+      // The dedicated ad page owns the preview/image-upload/Approve &
+      // Publish flow from here — see AdPreviewPage.
+      navigate(`/businesses/${businessId}/campaigns/${campaignId}/ad`)
     } catch (err) {
       setCreativeErrors((prev) => ({
         ...prev,
