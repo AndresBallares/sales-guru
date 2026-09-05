@@ -137,7 +137,8 @@ def _create_campaign(client: TestClient, business_id: str) -> str:
     campaign_readiness.py).
     """
     product_id = client.post(
-        f"/businesses/{business_id}/products", json={"description": "Ring"}
+        f"/businesses/{business_id}/products",
+        json={"description": "Ring", "url": "https://acme.example/ring"},
     ).json()["id"]
     audience_id = client.post(
         f"/businesses/{business_id}/audiences",

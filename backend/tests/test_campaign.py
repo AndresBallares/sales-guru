@@ -19,12 +19,21 @@ def _create_business(client: TestClient, name: str = "Acme Widgets") -> str:
 
 
 def _create_product(
-    client: TestClient, business_id: str, description: str = "Widgets"
+    client: TestClient,
+    business_id: str,
+    description: str = "Widgets",
+    url: str | None = None,
 ) -> str:
-    """Create a product under a business, return its id."""
-    response = client.post(
-        f"/businesses/{business_id}/products", json={"description": description}
-    )
+    """Create a product under a business, return its id.
+
+    url defaults to None, but a SALES/TRAFFIC campaign missing a product
+    requires one (app/services/url_validation.py) — pass one explicitly
+    whenever the test attaches this product to such a campaign.
+    """
+    payload: dict[str, str] = {"description": description}
+    if url is not None:
+        payload["url"] = url
+    response = client.post(f"/businesses/{business_id}/products", json=payload)
     id_: str = response.json()["id"]
     return id_
 
@@ -245,6 +254,81 @@ def test_create_campaign_404s_for_a_product_from_another_business(
     assert response.json()["detail"] == "Product not found"
 
 
+def test_create_campaign_rejects_a_sales_objective_with_a_urlless_product(
+    client: TestClient,
+) -> None:
+    """Binding a SALES campaign to a product with no destination URL 422s."""
+    _signed_up_client(client)
+    business_id = _create_business(client)
+    product_id = _create_product(client, business_id)
+
+    response = client.post(
+        f"/businesses/{business_id}/campaigns",
+        json={"objective": "SALES", "productId": product_id},
+    )
+
+    assert response.status_code == 422
+
+
+def test_create_campaign_rejects_a_traffic_objective_with_a_urlless_product(
+    client: TestClient,
+) -> None:
+    """Same rule for TRAFFIC as for SALES."""
+    _signed_up_client(client)
+    business_id = _create_business(client)
+    product_id = _create_product(client, business_id)
+
+    response = client.post(
+        f"/businesses/{business_id}/campaigns",
+        json={"objective": "TRAFFIC", "productId": product_id},
+    )
+
+    assert response.status_code == 422
+
+
+def test_create_campaign_allows_an_awareness_objective_with_a_urlless_product(
+    client: TestClient,
+) -> None:
+    """AWARENESS doesn't need a click-through destination at the product level."""
+    _signed_up_client(client)
+    business_id = _create_business(client)
+    product_id = _create_product(client, business_id)
+
+    response = client.post(
+        f"/businesses/{business_id}/campaigns",
+        json={"objective": "AWARENESS", "productId": product_id},
+    )
+
+    assert response.status_code == 201
+
+
+def test_update_campaign_rejects_binding_a_urlless_product_to_a_sales_campaign(
+    client: TestClient,
+) -> None:
+    """The same rule applies to the manual product-binding fallback."""
+    _signed_up_client(client)
+    business_id = _create_business(client)
+    # Two products (rather than one) so auto-attach can't decide and leaves
+    # the campaign alone — the manual PATCH below is what actually binds it.
+    product_id = _create_product(client, business_id, description="First product")
+    _create_product(
+        client,
+        business_id,
+        description="Second product",
+        url="https://acme.example/second",
+    )
+    campaign_id = client.post(
+        f"/businesses/{business_id}/campaigns", json={"objective": "SALES"}
+    ).json()["id"]
+
+    response = client.patch(
+        f"/businesses/{business_id}/campaigns/{campaign_id}",
+        json={"productId": product_id},
+    )
+
+    assert response.status_code == 422
+
+
 def test_create_campaign_404s_for_an_audience_from_another_business(
     client: TestClient,
 ) -> None:
@@ -337,7 +421,9 @@ def test_create_campaign_with_only_a_product_stays_draft(client: TestClient) -> 
     """Only one of product/audience set isn't enough to reach READY."""
     _signed_up_client(client)
     business_id = _create_business(client)
-    product_id = _create_product(client, business_id)
+    product_id = _create_product(
+        client, business_id, url="https://acme.example/widgets"
+    )
 
     response = client.post(
         f"/businesses/{business_id}/campaigns",
@@ -358,7 +444,9 @@ def test_creating_a_product_auto_attaches_it_to_a_draft_campaign(
         f"/businesses/{business_id}/campaigns", json={"objective": "SALES"}
     ).json()["id"]
 
-    product_id = _create_product(client, business_id)
+    product_id = _create_product(
+        client, business_id, url="https://acme.example/widgets"
+    )
 
     campaign = client.get(f"/businesses/{business_id}/campaigns").json()[0]
     assert campaign["id"] == campaign_id
@@ -373,7 +461,7 @@ def test_creating_an_audience_auto_attaches_it_and_completes_readiness(
     _signed_up_client(client)
     business_id = _create_business(client)
     client.post(f"/businesses/{business_id}/campaigns", json={"objective": "SALES"})
-    _create_product(client, business_id)
+    _create_product(client, business_id, url="https://acme.example/widgets")
 
     audience_id = _create_audience(client, business_id)
 
@@ -390,7 +478,12 @@ def test_a_second_product_stops_further_auto_attach(client: TestClient) -> None:
     campaign_id = client.post(
         f"/businesses/{business_id}/campaigns", json={"objective": "SALES"}
     ).json()["id"]
-    _create_product(client, business_id, description="First product")
+    _create_product(
+        client,
+        business_id,
+        description="First product",
+        url="https://acme.example/first",
+    )
 
     _create_product(client, business_id, description="Second product")
 
@@ -409,7 +502,9 @@ def test_creating_a_product_does_not_attach_to_an_already_complete_campaign(
     overwrites one that already has a different one."""
     _signed_up_client(client)
     business_id = _create_business(client)
-    original_product_id = _create_product(client, business_id, description="Original")
+    original_product_id = _create_product(
+        client, business_id, description="Original", url="https://acme.example/original"
+    )
     audience_id = _create_audience(client, business_id)
     campaign_id = client.post(
         f"/businesses/{business_id}/campaigns",
@@ -457,7 +552,12 @@ def test_update_campaign_attaches_a_product_and_audience(client: TestClient) -> 
     campaign_id = client.post(
         f"/businesses/{business_id}/campaigns", json={"objective": "SALES"}
     ).json()["id"]
-    product_id = _create_product(client, business_id, description="First product")
+    product_id = _create_product(
+        client,
+        business_id,
+        description="First product",
+        url="https://acme.example/first",
+    )
     _create_product(client, business_id, description="Second product")
     audience_id = _create_audience(client, business_id, description="First audience")
     _create_audience(client, business_id, description="Second audience")
@@ -478,7 +578,9 @@ def test_update_campaign_only_changes_provided_fields(client: TestClient) -> Non
     """Omitting a field in the PATCH body leaves it exactly as it was."""
     _signed_up_client(client)
     business_id = _create_business(client)
-    product_id = _create_product(client, business_id)
+    product_id = _create_product(
+        client, business_id, url="https://acme.example/widgets"
+    )
     campaign_id = client.post(
         f"/businesses/{business_id}/campaigns",
         json={"objective": "SALES", "productId": product_id},

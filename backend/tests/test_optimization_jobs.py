@@ -204,7 +204,8 @@ def _publish_campaign(client: TestClient, business_id: str) -> str:
         The new campaign's id.
     """
     product_id = client.post(
-        f"/businesses/{business_id}/products", json={"description": "Ring"}
+        f"/businesses/{business_id}/products",
+        json={"description": "Ring", "url": "https://acme.example/ring"},
     ).json()["id"]
     audience_id = client.post(
         f"/businesses/{business_id}/audiences",

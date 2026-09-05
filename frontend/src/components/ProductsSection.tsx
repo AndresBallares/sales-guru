@@ -3,12 +3,19 @@ import {
   ApiError,
   createProduct,
   deleteProductImage,
+  listCampaigns,
   listProductImages,
   listProducts,
   uploadProductImage,
   type Product,
   type ProductImage,
 } from '../lib/api'
+import {
+  DESTINATION_URL_ERROR_MESSAGE,
+  isValidDestinationUrl,
+  normalizeDestinationUrl,
+  requiresDestinationUrl,
+} from '../lib/urlValidation'
 
 export function ProductsSection({
   businessId,
@@ -27,6 +34,8 @@ export function ProductsSection({
   const [features, setFeatures] = useState('')
   const [benefits, setBenefits] = useState('')
   const [url, setUrl] = useState('')
+  const [urlFieldError, setUrlFieldError] = useState<string | null>(null)
+  const [urlRequired, setUrlRequired] = useState(false)
   const [formError, setFormError] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
 
@@ -49,6 +58,18 @@ export function ProductsSection({
         ),
       )
       setImages(Object.fromEntries(entries))
+
+      // A campaign still missing a product (auto-attach's target) whose
+      // objective needs a click-through destination makes the URL field
+      // required — the backend's own check (app/api/product.py's
+      // _product_url_is_required) is authoritative; this just avoids a
+      // round-trip for the common case.
+      const campaigns = await listCampaigns(businessId)
+      setUrlRequired(
+        campaigns.some(
+          (campaign) => campaign.productId === null && requiresDestinationUrl(campaign.objective),
+        ),
+      )
     } catch (err) {
       setListError(err instanceof ApiError ? err.message : 'Could not load products.')
     } finally {
@@ -60,9 +81,23 @@ export function ProductsSection({
     void refresh()
   }, [refresh])
 
+  function handleUrlBlur() {
+    if (!url) {
+      setUrlFieldError(null)
+      return
+    }
+    const normalized = normalizeDestinationUrl(url)
+    setUrl(normalized)
+    setUrlFieldError(isValidDestinationUrl(normalized) ? null : DESTINATION_URL_ERROR_MESSAGE)
+  }
+
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     setFormError(null)
+    if (url && !isValidDestinationUrl(url)) {
+      setUrlFieldError(DESTINATION_URL_ERROR_MESSAGE)
+      return
+    }
     setSubmitting(true)
     try {
       await createProduct(businessId, {
@@ -71,7 +106,7 @@ export function ProductsSection({
         margin: margin ? Number(margin) : undefined,
         features: features || undefined,
         benefits: benefits || undefined,
-        url: url || undefined,
+        url: url ? normalizeDestinationUrl(url) : undefined,
       })
       setDescription('')
       setPrice('')
@@ -79,6 +114,7 @@ export function ProductsSection({
       setFeatures('')
       setBenefits('')
       setUrl('')
+      setUrlFieldError(null)
       await refresh()
     } catch (err) {
       setFormError(err instanceof ApiError ? err.message : 'Could not create product.')
@@ -244,16 +280,30 @@ export function ProductsSection({
             <label htmlFor="url">
               URL{' '}
               <span className="field-hint">
-                (destination link the ad's CTA button takes people to when clicked)
+                (destination link the ad's CTA button takes people to when clicked
+                {urlRequired
+                  ? ' — required for a Sales or Traffic campaign'
+                  : ' — optional for brand awareness'}
+                )
               </span>
             </label>
             <input
               id="url"
-              type="url"
-              required
+              type="text"
+              required={urlRequired}
               value={url}
-              onChange={(event) => setUrl(event.target.value)}
+              onChange={(event) => {
+                setUrl(event.target.value)
+                setUrlFieldError(null)
+              }}
+              onBlur={handleUrlBlur}
+              aria-invalid={urlFieldError ? true : undefined}
             />
+            {urlFieldError && (
+              <p className="form-error" role="alert">
+                {urlFieldError}
+              </p>
+            )}
           </div>
           {formError && (
             <p className="form-error" role="alert">

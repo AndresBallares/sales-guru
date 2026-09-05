@@ -13,15 +13,17 @@ vi.mock('../lib/api', async (importOriginal) => {
     listProductImages: vi.fn<typeof actual.listProductImages>(),
     uploadProductImage: vi.fn<typeof actual.uploadProductImage>(),
     deleteProductImage: vi.fn<typeof actual.deleteProductImage>(),
+    listCampaigns: vi.fn<typeof actual.listCampaigns>(),
   }
 })
 const mockedApi = vi.mocked(api)
 
 beforeEach(() => {
   vi.resetAllMocks()
-  // Sane default so tests unrelated to images don't need to mock this
-  // per-product-image-list call themselves.
+  // Sane defaults so tests unrelated to images/campaigns don't need to
+  // mock these per-refresh calls themselves.
   mockedApi.listProductImages.mockResolvedValue([])
+  mockedApi.listCampaigns.mockResolvedValue([])
 })
 
 describe('ProductsSection', () => {
@@ -162,6 +164,127 @@ describe('ProductsSection', () => {
       }),
     )
     expect(await screen.findByRole('alert')).toHaveTextContent('Invalid price')
+  })
+
+  it('marks the URL field required when a pending campaign needs one', async () => {
+    mockedApi.listProducts.mockResolvedValue([])
+    mockedApi.listCampaigns.mockResolvedValue([
+      {
+        id: 'camp-1',
+        name: null,
+        objective: 'SALES',
+        status: 'DRAFT',
+        productId: null,
+        audienceId: null,
+        metaCampaignId: null,
+        eventVenueKey: null,
+        startDate: null,
+        endDate: null,
+        pausedReason: null,
+        dailySpendFlag: null,
+      },
+    ])
+
+    render(<ProductsSection businessId="biz-1" />)
+    await screen.findByText(/No products yet/)
+
+    expect(screen.getByLabelText(/^URL/)).toBeRequired()
+    expect(screen.getByText(/required for a Sales or Traffic campaign/)).toBeInTheDocument()
+  })
+
+  it('leaves the URL field optional when no pending campaign needs one', async () => {
+    mockedApi.listProducts.mockResolvedValue([])
+    mockedApi.listCampaigns.mockResolvedValue([
+      {
+        id: 'camp-1',
+        name: null,
+        objective: 'AWARENESS',
+        status: 'DRAFT',
+        productId: null,
+        audienceId: null,
+        metaCampaignId: null,
+        eventVenueKey: null,
+        startDate: null,
+        endDate: null,
+        pausedReason: null,
+        dailySpendFlag: null,
+      },
+    ])
+
+    render(<ProductsSection businessId="biz-1" />)
+    await screen.findByText(/No products yet/)
+
+    expect(screen.getByLabelText(/^URL/)).not.toBeRequired()
+    expect(screen.getByText(/optional for brand awareness/)).toBeInTheDocument()
+  })
+
+  it('normalizes a schemeless URL on blur', async () => {
+    mockedApi.listProducts.mockResolvedValue([])
+    const user = userEvent.setup()
+
+    render(<ProductsSection businessId="biz-1" />)
+    await screen.findByText(/No products yet/)
+
+    const urlField = screen.getByLabelText(/^URL/)
+    await user.type(urlField, 'acme.example/ring')
+    await user.tab()
+
+    expect(urlField).toHaveValue('https://acme.example/ring')
+  })
+
+  it('clears any inline URL error when the field is blurred empty', async () => {
+    mockedApi.listProducts.mockResolvedValue([])
+    const user = userEvent.setup()
+
+    render(<ProductsSection businessId="biz-1" />)
+    await screen.findByText(/No products yet/)
+
+    const urlField = screen.getByLabelText(/^URL/)
+    await user.type(urlField, 'javascript:alert(1)')
+    await user.tab()
+    await screen.findByRole('alert')
+    await user.clear(urlField)
+    await user.tab()
+
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+  })
+
+  it('shows an inline error for an invalid URL on blur, without calling the API', async () => {
+    mockedApi.listProducts.mockResolvedValue([])
+    const user = userEvent.setup()
+
+    render(<ProductsSection businessId="biz-1" />)
+    await screen.findByText(/No products yet/)
+
+    await user.type(screen.getByLabelText(/^URL/), 'javascript:alert(1)')
+    await user.tab()
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'Please enter a full web address',
+    )
+
+    await user.type(screen.getByLabelText('What do you sell?'), 'Handmade wallets')
+    await user.click(screen.getByRole('button', { name: 'Add product' }))
+
+    expect(mockedApi.createProduct).not.toHaveBeenCalled()
+  })
+
+  it('surfaces the backend 422 message as authoritative on submit', async () => {
+    mockedApi.listProducts.mockResolvedValue([])
+    mockedApi.createProduct.mockRejectedValue(
+      new api.ApiError(422, 'Please enter a full web address, e.g. https://yourshop.com/ring'),
+    )
+    const user = userEvent.setup()
+
+    render(<ProductsSection businessId="biz-1" />)
+    await screen.findByText(/No products yet/)
+
+    await user.type(screen.getByLabelText('What do you sell?'), 'Handmade wallets')
+    await user.click(screen.getByRole('button', { name: 'Add product' }))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'Please enter a full web address',
+    )
   })
 
   it('falls back to a generic message for a non-ApiError creation failure', async () => {

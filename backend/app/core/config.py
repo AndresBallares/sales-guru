@@ -61,6 +61,10 @@ class Settings(BaseSettings):
             "onboarding@resend.dev" (Resend's own sandbox sender, usable
             with no domain verification — fine for MVP; a verified custom
             domain address once one exists).
+        url_reachability_check_enabled: Whether POST .../products/{id}/
+            check-url (app/services/url_reachability.py) is exposed at
+            all. Off by default — this is a scaffold, not yet wired into
+            publish (see that module's docstring).
     """
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
@@ -79,6 +83,7 @@ class Settings(BaseSettings):
     enable_scheduler: bool = True
     resend_api_key: str | None = None
     email_from: str = "onboarding@resend.dev"
+    url_reachability_check_enabled: bool = False
 
     @property
     def cors_origins_list(self) -> list[str]:
