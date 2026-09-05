@@ -199,12 +199,23 @@ jobs:
     steps:
       - name: Verify no required job failed
         run: |
+          changes_result="${{ needs.changes.result }}"
           commit_result="${{ needs.commit-message-check.result }}"
           backend_result="${{ needs.backend-ci.result }}"
           frontend_result="${{ needs.frontend-ci.result }}"
+          echo "changes: $changes_result"
           echo "commit-message-check: $commit_result"
           echo "backend-ci: $backend_result"
           echo "frontend-ci: $frontend_result"
+          # changes is never legitimately "skipped" (nothing skips it), so
+          # unlike backend-ci/frontend-ci below, any non-success here is a
+          # real problem — most importantly, a failure here is exactly what
+          # silently skips backend-ci/frontend-ci without failing them, which
+          # is what let a broken changes job report an all-green PR before.
+          if [[ "$changes_result" != "success" ]]; then
+            echo "changes did not pass" >&2
+            exit 1
+          fi
           if [[ "$commit_result" == "failure" || "$commit_result" == "cancelled" ]]; then
             echo "commit-message-check did not pass" >&2
             exit 1
