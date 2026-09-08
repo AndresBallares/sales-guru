@@ -20,6 +20,15 @@ export interface BusinessCreateInput {
   description?: string
 }
 
+// Partial update — only name and description are editable through this
+// endpoint (app/schemas/business.py's BusinessUpdateRequest). A field's
+// absence here (vs. an explicit value) decides whether it changes,
+// matching the backend's model_dump exclude_unset semantics.
+export interface BusinessUpdateInput {
+  name?: string
+  description?: string | null
+}
+
 export interface Product {
   id: string
   description: string
@@ -249,6 +258,16 @@ export function listBusinesses(): Promise<Business[]> {
 
 export function getBusiness(businessId: string): Promise<Business> {
   return request<Business>(`/businesses/${businessId}`)
+}
+
+export function updateBusiness(
+  businessId: string,
+  input: BusinessUpdateInput,
+): Promise<Business> {
+  return request<Business>(`/businesses/${businessId}`, {
+    method: 'PATCH',
+    body: JSON.stringify(input),
+  })
 }
 
 export function createProduct(

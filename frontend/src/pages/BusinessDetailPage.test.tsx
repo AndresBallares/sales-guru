@@ -1,4 +1,5 @@
 import { render, screen, waitFor } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { BusinessDetailPage } from './BusinessDetailPage'
@@ -14,6 +15,7 @@ vi.mock('../lib/api', async (importOriginal) => {
     logout: vi.fn<typeof actual.logout>(),
     getMe: vi.fn<typeof actual.getMe>(),
     getBusiness: vi.fn<typeof actual.getBusiness>(),
+    updateBusiness: vi.fn<typeof actual.updateBusiness>(),
     listProducts: vi.fn<typeof actual.listProducts>(),
     listProductImages: vi.fn<typeof actual.listProductImages>(),
     listAudiences: vi.fn<typeof actual.listAudiences>(),
@@ -197,6 +199,62 @@ describe('BusinessDetailPage', () => {
       expect(screen.queryByRole('heading', { name: 'Audiences' })).not.toBeInTheDocument()
       expect(screen.queryByRole('heading', { name: 'Meta Ads' })).not.toBeInTheDocument()
     })
+  })
+
+  it('edits the business name and description inline', async () => {
+    const updated = { ...business, name: 'Acme Inc', description: 'Family-run since 1985' }
+    mockedApi.updateBusiness.mockResolvedValue(updated)
+    const user = userEvent.setup()
+
+    renderPage()
+    await screen.findByRole('heading', { name: 'Acme Widgets' })
+
+    await user.click(screen.getByRole('button', { name: 'Edit' }))
+    // Two forms are on the page while editing (the business edit form
+    // plus the campaign-creation form, since this business has no
+    // campaign yet) — the business form's field renders first.
+    const nameField = screen.getAllByLabelText('Name')[0]
+    await user.clear(nameField)
+    await user.type(nameField, 'Acme Inc')
+    await user.type(screen.getByLabelText(/About your business/), 'Family-run since 1985')
+    await user.click(screen.getByRole('button', { name: 'Save' }))
+
+    await waitFor(() =>
+      expect(mockedApi.updateBusiness).toHaveBeenCalledWith('biz-1', {
+        name: 'Acme Inc',
+        description: 'Family-run since 1985',
+      }),
+    )
+    expect(await screen.findByRole('heading', { name: 'Acme Inc' })).toBeInTheDocument()
+  })
+
+  it('cancels an edit without saving, restoring the heading unchanged', async () => {
+    const user = userEvent.setup()
+
+    renderPage()
+    await screen.findByRole('heading', { name: 'Acme Widgets' })
+
+    await user.click(screen.getByRole('button', { name: 'Edit' }))
+    await user.type(screen.getAllByLabelText('Name')[0], ' extra text')
+    await user.click(screen.getByRole('button', { name: 'Cancel' }))
+
+    expect(mockedApi.updateBusiness).not.toHaveBeenCalled()
+    expect(screen.getByRole('heading', { name: 'Acme Widgets' })).toBeInTheDocument()
+    // Back to just the campaign-creation form's own "Name" field.
+    expect(screen.getAllByLabelText('Name')).toHaveLength(1)
+  })
+
+  it('surfaces a backend error inline on the business edit form', async () => {
+    mockedApi.updateBusiness.mockRejectedValue(new api.ApiError(422, 'Name is required'))
+    const user = userEvent.setup()
+
+    renderPage()
+    await screen.findByRole('heading', { name: 'Acme Widgets' })
+
+    await user.click(screen.getByRole('button', { name: 'Edit' }))
+    await user.click(screen.getByRole('button', { name: 'Save' }))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Name is required')
   })
 
   it('shows an error if the business fails to load', async () => {

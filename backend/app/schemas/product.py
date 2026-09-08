@@ -1,9 +1,15 @@
 """Schemas for product onboarding endpoints."""
 
-from pydantic import field_validator
+from pydantic import Field, field_validator
 
 from app.schemas.base import CamelCaseModel
 from app.services.url_validation import validate_destination_url
+
+# This text is pasted into the Strategist/Creative Agent prompts verbatim
+# (app/services/strategist.py, app/services/creative.py, quarantined via
+# app/services/prompt_safety.py) — capped so a pasted-in product page
+# can't balloon the prompt, same reasoning as Business.description's cap.
+_MAX_DESCRIPTION_LENGTH = 1000
 
 
 class ProductCreateRequest(CamelCaseModel):
@@ -16,7 +22,7 @@ class ProductCreateRequest(CamelCaseModel):
     needs a database lookup a schema validator can't do.
     """
 
-    description: str
+    description: str = Field(max_length=_MAX_DESCRIPTION_LENGTH)
     price: float | None = None
     margin: float | None = None
     features: str | None = None
@@ -44,7 +50,7 @@ class ProductUpdateRequest(CamelCaseModel):
     product for that instead (app/api/campaign.py's update_campaign).
     """
 
-    description: str | None = None
+    description: str | None = Field(default=None, max_length=_MAX_DESCRIPTION_LENGTH)
     price: float | None = None
     margin: float | None = None
     features: str | None = None

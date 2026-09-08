@@ -1,7 +1,7 @@
 """Creative Agent endpoints (PRD.md build step 6)."""
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from prisma.models import Campaign, Creative, Product
+from prisma.models import Business, Campaign, Creative, Product
 from prisma.types import CreativeUpdateInput
 
 from app.api.product_image import product_image_url
@@ -30,7 +30,7 @@ _CAMPAIGN_NOT_READY = (
 
 
 def _to_response(
-    creative: Creative, campaign: Campaign, product: Product | None
+    creative: Creative, campaign: Campaign, product: Product | None, business: Business
 ) -> CreativeResponse:
     """Map a Prisma Creative record to its public response shape.
 
@@ -42,6 +42,7 @@ def _to_response(
         product: The campaign's current product, or None if it has none.
             Must be the product identified by campaign.productId when one
             is set.
+        business: The campaign's business, for its description snapshot.
 
     Returns:
         The public-facing representation.
@@ -61,7 +62,7 @@ def _to_response(
             "imageUrl": creative.imageUrl,
             "status": creative.status,
             "createdAt": creative.createdAt,
-            "isStale": is_creative_stale(creative, campaign, product),
+            "isStale": is_creative_stale(creative, campaign, product, business),
         }
     )
 
@@ -73,13 +74,21 @@ async def _current_product(campaign: Campaign) -> Product | None:
     return await db.product.find_unique(where={"id": campaign.productId})
 
 
+async def _current_business(campaign: Campaign) -> Business:
+    """Fetch the campaign's business — always present, unlike product."""
+    business = await db.business.find_unique(where={"id": campaign.businessId})
+    assert business is not None  # guaranteed by the FK, not user input
+    return business
+
+
 async def _list_creatives(campaign: Campaign) -> list[CreativeResponse]:
     """Fetch all creatives for a campaign, oldest first (stable A/B/C/D order)."""
     creatives = await db.creative.find_many(
         where={"campaignId": campaign.id}, order={"createdAt": "asc"}
     )
     product = await _current_product(campaign)
-    return [_to_response(c, campaign, product) for c in creatives]
+    business = await _current_business(campaign)
+    return [_to_response(c, campaign, product, business) for c in creatives]
 
 
 @router.post(
@@ -142,13 +151,16 @@ async def create_creatives(
                 "creativeAngle": variant.creative_angle,
                 "imagePrompt": variant.image_prompt,
                 "videoPrompt": variant.video_prompt,
-                # Snapshot the product this batch was actually grounded in
-                # (app/services/creative.py's is_creative_stale compares
-                # against this later) — None/None/None when there's no
-                # product, same as the prompt itself handling that case.
+                # Snapshot the business/product this batch was actually
+                # grounded in (app/services/creative.py's is_creative_stale
+                # compares against this later) — the product fields are
+                # None/None when there's no product, same as the prompt
+                # itself handling that case; sourceBusinessDescription is
+                # always set since a campaign's business is never optional.
                 "sourceProductId": product.id if product is not None else None,
                 "sourceDescription": source_description,
                 "sourceUrl": source_url,
+                "sourceBusinessDescription": business.description,
             }
         )
     await db.campaign.update(
@@ -260,4 +272,5 @@ async def select_creative(
     )
 
     product = await _current_product(campaign)
-    return _to_response(updated, campaign, product)
+    business = await _current_business(campaign)
+    return _to_response(updated, campaign, product, business)

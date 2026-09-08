@@ -383,6 +383,13 @@ model Creative {
   sourceProductId String?
   sourceDescription String?
   sourceUrl         String?
+  // Same snapshot idea, for the campaign's Business.description — a
+  // third staleness source alongside the product fields above (confirmed
+  // 2026-09-08): editing a business's own description after generating
+  // creatives leaves ad copy grounded in stale business context just as
+  // surely as editing the product does, so is_creative_stale checks this
+  // independently of whether a product is even attached.
+  sourceBusinessDescription String?
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 }

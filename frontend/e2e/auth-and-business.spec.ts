@@ -90,7 +90,7 @@ test('sign up, create a business, log out, log back in', async ({ page }) => {
   await page.getByLabel('Who buys?').fill('Busy professionals, 30-55')
   await page.getByLabel('Age min').fill('30')
   await page.getByLabel('Age max').fill('55')
-  await page.getByLabel('Location').fill('New York')
+  await page.getByLabel('Where are your customers?').fill('New York')
   await page.getByRole('button', { name: 'Add audience' }).click()
 
   // Adding an audience moves straight to the Meta Ads step — the

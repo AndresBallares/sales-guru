@@ -115,6 +115,54 @@ def test_create_product_requires_description(client: TestClient) -> None:
     assert response.status_code == 422
 
 
+def test_create_product_accepts_a_description_at_the_length_cap(
+    client: TestClient,
+) -> None:
+    """Exactly 1000 characters — the cap itself — is still accepted."""
+    _signed_up_client(client)
+    business_id = _create_business(client)
+
+    response = client.post(
+        f"/businesses/{business_id}/products", json={"description": "a" * 1000}
+    )
+
+    assert response.status_code == 201
+
+
+def test_create_product_rejects_a_description_over_the_length_cap(
+    client: TestClient,
+) -> None:
+    """A pasted-in product page can't balloon the Strategist/Creative
+    prompt — description is capped at 1000 characters, enforced at the
+    schema."""
+    _signed_up_client(client)
+    business_id = _create_business(client)
+
+    response = client.post(
+        f"/businesses/{business_id}/products", json={"description": "a" * 1001}
+    )
+
+    assert response.status_code == 422
+
+
+def test_update_product_rejects_a_description_over_the_length_cap(
+    client: TestClient,
+) -> None:
+    """The same cap applies to the PATCH partial-update path."""
+    _signed_up_client(client)
+    business_id = _create_business(client)
+    product_id = client.post(
+        f"/businesses/{business_id}/products", json={"description": "Widgets"}
+    ).json()["id"]
+
+    response = client.patch(
+        f"/businesses/{business_id}/products/{product_id}",
+        json={"description": "a" * 1001},
+    )
+
+    assert response.status_code == 422
+
+
 def test_create_product_normalizes_a_schemeless_url(client: TestClient) -> None:
     """A missing scheme is normalized to https:// before storage."""
     _signed_up_client(client)

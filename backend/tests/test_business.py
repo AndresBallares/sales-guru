@@ -128,3 +128,130 @@ def test_get_business_404s_for_another_users_business(client: TestClient) -> Non
     response = client.get(f"/businesses/{created['id']}")
 
     assert response.status_code == 404
+
+
+def test_create_business_accepts_a_description_at_the_length_cap(
+    client: TestClient,
+) -> None:
+    """Exactly 1000 characters — the cap itself — is still accepted."""
+    _signed_up_client(client)
+
+    response = client.post(
+        "/businesses", json={"name": "Acme", "description": "a" * 1000}
+    )
+
+    assert response.status_code == 201
+
+
+def test_create_business_rejects_a_description_over_the_length_cap(
+    client: TestClient,
+) -> None:
+    """A pasted-in About page can't balloon the Strategist/Creative prompt —
+    description is capped at 1000 characters, enforced at the schema."""
+    _signed_up_client(client)
+
+    response = client.post(
+        "/businesses", json={"name": "Acme", "description": "a" * 1001}
+    )
+
+    assert response.status_code == 422
+
+
+def test_update_business_requires_a_session(client: TestClient) -> None:
+    """Updating a business with no session cookie returns 401."""
+    response = client.patch("/businesses/some-id", json={"name": "New name"})
+
+    assert response.status_code == 401
+
+
+def test_update_business_404s_for_a_nonexistent_business(client: TestClient) -> None:
+    """Updating a business that doesn't exist returns 404."""
+    _signed_up_client(client)
+
+    response = client.patch("/businesses/does-not-exist", json={"name": "New name"})
+
+    assert response.status_code == 404
+
+
+def test_update_business_404s_for_another_users_business(client: TestClient) -> None:
+    """A user can't update a business they don't own."""
+    _signed_up_client(client, email="alice@example.com")
+    created = client.post("/businesses", json={"name": "Alice's Business"}).json()
+    client.post("/auth/logout")
+
+    _signed_up_client(client, email="bob@example.com")
+    response = client.patch(
+        f"/businesses/{created['id']}", json={"name": "Hijacked name"}
+    )
+
+    assert response.status_code == 404
+
+
+def test_update_business_partial_update_leaves_omitted_fields_untouched(
+    client: TestClient,
+) -> None:
+    """Only the fields sent in the PATCH body change; everything else
+    keeps its prior value."""
+    _signed_up_client(client)
+    created = client.post(
+        "/businesses",
+        json={
+            "name": "Acme Widgets",
+            "website": "https://acme.example",
+            "industry": "Manufacturing",
+            "location": "CDMX",
+            "description": "Original description",
+        },
+    ).json()
+
+    response = client.patch(
+        f"/businesses/{created['id']}", json={"description": "Updated description"}
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["name"] == "Acme Widgets"
+    assert body["website"] == "https://acme.example"
+    assert body["industry"] == "Manufacturing"
+    assert body["location"] == "CDMX"
+    assert body["description"] == "Updated description"
+
+
+def test_update_business_can_change_the_name(client: TestClient) -> None:
+    """The name can also be updated on its own."""
+    _signed_up_client(client)
+    created = client.post("/businesses", json={"name": "Acme Widgets"}).json()
+
+    response = client.patch(f"/businesses/{created['id']}", json={"name": "Acme Inc"})
+
+    assert response.status_code == 200
+    assert response.json()["name"] == "Acme Inc"
+
+
+def test_update_business_rejects_a_description_over_the_length_cap(
+    client: TestClient,
+) -> None:
+    """The same cap as create_business applies to the PATCH path."""
+    _signed_up_client(client)
+    created = client.post("/businesses", json={"name": "Acme"}).json()
+
+    response = client.patch(
+        f"/businesses/{created['id']}", json={"description": "a" * 1001}
+    )
+
+    assert response.status_code == 422
+
+
+def test_update_business_with_an_empty_body_changes_nothing(client: TestClient) -> None:
+    """An empty PATCH body is a no-op, not an error."""
+    _signed_up_client(client)
+    created = client.post(
+        "/businesses", json={"name": "Acme Widgets", "description": "Original"}
+    ).json()
+
+    response = client.patch(f"/businesses/{created['id']}", json={})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["name"] == "Acme Widgets"
+    assert body["description"] == "Original"

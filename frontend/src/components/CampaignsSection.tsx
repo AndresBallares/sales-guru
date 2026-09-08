@@ -10,6 +10,7 @@ import {
   createStrategy,
   createTestEvaluation,
   EVENT_VENUES,
+  getBusiness,
   getStrategy,
   listAudiences,
   listCampaigns,
@@ -28,6 +29,7 @@ import {
   uploadProductImage,
   type ActionType,
   type Audience,
+  type Business,
   type Campaign,
   type Creative,
   type Cta,
@@ -85,6 +87,9 @@ export function CampaignsSection({
 }) {
   const navigate = useNavigate()
   const [campaigns, setCampaigns] = useState<Campaign[]>([])
+  // Only fetched for the "add a business description" nudge on the
+  // create-campaign step below — nothing else here needs the business.
+  const [business, setBusiness] = useState<Business | null>(null)
   const [products, setProducts] = useState<Product[]>([])
   const [audiences, setAudiences] = useState<Audience[]>([])
   const [loading, setLoading] = useState(true)
@@ -183,6 +188,14 @@ export function CampaignsSection({
       setProducts(productList)
       setAudiences(audienceList)
       setListError(null)
+
+      // Best-effort, separate from the Promise.all above — this only
+      // powers the "add a business description" nudge below, so a
+      // failure here (e.g. the business itself failed to load elsewhere
+      // on the page) shouldn't take down the whole campaigns list.
+      getBusiness(businessId)
+        .then(setBusiness)
+        .catch(() => setBusiness(null))
 
       // Strategies aren't included on the campaign list itself — fetch each
       // already-generated one so a page reload still shows it, not just a
@@ -1477,6 +1490,11 @@ export function CampaignsSection({
       {!loading && !listError && campaigns.length === 0 && (
         <section>
           <h2>Create a campaign</h2>
+          {business && !business.description && (
+            <p className="field-hint">
+              Add a business description for stronger AI-generated strategy and ad copy.
+            </p>
+          )}
           <form onSubmit={handleSubmit} noValidate>
             <div className="field">
               <label htmlFor="campaign-name">Name</label>

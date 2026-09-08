@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { AudiencesSection } from '../components/AudiencesSection'
+import { BusinessEditForm } from '../components/BusinessEditForm'
 import { CampaignsSection } from '../components/CampaignsSection'
 import { MetaConnectionSection } from '../components/MetaConnectionSection'
 import { ProductsSection } from '../components/ProductsSection'
@@ -29,6 +30,7 @@ export function BusinessDetailPage() {
   const [products, setProducts] = useState<Product[] | null>(null)
   const [audiences, setAudiences] = useState<Audience[] | null>(null)
   const [metaSetupComplete, setMetaSetupComplete] = useState(false)
+  const [editingBusiness, setEditingBusiness] = useState(false)
 
   useEffect(() => {
     if (!businessId) {
@@ -46,7 +48,26 @@ export function BusinessDetailPage() {
       <p>
         <Link to="/">&larr; Back to dashboard</Link>
       </p>
-      <h1>{business ? business.name : 'Loading…'}</h1>
+      {business && editingBusiness ? (
+        <BusinessEditForm
+          businessId={business.id}
+          business={business}
+          onSaved={(updated) => {
+            setBusiness(updated)
+            setEditingBusiness(false)
+          }}
+          onCancel={() => setEditingBusiness(false)}
+        />
+      ) : (
+        <>
+          <h1>{business ? business.name : 'Loading…'}</h1>
+          {business && (
+            <button type="button" onClick={() => setEditingBusiness(true)}>
+              Edit
+            </button>
+          )}
+        </>
+      )}
       {businessError && (
         <p className="form-error" role="alert">
           {businessError}

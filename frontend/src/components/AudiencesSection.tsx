@@ -120,9 +120,10 @@ export function AudiencesSection({
             />
           </div>
           <div className="field">
-            <label htmlFor="location">Location</label>
+            <label htmlFor="location">Where are your customers?</label>
             <input
               id="location"
+              placeholder="e.g. NYC metro or nationwide"
               value={location}
               onChange={(event) => setLocation(event.target.value)}
             />
