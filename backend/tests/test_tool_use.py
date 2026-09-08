@@ -85,3 +85,53 @@ def test_parse_tool_input_does_not_unwrap_a_multi_field_models_wrong_key() -> No
     name to remap the value onto, so this stays a real failure."""
     with pytest.raises(Exception, match="offer"):
         parse_tool_input({"wrong_key": "just a string"}, _Flat)
+
+
+def test_parse_tool_input_decodes_a_json_encoded_list_field() -> None:
+    """A "variants" field returned as a JSON-encoded string rather than a
+    real array recovers — the exact shape observed from a real
+    claude-sonnet-5 call (2026-09-08)."""
+    result = parse_tool_input({"variants": '["a", "b"]'}, _SingleField)
+
+    assert result.variants == ["a", "b"]
+
+
+def test_parse_tool_input_decodes_a_json_encoded_dict_field() -> None:
+    """The same recovery works for a dict-shaped field, not just a list —
+    _Nested's "detail" field expects a real object, not a JSON string."""
+
+    class _Nested(BaseModel):
+        detail: _Flat
+
+    result = parse_tool_input(
+        {"detail": '{"offer": "Custom rings", "positioning": "Premium"}'},
+        _Nested,
+    )
+
+    assert result.detail.offer == "Custom rings"
+    assert result.detail.positioning == "Premium"
+
+
+def test_parse_tool_input_does_not_touch_a_plain_string_field() -> None:
+    """A genuinely plain string value (not JSON-shaped) is left alone —
+    only values starting with `[` or `{` are ever attempted, and a
+    missing required field still raises normally."""
+    with pytest.raises(Exception, match="positioning"):
+        parse_tool_input({"offer": "Custom rings"}, _Flat)
+
+
+def test_parse_tool_input_raises_original_error_when_decoded_json_still_fails() -> None:
+    """A string that *is* valid JSON but decodes to the wrong shape (a list
+    of ints where `list[str]` is expected) still falls through to the
+    original error, not a new one from the failed decode attempt."""
+    with pytest.raises(Exception, match="list_type|string_type"):
+        parse_tool_input({"variants": "[1, 2, 3]"}, _SingleField)
+
+
+def test_parse_tool_input_raises_the_original_error_for_unparseable_json() -> None:
+    """A string that merely starts with `[`/`{` but isn't valid JSON is
+    left alone — json.loads failing is caught, not left to bubble up as a
+    confusing secondary error — and the original validation error still
+    surfaces."""
+    with pytest.raises(Exception, match="list_type"):
+        parse_tool_input({"variants": "[not valid json"}, _SingleField)
