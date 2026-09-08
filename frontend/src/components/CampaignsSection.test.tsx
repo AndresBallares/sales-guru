@@ -87,6 +87,7 @@ function fakeCreative(overrides: Partial<api.Creative> = {}): api.Creative {
     imageUrl: null,
     status: 'GENERATED',
     createdAt: '2026-08-08T00:00:00Z',
+    isStale: false,
     ...overrides,
   }
 }
@@ -595,6 +596,39 @@ describe('CampaignsSection', () => {
       }),
     )
     expect(await screen.findByText('✓ Product')).toBeInTheDocument()
+  })
+
+  it('shows a stale-ads banner and regenerates from it', async () => {
+    mockedApi.listCampaigns.mockResolvedValue([
+      { ...draftCampaignFixture, status: 'ADS_GENERATED', productId: 'prod-1' },
+    ])
+    mockedApi.listProducts.mockResolvedValue([
+      {
+        id: 'prod-1',
+        description: 'Necklace',
+        price: null,
+        margin: null,
+        features: null,
+        benefits: null,
+        url: null,
+      },
+    ])
+    mockedApi.listCreatives.mockResolvedValue([fakeCreative({ isStale: true })])
+    mockedApi.createCreatives.mockResolvedValue([fakeCreative({ isStale: false })])
+    const user = userEvent.setup()
+
+    renderCampaigns(<CampaignsSection businessId="biz-1" />)
+    const banner = await screen.findByLabelText('Stale ads for camp-1')
+    expect(banner).toHaveTextContent(
+      'These ads were generated from an older version of the product. Regenerate?',
+    )
+
+    await user.click(screen.getByRole('button', { name: 'Regenerate' }))
+
+    await waitFor(() => expect(mockedApi.createCreatives).toHaveBeenCalledWith('biz-1', 'camp-1'))
+    await waitFor(() =>
+      expect(screen.queryByLabelText('Stale ads for camp-1')).not.toBeInTheDocument(),
+    )
   })
 
   it('lets the user manually attach an audience when there are several to choose from', async () => {

@@ -63,6 +63,7 @@ function makeCreative(overrides: Partial<api.Creative> = {}): api.Creative {
     imageUrl: null,
     status: 'SELECTED',
     createdAt: '2026-09-05T00:00:00Z',
+    isStale: false,
     ...overrides,
   }
 }

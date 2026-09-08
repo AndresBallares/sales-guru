@@ -21,6 +21,7 @@ from app.schemas.campaign import (
 )
 from app.schemas.strategy import StrategyContentAdapter
 from app.services.campaign_readiness import advance_to_ready_if_complete, is_ready
+from app.services.creative import is_creative_stale
 from app.services.event_venues import EVENT_VENUES, default_event_window
 from app.services.meta import MetaConnectionError
 from app.services.publish import pause_campaign as pause_campaign_on_meta
@@ -45,6 +46,10 @@ _META_NOT_CONNECTED = (
 )
 _META_NOT_CONNECTED_TO_PAUSE = "No Meta connection found for this campaign's business"
 _NO_CREATIVE_SELECTED = "Select an ad creative before publishing"
+_CREATIVE_STALE = (
+    "This ad was generated from an older version of the product — "
+    "regenerate it before publishing"
+)
 _NO_DESTINATION_URL = (
     "Set a product URL or business website before publishing — Meta requires "
     "a destination link for the ad"
@@ -351,7 +356,10 @@ async def publish_campaign(
 
     Raises:
         HTTPException: 400 if the campaign isn't approved yet, Meta isn't
-            fully connected, no creative is selected, there's no
+            fully connected, no creative is selected, the selected
+            creative is stale (see app/services/creative.py's
+            is_creative_stale — its product has since been edited or
+            swapped, so regenerate before publishing), there's no
             destination URL to advertise, or the objective needs a Meta
             Pixel that isn't configured (see requires_pixel); 500 if the
             Meta API call fails (the campaign is moved to FAILED first,
@@ -397,6 +405,10 @@ async def publish_campaign(
         if campaign.productId
         else None
     )
+    if is_creative_stale(creative, campaign, product):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=_CREATIVE_STALE
+        )
     destination_url = (product.url if product else None) or business.website
     if not destination_url:
         raise HTTPException(

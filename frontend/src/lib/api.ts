@@ -591,6 +591,10 @@ export interface Creative {
   imageUrl: string | null
   status: CreativeStatus
   createdAt: string
+  // Computed by the backend (app/services/creative.py's is_creative_stale)
+  // — true once the product this was generated from has since been
+  // edited or the campaign swapped onto a different one.
+  isStale: boolean
 }
 
 export function createCreatives(businessId: string, campaignId: string): Promise<Creative[]> {

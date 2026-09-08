@@ -641,6 +641,7 @@ export function CampaignsSection({
             // close over it — a plain property access re-widens to
             // `string | null` inside a nested closure.
             const campaignProductId = campaign.productId
+            const hasStaleCreatives = campaignCreatives.some((c) => c.isStale)
             return (
               <li key={campaign.id}>
                 {campaign.name ? `${campaign.name} — ` : ''}
@@ -662,6 +663,20 @@ export function CampaignsSection({
                       </>
                     )}
                   </p>
+                )}
+                {hasStaleCreatives && (
+                  <div aria-label={`Stale ads for ${campaign.name ?? campaign.id}`}>
+                    <p role="alert">
+                      These ads were generated from an older version of the product. Regenerate?
+                    </p>
+                    <button
+                      type="button"
+                      onClick={() => void handleGenerateCreatives(campaign.id)}
+                      disabled={generatingCreativesId === campaign.id}
+                    >
+                      {generatingCreativesId === campaign.id ? 'Regenerating…' : 'Regenerate'}
+                    </button>
+                  </div>
                 )}
                 {campaign.status === 'DRAFT' ? (
                   <div aria-label={`Campaign readiness for ${campaign.name ?? campaign.id}`}>

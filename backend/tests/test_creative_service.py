@@ -19,7 +19,7 @@ from app.schemas.strategy import (
     TargetAudience,
 )
 from app.services import creative
-from prisma.models import Business, Product
+from prisma.models import Business, Campaign, Creative, Product
 
 _ONE_VARIANT: dict[str, Any] = {
     "headline": "Emeralds With a Story",
@@ -66,13 +66,31 @@ def _fake_business(**overrides: object) -> Business:
 
 def _fake_product(**overrides: object) -> Product:
     defaults: dict[str, object] = {
+        "id": "product-1",
         "description": "Custom emerald rings",
         "price": None,
+        "url": None,
         "features": None,
         "benefits": None,
     }
     defaults.update(overrides)
     return cast(Product, SimpleNamespace(**defaults))
+
+
+def _fake_campaign(**overrides: object) -> Campaign:
+    defaults: dict[str, object] = {"productId": "product-1"}
+    defaults.update(overrides)
+    return cast(Campaign, SimpleNamespace(**defaults))
+
+
+def _fake_creative(**overrides: object) -> Creative:
+    defaults: dict[str, object] = {
+        "sourceProductId": "product-1",
+        "sourceDescription": "Custom emerald rings",
+        "sourceUrl": "https://acme.example/rings",
+    }
+    defaults.update(overrides)
+    return cast(Creative, SimpleNamespace(**defaults))
 
 
 def _mock_client_returning(
@@ -279,3 +297,81 @@ async def test_generate_creatives_raises_on_malformed_tool_input(
         await creative.generate_creatives(
             business=_fake_business(), product=None, strategy=_FAKE_STRATEGY
         )
+
+
+def test_is_creative_stale_false_for_a_freshly_generated_creative() -> None:
+    """A creative whose snapshot exactly matches the current product isn't stale."""
+    product = _fake_product(url="https://acme.example/rings")
+    campaign = _fake_campaign(productId=product.id)
+    fresh = _fake_creative(
+        sourceProductId=product.id,
+        sourceDescription=product.description,
+        sourceUrl=product.url,
+    )
+
+    assert creative.is_creative_stale(fresh, campaign, product) is False
+
+
+def test_is_creative_stale_true_when_source_product_id_differs() -> None:
+    """Swapping the campaign onto a different product makes its old
+    creatives stale, independent of whether the description/url also
+    happen to differ."""
+    product = _fake_product(id="product-2", description="Custom emerald rings")
+    campaign = _fake_campaign(productId="product-2")
+    stale = _fake_creative(
+        sourceProductId="product-1",
+        sourceDescription=product.description,
+        sourceUrl=product.url,
+    )
+
+    assert creative.is_creative_stale(stale, campaign, product) is True
+
+
+def test_is_creative_stale_true_when_description_differs() -> None:
+    """Editing the product's description alone is enough to go stale."""
+    product = _fake_product(description="Custom sapphire rings")
+    campaign = _fake_campaign(productId=product.id)
+    stale = _fake_creative(
+        sourceProductId=product.id,
+        sourceDescription="Custom emerald rings",
+        sourceUrl=product.url,
+    )
+
+    assert creative.is_creative_stale(stale, campaign, product) is True
+
+
+def test_is_creative_stale_true_when_url_differs() -> None:
+    """Editing the product's URL alone is enough to go stale."""
+    product = _fake_product(url="https://acme.example/new-url")
+    campaign = _fake_campaign(productId=product.id)
+    stale = _fake_creative(
+        sourceProductId=product.id,
+        sourceDescription=product.description,
+        sourceUrl="https://acme.example/old-url",
+    )
+
+    assert creative.is_creative_stale(stale, campaign, product) is True
+
+
+def test_is_creative_stale_false_when_only_price_changes() -> None:
+    """Price isn't part of the snapshot — changing it alone never triggers
+    staleness (the ad copy doesn't quote a price)."""
+    product = _fake_product(price=999.0)
+    campaign = _fake_campaign(productId=product.id)
+    fresh = _fake_creative(
+        sourceProductId=product.id,
+        sourceDescription=product.description,
+        sourceUrl=product.url,
+    )
+
+    assert creative.is_creative_stale(fresh, campaign, product) is False
+
+
+def test_is_creative_stale_false_when_campaign_has_no_product() -> None:
+    """An unset campaign product is 'no product,' never staleness — even
+    if the creative's stale snapshot still names one from before it was
+    detached."""
+    campaign = _fake_campaign(productId=None)
+    stale_looking = _fake_creative(sourceProductId="product-1")
+
+    assert creative.is_creative_stale(stale_looking, campaign, None) is False

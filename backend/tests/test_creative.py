@@ -632,3 +632,107 @@ def test_regenerating_creatives_after_approval_reverts_the_status(
 
     response = client.post(f"/businesses/{business_id}/campaigns/{campaign_id}/approve")
     assert response.status_code == 400
+
+
+def test_generated_creatives_are_not_stale(client: TestClient) -> None:
+    """A freshly generated batch, grounded in the current product, isn't stale."""
+    _signed_up_client(client)
+    business_id = _create_business(client)
+    campaign_id = _create_campaign(client, business_id)
+    _generate_strategy(client, business_id, campaign_id)
+
+    generated = client.post(
+        f"/businesses/{business_id}/campaigns/{campaign_id}/creatives"
+    ).json()
+
+    assert all(c["isStale"] is False for c in generated)
+
+
+def test_editing_the_product_description_marks_creatives_stale(
+    client: TestClient,
+) -> None:
+    """Part 1 x Part 3: editing a product's description (PATCH) is a
+    generation-worthy change, so creatives already generated for it read
+    as stale afterward, without any explicit "mark stale" write —
+    is_creative_stale just compares against the product's current state."""
+    _signed_up_client(client)
+    business_id = _create_business(client)
+    product_id = client.post(
+        f"/businesses/{business_id}/products",
+        json={"description": "Ring", "url": "https://acme.example/ring"},
+    ).json()["id"]
+    campaign_id = _create_campaign(client, business_id, product_id=product_id)
+    _generate_strategy(client, business_id, campaign_id)
+    generated = client.post(
+        f"/businesses/{business_id}/campaigns/{campaign_id}/creatives"
+    ).json()
+    assert all(c["isStale"] is False for c in generated)
+
+    client.patch(
+        f"/businesses/{business_id}/products/{product_id}",
+        json={"description": "Necklace"},
+    )
+
+    listed = client.get(
+        f"/businesses/{business_id}/campaigns/{campaign_id}/creatives"
+    ).json()
+    assert all(c["isStale"] is True for c in listed)
+
+
+def test_regenerating_after_a_product_edit_clears_staleness(
+    client: TestClient,
+) -> None:
+    """Calling the existing generation endpoint again re-snapshots the
+    product, so the new batch isn't stale — this is the "Regenerate"
+    button's entire mechanism, no separate un-stale step needed."""
+    _signed_up_client(client)
+    business_id = _create_business(client)
+    product_id = client.post(
+        f"/businesses/{business_id}/products",
+        json={"description": "Ring", "url": "https://acme.example/ring"},
+    ).json()["id"]
+    campaign_id = _create_campaign(client, business_id, product_id=product_id)
+    _generate_strategy(client, business_id, campaign_id)
+    client.post(f"/businesses/{business_id}/campaigns/{campaign_id}/creatives")
+    client.patch(
+        f"/businesses/{business_id}/products/{product_id}",
+        json={"description": "Necklace"},
+    )
+
+    regenerated = client.post(
+        f"/businesses/{business_id}/campaigns/{campaign_id}/creatives"
+    ).json()
+
+    assert all(c["isStale"] is False for c in regenerated)
+
+
+def test_swapping_the_campaign_product_marks_creatives_stale(
+    client: TestClient,
+) -> None:
+    """Part 2 x Part 3: swapping to a different product entirely also
+    makes existing creatives stale, same mechanism as editing one."""
+    _signed_up_client(client)
+    business_id = _create_business(client)
+    original_product_id = client.post(
+        f"/businesses/{business_id}/products",
+        json={"description": "Ring", "url": "https://acme.example/ring"},
+    ).json()["id"]
+    other_product_id = client.post(
+        f"/businesses/{business_id}/products",
+        json={"description": "Necklace", "url": "https://acme.example/necklace"},
+    ).json()["id"]
+    campaign_id = _create_campaign(client, business_id, product_id=original_product_id)
+    _generate_strategy(client, business_id, campaign_id)
+    client.post(f"/businesses/{business_id}/campaigns/{campaign_id}/creatives")
+
+    response = client.patch(
+        f"/businesses/{business_id}/campaigns/{campaign_id}",
+        json={"productId": other_product_id},
+    )
+    assert response.status_code == 200
+
+    listed = client.get(
+        f"/businesses/{business_id}/campaigns/{campaign_id}/creatives"
+    ).json()
+    assert len(listed) == 4  # old creatives kept for history, never deleted
+    assert all(c["isStale"] is True for c in listed)
