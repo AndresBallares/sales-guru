@@ -341,6 +341,12 @@ fieldset {
 }
 
 legend {
+  /* A <legend> renders in its own special box outside the <fieldset>'s
+     normal content flow, so the fieldset's own flex `gap` (above) never
+     applies to it — margin is the one spacing mechanism a legend
+     actually respects, so the question-to-buttons gap has to be set
+     here explicitly instead. */
+  margin: 0 0 0.75rem;
   padding: 0;
   font-size: 0.85rem;
   font-weight: 500;
