@@ -678,8 +678,13 @@ export function CampaignsSection({
                     )}
                   </p>
                 )}
-                <div aria-label={`Product for ${campaign.name ?? campaign.id}`}>
-                  Product: {currentProduct ? currentProduct.description : 'No product selected'}{' '}
+                <div
+                  className="campaign-block"
+                  aria-label={`Product for ${campaign.name ?? campaign.id}`}
+                >
+                  <p>
+                    Product: {currentProduct ? currentProduct.description : 'No product selected'}
+                  </p>
                   <button
                     type="button"
                     onClick={() => {
@@ -729,7 +734,7 @@ export function CampaignsSection({
                         onCancel={() => setAddingProductForCampaignId(null)}
                       />
                     ) : (
-                      <div>
+                      <div className="button-row">
                         <select
                           aria-label="Change product"
                           value={pickProductId[campaign.id] ?? ''}
@@ -774,7 +779,10 @@ export function CampaignsSection({
                   )}
                 </div>
                 {hasStaleCreatives && (
-                  <div aria-label={`Stale ads for ${campaign.name ?? campaign.id}`}>
+                  <div
+                    className="campaign-block"
+                    aria-label={`Stale ads for ${campaign.name ?? campaign.id}`}
+                  >
                     <p role="alert">
                       These ads were generated from an older version of the product. Regenerate?
                     </p>
