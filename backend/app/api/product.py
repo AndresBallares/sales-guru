@@ -1,12 +1,20 @@
 """Product onboarding endpoints, nested under a business (PRD.md §2 step 3, §7)."""
 
+from typing import cast
+
 from fastapi import APIRouter, Depends, HTTPException, status
 from prisma.models import Business, Product
+from prisma.types import ProductUpdateInput
 
-from app.core.authz import get_owned_business
+from app.core.authz import get_owned_business, get_owned_product
 from app.core.config import get_settings
 from app.core.db import db
-from app.schemas.product import CheckUrlResponse, ProductCreateRequest, ProductResponse
+from app.schemas.product import (
+    CheckUrlResponse,
+    ProductCreateRequest,
+    ProductResponse,
+    ProductUpdateRequest,
+)
 from app.services.campaign_readiness import auto_attach_product
 from app.services.url_reachability import check_url_reachable
 from app.services.url_validation import requires_destination_url
@@ -120,6 +128,40 @@ async def list_products(
     """
     products = await db.product.find_many(where={"businessId": business.id})
     return [_to_response(p) for p in products]
+
+
+@router.patch("/{product_id}", response_model=ProductResponse)
+async def update_product(
+    payload: ProductUpdateRequest,
+    product: Product = Depends(get_owned_product),
+) -> ProductResponse:
+    """Partially update a product owned by the current user's business.
+
+    Only fields present in the request body change (see
+    ProductUpdateRequest) — this is for editing the same item being sold
+    (a typo'd description, a price change, a corrected URL), not for
+    turning a product record into a different item entirely; see
+    CLAUDE.md's "Products are reusable across campaigns" note.
+
+    Args:
+        payload: The fields to change.
+        product: The product, resolved and ownership-checked by
+            get_owned_product.
+
+    Returns:
+        The updated product.
+
+    Raises:
+        HTTPException: 404 if the product doesn't belong to this business
+            (via get_owned_product). 422 if url is given but fails
+            validate_destination_url.
+    """
+    update_data = cast(ProductUpdateInput, payload.model_dump(exclude_unset=True))
+    if not update_data:
+        return _to_response(product)
+    updated = await db.product.update(where={"id": product.id}, data=update_data)
+    assert updated is not None  # just fetched above, can't vanish mid-request
+    return _to_response(updated)
 
 
 @router.post("/{product_id}/check-url", response_model=CheckUrlResponse)

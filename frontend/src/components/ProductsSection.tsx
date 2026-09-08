@@ -1,7 +1,6 @@
-import { useCallback, useEffect, useState, type ChangeEvent, type FormEvent } from 'react'
+import { useCallback, useEffect, useState, type ChangeEvent } from 'react'
 import {
   ApiError,
-  createProduct,
   deleteProductImage,
   listCampaigns,
   listProductImages,
@@ -10,12 +9,8 @@ import {
   type Product,
   type ProductImage,
 } from '../lib/api'
-import {
-  DESTINATION_URL_ERROR_MESSAGE,
-  isValidDestinationUrl,
-  normalizeDestinationUrl,
-  requiresDestinationUrl,
-} from '../lib/urlValidation'
+import { requiresDestinationUrl } from '../lib/urlValidation'
+import { ProductForm } from './ProductForm'
 
 export function ProductsSection({
   businessId,
@@ -27,17 +22,12 @@ export function ProductsSection({
   const [products, setProducts] = useState<Product[]>([])
   const [loading, setLoading] = useState(true)
   const [listError, setListError] = useState<string | null>(null)
-
-  const [description, setDescription] = useState('')
-  const [price, setPrice] = useState('')
-  const [margin, setMargin] = useState('')
-  const [features, setFeatures] = useState('')
-  const [benefits, setBenefits] = useState('')
-  const [url, setUrl] = useState('')
-  const [urlFieldError, setUrlFieldError] = useState<string | null>(null)
   const [urlRequired, setUrlRequired] = useState(false)
-  const [formError, setFormError] = useState<string | null>(null)
-  const [submitting, setSubmitting] = useState(false)
+
+  // Which row (if any) is currently swapped into its inline edit form —
+  // reuses ProductForm in "edit" mode (Part 1) rather than a second,
+  // near-duplicate form.
+  const [editingId, setEditingId] = useState<string | null>(null)
 
   const [images, setImages] = useState<Record<string, ProductImage[]>>({})
   const [uploadingId, setUploadingId] = useState<string | null>(null)
@@ -80,48 +70,6 @@ export function ProductsSection({
   useEffect(() => {
     void refresh()
   }, [refresh])
-
-  function handleUrlBlur() {
-    if (!url) {
-      setUrlFieldError(null)
-      return
-    }
-    const normalized = normalizeDestinationUrl(url)
-    setUrl(normalized)
-    setUrlFieldError(isValidDestinationUrl(normalized) ? null : DESTINATION_URL_ERROR_MESSAGE)
-  }
-
-  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault()
-    setFormError(null)
-    if (url && !isValidDestinationUrl(url)) {
-      setUrlFieldError(DESTINATION_URL_ERROR_MESSAGE)
-      return
-    }
-    setSubmitting(true)
-    try {
-      await createProduct(businessId, {
-        description,
-        price: price ? Number(price) : undefined,
-        margin: margin ? Number(margin) : undefined,
-        features: features || undefined,
-        benefits: benefits || undefined,
-        url: url ? normalizeDestinationUrl(url) : undefined,
-      })
-      setDescription('')
-      setPrice('')
-      setMargin('')
-      setFeatures('')
-      setBenefits('')
-      setUrl('')
-      setUrlFieldError(null)
-      await refresh()
-    } catch (err) {
-      setFormError(err instanceof ApiError ? err.message : 'Could not create product.')
-    } finally {
-      setSubmitting(false)
-    }
-  }
 
   async function handleUpload(productId: string, event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0]
@@ -182,9 +130,28 @@ export function ProductsSection({
           {products.map((product) => {
             const productImages = images[product.id] ?? []
             const imageError = imageErrors[product.id]
+            if (editingId === product.id) {
+              return (
+                <li key={product.id}>
+                  <ProductForm
+                    businessId={businessId}
+                    product={product}
+                    urlRequired={urlRequired}
+                    onSaved={() => {
+                      setEditingId(null)
+                      void refresh()
+                    }}
+                    onCancel={() => setEditingId(null)}
+                  />
+                </li>
+              )
+            }
             return (
               <li key={product.id}>
-                {product.description}
+                {product.description}{' '}
+                <button type="button" onClick={() => setEditingId(product.id)}>
+                  Edit
+                </button>
                 <div>
                   {productImages.map((image) => (
                     <span key={image.id} style={{ display: 'inline-block' }}>
@@ -227,93 +194,11 @@ export function ProductsSection({
 
       <section>
         <h2>Add a product</h2>
-        <form onSubmit={handleSubmit} noValidate>
-          <div className="field">
-            <label htmlFor="product-description">What do you sell?</label>
-            <textarea
-              id="product-description"
-              required
-              value={description}
-              onChange={(event) => setDescription(event.target.value)}
-            />
-          </div>
-          <div className="field">
-            <label htmlFor="price">Price</label>
-            <input
-              id="price"
-              type="number"
-              step="0.01"
-              value={price}
-              onChange={(event) => setPrice(event.target.value)}
-            />
-          </div>
-          <div className="field">
-            <label htmlFor="margin">Margin (as a fraction, e.g. 0.4 for 40%)</label>
-            <input
-              id="margin"
-              type="number"
-              step="0.01"
-              min="0"
-              max="1"
-              placeholder="0.40"
-              value={margin}
-              onChange={(event) => setMargin(event.target.value)}
-            />
-          </div>
-          <div className="field">
-            <label htmlFor="features">Features</label>
-            <textarea
-              id="features"
-              value={features}
-              onChange={(event) => setFeatures(event.target.value)}
-            />
-          </div>
-          <div className="field">
-            <label htmlFor="benefits">Benefits</label>
-            <textarea
-              id="benefits"
-              value={benefits}
-              onChange={(event) => setBenefits(event.target.value)}
-            />
-          </div>
-          <div className="field">
-            <label htmlFor="url">
-              URL{' '}
-              <span className="field-hint">
-                (destination link the ad's CTA button takes people to when clicked
-                {urlRequired
-                  ? ' — required for a Sales or Traffic campaign'
-                  : ' — optional for brand awareness'}
-                )
-              </span>
-            </label>
-            <input
-              id="url"
-              type="text"
-              required={urlRequired}
-              value={url}
-              onChange={(event) => {
-                setUrl(event.target.value)
-                setUrlFieldError(null)
-              }}
-              onBlur={handleUrlBlur}
-              aria-invalid={urlFieldError ? true : undefined}
-            />
-            {urlFieldError && (
-              <p className="form-error" role="alert">
-                {urlFieldError}
-              </p>
-            )}
-          </div>
-          {formError && (
-            <p className="form-error" role="alert">
-              {formError}
-            </p>
-          )}
-          <button type="submit" disabled={submitting}>
-            {submitting ? 'Adding…' : 'Add product'}
-          </button>
-        </form>
+        <ProductForm
+          businessId={businessId}
+          urlRequired={urlRequired}
+          onSaved={() => void refresh()}
+        />
       </section>
     </>
   )

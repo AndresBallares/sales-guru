@@ -9,6 +9,7 @@ vi.mock('../lib/api', async (importOriginal) => {
   return {
     ...actual,
     createProduct: vi.fn<typeof actual.createProduct>(),
+    updateProduct: vi.fn<typeof actual.updateProduct>(),
     listProducts: vi.fn<typeof actual.listProducts>(),
     listProductImages: vi.fn<typeof actual.listProductImages>(),
     uploadProductImage: vi.fn<typeof actual.uploadProductImage>(),
@@ -490,5 +491,96 @@ describe('ProductsSection', () => {
     await user.click(screen.getByRole('button', { name: 'Remove' }))
 
     expect(await screen.findByRole('alert')).toHaveTextContent('Could not delete image.')
+  })
+
+  it('edits a product in place and refreshes the list', async () => {
+    const original = {
+      id: 'prod-1',
+      description: 'Handmade wallets',
+      price: 49.99,
+      margin: null,
+      features: null,
+      benefits: null,
+      url: null,
+    }
+    const updated = { ...original, description: 'Handmade leather wallets' }
+    mockedApi.listProducts.mockResolvedValueOnce([original]).mockResolvedValueOnce([updated])
+    mockedApi.updateProduct.mockResolvedValue(updated)
+    const user = userEvent.setup()
+
+    render(<ProductsSection businessId="biz-1" />)
+    await screen.findByText('Handmade wallets')
+
+    await user.click(screen.getByRole('button', { name: 'Edit' }))
+    // Two forms are on the page while editing (the edit row plus the
+    // always-present "Add a product" form below) — the edit form's field
+    // renders first in DOM order.
+    const descriptionField = screen.getAllByLabelText('What do you sell?')[0]
+    await user.clear(descriptionField)
+    await user.type(descriptionField, 'Handmade leather wallets')
+    await user.click(screen.getByRole('button', { name: 'Save' }))
+
+    await waitFor(() =>
+      expect(mockedApi.updateProduct).toHaveBeenCalledWith('biz-1', 'prod-1', {
+        description: 'Handmade leather wallets',
+        price: 49.99,
+        margin: undefined,
+        features: undefined,
+        benefits: undefined,
+        url: null,
+      }),
+    )
+    expect(await screen.findByText('Handmade leather wallets')).toBeInTheDocument()
+  })
+
+  it('cancels an edit without saving, restoring the row unchanged', async () => {
+    mockedApi.listProducts.mockResolvedValue([
+      {
+        id: 'prod-1',
+        description: 'Handmade wallets',
+        price: null,
+        margin: null,
+        features: null,
+        benefits: null,
+        url: null,
+      },
+    ])
+    const user = userEvent.setup()
+
+    render(<ProductsSection businessId="biz-1" />)
+    await screen.findByText('Handmade wallets')
+
+    await user.click(screen.getByRole('button', { name: 'Edit' }))
+    await user.type(screen.getAllByLabelText('What do you sell?')[0], ' extra text')
+    await user.click(screen.getByRole('button', { name: 'Cancel' }))
+
+    expect(mockedApi.updateProduct).not.toHaveBeenCalled()
+    expect(screen.getByText('Handmade wallets')).toBeInTheDocument()
+    // Back to just the "Add a product" form's field once cancelled.
+    expect(screen.getAllByLabelText('What do you sell?')).toHaveLength(1)
+  })
+
+  it('surfaces a backend 422 inline on the edit form', async () => {
+    mockedApi.listProducts.mockResolvedValue([
+      {
+        id: 'prod-1',
+        description: 'Handmade wallets',
+        price: null,
+        margin: null,
+        features: null,
+        benefits: null,
+        url: 'https://acme.example/wallets',
+      },
+    ])
+    mockedApi.updateProduct.mockRejectedValue(new api.ApiError(422, 'Invalid URL'))
+    const user = userEvent.setup()
+
+    render(<ProductsSection businessId="biz-1" />)
+    await screen.findByText('Handmade wallets')
+
+    await user.click(screen.getByRole('button', { name: 'Edit' }))
+    await user.click(screen.getByRole('button', { name: 'Save' }))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Invalid URL')
   })
 })

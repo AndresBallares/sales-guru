@@ -29,6 +29,34 @@ class ProductCreateRequest(CamelCaseModel):
         return validate_destination_url(value) if value is not None else None
 
 
+class ProductUpdateRequest(CamelCaseModel):
+    """Payload for PATCH .../products/{id} — a partial update.
+
+    Only fields explicitly provided change; an omitted field is left as
+    it is (app/api/product.py's update_product uses model_dump's
+    exclude_unset, not a "None means unchanged" convention, since url
+    must stay nullable — a client explicitly clearing it needs to be
+    distinguishable from simply not mentioning it).
+
+    Products are reusable across campaigns (CLAUDE.md): this endpoint is
+    for correcting/updating the same item being sold, not repurposing a
+    product record to describe a different item — swap the campaign's
+    product for that instead (app/api/campaign.py's update_campaign).
+    """
+
+    description: str | None = None
+    price: float | None = None
+    margin: float | None = None
+    features: str | None = None
+    benefits: str | None = None
+    url: str | None = None
+
+    @field_validator("url")
+    @classmethod
+    def _validate_url(cls, value: str | None) -> str | None:
+        return validate_destination_url(value) if value is not None else None
+
+
 class ProductResponse(CamelCaseModel):
     """Public-facing representation of a Product."""
 
