@@ -895,7 +895,10 @@ export function CampaignsSection({
                     )}
                   </>
                 )}
-                {strategy && (
+                {/* Once ads exist, the creatives are what the user acts on —
+                    the strategy write-up that produced them is no longer
+                    the useful thing to scroll past to reach them. */}
+                {strategy && campaignCreatives.length === 0 && (
                   <div aria-label={`Strategy for ${campaign.name ?? campaign.id}`}>
                     <p>
                       <strong>Offer:</strong> {strategy.offer}
