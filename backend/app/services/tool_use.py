@@ -23,6 +23,17 @@ variability, not a bug in the request itself. parse_tool_input also
 tries json.loads() on any string field that looks JSON-shaped before
 giving up, for the same "don't let one recoverable quirk break
 generation outright" reasoning as the stray-key case.
+
+The two quirks also compound (also observed 2026-09-08, same day): a
+tool call came back as `{"variants": '{"variants": [...]}'}` — the
+*whole* correctly-shaped object, wrapper key and all, stringified and
+then stuffed under that same key again. JSON-decoding the string alone
+recovers `{"variants": {"variants": [...]}}`, which still doesn't
+validate (`variants` is now a dict, not a list) — it takes unwrapping
+*that* result's own stray key to reach the real `{"variants": [...]}`.
+parse_tool_input tries every combination of the two recoveries (decode,
+unwrap, and unwrap-of-decode) rather than just one pass of each, so a
+compounded quirk like this one still resolves.
 """
 
 import json
@@ -100,10 +111,46 @@ def _decode_json_string_fields(raw: dict[str, object]) -> dict[str, object] | No
     return decoded if changed else None
 
 
+def _recovery_candidates(
+    raw: dict[str, object], model: type[BaseModel]
+) -> list[dict[str, object]]:
+    """Build every recoverable reshaping of `raw` worth retrying, in order.
+
+    Composes both known recoveries — JSON-decoding a stringified field
+    and unwrapping a stray top-level key — including applying the second
+    to the result of the first, so a compounded quirk (the whole
+    `{field: [...]}` shape stringified and wrapped under its own field
+    name again) still resolves, not just each quirk in isolation.
+
+    Args:
+        raw: The tool call's raw input, already known not to validate
+            as-is.
+        model: The Pydantic model it was supposed to match.
+
+    Returns:
+        Candidate dicts to try validating, most-likely-first, without
+        duplicates. Empty if neither recovery applies.
+    """
+    candidates: list[dict[str, object]] = []
+    seen: list[dict[str, object]] = []
+
+    def _add(candidate: dict[str, object] | None) -> None:
+        if candidate is not None and candidate not in seen:
+            candidates.append(candidate)
+            seen.append(candidate)
+
+    decoded = _decode_json_string_fields(raw)
+    _add(decoded)
+    _add(_unwrap_stray_key(raw, model))
+    if decoded is not None:
+        _add(_unwrap_stray_key(decoded, model))
+    return candidates
+
+
 def parse_tool_input[ModelT: BaseModel](
     raw: dict[str, object], model: type[ModelT]
 ) -> ModelT:
-    """Validate a tool call's raw input, tolerating two known model quirks.
+    """Validate a tool call's raw input, tolerating known model quirks.
 
     Args:
         raw: The tool_use.input dict as returned by the Anthropic API.
@@ -113,24 +160,16 @@ def parse_tool_input[ModelT: BaseModel](
         The validated model instance.
 
     Raises:
-        ValidationError: If `raw` doesn't match `model`, even after
-            attempting to unwrap a single stray top-level key and to
-            JSON-decode any string field that looked JSON-shaped — the
-            original error, not one from a failed recovery attempt.
+        ValidationError: If `raw` doesn't match `model`, even after every
+            recovery attempt (see _recovery_candidates) — the original
+            error, not one from a failed recovery attempt.
     """
     try:
         return model.model_validate(raw)
     except ValidationError as exc:
-        decoded = _decode_json_string_fields(raw)
-        if decoded is not None:
+        for candidate in _recovery_candidates(raw, model):
             try:
-                return model.model_validate(decoded)
+                return model.model_validate(candidate)
             except ValidationError:
-                pass
-        unwrapped = _unwrap_stray_key(raw, model)
-        if unwrapped is not None:
-            try:
-                return model.model_validate(unwrapped)
-            except ValidationError:
-                pass
+                continue
         raise exc

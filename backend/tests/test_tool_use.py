@@ -96,6 +96,18 @@ def test_parse_tool_input_decodes_a_json_encoded_list_field() -> None:
     assert result.variants == ["a", "b"]
 
 
+def test_parse_tool_input_recovers_from_a_stringified_and_wrapped_field() -> None:
+    """The two quirks compound: the whole `{"variants": [...]}` shape,
+    wrapper key and all, comes back stringified and stuffed under that
+    same field name again — also observed from a real claude-sonnet-5
+    call (2026-09-08). Decoding the string alone isn't enough (it leaves
+    `variants` holding a dict, not a list); it takes unwrapping that
+    dict's own stray key too."""
+    result = parse_tool_input({"variants": '{"variants": ["a", "b"]}'}, _SingleField)
+
+    assert result.variants == ["a", "b"]
+
+
 def test_parse_tool_input_decodes_a_json_encoded_dict_field() -> None:
     """The same recovery works for a dict-shaped field, not just a list —
     _Nested's "detail" field expects a real object, not a JSON string."""
