@@ -92,7 +92,7 @@ describe('DashboardPage', () => {
     await user.type(screen.getByLabelText('Website'), 'https://acme.example')
     await user.type(screen.getByLabelText('Industry'), 'Manufacturing')
     await user.type(screen.getByLabelText('Location'), 'CDMX')
-    await user.type(screen.getByLabelText('Description'), 'We make widgets.')
+    await user.type(screen.getByLabelText(/About your business/), 'We make widgets.')
     await user.click(screen.getByRole('button', { name: 'Create business' }))
 
     await waitFor(() =>
@@ -121,6 +121,22 @@ describe('DashboardPage', () => {
     await user.click(screen.getByRole('button', { name: 'Create business' }))
 
     expect(await screen.findByRole('alert')).toHaveTextContent('Name is required')
+  })
+
+  it('shows a live character counter and caps the description at 1000 characters', async () => {
+    mockedApi.listBusinesses.mockResolvedValue([])
+    const user = userEvent.setup()
+
+    renderDashboard()
+    await screen.findByText(/No businesses yet/)
+
+    const description = screen.getByLabelText(/About your business/)
+    expect(screen.getByText('0/1000')).toBeInTheDocument()
+
+    await user.type(description, 'Family-run since 1985')
+
+    expect(screen.getByText('21/1000')).toBeInTheDocument()
+    expect(description).toHaveAttribute('maxLength', '1000')
   })
 
   it('logs out when the log out button is clicked', async () => {

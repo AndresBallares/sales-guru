@@ -738,6 +738,43 @@ def test_swapping_the_campaign_product_marks_creatives_stale(
     assert all(c["isStale"] is True for c in listed)
 
 
+@pytest.mark.asyncio
+async def test_editing_the_business_description_marks_creatives_stale(
+    client: TestClient,
+) -> None:
+    """A business's own description is a third staleness source (confirmed
+    2026-09-08), independent of the product — there's no PATCH endpoint for
+    Business yet, so this seeds the change directly via Prisma, same
+    "forced-state defense in depth" reasoning as
+    test_select_creative_428s_for_image_attach_when_not_ready above."""
+    _signed_up_client(client)
+    business_id = _create_business(client)
+    seeder = Prisma()
+    await seeder.connect()
+    await seeder.business.update(
+        where={"id": business_id}, data={"description": "Family-run since 1985"}
+    )
+    await seeder.disconnect()
+    campaign_id = _create_campaign(client, business_id)
+    _generate_strategy(client, business_id, campaign_id)
+    generated = client.post(
+        f"/businesses/{business_id}/campaigns/{campaign_id}/creatives"
+    ).json()
+    assert all(c["isStale"] is False for c in generated)
+
+    seeder = Prisma()
+    await seeder.connect()
+    await seeder.business.update(
+        where={"id": business_id}, data={"description": "Now under new ownership"}
+    )
+    await seeder.disconnect()
+
+    listed = client.get(
+        f"/businesses/{business_id}/campaigns/{campaign_id}/creatives"
+    ).json()
+    assert all(c["isStale"] is True for c in listed)
+
+
 def test_swapping_to_a_urlless_product_warns_on_sales(client: TestClient) -> None:
     """Swapping a SALES campaign onto a product with no destination URL
     never blocks — it warns via needsDestinationUrl instead."""

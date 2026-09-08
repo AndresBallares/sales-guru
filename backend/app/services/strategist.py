@@ -66,6 +66,7 @@ from app.services.benchmarks import (
     BenchmarkRange,
 )
 from app.services.meta import AccountCampaignInsights
+from app.services.prompt_safety import quarantine
 from app.services.tool_use import parse_tool_input
 from app.services.unit_economics import compute_unit_economics
 
@@ -149,10 +150,10 @@ def _business_product_audience_lines(
     if business.location:
         lines.append(f"Location: {business.location}")
     if business.description:
-        lines.append(f"About: {business.description}")
+        lines.append(quarantine("About", business.description))
 
     if product is not None:
-        lines += ["", f"Product: {product.description}"]
+        lines += ["", quarantine("Product", product.description)]
         if product.price is not None:
             lines.append(f"Price: {product.price}")
         if product.features:

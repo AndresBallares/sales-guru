@@ -455,7 +455,7 @@ async def publish_campaign(
         if campaign.productId
         else None
     )
-    if is_creative_stale(creative, campaign, product):
+    if is_creative_stale(creative, campaign, product, business):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST, detail=_CREATIVE_STALE
         )

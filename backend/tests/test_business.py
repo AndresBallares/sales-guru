@@ -128,3 +128,30 @@ def test_get_business_404s_for_another_users_business(client: TestClient) -> Non
     response = client.get(f"/businesses/{created['id']}")
 
     assert response.status_code == 404
+
+
+def test_create_business_accepts_a_description_at_the_length_cap(
+    client: TestClient,
+) -> None:
+    """Exactly 1000 characters — the cap itself — is still accepted."""
+    _signed_up_client(client)
+
+    response = client.post(
+        "/businesses", json={"name": "Acme", "description": "a" * 1000}
+    )
+
+    assert response.status_code == 201
+
+
+def test_create_business_rejects_a_description_over_the_length_cap(
+    client: TestClient,
+) -> None:
+    """A pasted-in About page can't balloon the Strategist/Creative prompt —
+    description is capped at 1000 characters, enforced at the schema."""
+    _signed_up_client(client)
+
+    response = client.post(
+        "/businesses", json={"name": "Acme", "description": "a" * 1001}
+    )
+
+    assert response.status_code == 422

@@ -3,6 +3,11 @@ import { Link, useNavigate } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import { ApiError, createBusiness, listBusinesses, type Business } from '../lib/api'
 
+// Mirrors the backend's own cap (app/schemas/business.py) — description is
+// pasted verbatim into the Strategist/Creative Agent prompts, so a pasted-in
+// About page can't balloon the prompt.
+const MAX_DESCRIPTION_LENGTH = 1000
+
 export function DashboardPage() {
   const { user, logout } = useAuth()
   const navigate = useNavigate()
@@ -125,12 +130,26 @@ export function DashboardPage() {
             />
           </div>
           <div className="field">
-            <label htmlFor="description">Description</label>
+            <label htmlFor="description">
+              About your business{' '}
+              <span className="field-hint">
+                (helps the AI write better strategy and ad copy)
+              </span>
+            </label>
             <textarea
               id="description"
+              placeholder={
+                'Who you are, what makes you different, who your typical customer is — ' +
+                "e.g. \"Family-run studio in Brooklyn, handmade recycled-gold pieces, " +
+                'mostly customers buying for milestones."'
+              }
+              maxLength={MAX_DESCRIPTION_LENGTH}
               value={description}
               onChange={(event) => setDescription(event.target.value)}
             />
+            <p className="field-hint">
+              {description.length}/{MAX_DESCRIPTION_LENGTH}
+            </p>
           </div>
           {formError && (
             <p className="form-error" role="alert">

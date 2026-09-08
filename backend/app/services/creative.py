@@ -20,6 +20,7 @@ from prisma.models import Business, Campaign, Creative, Product
 from app.core.config import get_settings
 from app.schemas.creative import GeneratedCreativeBatch, GeneratedCreativeVariant
 from app.schemas.strategy import StrategyContent, primary_audience
+from app.services.prompt_safety import quarantine
 from app.services.tool_use import parse_tool_input
 
 _MODEL = "claude-sonnet-5"
@@ -57,10 +58,10 @@ def _build_prompt(
     if business.industry:
         lines.append(f"Industry: {business.industry}")
     if business.description:
-        lines.append(f"About: {business.description}")
+        lines.append(quarantine("About", business.description))
 
     if product is not None:
-        lines += ["", f"Product: {product.description}"]
+        lines += ["", quarantine("Product", product.description)]
         if product.price is not None:
             lines.append(f"Price: {product.price}")
         if product.features:
@@ -147,17 +148,19 @@ async def generate_creatives(
 
 
 def is_creative_stale(
-    creative: Creative, campaign: Campaign, product: Product | None
+    creative: Creative, campaign: Campaign, product: Product | None, business: Business
 ) -> bool:
-    """Whether a creative's source snapshot no longer matches its product.
+    """Whether a creative's source snapshot no longer matches its grounding.
 
-    A creative is generated grounded in a specific product's description/
-    URL at that moment (see app/api/creative.py's create_creatives, which
-    stamps sourceProductId/sourceDescription/sourceUrl). It goes stale the
-    moment either of those facts moves out from under it — editing the
-    product's description (Part 1), or swapping the campaign onto a
-    different product entirely (Part 2) — because the ad copy/CTA no
-    longer reflects what's actually being sold.
+    A creative is generated grounded in the business's description and a
+    specific product's description/URL at that moment (see app/api/
+    creative.py's create_creatives, which stamps sourceProductId/
+    sourceDescription/sourceUrl/sourceBusinessDescription). It goes stale
+    the moment any of those facts move out from under it — editing the
+    business's own description, editing the product's description (Part
+    1), or swapping the campaign onto a different product entirely (Part
+    2) — because the ad copy/CTA no longer reflects what's actually being
+    sold or who's selling it.
 
     Args:
         creative: The creative to check, with its source_* snapshot.
@@ -165,13 +168,20 @@ def is_creative_stale(
         product: The campaign's current product, or None if it has none.
             Must be the product identified by campaign.productId when one
             is set — callers are responsible for fetching the right row.
+        business: The campaign's business — always present (unlike
+            product), so its description is checked unconditionally,
+            independent of whether a product is even attached.
 
     Returns:
         True if the creative's snapshot no longer matches the campaign's
-        current product. A campaign with no product attached is never
-        stale — that's "no product," a distinct case handled by the
-        caller (e.g. show nothing to regenerate against), not staleness.
+        current business/product grounding. A campaign with no product
+        attached is never stale on the *product* fields — that's "no
+        product," a distinct case handled by the caller (e.g. show
+        nothing to regenerate against) — but a business description
+        mismatch is still staleness regardless.
     """
+    if creative.sourceBusinessDescription != business.description:
+        return True
     if campaign.productId is None:
         return False
     if creative.sourceProductId != campaign.productId:

@@ -20,6 +20,7 @@ vi.mock('../lib/api', async (importOriginal) => {
     createCampaign: vi.fn<typeof actual.createCampaign>(),
     updateCampaign: vi.fn<typeof actual.updateCampaign>(),
     listCampaigns: vi.fn<typeof actual.listCampaigns>(),
+    getBusiness: vi.fn<typeof actual.getBusiness>(),
     listProducts: vi.fn<typeof actual.listProducts>(),
     createProduct: vi.fn<typeof actual.createProduct>(),
     updateProduct: vi.fn<typeof actual.updateProduct>(),
@@ -266,6 +267,14 @@ function fakeTestEvaluation(
 
 beforeEach(() => {
   vi.resetAllMocks()
+  mockedApi.getBusiness.mockResolvedValue({
+    id: 'biz-1',
+    name: 'Acme Jewelry',
+    website: null,
+    industry: null,
+    location: null,
+    description: 'Family-run since 1985',
+  })
   mockedApi.listProducts.mockResolvedValue([])
   mockedApi.listAudiences.mockResolvedValue([])
   mockedApi.getStrategy.mockRejectedValue(new api.ApiError(404, 'Strategy not found'))
@@ -515,6 +524,36 @@ describe('CampaignsSection', () => {
     expect(await screen.findByRole('heading', { name: 'Campaigns' })).toBeInTheDocument()
     expect(screen.queryByRole('heading', { name: 'Create a campaign' })).not.toBeInTheDocument()
     expect(screen.queryByLabelText('Name', { exact: true })).not.toBeInTheDocument()
+  })
+
+  it('nudges toward adding a business description when the campaign step is empty', async () => {
+    mockedApi.listCampaigns.mockResolvedValue([])
+    mockedApi.getBusiness.mockResolvedValue({
+      id: 'biz-1',
+      name: 'Acme Jewelry',
+      website: null,
+      industry: null,
+      location: null,
+      description: null,
+    })
+
+    renderCampaigns(<CampaignsSection businessId="biz-1" />)
+
+    expect(
+      await screen.findByText(/Add a business description for stronger AI-generated/),
+    ).toBeInTheDocument()
+  })
+
+  it('does not nudge once the business already has a description', async () => {
+    mockedApi.listCampaigns.mockResolvedValue([])
+
+    renderCampaigns(<CampaignsSection businessId="biz-1" />)
+
+    await screen.findByRole('heading', { name: 'Create a campaign' })
+
+    expect(
+      screen.queryByText(/Add a business description for stronger AI-generated/),
+    ).not.toBeInTheDocument()
   })
 
   const draftCampaignFixture: api.Campaign = {
