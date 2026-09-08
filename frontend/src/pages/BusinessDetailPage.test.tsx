@@ -45,6 +45,7 @@ const draftCampaign: api.Campaign = {
   endDate: null,
   pausedReason: null,
   dailySpendFlag: null,
+  needsDestinationUrl: false,
 }
 
 beforeEach(() => {

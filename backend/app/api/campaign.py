@@ -60,7 +60,25 @@ _NO_PIXEL_CONFIGURED = (
 )
 
 
-def _to_response(campaign: Campaign) -> CampaignResponse:
+async def _needs_destination_url(campaign: Campaign) -> bool:
+    """Whether the campaign's current product is missing a URL its objective needs.
+
+    Args:
+        campaign: The campaign to check.
+
+    Returns:
+        True if a product is attached but lacks a destination URL that
+        SALES/TRAFFIC requires. False with no product attached at all —
+        that's a distinct "no product" state, surfaced elsewhere (the
+        readiness checklist), not this field's job.
+    """
+    if campaign.productId is None or not requires_destination_url(campaign.objective):
+        return False
+    product = await db.product.find_unique(where={"id": campaign.productId})
+    return product is not None and product.url is None
+
+
+async def _to_response(campaign: Campaign) -> CampaignResponse:
     """Map a Prisma Campaign record to its public response shape.
 
     Args:
@@ -82,11 +100,16 @@ def _to_response(campaign: Campaign) -> CampaignResponse:
         end_date=campaign.endDate,
         paused_reason=campaign.pausedReason,
         daily_spend_flag=campaign.dailySpendFlag,
+        needs_destination_url=await _needs_destination_url(campaign),
     )
 
 
 async def _validate_product(
-    business_id: str, product_id: str | None, objective: str
+    business_id: str,
+    product_id: str | None,
+    objective: str,
+    *,
+    enforce_url_requirement: bool = True,
 ) -> None:
     """Confirm a product id, if given, belongs to this business and qualifies.
 
@@ -101,11 +124,19 @@ async def _validate_product(
         objective: The campaign's objective — SALES/TRAFFIC campaigns
             require the bound product to have a destination URL (see
             app/services/url_validation.py's requires_destination_url).
+        enforce_url_requirement: When True (create_campaign's default),
+            a resolving product that lacks a required URL is rejected
+            outright. update_campaign passes False — swapping a
+            campaign's product is never blocked on this; the response's
+            needs_destination_url field warns instead (see
+            _needs_destination_url), since a swap is a correction the
+            user is actively in the middle of making, not a fresh
+            creation that should refuse to save an inconsistent state.
 
     Raises:
         HTTPException: 404 if product_id is set but doesn't resolve within
             this business. 422 if it resolves but lacks a URL required by
-            objective.
+            objective and enforce_url_requirement is True.
     """
     if product_id is None:
         return
@@ -116,7 +147,11 @@ async def _validate_product(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail=_PRODUCT_NOT_FOUND
         )
-    if requires_destination_url(objective) and product.url is None:
+    if (
+        enforce_url_requirement
+        and requires_destination_url(objective)
+        and product.url is None
+    ):
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail=_PRODUCT_MISSING_URL_FOR_OBJECTIVE,
@@ -230,7 +265,7 @@ async def create_campaign(
         }
     )
     campaign = await advance_to_ready_if_complete(campaign)
-    return _to_response(campaign)
+    return await _to_response(campaign)
 
 
 @router.get("", response_model=list[CampaignResponse])
@@ -247,7 +282,7 @@ async def list_campaigns(
         All campaigns under the business.
     """
     campaigns = await db.campaign.find_many(where={"businessId": business.id})
-    return [_to_response(c) for c in campaigns]
+    return [await _to_response(c) for c in campaigns]
 
 
 @router.patch("/{campaign_id}", response_model=CampaignResponse)
@@ -255,14 +290,28 @@ async def update_campaign(
     payload: CampaignUpdateRequest,
     campaign: Campaign = Depends(get_owned_campaign),
 ) -> CampaignResponse:
-    """Attach a product and/or audience to an existing campaign.
+    """Attach a product and/or audience to an existing campaign, or swap one out.
 
     The objective-first onboarding flow creates a campaign before a
     product or audience necessarily exists. Most of the time one gets
     auto-attached the moment the business ends up with exactly one of
     each (app/services/campaign_readiness.py) — this endpoint is the
     manual fallback for the rest: several products/audiences to choose
-    from, or correcting a wrong auto-attach.
+    from, correcting a wrong auto-attach, or deliberately swapping an
+    already-attached product for a different one (e.g. this campaign is
+    now selling a different item entirely — CLAUDE.md's "Products are
+    reusable across campaigns" note).
+
+    Changing product_id never blocks on that new product missing a
+    destination URL the objective requires (unlike create_campaign) —
+    the response's needs_destination_url field warns instead, since a
+    swap is a correction in progress, not a fresh creation. Any creatives
+    already generated for this campaign are left untouched in storage
+    (never deleted — kept for history) but read as stale from this point
+    on: their stored source_product_id/source_description/source_url
+    snapshot no longer matches the new product, so
+    app/services/creative.py's is_creative_stale (surfaced as is_stale on
+    every creative response) flips true until the user regenerates.
 
     Args:
         payload: A product_id and/or audience_id to set. Omitted fields
@@ -271,15 +320,19 @@ async def update_campaign(
             get_owned_campaign.
 
     Returns:
-        The updated campaign.
+        The updated campaign, with needs_destination_url reflecting the
+        new product (if any) — check this rather than expecting a 422.
 
     Raises:
         HTTPException: 404 if product_id/audience_id is given but doesn't
-            belong to this campaign's business. 422 if product_id resolves
-            but the product lacks a destination URL this campaign's
-            objective requires (see _validate_product).
+            belong to this campaign's business.
     """
-    await _validate_product(campaign.businessId, payload.product_id, campaign.objective)
+    await _validate_product(
+        campaign.businessId,
+        payload.product_id,
+        campaign.objective,
+        enforce_url_requirement=False,
+    )
     await _validate_audience(campaign.businessId, payload.audience_id)
 
     update_data: CampaignUpdateInput = {}
@@ -296,7 +349,7 @@ async def update_campaign(
         assert maybe_updated is not None  # just fetched above, can't vanish mid-request
         result = await advance_to_ready_if_complete(maybe_updated)
 
-    return _to_response(result)
+    return await _to_response(result)
 
 
 @router.post("/{campaign_id}/approve", response_model=CampaignResponse)
@@ -331,7 +384,7 @@ async def approve_campaign(
     )
     assert updated is not None  # just fetched above, can't vanish mid-request
 
-    return _to_response(updated)
+    return await _to_response(updated)
 
 
 @router.post("/{campaign_id}/publish", response_model=CampaignResponse)
@@ -356,10 +409,7 @@ async def publish_campaign(
 
     Raises:
         HTTPException: 400 if the campaign isn't approved yet, Meta isn't
-            fully connected, no creative is selected, the selected
-            creative is stale (see app/services/creative.py's
-            is_creative_stale — its product has since been edited or
-            swapped, so regenerate before publishing), there's no
+            fully connected, no creative is selected, there's no
             destination URL to advertise, or the objective needs a Meta
             Pixel that isn't configured (see requires_pixel); 500 if the
             Meta API call fails (the campaign is moved to FAILED first,
@@ -434,7 +484,7 @@ async def publish_campaign(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)
         ) from exc
 
-    return _to_response(updated)
+    return await _to_response(updated)
 
 
 @router.post("/{campaign_id}/pause", response_model=CampaignResponse)
@@ -485,4 +535,4 @@ async def pause_campaign(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)
         ) from exc
 
-    return _to_response(updated)
+    return await _to_response(updated)

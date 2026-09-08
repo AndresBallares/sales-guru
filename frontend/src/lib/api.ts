@@ -95,6 +95,11 @@ export interface Campaign {
   endDate: string | null
   pausedReason: string | null
   dailySpendFlag: string | null
+  // True when a product is attached but lacks a destination URL this
+  // campaign's SALES/TRAFFIC objective requires — computed by the
+  // backend (app/api/campaign.py's _needs_destination_url), never
+  // blocking the swap that produced it.
+  needsDestinationUrl: boolean
 }
 
 export interface CampaignCreateInput {

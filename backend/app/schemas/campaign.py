@@ -61,3 +61,11 @@ class CampaignResponse(CamelCaseModel):
     end_date: datetime | None
     paused_reason: str | None
     daily_spend_flag: str | None
+    # Computed at read time (app/api/campaign.py's _to_response), never
+    # stored: true when a product is attached but lacks a destination URL
+    # that this campaign's SALES/TRAFFIC objective requires. Swapping a
+    # campaign onto a URL-less product (app/api/campaign.py's
+    # update_campaign) is never blocked outright — this field is how the
+    # frontend surfaces the warning instead, since the swap itself always
+    # succeeds.
+    needs_destination_url: bool

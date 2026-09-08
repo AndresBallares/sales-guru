@@ -44,6 +44,7 @@ function makeCampaign(overrides: Partial<api.Campaign> = {}): api.Campaign {
     endDate: null,
     pausedReason: null,
     dailySpendFlag: null,
+    needsDestinationUrl: false,
     ...overrides,
   }
 }

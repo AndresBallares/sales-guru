@@ -736,3 +736,46 @@ def test_swapping_the_campaign_product_marks_creatives_stale(
     ).json()
     assert len(listed) == 4  # old creatives kept for history, never deleted
     assert all(c["isStale"] is True for c in listed)
+
+
+def test_swapping_to_a_urlless_product_warns_on_sales(client: TestClient) -> None:
+    """Swapping a SALES campaign onto a product with no destination URL
+    never blocks — it warns via needsDestinationUrl instead."""
+    _signed_up_client(client)
+    business_id = _create_business(client)
+    campaign_id = _create_campaign(client, business_id)
+    urlless_product_id = client.post(
+        f"/businesses/{business_id}/products", json={"description": "Necklace"}
+    ).json()["id"]
+
+    response = client.patch(
+        f"/businesses/{business_id}/campaigns/{campaign_id}",
+        json={"productId": urlless_product_id},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["needsDestinationUrl"] is True
+
+
+def test_swapping_to_a_urlless_product_on_awareness_has_no_warning(
+    client: TestClient,
+) -> None:
+    """AWARENESS doesn't need a click-through destination, so no warning."""
+    _signed_up_client(client)
+    business_id = _create_business(client)
+    audience_id = _create_audience(client, business_id)
+    campaign_id = client.post(
+        f"/businesses/{business_id}/campaigns",
+        json={"objective": "AWARENESS", "audienceId": audience_id},
+    ).json()["id"]
+    urlless_product_id = client.post(
+        f"/businesses/{business_id}/products", json={"description": "Necklace"}
+    ).json()["id"]
+
+    response = client.patch(
+        f"/businesses/{business_id}/campaigns/{campaign_id}",
+        json={"productId": urlless_product_id},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["needsDestinationUrl"] is False

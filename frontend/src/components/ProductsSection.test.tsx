@@ -183,6 +183,7 @@ describe('ProductsSection', () => {
         endDate: null,
         pausedReason: null,
         dailySpendFlag: null,
+        needsDestinationUrl: false,
       },
     ])
 
@@ -209,6 +210,7 @@ describe('ProductsSection', () => {
         endDate: null,
         pausedReason: null,
         dailySpendFlag: null,
+        needsDestinationUrl: false,
       },
     ])
 
