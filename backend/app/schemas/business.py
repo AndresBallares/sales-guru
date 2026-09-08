@@ -21,6 +21,21 @@ class BusinessCreateRequest(CamelCaseModel):
     description: str | None = Field(default=None, max_length=_MAX_DESCRIPTION_LENGTH)
 
 
+class BusinessUpdateRequest(CamelCaseModel):
+    """Payload for PATCH .../businesses/{id} — a partial update.
+
+    Only name and description can be changed here (confirmed 2026-09-08)
+    — website/industry/location aren't editable through this endpoint,
+    since nothing has asked for that yet. Only fields explicitly provided
+    change; an omitted field is left as it is (app/api/business.py's
+    update_business uses model_dump's exclude_unset, same convention as
+    ProductUpdateRequest).
+    """
+
+    name: str | None = None
+    description: str | None = Field(default=None, max_length=_MAX_DESCRIPTION_LENGTH)
+
+
 class BusinessResponse(CamelCaseModel):
     """Public-facing representation of a Business."""
 

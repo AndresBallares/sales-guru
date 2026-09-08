@@ -1,11 +1,18 @@
 """Business onboarding endpoints (PRD.md §2 step 2, §7)."""
 
+from typing import cast
+
 from fastapi import APIRouter, Depends, status
 from prisma.models import Business
+from prisma.types import BusinessUpdateInput
 
 from app.core.authz import get_owned_business, get_owned_organization_id
 from app.core.db import db
-from app.schemas.business import BusinessCreateRequest, BusinessResponse
+from app.schemas.business import (
+    BusinessCreateRequest,
+    BusinessResponse,
+    BusinessUpdateRequest,
+)
 
 router = APIRouter(prefix="/businesses", tags=["businesses"])
 
@@ -90,3 +97,35 @@ async def get_business(
         The business.
     """
     return _to_response(business)
+
+
+@router.patch("/{business_id}", response_model=BusinessResponse)
+async def update_business(
+    payload: BusinessUpdateRequest,
+    business: Business = Depends(get_owned_business),
+) -> BusinessResponse:
+    """Partially update a business owned by the current user.
+
+    Only name and description can be changed here (see
+    BusinessUpdateRequest) — only fields present in the request body
+    change.
+
+    Args:
+        payload: The fields to change.
+        business: The business, resolved and ownership-checked by
+            get_owned_business.
+
+    Returns:
+        The updated business.
+
+    Raises:
+        HTTPException: 404 if the business doesn't exist or belongs to a
+            different organization (via get_owned_business). 422 if
+            description exceeds the length cap.
+    """
+    update_data = cast(BusinessUpdateInput, payload.model_dump(exclude_unset=True))
+    if not update_data:
+        return _to_response(business)
+    updated = await db.business.update(where={"id": business.id}, data=update_data)
+    assert updated is not None  # just fetched above, can't vanish mid-request
+    return _to_response(updated)
