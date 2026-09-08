@@ -284,7 +284,14 @@ main > section {
   gap: 1rem;
 }
 
-main > section > form,
+/* Not scoped to `main > section > form` (its original selector) — that
+   missed a form nested any deeper, e.g. ProductForm rendered inside
+   CampaignsSection's product-picker <div> (Part 2) or BusinessEditForm
+   directly under <main>, both of which had their fields/buttons crammed
+   together with no gap at all. Every form in this app is a real
+   multi-field form, never a tiny single-input inline one, so a bare
+   `form` selector is safe. */
+form,
 .meta-step {
   display: flex;
   flex-direction: column;
