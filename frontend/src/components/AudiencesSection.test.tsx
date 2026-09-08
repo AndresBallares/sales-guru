@@ -85,7 +85,7 @@ describe('AudiencesSection', () => {
     await screen.findByText(/No audiences yet/)
 
     await user.type(screen.getByLabelText('Who buys?'), 'Busy parents')
-    await user.type(screen.getByLabelText('Location'), 'New York')
+    await user.type(screen.getByLabelText('Where are your customers?'), 'New York')
     await user.type(screen.getByLabelText('Interests'), 'meal kits')
     await user.click(screen.getByRole('button', { name: 'Add audience' }))
 
