@@ -338,6 +338,194 @@ def test_check_product_url_404s_for_a_nonexistent_product(
         get_settings.cache_clear()
 
 
+def test_update_product_requires_a_session(client: TestClient) -> None:
+    """Updating a product with no session cookie returns 401."""
+    response = client.patch(
+        "/businesses/some-id/products/some-id", json={"description": "New"}
+    )
+
+    assert response.status_code == 401
+
+
+def test_update_product_404s_for_a_nonexistent_product(client: TestClient) -> None:
+    """Updating a product that doesn't exist returns 404."""
+    _signed_up_client(client)
+    business_id = _create_business(client)
+
+    response = client.patch(
+        f"/businesses/{business_id}/products/does-not-exist",
+        json={"description": "New"},
+    )
+
+    assert response.status_code == 404
+
+
+def test_update_product_404s_for_a_product_from_another_business(
+    client: TestClient,
+) -> None:
+    """A product belonging to a different business can't be updated, same
+    "not found" treatment as any other cross-business lookup."""
+    _signed_up_client(client)
+    business_a = _create_business(client, name="Business A")
+    business_b = _create_business(client, name="Business B")
+    product_id = client.post(
+        f"/businesses/{business_b}/products", json={"description": "Widgets"}
+    ).json()["id"]
+
+    response = client.patch(
+        f"/businesses/{business_a}/products/{product_id}",
+        json={"description": "New"},
+    )
+
+    assert response.status_code == 404
+
+
+def test_update_product_404s_for_another_users_product(client: TestClient) -> None:
+    """A user can't update a product under a business they don't own."""
+    _signed_up_client(client, email="alice@example.com")
+    business_id = _create_business(client)
+    product_id = client.post(
+        f"/businesses/{business_id}/products", json={"description": "Widgets"}
+    ).json()["id"]
+    client.post("/auth/logout")
+
+    _signed_up_client(client, email="bob@example.com")
+    response = client.patch(
+        f"/businesses/{business_id}/products/{product_id}",
+        json={"description": "New"},
+    )
+
+    assert response.status_code == 404
+
+
+def test_update_product_partial_update_leaves_omitted_fields_untouched(
+    client: TestClient,
+) -> None:
+    """Only the fields sent in the PATCH body change; everything else
+    keeps its prior value."""
+    _signed_up_client(client)
+    business_id = _create_business(client)
+    product_id = client.post(
+        f"/businesses/{business_id}/products",
+        json={
+            "description": "Handmade leather wallets",
+            "price": 49.99,
+            "margin": 0.4,
+            "features": "Full-grain leather",
+            "benefits": "Lasts a lifetime",
+            "url": "https://acme.example/wallets",
+        },
+    ).json()["id"]
+
+    response = client.patch(
+        f"/businesses/{business_id}/products/{product_id}",
+        json={"description": "Handmade leather wallets, now with a strap"},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["description"] == "Handmade leather wallets, now with a strap"
+    assert body["price"] == 49.99
+    assert body["margin"] == 0.4
+    assert body["features"] == "Full-grain leather"
+    assert body["benefits"] == "Lasts a lifetime"
+    assert body["url"] == "https://acme.example/wallets"
+
+
+def test_update_product_can_change_price_and_url_together(
+    client: TestClient,
+) -> None:
+    """Multiple fields can change in the same request."""
+    _signed_up_client(client)
+    business_id = _create_business(client)
+    product_id = client.post(
+        f"/businesses/{business_id}/products",
+        json={"description": "Widgets", "price": 10.0},
+    ).json()["id"]
+
+    response = client.patch(
+        f"/businesses/{business_id}/products/{product_id}",
+        json={"price": 15.0, "url": "https://acme.example/widgets"},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["price"] == 15.0
+    assert body["url"] == "https://acme.example/widgets"
+    assert body["description"] == "Widgets"
+
+
+def test_update_product_normalizes_a_schemeless_url(client: TestClient) -> None:
+    """Same normalization as create — a missing scheme becomes https://."""
+    _signed_up_client(client)
+    business_id = _create_business(client)
+    product_id = client.post(
+        f"/businesses/{business_id}/products", json={"description": "Widgets"}
+    ).json()["id"]
+
+    response = client.patch(
+        f"/businesses/{business_id}/products/{product_id}",
+        json={"url": "acme.example/ring"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["url"] == "https://acme.example/ring"
+
+
+def test_update_product_rejects_an_invalid_url(client: TestClient) -> None:
+    """An invalid URL returns a 422, and leaves the product unchanged."""
+    _signed_up_client(client)
+    business_id = _create_business(client)
+    product_id = client.post(
+        f"/businesses/{business_id}/products",
+        json={"description": "Widgets", "url": "https://acme.example/widgets"},
+    ).json()["id"]
+
+    response = client.patch(
+        f"/businesses/{business_id}/products/{product_id}",
+        json={"url": "javascript:alert(1)"},
+    )
+
+    assert response.status_code == 422
+    unchanged = client.get(f"/businesses/{business_id}/products").json()[0]
+    assert unchanged["url"] == "https://acme.example/widgets"
+
+
+def test_update_product_can_clear_the_url(client: TestClient) -> None:
+    """url stays nullable — an explicit null clears it rather than being
+    ignored like an omitted field would be."""
+    _signed_up_client(client)
+    business_id = _create_business(client)
+    product_id = client.post(
+        f"/businesses/{business_id}/products",
+        json={"description": "Widgets", "url": "https://acme.example/widgets"},
+    ).json()["id"]
+
+    response = client.patch(
+        f"/businesses/{business_id}/products/{product_id}", json={"url": None}
+    )
+
+    assert response.status_code == 200
+    assert response.json()["url"] is None
+
+
+def test_update_product_with_an_empty_body_changes_nothing(client: TestClient) -> None:
+    """An empty PATCH body is a no-op, not an error."""
+    _signed_up_client(client)
+    business_id = _create_business(client)
+    product_id = client.post(
+        f"/businesses/{business_id}/products",
+        json={"description": "Widgets", "price": 10.0},
+    ).json()["id"]
+
+    response = client.patch(f"/businesses/{business_id}/products/{product_id}", json={})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["description"] == "Widgets"
+    assert body["price"] == 10.0
+
+
 def test_list_products_requires_a_session(client: TestClient) -> None:
     """Listing products with no session cookie returns 401."""
     response = client.get("/businesses/some-id/products")

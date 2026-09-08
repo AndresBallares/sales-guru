@@ -546,6 +546,55 @@ def test_publish_succeeds_and_marks_the_campaign_live(
     assert selected["adId"] is not None
 
 
+def test_publish_400s_when_the_selected_creative_is_stale(client: TestClient) -> None:
+    """Editing the product out from under an already-selected, approved
+    creative blocks publish — the ad no longer reflects what's actually
+    being sold (app/services/creative.py's is_creative_stale)."""
+    business_id, campaign_id = _ready_campaign(client)
+    product_id = client.get(f"/businesses/{business_id}/campaigns").json()[0][
+        "productId"
+    ]
+
+    client.patch(
+        f"/businesses/{business_id}/products/{product_id}",
+        json={"description": "A completely different item"},
+    )
+
+    response = client.post(f"/businesses/{business_id}/campaigns/{campaign_id}/publish")
+
+    assert response.status_code == 400
+    assert "regenerate" in response.json()["detail"].lower()
+
+
+def test_publish_succeeds_after_regenerating_a_stale_creative(
+    client: TestClient,
+) -> None:
+    """Regenerating, re-selecting, and re-approving after an edit clears
+    the staleness block — the same fix path the frontend's Regenerate
+    button drives."""
+    business_id, campaign_id = _ready_campaign(client)
+    product_id = client.get(f"/businesses/{business_id}/campaigns").json()[0][
+        "productId"
+    ]
+    client.patch(
+        f"/businesses/{business_id}/products/{product_id}",
+        json={"description": "A completely different item"},
+    )
+    regenerated = client.post(
+        f"/businesses/{business_id}/campaigns/{campaign_id}/creatives"
+    ).json()
+    client.post(
+        f"/businesses/{business_id}/campaigns/{campaign_id}"
+        f"/creatives/{regenerated[0]['id']}/select"
+    )
+    client.post(f"/businesses/{business_id}/campaigns/{campaign_id}/approve")
+
+    response = client.post(f"/businesses/{business_id}/campaigns/{campaign_id}/publish")
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "LIVE"
+
+
 @pytest.mark.asyncio
 async def test_publish_creates_two_real_adsets_for_a_test_plan_campaign(
     client: TestClient,

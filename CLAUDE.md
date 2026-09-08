@@ -68,6 +68,16 @@ GitHub or Render.
   user-facing flow.
 - **Schema changes**: always `uv run prisma migrate dev --name <desc>`, never
   `prisma db push` — see README.md's Database schema changes section for why.
+- **Products are reusable across campaigns.** If the item being sold is the
+  same, edit the product (`PATCH .../products/{id}`, `app/api/product.py`).
+  If it's a different item, swap the campaign's product instead
+  (`PATCH .../campaigns/{id}` with `productId`, `app/api/campaign.py`).
+  Never repurpose a product record by rewriting its URL/description to
+  describe a different item — that silently invalidates ad creatives
+  generated against the old one for every campaign that shares it, not
+  just the one you're looking at. Both an edit and a swap make any
+  already-generated creative read as stale (`is_creative_stale`,
+  `app/services/creative.py`) until it's regenerated.
 - **Destination URLs**: all URL validation goes through
   `validate_destination_url` (`backend/app/services/url_validation.py`) —
   never add an ad-hoc regex. It's the single source of truth for format

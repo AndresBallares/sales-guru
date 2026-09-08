@@ -305,7 +305,20 @@ main > section > form,
    whole labeled question, not a one-line label, so width:100% forces it
    onto its own full-width line (flex-wrap) instead of crowding next to
    the button, and the column layout below gives its own pieces (legend,
-   Yes/No) real spacing rather than a bare unstyled <fieldset>. */
+   Yes/No) real spacing rather than a bare unstyled <fieldset>. Same
+   reasoning for .campaign-block below: the product row and the stale-ads
+   banner are each a small chunk of content, so without a forced
+   full-width line they'd otherwise wrap into the same row as the
+   campaign summary and the Generate/Regenerate strategy button, reading
+   as one crowded line instead of separate ones. */
+.campaign-block {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.6rem;
+}
+
 fieldset {
   border: none;
   /* The li's own row-gap (0.5rem) already separates this from the line
@@ -612,9 +625,12 @@ button:disabled {
   cursor: not-allowed;
 }
 
-/* Secondary-looking buttons: anything that isn't the primary form-submit
-   action reads better as a quiet outline instead of a second solid pill. */
-li button,
+/* Secondary-looking buttons: the dashboard header's Log out/theme controls
+   read better as a quiet outline than a second solid pill next to the
+   page title. Campaign-row buttons (Change product, Regenerate strategy,
+   Attach, Approve, etc.) deliberately do NOT get this treatment (confirmed
+   2026-09-08) — they use the same solid color-background/white-text style
+   as the primary "Create business" pill everywhere else on the site. */
 .dashboard-header button {
   background: transparent;
   color: var(--text-secondary);
@@ -623,7 +639,6 @@ li button,
   font-weight: 500;
 }
 
-li button:hover:not(:disabled),
 .dashboard-header button:hover:not(:disabled) {
   background: var(--surface-hover);
   border-color: var(--border-hover);

@@ -15,7 +15,7 @@ directly.
 
 import anthropic
 from anthropic import AsyncAnthropic
-from prisma.models import Business, Product
+from prisma.models import Business, Campaign, Creative, Product
 
 from app.core.config import get_settings
 from app.schemas.creative import GeneratedCreativeBatch, GeneratedCreativeVariant
@@ -144,3 +144,39 @@ async def generate_creatives(
 
     batch = parse_tool_input(tool_use.input, GeneratedCreativeBatch)
     return batch.variants
+
+
+def is_creative_stale(
+    creative: Creative, campaign: Campaign, product: Product | None
+) -> bool:
+    """Whether a creative's source snapshot no longer matches its product.
+
+    A creative is generated grounded in a specific product's description/
+    URL at that moment (see app/api/creative.py's create_creatives, which
+    stamps sourceProductId/sourceDescription/sourceUrl). It goes stale the
+    moment either of those facts moves out from under it — editing the
+    product's description (Part 1), or swapping the campaign onto a
+    different product entirely (Part 2) — because the ad copy/CTA no
+    longer reflects what's actually being sold.
+
+    Args:
+        creative: The creative to check, with its source_* snapshot.
+        campaign: Its parent campaign, for the current productId.
+        product: The campaign's current product, or None if it has none.
+            Must be the product identified by campaign.productId when one
+            is set — callers are responsible for fetching the right row.
+
+    Returns:
+        True if the creative's snapshot no longer matches the campaign's
+        current product. A campaign with no product attached is never
+        stale — that's "no product," a distinct case handled by the
+        caller (e.g. show nothing to regenerate against), not staleness.
+    """
+    if campaign.productId is None:
+        return False
+    if creative.sourceProductId != campaign.productId:
+        return True
+    assert product is not None  # campaign.productId set implies its row exists (FK)
+    if creative.sourceDescription != product.description:
+        return True
+    return creative.sourceUrl != product.url

@@ -44,6 +44,7 @@ function makeCampaign(overrides: Partial<api.Campaign> = {}): api.Campaign {
     endDate: null,
     pausedReason: null,
     dailySpendFlag: null,
+    needsDestinationUrl: false,
     ...overrides,
   }
 }
@@ -63,6 +64,7 @@ function makeCreative(overrides: Partial<api.Creative> = {}): api.Creative {
     imageUrl: null,
     status: 'SELECTED',
     createdAt: '2026-09-05T00:00:00Z',
+    isStale: false,
     ...overrides,
   }
 }

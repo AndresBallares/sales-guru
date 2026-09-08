@@ -39,6 +39,20 @@ export interface ProductCreateInput {
   url?: string
 }
 
+// Partial update — a field's absence here (vs. an explicit null/value)
+// decides whether it changes, matching the backend's model_dump
+// exclude_unset semantics (app/schemas/product.py's ProductUpdateRequest).
+// url is the one field a caller may want to explicitly clear, hence
+// `| null` rather than reusing ProductCreateInput's `?: string`.
+export interface ProductUpdateInput {
+  description?: string
+  price?: number
+  margin?: number
+  features?: string
+  benefits?: string
+  url?: string | null
+}
+
 export interface ProductImage {
   id: string
   url: string
@@ -81,6 +95,11 @@ export interface Campaign {
   endDate: string | null
   pausedReason: string | null
   dailySpendFlag: string | null
+  // True when a product is attached but lacks a destination URL this
+  // campaign's SALES/TRAFFIC objective requires — computed by the
+  // backend (app/api/campaign.py's _needs_destination_url), never
+  // blocking the swap that produced it.
+  needsDestinationUrl: boolean
 }
 
 export interface CampaignCreateInput {
@@ -244,6 +263,17 @@ export function createProduct(
 
 export function listProducts(businessId: string): Promise<Product[]> {
   return request<Product[]>(`/businesses/${businessId}/products`)
+}
+
+export function updateProduct(
+  businessId: string,
+  productId: string,
+  input: ProductUpdateInput,
+): Promise<Product> {
+  return request<Product>(`/businesses/${businessId}/products/${productId}`, {
+    method: 'PATCH',
+    body: JSON.stringify(input),
+  })
 }
 
 export function uploadProductImage(
@@ -566,6 +596,10 @@ export interface Creative {
   imageUrl: string | null
   status: CreativeStatus
   createdAt: string
+  // Computed by the backend (app/services/creative.py's is_creative_stale)
+  // — true once the product this was generated from has since been
+  // edited or the campaign swapped onto a different one.
+  isStale: boolean
 }
 
 export function createCreatives(businessId: string, campaignId: string): Promise<Creative[]> {

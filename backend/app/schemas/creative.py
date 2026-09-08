@@ -76,3 +76,8 @@ class CreativeResponse(CamelCaseModel):
     image_url: str | None
     status: CreativeStatus
     created_at: datetime
+    # is_stale is computed at read time via app/services/creative.py's
+    # is_creative_stale — never stored — so it always reflects the
+    # campaign's current product, not whatever was true when this row was
+    # last written.
+    is_stale: bool

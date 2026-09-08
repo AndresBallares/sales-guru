@@ -1,7 +1,7 @@
 """Creative Agent endpoints (PRD.md build step 6)."""
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from prisma.models import Campaign, Creative
+from prisma.models import Campaign, Creative, Product
 from prisma.types import CreativeUpdateInput
 
 from app.api.product_image import product_image_url
@@ -10,7 +10,11 @@ from app.core.db import db
 from app.schemas.creative import CreativeResponse, SelectCreativeRequest
 from app.schemas.strategy import StrategyContentAdapter
 from app.services.campaign_readiness import is_ready
-from app.services.creative import CreativeAgentError, generate_creatives
+from app.services.creative import (
+    CreativeAgentError,
+    generate_creatives,
+    is_creative_stale,
+)
 
 router = APIRouter(
     prefix="/businesses/{business_id}/campaigns/{campaign_id}/creatives",
@@ -25,11 +29,19 @@ _CAMPAIGN_NOT_READY = (
 )
 
 
-def _to_response(creative: Creative) -> CreativeResponse:
+def _to_response(
+    creative: Creative, campaign: Campaign, product: Product | None
+) -> CreativeResponse:
     """Map a Prisma Creative record to its public response shape.
 
     Args:
         creative: The Prisma Creative model instance.
+        campaign: The creative's parent campaign — needed to compute
+            is_stale (app/services/creative.py's is_creative_stale) at
+            read time rather than trusting a stored flag.
+        product: The campaign's current product, or None if it has none.
+            Must be the product identified by campaign.productId when one
+            is set.
 
     Returns:
         The public-facing representation.
@@ -49,16 +61,25 @@ def _to_response(creative: Creative) -> CreativeResponse:
             "imageUrl": creative.imageUrl,
             "status": creative.status,
             "createdAt": creative.createdAt,
+            "isStale": is_creative_stale(creative, campaign, product),
         }
     )
 
 
-async def _list_creatives(campaign_id: str) -> list[CreativeResponse]:
+async def _current_product(campaign: Campaign) -> Product | None:
+    """Fetch the campaign's current product, or None if it has none."""
+    if campaign.productId is None:
+        return None
+    return await db.product.find_unique(where={"id": campaign.productId})
+
+
+async def _list_creatives(campaign: Campaign) -> list[CreativeResponse]:
     """Fetch all creatives for a campaign, oldest first (stable A/B/C/D order)."""
     creatives = await db.creative.find_many(
-        where={"campaignId": campaign_id}, order={"createdAt": "asc"}
+        where={"campaignId": campaign.id}, order={"createdAt": "asc"}
     )
-    return [_to_response(c) for c in creatives]
+    product = await _current_product(campaign)
+    return [_to_response(c, campaign, product) for c in creatives]
 
 
 @router.post(
@@ -106,6 +127,9 @@ async def create_creatives(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)
         ) from exc
 
+    source_description = product.description if product is not None else None
+    source_url = product.url if product is not None else None
+
     await db.creative.delete_many(where={"campaignId": campaign.id})
     for variant in variants:
         await db.creative.create(
@@ -118,13 +142,20 @@ async def create_creatives(
                 "creativeAngle": variant.creative_angle,
                 "imagePrompt": variant.image_prompt,
                 "videoPrompt": variant.video_prompt,
+                # Snapshot the product this batch was actually grounded in
+                # (app/services/creative.py's is_creative_stale compares
+                # against this later) — None/None/None when there's no
+                # product, same as the prompt itself handling that case.
+                "sourceProductId": product.id if product is not None else None,
+                "sourceDescription": source_description,
+                "sourceUrl": source_url,
             }
         )
     await db.campaign.update(
         where={"id": campaign.id}, data={"status": "ADS_GENERATED"}
     )
 
-    return await _list_creatives(campaign.id)
+    return await _list_creatives(campaign)
 
 
 @router.get("", response_model=list[CreativeResponse])
@@ -140,7 +171,7 @@ async def list_creatives(
     Returns:
         The campaign's creative variants, oldest first.
     """
-    return await _list_creatives(campaign.id)
+    return await _list_creatives(campaign)
 
 
 @router.post("/{creative_id}/select", response_model=CreativeResponse)
@@ -228,4 +259,5 @@ async def select_creative(
         where={"id": campaign.id}, data={"status": "PENDING_APPROVAL"}
     )
 
-    return _to_response(updated)
+    product = await _current_product(campaign)
+    return _to_response(updated, campaign, product)

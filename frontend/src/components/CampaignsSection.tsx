@@ -40,6 +40,7 @@ import {
   type TargetLocation,
   type TestEvaluation,
 } from '../lib/api'
+import { ProductForm } from './ProductForm'
 
 function formatLocations(locations: TargetLocation[]): string {
   return locations
@@ -96,6 +97,18 @@ export function CampaignsSection({
   const [pickAudienceId, setPickAudienceId] = useState<Record<string, string>>({})
   const [attachingId, setAttachingId] = useState<string | null>(null)
   const [attachErrors, setAttachErrors] = useState<Record<string, string>>({})
+
+  // "Change product" is always visible (Part 2), not just while a
+  // campaign is DRAFT and missing one — reuses pickProductId/
+  // handleAttachToCampaign above for the actual swap. Only one
+  // campaign's picker is open at a time.
+  const [productPickerId, setProductPickerId] = useState<string | null>(null)
+  const [addingProductForCampaignId, setAddingProductForCampaignId] = useState<string | null>(
+    null,
+  )
+  const [editingProductForCampaignId, setEditingProductForCampaignId] = useState<string | null>(
+    null,
+  )
 
   const [name, setName] = useState('')
   const [objective, setObjective] = useState<Objective>('SALES')
@@ -641,6 +654,8 @@ export function CampaignsSection({
             // close over it — a plain property access re-widens to
             // `string | null` inside a nested closure.
             const campaignProductId = campaign.productId
+            const currentProduct = products.find((p) => p.id === campaignProductId)
+            const hasStaleCreatives = campaignCreatives.some((c) => c.isStale)
             return (
               <li key={campaign.id}>
                 {campaign.name ? `${campaign.name} — ` : ''}
@@ -663,49 +678,129 @@ export function CampaignsSection({
                     )}
                   </p>
                 )}
+                <div
+                  className="campaign-block"
+                  aria-label={`Product for ${campaign.name ?? campaign.id}`}
+                >
+                  <p>
+                    Product: {currentProduct ? currentProduct.description : 'No product selected'}
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setEditingProductForCampaignId(null)
+                      setAddingProductForCampaignId(null)
+                      setProductPickerId((prev) => (prev === campaign.id ? null : campaign.id))
+                    }}
+                  >
+                    Change product
+                  </button>
+                  {campaign.needsDestinationUrl && (
+                    <p className="form-error" role="alert">
+                      This product needs a destination link before you can publish a Sales or
+                      Traffic campaign.{' '}
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setProductPickerId(campaign.id)
+                          setAddingProductForCampaignId(null)
+                          setEditingProductForCampaignId(campaign.id)
+                        }}
+                      >
+                        Edit product
+                      </button>
+                    </p>
+                  )}
+                  {productPickerId === campaign.id &&
+                    (editingProductForCampaignId === campaign.id && currentProduct ? (
+                      <ProductForm
+                        businessId={businessId}
+                        product={currentProduct}
+                        onSaved={() => {
+                          setEditingProductForCampaignId(null)
+                          setProductPickerId(null)
+                          void refresh()
+                        }}
+                        onCancel={() => setEditingProductForCampaignId(null)}
+                      />
+                    ) : addingProductForCampaignId === campaign.id ? (
+                      <ProductForm
+                        businessId={businessId}
+                        onSaved={(created) => {
+                          setAddingProductForCampaignId(null)
+                          setProductPickerId(null)
+                          void handleAttachToCampaign(campaign.id, { productId: created.id })
+                        }}
+                        onCancel={() => setAddingProductForCampaignId(null)}
+                      />
+                    ) : (
+                      <div className="button-row">
+                        <select
+                          aria-label="Change product"
+                          value={pickProductId[campaign.id] ?? ''}
+                          onChange={(event) =>
+                            setPickProductId((prev) => ({
+                              ...prev,
+                              [campaign.id]: event.target.value,
+                            }))
+                          }
+                        >
+                          <option value="">Choose a product…</option>
+                          {products.map((product) => (
+                            <option key={product.id} value={product.id}>
+                              {product.description}
+                            </option>
+                          ))}
+                        </select>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            void handleAttachToCampaign(campaign.id, {
+                              productId: pickProductId[campaign.id],
+                            })
+                            setProductPickerId(null)
+                          }}
+                          disabled={!pickProductId[campaign.id] || attachingId === campaign.id}
+                        >
+                          Attach
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setAddingProductForCampaignId(campaign.id)}
+                        >
+                          Add new product
+                        </button>
+                      </div>
+                    ))}
+                  {attachErrors[campaign.id] && (
+                    <p className="form-error" role="alert">
+                      {attachErrors[campaign.id]}
+                    </p>
+                  )}
+                </div>
+                {hasStaleCreatives && (
+                  <div
+                    className="campaign-block"
+                    aria-label={`Stale ads for ${campaign.name ?? campaign.id}`}
+                  >
+                    <p role="alert">
+                      These ads were generated from an older version of the product. Regenerate?
+                    </p>
+                    <button
+                      type="button"
+                      onClick={() => void handleGenerateCreatives(campaign.id)}
+                      disabled={generatingCreativesId === campaign.id}
+                    >
+                      {generatingCreativesId === campaign.id ? 'Regenerating…' : 'Regenerate'}
+                    </button>
+                  </div>
+                )}
                 {campaign.status === 'DRAFT' ? (
                   <div aria-label={`Campaign readiness for ${campaign.name ?? campaign.id}`}>
                     <p>Campaign needs:</p>
                     <ul>
                       <li>✓ Objective</li>
-                      <li>
-                        {campaign.productId ? '✓' : '✗'} Product
-                        {!campaign.productId && products.length > 1 && (
-                          <>
-                            {' '}
-                            <select
-                              aria-label="Which product?"
-                              value={pickProductId[campaign.id] ?? ''}
-                              onChange={(event) =>
-                                setPickProductId((prev) => ({
-                                  ...prev,
-                                  [campaign.id]: event.target.value,
-                                }))
-                              }
-                            >
-                              <option value="">Which product?</option>
-                              {products.map((product) => (
-                                <option key={product.id} value={product.id}>
-                                  {product.description}
-                                </option>
-                              ))}
-                            </select>
-                            <button
-                              type="button"
-                              onClick={() =>
-                                void handleAttachToCampaign(campaign.id, {
-                                  productId: pickProductId[campaign.id],
-                                })
-                              }
-                              disabled={
-                                !pickProductId[campaign.id] || attachingId === campaign.id
-                              }
-                            >
-                              Attach
-                            </button>
-                          </>
-                        )}
-                      </li>
+                      <li>{campaign.productId ? '✓' : '✗'} Product</li>
                       <li>
                         {campaign.audienceId ? '✓' : '✗'} Audience
                         {!campaign.audienceId && audiences.length > 1 && (
@@ -745,11 +840,6 @@ export function CampaignsSection({
                         )}
                       </li>
                     </ul>
-                    {attachErrors[campaign.id] && (
-                      <p className="form-error" role="alert">
-                        {attachErrors[campaign.id]}
-                      </p>
-                    )}
                   </div>
                 ) : (
                   <>

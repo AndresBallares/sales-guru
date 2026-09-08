@@ -302,10 +302,13 @@ def test_create_campaign_allows_an_awareness_objective_with_a_urlless_product(
     assert response.status_code == 201
 
 
-def test_update_campaign_rejects_binding_a_urlless_product_to_a_sales_campaign(
+def test_update_campaign_warns_instead_of_blocking_a_urlless_product_on_sales(
     client: TestClient,
 ) -> None:
-    """The same rule applies to the manual product-binding fallback."""
+    """Unlike create_campaign, binding/swapping via PATCH never blocks on a
+    missing URL — it warns via needs_destination_url instead (confirmed
+    2026-09-08: a swap is a correction in progress, not a fresh creation
+    that should refuse to save)."""
     _signed_up_client(client)
     business_id = _create_business(client)
     # Two products (rather than one) so auto-attach can't decide and leaves
@@ -326,7 +329,10 @@ def test_update_campaign_rejects_binding_a_urlless_product_to_a_sales_campaign(
         json={"productId": product_id},
     )
 
-    assert response.status_code == 422
+    assert response.status_code == 200
+    body = response.json()
+    assert body["productId"] == product_id
+    assert body["needsDestinationUrl"] is True
 
 
 def test_create_campaign_404s_for_an_audience_from_another_business(

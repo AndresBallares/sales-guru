@@ -21,6 +21,8 @@ vi.mock('../lib/api', async (importOriginal) => {
     updateCampaign: vi.fn<typeof actual.updateCampaign>(),
     listCampaigns: vi.fn<typeof actual.listCampaigns>(),
     listProducts: vi.fn<typeof actual.listProducts>(),
+    createProduct: vi.fn<typeof actual.createProduct>(),
+    updateProduct: vi.fn<typeof actual.updateProduct>(),
     listAudiences: vi.fn<typeof actual.listAudiences>(),
     uploadProductImage: vi.fn<typeof actual.uploadProductImage>(),
     listProductImages: vi.fn<typeof actual.listProductImages>(),
@@ -87,6 +89,7 @@ function fakeCreative(overrides: Partial<api.Creative> = {}): api.Creative {
     imageUrl: null,
     status: 'GENERATED',
     createdAt: '2026-08-08T00:00:00Z',
+    isStale: false,
     ...overrides,
   }
 }
@@ -306,6 +309,7 @@ describe('CampaignsSection', () => {
         endDate: null,
         pausedReason: null,
         dailySpendFlag: null,
+        needsDestinationUrl: false,
       },
     ])
 
@@ -329,6 +333,7 @@ describe('CampaignsSection', () => {
         endDate: null,
         pausedReason: null,
         dailySpendFlag: null,
+        needsDestinationUrl: false,
       },
     ])
 
@@ -372,6 +377,7 @@ describe('CampaignsSection', () => {
           endDate: null,
           pausedReason: null,
           dailySpendFlag: null,
+          needsDestinationUrl: false,
         },
       ])
     mockedApi.createCampaign.mockResolvedValue({
@@ -387,6 +393,7 @@ describe('CampaignsSection', () => {
       endDate: null,
       pausedReason: null,
       dailySpendFlag: null,
+      needsDestinationUrl: false,
     })
     const user = userEvent.setup()
 
@@ -431,6 +438,7 @@ describe('CampaignsSection', () => {
         endDate: '2027-06-04T00:00:00Z',
         pausedReason: null,
         dailySpendFlag: null,
+        needsDestinationUrl: false,
       },
     ])
     mockedApi.createCampaign.mockResolvedValue({
@@ -446,6 +454,7 @@ describe('CampaignsSection', () => {
       endDate: '2027-06-04T00:00:00Z',
       pausedReason: null,
       dailySpendFlag: null,
+      needsDestinationUrl: false,
     })
     const user = userEvent.setup()
 
@@ -497,6 +506,7 @@ describe('CampaignsSection', () => {
         endDate: null,
         pausedReason: null,
         dailySpendFlag: null,
+        needsDestinationUrl: false,
       },
     ])
 
@@ -520,6 +530,7 @@ describe('CampaignsSection', () => {
     endDate: null,
     pausedReason: null,
     dailySpendFlag: null,
+    needsDestinationUrl: false,
   }
 
   it('shows a readiness checklist for a DRAFT campaign missing a product and audience', async () => {
@@ -534,7 +545,7 @@ describe('CampaignsSection', () => {
     expect(screen.queryByRole('button', { name: 'Generate strategy' })).not.toBeInTheDocument()
   })
 
-  it('does not show a manual product/audience picker with zero or one to choose from', async () => {
+  it('does not show a manual audience picker with zero or one to choose from', async () => {
     mockedApi.listCampaigns.mockResolvedValue([draftCampaignFixture])
     mockedApi.listProducts.mockResolvedValue([
       {
@@ -551,11 +562,33 @@ describe('CampaignsSection', () => {
     renderCampaigns(<CampaignsSection businessId="biz-1" />)
 
     await screen.findByLabelText('Campaign readiness for camp-1')
-    expect(screen.queryByLabelText('Which product?')).not.toBeInTheDocument()
     expect(screen.queryByLabelText('Which audience?')).not.toBeInTheDocument()
   })
 
-  it('lets the user manually attach a product when there are several to choose from', async () => {
+  it('always shows a "Change product" control, regardless of product count', async () => {
+    mockedApi.listCampaigns.mockResolvedValue([draftCampaignFixture])
+    mockedApi.listProducts.mockResolvedValue([
+      {
+        id: 'prod-1',
+        description: 'Handmade wallets',
+        price: null,
+        margin: null,
+        features: null,
+        benefits: null,
+        url: null,
+      },
+    ])
+
+    renderCampaigns(<CampaignsSection businessId="biz-1" />)
+
+    const productRow = await screen.findByLabelText('Product for camp-1')
+    expect(productRow).toHaveTextContent('No product selected')
+    expect(screen.getByRole('button', { name: 'Change product' })).toBeInTheDocument()
+    // The picker itself is collapsed until "Change product" is clicked.
+    expect(screen.queryByLabelText('Change product', { selector: 'select' })).toBeNull()
+  })
+
+  it('lets the user swap a campaign onto a different existing product', async () => {
     mockedApi.listCampaigns.mockResolvedValue([draftCampaignFixture])
     mockedApi.listProducts.mockResolvedValue([
       {
@@ -584,17 +617,136 @@ describe('CampaignsSection', () => {
     const user = userEvent.setup()
 
     renderCampaigns(<CampaignsSection businessId="biz-1" />)
-    await screen.findByLabelText('Campaign readiness for camp-1')
+    await screen.findByLabelText('Product for camp-1')
 
-    await user.selectOptions(screen.getByLabelText('Which product?'), 'prod-2')
-    await user.click(screen.getAllByRole('button', { name: 'Attach' })[0])
+    await user.click(screen.getByRole('button', { name: 'Change product' }))
+    await user.selectOptions(screen.getByLabelText('Change product', { selector: 'select' }), 'prod-2')
+    await user.click(screen.getByRole('button', { name: 'Attach' }))
 
     await waitFor(() =>
       expect(mockedApi.updateCampaign).toHaveBeenCalledWith('biz-1', 'camp-1', {
         productId: 'prod-2',
       }),
     )
-    expect(await screen.findByText('✓ Product')).toBeInTheDocument()
+  })
+
+  it('creates and attaches a brand new product from the "Change product" picker', async () => {
+    mockedApi.listCampaigns.mockResolvedValue([draftCampaignFixture])
+    mockedApi.listProducts.mockResolvedValue([
+      {
+        id: 'prod-1',
+        description: 'Handmade wallets',
+        price: null,
+        margin: null,
+        features: null,
+        benefits: null,
+        url: null,
+      },
+    ])
+    const created = {
+      id: 'prod-2',
+      description: 'Leather belts',
+      price: null,
+      margin: null,
+      features: null,
+      benefits: null,
+      url: null,
+    }
+    mockedApi.createProduct.mockResolvedValue(created)
+    mockedApi.updateCampaign.mockResolvedValue({
+      ...draftCampaignFixture,
+      productId: 'prod-2',
+    })
+    const user = userEvent.setup()
+
+    renderCampaigns(<CampaignsSection businessId="biz-1" />)
+    await screen.findByLabelText('Product for camp-1')
+
+    await user.click(screen.getByRole('button', { name: 'Change product' }))
+    await user.click(screen.getByRole('button', { name: 'Add new product' }))
+    await user.type(screen.getByLabelText('What do you sell?'), 'Leather belts')
+    await user.click(screen.getByRole('button', { name: 'Add product' }))
+
+    await waitFor(() =>
+      expect(mockedApi.updateCampaign).toHaveBeenCalledWith('biz-1', 'camp-1', {
+        productId: 'prod-2',
+      }),
+    )
+  })
+
+  it('shows a warning and an edit link when the attached product needs a destination URL', async () => {
+    const urllessProduct = {
+      id: 'prod-1',
+      description: 'Handmade wallets',
+      price: null,
+      margin: null,
+      features: null,
+      benefits: null,
+      url: null,
+    }
+    mockedApi.listCampaigns.mockResolvedValue([
+      { ...draftCampaignFixture, productId: 'prod-1', needsDestinationUrl: true },
+    ])
+    mockedApi.listProducts.mockResolvedValue([urllessProduct])
+    mockedApi.updateProduct.mockResolvedValue({
+      ...urllessProduct,
+      url: 'https://acme.example/wallets',
+    })
+    const user = userEvent.setup()
+
+    renderCampaigns(<CampaignsSection businessId="biz-1" />)
+    const productRow = await screen.findByLabelText('Product for camp-1')
+    expect(productRow).toHaveTextContent(
+      'This product needs a destination link before you can publish a Sales or Traffic campaign.',
+    )
+
+    await user.click(screen.getByRole('button', { name: 'Edit product' }))
+    await user.type(screen.getByLabelText(/^URL/), 'https://acme.example/wallets')
+    await user.click(screen.getByRole('button', { name: 'Save' }))
+
+    await waitFor(() =>
+      expect(mockedApi.updateProduct).toHaveBeenCalledWith('biz-1', 'prod-1', {
+        description: 'Handmade wallets',
+        price: undefined,
+        margin: undefined,
+        features: undefined,
+        benefits: undefined,
+        url: 'https://acme.example/wallets',
+      }),
+    )
+  })
+
+  it('shows a stale-ads banner and regenerates from it', async () => {
+    mockedApi.listCampaigns.mockResolvedValue([
+      { ...draftCampaignFixture, status: 'ADS_GENERATED', productId: 'prod-1' },
+    ])
+    mockedApi.listProducts.mockResolvedValue([
+      {
+        id: 'prod-1',
+        description: 'Necklace',
+        price: null,
+        margin: null,
+        features: null,
+        benefits: null,
+        url: null,
+      },
+    ])
+    mockedApi.listCreatives.mockResolvedValue([fakeCreative({ isStale: true })])
+    mockedApi.createCreatives.mockResolvedValue([fakeCreative({ isStale: false })])
+    const user = userEvent.setup()
+
+    renderCampaigns(<CampaignsSection businessId="biz-1" />)
+    const banner = await screen.findByLabelText('Stale ads for camp-1')
+    expect(banner).toHaveTextContent(
+      'These ads were generated from an older version of the product. Regenerate?',
+    )
+
+    await user.click(screen.getByRole('button', { name: 'Regenerate' }))
+
+    await waitFor(() => expect(mockedApi.createCreatives).toHaveBeenCalledWith('biz-1', 'camp-1'))
+    await waitFor(() =>
+      expect(screen.queryByLabelText('Stale ads for camp-1')).not.toBeInTheDocument(),
+    )
   })
 
   it('lets the user manually attach an audience when there are several to choose from', async () => {
@@ -667,9 +819,10 @@ describe('CampaignsSection', () => {
     const user = userEvent.setup()
 
     renderCampaigns(<CampaignsSection businessId="biz-1" />)
-    await screen.findByLabelText('Campaign readiness for camp-1')
+    await screen.findByLabelText('Product for camp-1')
 
-    await user.selectOptions(screen.getByLabelText('Which product?'), 'prod-2')
+    await user.click(screen.getByRole('button', { name: 'Change product' }))
+    await user.selectOptions(screen.getByLabelText('Change product', { selector: 'select' }), 'prod-2')
     await user.click(screen.getByRole('button', { name: 'Attach' }))
 
     expect(await screen.findByRole('alert')).toHaveTextContent('Product not found')
@@ -690,6 +843,7 @@ describe('CampaignsSection', () => {
         endDate: null,
         pausedReason: null,
         dailySpendFlag: null,
+        needsDestinationUrl: false,
       },
     ])
     mockedApi.createStrategy.mockResolvedValue(FAKE_STRATEGY)
@@ -727,6 +881,7 @@ describe('CampaignsSection', () => {
         endDate: null,
         pausedReason: null,
         dailySpendFlag: null,
+        needsDestinationUrl: false,
       },
     ])
     mockedApi.createStrategy.mockRejectedValue(
@@ -759,6 +914,7 @@ describe('CampaignsSection', () => {
         endDate: null,
         pausedReason: null,
         dailySpendFlag: null,
+        needsDestinationUrl: false,
       },
     ])
     mockedApi.createStrategy
@@ -796,6 +952,7 @@ describe('CampaignsSection', () => {
         endDate: null,
         pausedReason: null,
         dailySpendFlag: null,
+        needsDestinationUrl: false,
       },
     ])
     mockedApi.createStrategy.mockResolvedValue({
@@ -838,6 +995,7 @@ describe('CampaignsSection', () => {
         endDate: null,
         pausedReason: null,
         dailySpendFlag: null,
+        needsDestinationUrl: false,
       },
     ])
     mockedApi.getStrategy.mockResolvedValue(FAKE_STRATEGY)
@@ -863,6 +1021,7 @@ describe('CampaignsSection', () => {
         endDate: null,
         pausedReason: null,
         dailySpendFlag: null,
+        needsDestinationUrl: false,
       },
     ])
     mockedApi.getStrategy.mockResolvedValue(FAKE_STRATEGY)
@@ -901,6 +1060,7 @@ describe('CampaignsSection', () => {
         endDate: null,
         pausedReason: null,
         dailySpendFlag: null,
+        needsDestinationUrl: false,
       },
     ])
     mockedApi.getStrategy.mockResolvedValue(FAKE_STRATEGY)
@@ -934,6 +1094,7 @@ describe('CampaignsSection', () => {
         endDate: null,
         pausedReason: null,
         dailySpendFlag: null,
+        needsDestinationUrl: false,
       },
     ])
     mockedApi.getStrategy.mockResolvedValue(FAKE_STRATEGY)
@@ -959,6 +1120,7 @@ describe('CampaignsSection', () => {
       endDate: null,
       pausedReason: null,
       dailySpendFlag: null,
+      needsDestinationUrl: false,
     }
     mockedApi.listCampaigns.mockResolvedValueOnce([draftCampaign])
     mockedApi.listCampaigns.mockResolvedValueOnce([
@@ -1013,6 +1175,7 @@ describe('CampaignsSection', () => {
         endDate: null,
         pausedReason: null,
         dailySpendFlag: null,
+        needsDestinationUrl: false,
       },
     ])
     mockedApi.getStrategy.mockResolvedValue(FAKE_STRATEGY)
@@ -1040,6 +1203,7 @@ describe('CampaignsSection', () => {
       endDate: null,
       pausedReason: null,
       dailySpendFlag: null,
+      needsDestinationUrl: false,
     }
     mockedApi.listCampaigns.mockResolvedValue([campaign])
     mockedApi.getStrategy.mockResolvedValue(FAKE_STRATEGY)
@@ -1096,6 +1260,7 @@ describe('CampaignsSection', () => {
       endDate: null,
       pausedReason: null,
       dailySpendFlag: null,
+      needsDestinationUrl: false,
     }
     mockedApi.listCampaigns.mockResolvedValue([campaign])
     mockedApi.getStrategy.mockResolvedValue(FAKE_STRATEGY)
@@ -1151,6 +1316,7 @@ describe('CampaignsSection', () => {
       endDate: null,
       pausedReason: null,
       dailySpendFlag: null,
+      needsDestinationUrl: false,
     }
     mockedApi.listCampaigns.mockResolvedValue([campaign])
     mockedApi.getStrategy.mockResolvedValue(FAKE_STRATEGY)
@@ -1184,6 +1350,7 @@ describe('CampaignsSection', () => {
       endDate: null,
       pausedReason: null,
       dailySpendFlag: null,
+      needsDestinationUrl: false,
     }
     mockedApi.listCampaigns.mockResolvedValue([campaign])
     mockedApi.getStrategy.mockResolvedValue(FAKE_STRATEGY)
@@ -1218,6 +1385,7 @@ describe('CampaignsSection', () => {
       endDate: null,
       pausedReason: null,
       dailySpendFlag: null,
+      needsDestinationUrl: false,
     }
     mockedApi.listCampaigns.mockResolvedValue([campaign])
     mockedApi.getStrategy.mockResolvedValue(FAKE_STRATEGY)
@@ -1251,6 +1419,7 @@ describe('CampaignsSection', () => {
       endDate: null,
       pausedReason: null,
       dailySpendFlag: null,
+      needsDestinationUrl: false,
     }
     mockedApi.listCampaigns.mockResolvedValue([campaign])
     mockedApi.getStrategy.mockResolvedValue(FAKE_STRATEGY)
@@ -1283,6 +1452,7 @@ describe('CampaignsSection', () => {
       endDate: null,
       pausedReason: null,
       dailySpendFlag: null,
+      needsDestinationUrl: false,
     }
     mockedApi.listCampaigns.mockResolvedValue([campaign])
     mockedApi.getStrategy.mockResolvedValue(FAKE_STRATEGY)
@@ -1315,6 +1485,7 @@ describe('CampaignsSection', () => {
       endDate: null,
       pausedReason: null,
       dailySpendFlag: null,
+      needsDestinationUrl: false,
     }
     mockedApi.listCampaigns.mockResolvedValue([campaign])
     mockedApi.getStrategy.mockResolvedValue(FAKE_STRATEGY)
@@ -1360,6 +1531,7 @@ describe('CampaignsSection', () => {
         endDate: null,
         pausedReason: null,
         dailySpendFlag: null,
+        needsDestinationUrl: false,
       },
     ])
     mockedApi.getStrategy.mockResolvedValue(FAKE_STRATEGY)
@@ -1392,6 +1564,7 @@ describe('CampaignsSection', () => {
         endDate: null,
         pausedReason: null,
         dailySpendFlag: null,
+        needsDestinationUrl: false,
       },
     ])
     mockedApi.getStrategy.mockResolvedValue(FAKE_STRATEGY)
@@ -1422,6 +1595,7 @@ describe('CampaignsSection', () => {
         endDate: null,
         pausedReason: null,
         dailySpendFlag: null,
+        needsDestinationUrl: false,
       },
     ])
     mockedApi.listCampaigns.mockResolvedValueOnce([
@@ -1438,6 +1612,7 @@ describe('CampaignsSection', () => {
         endDate: null,
         pausedReason: null,
         dailySpendFlag: null,
+        needsDestinationUrl: false,
       },
     ])
     mockedApi.getStrategy.mockResolvedValue(FAKE_STRATEGY)
@@ -1455,6 +1630,7 @@ describe('CampaignsSection', () => {
       endDate: null,
       pausedReason: null,
       dailySpendFlag: null,
+      needsDestinationUrl: false,
     })
     mockedApi.publishCampaign.mockResolvedValue({
       id: 'camp-1',
@@ -1469,6 +1645,7 @@ describe('CampaignsSection', () => {
       endDate: null,
       pausedReason: null,
       dailySpendFlag: null,
+      needsDestinationUrl: false,
     })
     const user = userEvent.setup()
 
@@ -1500,6 +1677,7 @@ describe('CampaignsSection', () => {
         endDate: null,
         pausedReason: null,
         dailySpendFlag: null,
+        needsDestinationUrl: false,
       },
     ])
     mockedApi.listCampaigns.mockResolvedValueOnce([
@@ -1516,6 +1694,7 @@ describe('CampaignsSection', () => {
         endDate: null,
         pausedReason: 'Manually paused',
         dailySpendFlag: null,
+        needsDestinationUrl: false,
       },
     ])
     mockedApi.pauseCampaign.mockResolvedValue({
@@ -1531,6 +1710,7 @@ describe('CampaignsSection', () => {
       endDate: null,
       pausedReason: 'Manually paused',
       dailySpendFlag: null,
+      needsDestinationUrl: false,
     })
     const user = userEvent.setup()
 
@@ -1559,6 +1739,7 @@ describe('CampaignsSection', () => {
         endDate: null,
         pausedReason: null,
         dailySpendFlag: null,
+        needsDestinationUrl: false,
       },
     ])
     mockedApi.pauseCampaign.mockRejectedValue(
@@ -1589,6 +1770,7 @@ describe('CampaignsSection', () => {
         endDate: null,
         pausedReason: null,
         dailySpendFlag: null,
+        needsDestinationUrl: false,
       },
     ])
     mockedApi.pauseCampaign.mockRejectedValue(new Error('network down'))
@@ -1617,6 +1799,7 @@ describe('CampaignsSection', () => {
         endDate: null,
         pausedReason: null,
         dailySpendFlag: null,
+        needsDestinationUrl: false,
       },
     ])
 
@@ -1640,6 +1823,7 @@ describe('CampaignsSection', () => {
         endDate: null,
         pausedReason: null,
         dailySpendFlag: 'Daily spend above 1.25x budget — Broad: $65.00 vs $50.00/day budget',
+        needsDestinationUrl: false,
       },
     ])
 
@@ -1667,6 +1851,7 @@ describe('CampaignsSection', () => {
         endDate: null,
         pausedReason: null,
         dailySpendFlag: null,
+        needsDestinationUrl: false,
       },
     ])
 
@@ -1691,6 +1876,7 @@ describe('CampaignsSection', () => {
         endDate: null,
         pausedReason: null,
         dailySpendFlag: null,
+        needsDestinationUrl: false,
       },
     ])
     mockedApi.getStrategy.mockResolvedValue(FAKE_STRATEGY)
@@ -1708,6 +1894,7 @@ describe('CampaignsSection', () => {
       endDate: null,
       pausedReason: null,
       dailySpendFlag: null,
+      needsDestinationUrl: false,
     })
     const user = userEvent.setup()
 
@@ -1736,6 +1923,7 @@ describe('CampaignsSection', () => {
         endDate: null,
         pausedReason: null,
         dailySpendFlag: null,
+        needsDestinationUrl: false,
       },
     ])
     mockedApi.getStrategy.mockResolvedValue(FAKE_STRATEGY)
@@ -1764,6 +1952,7 @@ describe('CampaignsSection', () => {
         endDate: null,
         pausedReason: null,
         dailySpendFlag: null,
+        needsDestinationUrl: false,
       },
     ])
     mockedApi.getStrategy.mockResolvedValue(FAKE_STRATEGY)
@@ -1799,6 +1988,7 @@ describe('CampaignsSection', () => {
         endDate: null,
         pausedReason: null,
         dailySpendFlag: null,
+        needsDestinationUrl: false,
       },
     ])
     mockedApi.getStrategy.mockResolvedValue(FAKE_STRATEGY)
@@ -1816,6 +2006,7 @@ describe('CampaignsSection', () => {
       endDate: null,
       pausedReason: null,
       dailySpendFlag: null,
+      needsDestinationUrl: false,
     })
     mockedApi.publishCampaign.mockRejectedValue(
       new api.ApiError(400, 'Connect Meta Ads and select an ad account and Page before publishing'),
@@ -1847,6 +2038,7 @@ describe('CampaignsSection', () => {
         endDate: null,
         pausedReason: null,
         dailySpendFlag: null,
+        needsDestinationUrl: false,
       },
     ])
     mockedApi.listMetrics.mockResolvedValue([fakeMetric()])
@@ -1874,6 +2066,7 @@ describe('CampaignsSection', () => {
         endDate: null,
         pausedReason: null,
         dailySpendFlag: null,
+        needsDestinationUrl: false,
       },
     ])
     mockedApi.refreshMetrics.mockResolvedValue(
@@ -1905,6 +2098,7 @@ describe('CampaignsSection', () => {
         endDate: null,
         pausedReason: null,
         dailySpendFlag: null,
+        needsDestinationUrl: false,
       },
     ])
     mockedApi.refreshMetrics.mockRejectedValue(
@@ -1935,6 +2129,7 @@ describe('CampaignsSection', () => {
         endDate: null,
         pausedReason: null,
         dailySpendFlag: null,
+        needsDestinationUrl: false,
       },
     ])
 
@@ -1961,6 +2156,7 @@ describe('CampaignsSection', () => {
         endDate: null,
         pausedReason: null,
         dailySpendFlag: null,
+        needsDestinationUrl: false,
       },
     ])
     mockedApi.listRecommendations.mockResolvedValue([fakeRecommendation()])
@@ -1991,6 +2187,7 @@ describe('CampaignsSection', () => {
         endDate: null,
         pausedReason: null,
         dailySpendFlag: null,
+        needsDestinationUrl: false,
       },
     ])
     mockedApi.createRecommendation.mockResolvedValue(fakeRecommendation())
@@ -2020,6 +2217,7 @@ describe('CampaignsSection', () => {
         endDate: null,
         pausedReason: null,
         dailySpendFlag: null,
+        needsDestinationUrl: false,
       },
     ])
     mockedApi.createRecommendation.mockRejectedValue(
@@ -2050,6 +2248,7 @@ describe('CampaignsSection', () => {
         endDate: null,
         pausedReason: null,
         dailySpendFlag: null,
+        needsDestinationUrl: false,
       },
     ])
     mockedApi.listRecommendations.mockResolvedValue([fakeRecommendation()])
@@ -2085,6 +2284,7 @@ describe('CampaignsSection', () => {
         endDate: null,
         pausedReason: null,
         dailySpendFlag: null,
+        needsDestinationUrl: false,
       },
     ])
     mockedApi.listRecommendations.mockResolvedValue([fakeRecommendation()])
@@ -2120,6 +2320,7 @@ describe('CampaignsSection', () => {
         endDate: null,
         pausedReason: null,
         dailySpendFlag: null,
+        needsDestinationUrl: false,
       },
     ])
     mockedApi.listRecommendations.mockResolvedValue([fakeRecommendation()])
@@ -2151,6 +2352,7 @@ describe('CampaignsSection', () => {
         endDate: null,
         pausedReason: null,
         dailySpendFlag: null,
+        needsDestinationUrl: false,
       },
     ])
     mockedApi.listRecommendations.mockResolvedValue([fakeRecommendation()])
@@ -2182,6 +2384,7 @@ describe('CampaignsSection', () => {
         endDate: null,
         pausedReason: null,
         dailySpendFlag: null,
+        needsDestinationUrl: false,
       },
     ])
     mockedApi.listRecommendations.mockResolvedValue([
@@ -2210,6 +2413,7 @@ describe('CampaignsSection', () => {
         endDate: null,
         pausedReason: null,
         dailySpendFlag: null,
+        needsDestinationUrl: false,
       },
     ])
     mockedApi.listRecommendations.mockResolvedValue([
@@ -2236,6 +2440,7 @@ describe('CampaignsSection', () => {
         endDate: null,
         pausedReason: null,
         dailySpendFlag: null,
+        needsDestinationUrl: false,
       },
     ])
     mockedApi.listRecommendations.mockResolvedValue([
@@ -2263,6 +2468,7 @@ describe('CampaignsSection', () => {
         endDate: null,
         pausedReason: null,
         dailySpendFlag: null,
+        needsDestinationUrl: false,
       },
     ])
 
@@ -2287,6 +2493,7 @@ describe('CampaignsSection', () => {
         endDate: null,
         pausedReason: null,
         dailySpendFlag: null,
+        needsDestinationUrl: false,
       },
     ])
     mockedApi.getStrategy.mockResolvedValue({
@@ -2320,6 +2527,7 @@ describe('CampaignsSection', () => {
         endDate: null,
         pausedReason: null,
         dailySpendFlag: null,
+        needsDestinationUrl: false,
       },
     ])
     mockedApi.getStrategy.mockResolvedValue({
@@ -2355,6 +2563,7 @@ describe('CampaignsSection', () => {
         endDate: null,
         pausedReason: null,
         dailySpendFlag: null,
+        needsDestinationUrl: false,
       },
     ])
     mockedApi.getStrategy.mockResolvedValue({
@@ -2393,6 +2602,7 @@ describe('CampaignsSection', () => {
         endDate: null,
         pausedReason: null,
         dailySpendFlag: null,
+        needsDestinationUrl: false,
       },
     ])
 

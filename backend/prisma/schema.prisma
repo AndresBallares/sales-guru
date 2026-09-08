@@ -372,6 +372,17 @@ model Creative {
   imageUrl       String?
   status         String   @default("GENERATED")
   metaCreativeId String?
+  // Snapshot of the product this creative was generated from (PRD.md
+  // "stale creative detection"). sourceProductId is nullable — a creative
+  // generated with no product selected has nothing to snapshot.
+  // sourceDescription/sourceUrl snapshot Product.description/.url at
+  // generation time, not live references, so a later product edit or
+  // swap can be detected by comparison (see app/services/creative.py's
+  // is_creative_stale) without needing a join back to the product's
+  // current state to know something changed.
+  sourceProductId String?
+  sourceDescription String?
+  sourceUrl         String?
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 }
