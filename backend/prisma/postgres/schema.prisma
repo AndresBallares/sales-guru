@@ -396,6 +396,17 @@ model Creative {
   imagePrompt    String?
   videoPrompt    String?
   imageUrl       String?
+  // The ProductImage this creative's imageUrl was built from — a plain
+  // id, not a `@relation` (deliberately, same as sourceProductId below):
+  // a photo deleted after selection is handled explicitly in application
+  // code (app/services/publish.py's _resolve_image_hash fails the
+  // publish outright with a clear error, confirmed 2026-09-09 — a known,
+  // flagged gap in ProductForm's photo-removal UI, which has no in-use
+  // guard yet), not enforced as a DB-level FK cascade/restrict. Read at
+  // publish time to fetch the actual image bytes for Meta's real ad
+  // image upload (app/services/meta.py's upload_meta_ad_image) — imageUrl
+  // alone (our own /product-images/{id} URL) isn't enough for that.
+  productImageId String?
   status         String   @default("GENERATED")
   metaCreativeId String?
   // Snapshot of the product this creative was generated from (PRD.md

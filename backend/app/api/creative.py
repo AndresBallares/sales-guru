@@ -210,14 +210,17 @@ async def select_creative(
     changed.
 
     If payload.product_image_id names a photo, that photo is attached as
-    imageUrl, overriding whatever was there before — the user explicitly
-    chose it. Otherwise, if this creative doesn't already have an image,
-    the product's primary photo (position 0 — ProductImage.position,
-    "first = primary") is attached instead — the natural checkpoint
-    moment before publish, and the point where the frontend can show the
-    user what image the ad will actually use. A product with zero photos
-    at all is rejected outright (see the 428 below), not silently
-    selected image-less.
+    imageUrl (and productImageId, its id), overriding whatever was there
+    before — the user explicitly chose it. Otherwise, if this creative
+    doesn't already have an image, the product's primary photo (position
+    0 — ProductImage.position, "first = primary") is attached instead —
+    the natural checkpoint moment before publish, and the point where the
+    frontend can show the user what image the ad will actually use. A
+    product with zero photos at all is rejected outright (see the 428
+    below), not silently selected image-less. productImageId is what
+    app/services/publish.py reads at publish time to fetch the actual
+    image bytes for Meta's real ad image upload — imageUrl alone (our own
+    /product-images/{id} URL) isn't enough for that.
 
     Args:
         creative_id: The creative to select.
@@ -283,12 +286,14 @@ async def select_creative(
                 status_code=status.HTTP_404_NOT_FOUND, detail=_PRODUCT_IMAGE_NOT_FOUND
             )
         update_data["imageUrl"] = product_image_url(product_image.id)
+        update_data["productImageId"] = product_image.id
     elif creative.imageUrl is None and campaign.productId is not None:
         product_image = await db.productimage.find_first(
             where={"productId": campaign.productId}, order={"position": "asc"}
         )
         if product_image is not None:
             update_data["imageUrl"] = product_image_url(product_image.id)
+            update_data["productImageId"] = product_image.id
     updated = await db.creative.update(where={"id": creative.id}, data=update_data)
     assert updated is not None  # just fetched above, can't vanish mid-request
 

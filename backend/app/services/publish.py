@@ -27,6 +27,7 @@ DATA_DRIVEN_STRATEGY campaign is unaffected — still exactly one AdSet/Ad,
 same as before.
 """
 
+import logging
 from datetime import UTC, datetime, timedelta
 
 from prisma.models import Campaign, Creative, MetaConnection
@@ -43,8 +44,10 @@ from app.schemas.strategy import (
 from app.services import geo, meta
 from app.services.event_venues import EVENT_VENUES
 from app.services.interests import INTERESTS
-from app.services.meta import CustomLocation, ResolvedGeoLocation
+from app.services.meta import CustomLocation, MetaConnectionError, ResolvedGeoLocation
 from app.services.optimizer import resolve_target_cac
+
+logger = logging.getLogger(__name__)
 
 # No user input collects this yet, so each objective gets a reasonable
 # Meta optimization_goal default rather than leaving it unset (the AdSet
@@ -318,11 +321,72 @@ async def _publish_test_plan_variant(
                 "imagePrompt": creative.imagePrompt,
                 "videoPrompt": creative.videoPrompt,
                 "imageUrl": creative.imageUrl,
+                "productImageId": creative.productImageId,
                 "status": "SELECTED",
                 "metaCreativeId": meta_creative_id,
                 "adId": ad.id,
             }
         )
+
+
+async def _resolve_image_hash(
+    creative: Creative, *, access_token: str, ad_account_id: str
+) -> str | None:
+    """Upload the creative's attached photo to Meta, returning its image_hash.
+
+    Only ever None for a legacy creative with no productImageId at all —
+    predates this field, or (no longer reachable via the normal flow
+    since select_creative's own 428 gate, app/api/creative.py) a campaign
+    whose product had no photo — logged as a warning since it's meant to
+    be rare, not silently accepted. A productImageId that no longer
+    resolves to a real photo (confirmed 2026-09-09: deleted after
+    selection — a known, flagged gap in ProductForm's photo-removal UI,
+    which doesn't check whether the photo is in use) fails the publish
+    outright instead — a stale reference is a real data problem, not a
+    "no photo was ever chosen" case, and silently dropping to image-less
+    would publish an ad the user never actually approved looking like
+    that. A real Meta API failure from the upload call itself (a
+    MetaConnectionError, e.g. an invalid/oversized image Meta's own
+    validation rejects) is likewise never caught here — it propagates
+    up uncaught, same as every other meta.* call in
+    publish_campaign_to_meta, failing the publish loudly.
+
+    Args:
+        creative: The campaign's SELECTED creative.
+        access_token: The business's Meta access token.
+        ad_account_id: The connected ad account to upload into.
+
+    Returns:
+        The uploaded image's hash, or None for a legacy creative with no
+        productImageId at all.
+
+    Raises:
+        MetaConnectionError: If productImageId is set but no longer names
+            an existing photo, or if the upload call itself fails.
+    """
+    if creative.productImageId is None:
+        logger.warning(
+            "Creative %s has no productImageId — publishing image-less. "
+            "Expected only for a creative selected before this field "
+            "existed, or a campaign whose product never had a photo.",
+            creative.id,
+        )
+        return None
+    product_image = await db.productimage.find_unique(
+        where={"id": creative.productImageId}
+    )
+    if product_image is None:
+        raise MetaConnectionError(
+            f"Creative {creative.id}'s selected photo "
+            f"(productImageId={creative.productImageId}) no longer exists — "
+            "it was deleted after being selected. Attach a photo and "
+            "re-select this ad before publishing."
+        )
+    return await meta.upload_meta_ad_image(
+        access_token=access_token,
+        ad_account_id=ad_account_id,
+        image_data=product_image.data.decode(),
+    )
 
 
 async def publish_campaign_to_meta(
@@ -358,11 +422,15 @@ async def publish_campaign_to_meta(
         one was computed and wasn't already set).
 
     Raises:
-        MetaConnectionError: If any Graph API call fails. The campaign's
-            status is left for the caller to move to FAILED — this
-            function doesn't write that, so a caller can distinguish "we
-            never even validated" (never called this) from "we tried and
-            Meta rejected it" (caught here).
+        MetaConnectionError: If any Graph API call fails (including the
+            selected photo's Meta upload — see _resolve_image_hash), or
+            if the creative's selected photo was deleted after selection
+            (also _resolve_image_hash — confirmed 2026-09-09, publish
+            fails loudly rather than silently going image-less). The
+            campaign's status is left for the caller to move to FAILED —
+            this function doesn't write that, so a caller can distinguish
+            "we never even validated" (never called this) from "we tried
+            and Meta rejected it" (caught here).
     """
     assert connection.adAccountId is not None
     assert connection.pageId is not None
@@ -391,6 +459,9 @@ async def publish_campaign_to_meta(
         name=object_name,
         objective=campaign.objective,
     )
+    image_hash = await _resolve_image_hash(
+        creative, access_token=connection.accessToken, ad_account_id=ad_account_id
+    )
     meta_creative_id = await meta.create_meta_ad_creative(
         access_token=connection.accessToken,
         ad_account_id=ad_account_id,
@@ -401,7 +472,7 @@ async def publish_campaign_to_meta(
         description=creative.description,
         cta=creative.cta,
         link=destination_url,
-        image_url=creative.imageUrl,
+        image_hash=image_hash,
     )
 
     if strategy.plan_type == "TEST_PLAN":

@@ -20,8 +20,21 @@ reachable via the *real* OAuth flow (exchange_code_for_token,
 get_long_lived_token, get_meta_user_id, build_authorization_url) are left
 alone — POST .../meta/fake-connect (app/api/meta.py) bypasses that flow
 entirely, so fake mode never exercises them.
+
+**Real ad image upload (confirmed 2026-09-09, NEEDS REAL-API VERIFICATION):**
+upload_meta_ad_image POSTs raw image bytes to .../adimages via the `bytes`
+form param (a JSON object mapping an arbitrary slot name to base64 image
+data — Meta's documented alternative to a multipart file upload) and
+returns the resulting image_hash, which create_meta_ad_creative now sets
+as link_data.image_hash instead of link_data.picture's bare URL. Real
+Meta OAuth can't be driven by anything automated (see above), so this
+exact request shape has only been checked against Meta's public API
+documentation, never against a real ad account — flagged for manual
+verification the first time a real business actually publishes with a
+product photo attached.
 """
 
+import base64
 import json
 from datetime import UTC, datetime, timedelta
 from typing import Any, Literal, NamedTuple
@@ -544,6 +557,44 @@ async def create_meta_ad_set(
     return ad_set_id
 
 
+async def upload_meta_ad_image(
+    *, access_token: str, ad_account_id: str, image_data: bytes
+) -> str:
+    """Upload raw image bytes to Meta, returning the image_hash to reference it.
+
+    The returned hash is what create_meta_ad_creative sets as
+    link_data.image_hash — Meta's documented way to attach an ad image
+    you host yourself, rather than a bare, publicly-fetchable picture URL
+    (which link_data.picture used before this and Meta has to fetch
+    itself, an extra failure point this avoids).
+
+    Args:
+        access_token: The business's Meta access token.
+        ad_account_id: The connected ad account to upload into.
+        image_data: The raw image bytes (already validated on upload —
+            app/schemas/product_image.py's JPG/PNG/size/dimension checks
+            — so no further validation happens here).
+
+    Returns:
+        The new image's hash.
+
+    Raises:
+        MetaConnectionError: If the call fails.
+    """
+    if get_settings().fake_meta_enabled:
+        return f"fake_image_hash_{uuid4().hex[:12]}"
+    # The single arbitrary key here ("image") is just a slot name Meta
+    # echoes back in the response under the same key — it has no meaning
+    # to Meta beyond that round-trip.
+    encoded = base64.b64encode(image_data).decode("ascii")
+    body = await _post_json(
+        f"{_GRAPH_BASE_URL}/{ad_account_id}/adimages",
+        {"access_token": access_token, "bytes": json.dumps({"image": encoded})},
+    )
+    image_hash: str = body["images"]["image"]["hash"]
+    return image_hash
+
+
 async def create_meta_ad_creative(
     *,
     access_token: str,
@@ -555,14 +606,14 @@ async def create_meta_ad_creative(
     description: str,
     cta: str,
     link: str,
-    image_url: str | None,
+    image_hash: str | None,
 ) -> str:
     """Create an ad creative object on Meta, ready to attach to an Ad.
 
-    image_url is optional — no image generation/upload is built yet
-    (PRD.md §2 step 4), so most creatives won't have one. Meta still
-    accepts a link-only creative; a real running ad will typically need a
-    real image to pass Meta's own ad review, which this doesn't handle.
+    image_hash is optional — a campaign with no product, or whose
+    product has no photo, still has nothing to upload. Meta still accepts
+    a link-only creative; a real running ad will typically need a real
+    image to pass Meta's own ad review, which this doesn't handle.
 
     Args:
         access_token: The business's Meta access token.
@@ -574,7 +625,8 @@ async def create_meta_ad_creative(
         description: The secondary description line.
         cta: A Meta call_to_action type value.
         link: The destination URL.
-        image_url: A publicly-reachable image URL, if one exists.
+        image_hash: An already-uploaded image's hash (see
+            upload_meta_ad_image), if one exists.
 
     Returns:
         The new Meta ad creative id.
@@ -591,8 +643,8 @@ async def create_meta_ad_creative(
         "link": link,
         "call_to_action": {"type": cta},
     }
-    if image_url:
-        link_data["picture"] = image_url
+    if image_hash:
+        link_data["image_hash"] = image_hash
 
     object_story_spec = json.dumps({"page_id": page_id, "link_data": link_data})
     body = await _post_json(

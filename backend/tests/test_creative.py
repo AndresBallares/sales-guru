@@ -564,6 +564,91 @@ def test_select_creative_attaches_an_explicitly_chosen_photo(
     assert older_image["id"] != chosen_image["id"]
 
 
+@pytest.mark.asyncio
+async def test_select_creative_stores_the_auto_attached_photo_id(
+    client: TestClient,
+) -> None:
+    """productImageId is stored alongside the auto-attached imageUrl, not
+    just derivable from it — app/services/publish.py needs the actual id
+    to fetch image bytes for Meta's real ad image upload (confirmed
+    2026-09-09); imageUrl alone (our own /product-images/{id} URL) isn't
+    enough for that."""
+    _signed_up_client(client)
+    business_id = _create_business(client)
+    product_id = client.post(
+        f"/businesses/{business_id}/products",
+        json={"description": "Ring", "url": "https://acme.example/ring"},
+    ).json()["id"]
+    image = client.post(
+        f"/businesses/{business_id}/products/{product_id}/images",
+        files={"file": ("ring.jpg", _valid_jpeg(), "image/jpeg")},
+    ).json()
+    audience_id = _create_audience(client, business_id)
+    campaign_id = client.post(
+        f"/businesses/{business_id}/campaigns",
+        json={"objective": "SALES", "productId": product_id, "audienceId": audience_id},
+    ).json()["id"]
+    _generate_strategy(client, business_id, campaign_id)
+    generated = client.post(
+        f"/businesses/{business_id}/campaigns/{campaign_id}/creatives"
+    ).json()
+
+    selected = client.post(
+        f"/businesses/{business_id}/campaigns/{campaign_id}"
+        f"/creatives/{generated[0]['id']}/select"
+    ).json()
+
+    seeder = Prisma()
+    await seeder.connect()
+    stored = await seeder.creative.find_unique(where={"id": selected["id"]})
+    await seeder.disconnect()
+    assert stored is not None
+    assert stored.productImageId == image["id"]
+
+
+@pytest.mark.asyncio
+async def test_select_creative_stores_the_explicitly_chosen_photo_id(
+    client: TestClient,
+) -> None:
+    """Same as the auto-attach case, but for an explicitly-chosen photo."""
+    _signed_up_client(client)
+    business_id = _create_business(client)
+    product_id = client.post(
+        f"/businesses/{business_id}/products",
+        json={"description": "Ring", "url": "https://acme.example/ring"},
+    ).json()["id"]
+    client.post(
+        f"/businesses/{business_id}/products/{product_id}/images",
+        files={"file": ("older.jpg", _valid_jpeg(), "image/jpeg")},
+    )
+    chosen_image = client.post(
+        f"/businesses/{business_id}/products/{product_id}/images",
+        files={"file": ("chosen.jpg", _valid_jpeg(), "image/jpeg")},
+    ).json()
+    audience_id = _create_audience(client, business_id)
+    campaign_id = client.post(
+        f"/businesses/{business_id}/campaigns",
+        json={"objective": "SALES", "productId": product_id, "audienceId": audience_id},
+    ).json()["id"]
+    _generate_strategy(client, business_id, campaign_id)
+    generated = client.post(
+        f"/businesses/{business_id}/campaigns/{campaign_id}/creatives"
+    ).json()
+
+    selected = client.post(
+        f"/businesses/{business_id}/campaigns/{campaign_id}"
+        f"/creatives/{generated[0]['id']}/select",
+        json={"productImageId": chosen_image["id"]},
+    ).json()
+
+    seeder = Prisma()
+    await seeder.connect()
+    stored = await seeder.creative.find_unique(where={"id": selected["id"]})
+    await seeder.disconnect()
+    assert stored is not None
+    assert stored.productImageId == chosen_image["id"]
+
+
 def test_select_creative_404s_for_a_product_image_from_another_product(
     client: TestClient,
 ) -> None:
