@@ -28,6 +28,10 @@ class ProductCreateRequest(CamelCaseModel):
     features: str | None = None
     benefits: str | None = None
     url: str | None = None
+    # The campaign this product is being created for, if any — scopes
+    # auto-attach (app/services/campaign_readiness.py's auto_attach_product)
+    # to just that campaign instead of guessing across the whole business.
+    campaign_id: str | None = None
 
     @field_validator("url")
     @classmethod

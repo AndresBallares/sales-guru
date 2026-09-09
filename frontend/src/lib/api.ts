@@ -73,6 +73,10 @@ export interface ProductCreateInput {
   features?: string
   benefits?: string
   url?: string
+  // The campaign this product is being created for, if any — scopes
+  // backend auto-attach to that one campaign (app/services/
+  // campaign_readiness.py) instead of every empty draft in the business.
+  campaignId?: string
 }
 
 // Partial update — a field's absence here (vs. an explicit null/value)
@@ -114,6 +118,10 @@ export interface AudienceCreateInput {
   interests?: string
   problem?: string
   desire?: string
+  // The campaign this audience is being created for, if any — scopes
+  // backend auto-attach to that one campaign (app/services/
+  // campaign_readiness.py) instead of every empty draft in the business.
+  campaignId?: string
 }
 
 export type Objective = 'SALES' | 'LEADS' | 'TRAFFIC' | 'MESSAGES' | 'AWARENESS'

@@ -10,12 +10,17 @@ vi.mock('../lib/api', async (importOriginal) => {
     ...actual,
     createAudience: vi.fn<typeof actual.createAudience>(),
     listAudiences: vi.fn<typeof actual.listAudiences>(),
+    listCampaigns: vi.fn<typeof actual.listCampaigns>(),
   }
 })
 const mockedApi = vi.mocked(api)
 
 beforeEach(() => {
   vi.resetAllMocks()
+  // No campaign pending an audience by default — most tests here don't
+  // care about auto-attach scoping, only the individual ones that do
+  // override this.
+  mockedApi.listCampaigns.mockResolvedValue([])
 })
 
 describe('AudiencesSection', () => {
@@ -101,6 +106,51 @@ describe('AudiencesSection', () => {
       }),
     )
     expect(await screen.findByText('Busy parents')).toBeInTheDocument()
+  })
+
+  it('passes the campaign still missing an audience so the backend can auto-attach', async () => {
+    mockedApi.listAudiences.mockResolvedValue([])
+    mockedApi.listCampaigns.mockResolvedValue([
+      {
+        id: 'camp-1',
+        name: null,
+        objective: 'SALES',
+        status: 'DRAFT',
+        productId: 'prod-1',
+        audienceId: null,
+        metaCampaignId: null,
+        eventVenueKey: null,
+        startDate: null,
+        endDate: null,
+        needsDestinationUrl: false,
+        dailySpendFlag: null,
+        pausedReason: null,
+      },
+    ])
+    mockedApi.createAudience.mockResolvedValue({
+      id: 'aud-1',
+      description: 'Busy parents',
+      ageMin: null,
+      ageMax: null,
+      location: null,
+      interests: null,
+      problem: null,
+      desire: null,
+    })
+    const user = userEvent.setup()
+
+    render(<AudiencesSection businessId="biz-1" />)
+    await screen.findByText(/No audiences yet/)
+
+    await user.type(screen.getByLabelText('Who buys?'), 'Busy parents')
+    await user.click(screen.getByRole('button', { name: 'Add audience' }))
+
+    await waitFor(() =>
+      expect(mockedApi.createAudience).toHaveBeenCalledWith(
+        'biz-1',
+        expect.objectContaining({ campaignId: 'camp-1' }),
+      ),
+    )
   })
 
   it('reports its loaded audiences to the parent, initially and after creating one', async () => {

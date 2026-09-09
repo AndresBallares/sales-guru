@@ -61,7 +61,7 @@ async def create_audience(
             "desire": payload.desire,
         }
     )
-    await auto_attach_audience(business.id, audience.id)
+    await auto_attach_audience(business.id, audience.id, payload.campaign_id)
     return _to_response(audience)
 
 

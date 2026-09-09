@@ -13,6 +13,10 @@ class AudienceCreateRequest(CamelCaseModel):
     interests: str | None = None
     problem: str | None = None
     desire: str | None = None
+    # The campaign this audience is being created for, if any — scopes
+    # auto-attach (app/services/campaign_readiness.py's auto_attach_audience)
+    # to just that campaign instead of guessing across the whole business.
+    campaign_id: str | None = None
 
 
 class AudienceResponse(CamelCaseModel):
