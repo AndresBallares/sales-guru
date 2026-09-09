@@ -24,7 +24,14 @@ from app.services.prompt_safety import quarantine
 from app.services.tool_use import parse_tool_input
 
 _MODEL = "claude-sonnet-5"
-_MAX_TOKENS = 4096
+# Four variants x {headline, body_text, description, cta, creative_angle,
+# image_prompt, video_prompt} is a lot of real content — 4096 was
+# occasionally too tight and truncated mid-JSON (confirmed 2026-09-09,
+# surfaced by real e2e generation rather than any mocked test: the
+# truncated tail came back as a string tool_use.py's known-quirk
+# recovery couldn't parse, since it wasn't merely mis-shaped JSON but
+# genuinely incomplete).
+_MAX_TOKENS = 8192
 _TOOL_NAME = "submit_creatives"
 _VARIANT_COUNT = 4
 
