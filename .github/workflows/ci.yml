@@ -176,6 +176,16 @@ jobs:
         working-directory: backend
         run: uv run prisma generate
 
+      # A fresh key every run — e2e's backend only ever writes to its own
+      # throwaway e2e.db (reset at the start of every run), never anything
+      # that needs to survive across runs, same "no real secret sitting in
+      # the repo" reasoning as conftest.py's own per-test-session key.
+      # Needed now that a spec (fake-meta-publish.spec.ts) actually creates
+      # a MetaConnection — no prior e2e spec got far enough to need it.
+      - name: Generate a throwaway Meta token encryption key (for e2e's real backend)
+        working-directory: backend
+        run: echo "META_TOKEN_ENCRYPTION_KEY=$(uv run python -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())')" >> "$GITHUB_ENV"
+
       - name: E2E test (Playwright + axe-core a11y checks, real backend)
         run: npm run test:e2e
 
