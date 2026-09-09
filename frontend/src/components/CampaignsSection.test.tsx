@@ -877,6 +877,8 @@ describe('CampaignsSection', () => {
     renderCampaigns(<CampaignsSection businessId="biz-1" />)
     await screen.findByLabelText('Campaign readiness for camp-1')
 
+    await user.click(screen.getByRole('button', { name: 'Attach an audience' }))
+    await user.click(screen.getByRole('button', { name: 'Use an existing audience instead' }))
     const picker = screen.getByLabelText('Which audience?')
     await user.selectOptions(picker, 'aud-1')
     await user.click(screen.getByRole('button', { name: 'Attach' }))
@@ -947,6 +949,7 @@ describe('CampaignsSection', () => {
     await screen.findByLabelText('Product for camp-1')
 
     await user.click(screen.getByRole('button', { name: 'Attach a product' }))
+    await user.click(screen.getByRole('button', { name: 'Use an existing product instead' }))
     await user.selectOptions(screen.getByLabelText('Change product', { selector: 'select' }), 'prod-2')
     await user.click(screen.getByRole('button', { name: 'Attach' }))
 
@@ -957,7 +960,7 @@ describe('CampaignsSection', () => {
     )
   })
 
-  it('creates and attaches a brand new product from the product-attach picker', async () => {
+  it('creates and attaches a brand new product directly, no picker in front of it', async () => {
     mockedApi.listCampaigns.mockResolvedValue([draftCampaignFixture])
     mockedApi.listProducts.mockResolvedValue([
       {
@@ -990,15 +993,161 @@ describe('CampaignsSection', () => {
     await screen.findByLabelText('Product for camp-1')
 
     await user.click(screen.getByRole('button', { name: 'Attach a product' }))
-    await user.click(screen.getByRole('button', { name: 'Add new product' }))
     await user.type(screen.getByLabelText('What do you sell?'), 'Leather belts')
     await user.click(screen.getByRole('button', { name: 'Add product' }))
 
+    await waitFor(() =>
+      expect(mockedApi.createProduct).toHaveBeenCalledWith(
+        'biz-1',
+        expect.objectContaining({ campaignId: 'camp-1' }),
+      ),
+    )
     await waitFor(() =>
       expect(mockedApi.updateCampaign).toHaveBeenCalledWith('biz-1', 'camp-1', {
         productId: 'prod-2',
       }),
     )
+  })
+
+  it('toggles the product picker back to the create form via "Add a new product instead"', async () => {
+    mockedApi.listCampaigns.mockResolvedValue([draftCampaignFixture])
+    mockedApi.listProducts.mockResolvedValue([
+      {
+        id: 'prod-1',
+        description: 'Handmade wallets',
+        price: null,
+        margin: null,
+        features: null,
+        benefits: null,
+        url: null,
+      },
+    ])
+    const user = userEvent.setup()
+
+    renderCampaigns(<CampaignsSection businessId="biz-1" />)
+    await screen.findByLabelText('Product for camp-1')
+
+    await user.click(screen.getByRole('button', { name: 'Attach a product' }))
+    await user.click(screen.getByRole('button', { name: 'Use an existing product instead' }))
+    expect(screen.getByLabelText('Change product', { selector: 'select' })).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'Add a new product instead' }))
+
+    expect(screen.getByLabelText('What do you sell?')).toBeInTheDocument()
+    expect(screen.queryByLabelText('Change product', { selector: 'select' })).toBeNull()
+  })
+
+  it('closes the product picker when the create form is cancelled', async () => {
+    mockedApi.listCampaigns.mockResolvedValue([draftCampaignFixture])
+    mockedApi.listProducts.mockResolvedValue([])
+    const user = userEvent.setup()
+
+    renderCampaigns(<CampaignsSection businessId="biz-1" />)
+    await screen.findByLabelText('Product for camp-1')
+
+    await user.click(screen.getByRole('button', { name: 'Attach a product' }))
+    expect(screen.getByLabelText('What do you sell?')).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'Cancel' }))
+
+    expect(screen.queryByLabelText('What do you sell?')).toBeNull()
+  })
+
+  it('creates and attaches a brand new audience directly, no picker in front of it', async () => {
+    mockedApi.listCampaigns.mockResolvedValue([draftCampaignFixture])
+    mockedApi.listAudiences.mockResolvedValue([
+      {
+        id: 'aud-1',
+        description: 'Busy professionals',
+        ageMin: null,
+        ageMax: null,
+        location: null,
+        interests: null,
+        problem: null,
+        desire: null,
+      },
+    ])
+    const created = {
+      id: 'aud-2',
+      description: 'Students',
+      ageMin: null,
+      ageMax: null,
+      location: null,
+      interests: null,
+      problem: null,
+      desire: null,
+    }
+    mockedApi.createAudience.mockResolvedValue(created)
+    mockedApi.updateCampaign.mockResolvedValue({
+      ...draftCampaignFixture,
+      audienceId: 'aud-2',
+    })
+    const user = userEvent.setup()
+
+    renderCampaigns(<CampaignsSection businessId="biz-1" />)
+    await screen.findByLabelText('Campaign readiness for camp-1')
+
+    await user.click(screen.getByRole('button', { name: 'Attach an audience' }))
+    expect(screen.queryByLabelText('Which audience?')).toBeNull()
+    await user.type(screen.getByLabelText('Who buys?'), 'Students')
+    await user.click(screen.getByRole('button', { name: 'Add audience' }))
+
+    await waitFor(() =>
+      expect(mockedApi.createAudience).toHaveBeenCalledWith(
+        'biz-1',
+        expect.objectContaining({ campaignId: 'camp-1' }),
+      ),
+    )
+    await waitFor(() =>
+      expect(mockedApi.updateCampaign).toHaveBeenCalledWith('biz-1', 'camp-1', {
+        audienceId: 'aud-2',
+      }),
+    )
+  })
+
+  it('toggles the audience picker back to the create form via "Add a new audience instead"', async () => {
+    mockedApi.listCampaigns.mockResolvedValue([draftCampaignFixture])
+    mockedApi.listAudiences.mockResolvedValue([
+      {
+        id: 'aud-1',
+        description: 'Busy professionals',
+        ageMin: null,
+        ageMax: null,
+        location: null,
+        interests: null,
+        problem: null,
+        desire: null,
+      },
+    ])
+    const user = userEvent.setup()
+
+    renderCampaigns(<CampaignsSection businessId="biz-1" />)
+    await screen.findByLabelText('Campaign readiness for camp-1')
+
+    await user.click(screen.getByRole('button', { name: 'Attach an audience' }))
+    await user.click(screen.getByRole('button', { name: 'Use an existing audience instead' }))
+    expect(screen.getByLabelText('Which audience?')).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'Add a new audience instead' }))
+
+    expect(screen.getByLabelText('Who buys?')).toBeInTheDocument()
+    expect(screen.queryByLabelText('Which audience?')).toBeNull()
+  })
+
+  it('closes the audience picker when the create form is cancelled', async () => {
+    mockedApi.listCampaigns.mockResolvedValue([draftCampaignFixture])
+    mockedApi.listAudiences.mockResolvedValue([])
+    const user = userEvent.setup()
+
+    renderCampaigns(<CampaignsSection businessId="biz-1" />)
+    await screen.findByLabelText('Campaign readiness for camp-1')
+
+    await user.click(screen.getByRole('button', { name: 'Attach an audience' }))
+    expect(screen.getByLabelText('Who buys?')).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'Cancel' }))
+
+    expect(screen.queryByLabelText('Who buys?')).toBeNull()
   })
 
   it('shows a warning and an edit link when the attached product needs a destination URL', async () => {
@@ -1109,6 +1258,8 @@ describe('CampaignsSection', () => {
     renderCampaigns(<CampaignsSection businessId="biz-1" />)
     await screen.findByLabelText('Campaign readiness for camp-1')
 
+    await user.click(screen.getByRole('button', { name: 'Attach an audience' }))
+    await user.click(screen.getByRole('button', { name: 'Use an existing audience instead' }))
     await user.selectOptions(screen.getByLabelText('Which audience?'), 'aud-2')
     await user.click(screen.getByRole('button', { name: 'Attach' }))
 
@@ -1149,6 +1300,7 @@ describe('CampaignsSection', () => {
     await screen.findByLabelText('Product for camp-1')
 
     await user.click(screen.getByRole('button', { name: 'Attach a product' }))
+    await user.click(screen.getByRole('button', { name: 'Use an existing product instead' }))
     await user.selectOptions(screen.getByLabelText('Change product', { selector: 'select' }), 'prod-2')
     await user.click(screen.getByRole('button', { name: 'Attach' }))
 

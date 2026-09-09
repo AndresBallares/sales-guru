@@ -30,20 +30,29 @@ _PRODUCT_NOT_FOUND = "Product not found"
 _PRODUCT_HAS_NO_URL = "This product has no URL to check"
 
 
-async def _product_url_is_required(business_id: str) -> bool:
-    """Whether any campaign still missing a product needs one with a URL.
+async def _product_url_is_required(business_id: str, campaign_id: str | None) -> bool:
+    """Whether the campaign this product is for needs one with a URL.
 
-    Checked against every campaign missing a product, not just one — the
-    next product created is a candidate for auto-attaching to any/all of
-    them (app/services/campaign_readiness.py's auto_attach_product).
+    When campaign_id is given, only that campaign's objective is checked
+    (it's the one auto-attach — app/services/campaign_readiness.py's
+    auto_attach_product — will actually connect this product to).
+    Otherwise falls back to checking every campaign still missing a
+    product, since there's no specific one to narrow to.
 
     Args:
         business_id: The business the product is being created under.
+        campaign_id: The campaign this product is being created for, if
+            any.
 
     Returns:
-        True if at least one such campaign's objective requires a URL
+        True if the relevant campaign's objective requires a URL
         (SALES/TRAFFIC — see app/services/url_validation.py).
     """
+    if campaign_id is not None:
+        campaign = await db.campaign.find_first(
+            where={"id": campaign_id, "businessId": business_id, "productId": None}
+        )
+        return campaign is not None and requires_destination_url(campaign.objective)
     campaigns = await db.campaign.find_many(
         where={"businessId": business_id, "productId": None}
     )
@@ -93,7 +102,9 @@ async def create_product(
             requires_destination_url) — its CTA needs somewhere to send
             people.
     """
-    if payload.url is None and await _product_url_is_required(business.id):
+    if payload.url is None and await _product_url_is_required(
+        business.id, payload.campaign_id
+    ):
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail=_URL_REQUIRED_FOR_OBJECTIVE,
@@ -109,7 +120,7 @@ async def create_product(
             "url": payload.url,
         }
     )
-    await auto_attach_product(business.id, product.id)
+    await auto_attach_product(business.id, product.id, payload.campaign_id)
     return _to_response(product)
 
 

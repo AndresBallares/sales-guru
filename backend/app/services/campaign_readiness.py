@@ -7,13 +7,19 @@ in view to be meaningful). A campaign created that way starts DRAFT with
 productId/audienceId both null; this module is what closes that gap
 without making the user hunt for an "attach" button:
 
-- The common case (a business ends up with exactly one product, or one
-  audience) auto-attaches it to every campaign still missing one, the
-  moment that product/audience is created (see create_product/
-  create_audience in app/api/product.py / app/api/audience.py).
-- The ambiguous case (several products/audiences to choose from) is left
-  alone here — app/api/campaign.py's update_campaign (PATCH) is the
-  manual path the frontend falls back to when auto-attach can't decide.
+- The caller (create_product/create_audience in app/api/product.py /
+  app/api/audience.py) passes along the campaign_id of whichever campaign
+  the product/audience was created *for* — the frontend always knows this,
+  since a product/audience is only ever created from a flow that's already
+  scoped to one campaign (the guided per-campaign flow, or an existing
+  campaign's swap-to-new-product/audience control). Auto-attach fills in
+  just that one campaign, and only if it's still missing one; it never
+  reaches into other campaigns in the business.
+- No campaign_id (a caller that isn't scoped to a specific campaign) means
+  there's nothing to attach to, so this is a no-op — guessing across every
+  empty draft in the business was the bug this module used to have.
+- app/api/campaign.py's update_campaign (PATCH) remains the manual path for
+  swapping a campaign onto a different, already-existing product/audience.
 
 Once both product and audience are set, the campaign's status flips DRAFT
 -> READY (see advance_to_ready_if_complete) — a small, purely informational
@@ -57,33 +63,39 @@ async def advance_to_ready_if_complete(campaign: Campaign) -> Campaign:
     return campaign
 
 
-async def auto_attach_product(business_id: str, product_id: str) -> None:
-    """Attach a product to every campaign still missing one, if unambiguous.
+async def auto_attach_product(
+    business_id: str, product_id: str, campaign_id: str | None
+) -> None:
+    """Attach a product to the campaign it was created for, if any.
 
-    Only acts when this business has exactly one product total — with two
-    or more, which one a given campaign is "for" isn't this module's call
-    to make (see the module docstring's manual-path note).
+    A no-op unless campaign_id names a campaign that belongs to this
+    business and is still missing a product — in particular, it never
+    touches any *other* campaign in the business.
 
     Args:
         business_id: The business the product was just created under.
         product_id: The just-created product's id.
+        campaign_id: The campaign this product was created for, or None if
+            the caller isn't scoped to one.
     """
-    count = await db.product.count(where={"businessId": business_id})
-    if count != 1:
+    if campaign_id is None:
         return
-    campaigns = await db.campaign.find_many(
-        where={"businessId": business_id, "productId": None}
+    campaign = await db.campaign.find_first(
+        where={"id": campaign_id, "businessId": business_id, "productId": None}
     )
-    for campaign in campaigns:
-        updated = await db.campaign.update(
-            where={"id": campaign.id}, data={"product": {"connect": {"id": product_id}}}
-        )
-        assert updated is not None  # just fetched above, can't vanish mid-request
-        await advance_to_ready_if_complete(updated)
+    if campaign is None:
+        return
+    updated = await db.campaign.update(
+        where={"id": campaign.id}, data={"product": {"connect": {"id": product_id}}}
+    )
+    assert updated is not None  # just fetched above, can't vanish mid-request
+    await advance_to_ready_if_complete(updated)
 
 
-async def auto_attach_audience(business_id: str, audience_id: str) -> None:
-    """Attach an audience to every campaign still missing one, if unambiguous.
+async def auto_attach_audience(
+    business_id: str, audience_id: str, campaign_id: str | None
+) -> None:
+    """Attach an audience to the campaign it was created for, if any.
 
     Mirrors auto_attach_product exactly, one audience instead of one
     product.
@@ -91,17 +103,19 @@ async def auto_attach_audience(business_id: str, audience_id: str) -> None:
     Args:
         business_id: The business the audience was just created under.
         audience_id: The just-created audience's id.
+        campaign_id: The campaign this audience was created for, or None if
+            the caller isn't scoped to one.
     """
-    count = await db.audience.count(where={"businessId": business_id})
-    if count != 1:
+    if campaign_id is None:
         return
-    campaigns = await db.campaign.find_many(
-        where={"businessId": business_id, "audienceId": None}
+    campaign = await db.campaign.find_first(
+        where={"id": campaign_id, "businessId": business_id, "audienceId": None}
     )
-    for campaign in campaigns:
-        updated = await db.campaign.update(
-            where={"id": campaign.id},
-            data={"audience": {"connect": {"id": audience_id}}},
-        )
-        assert updated is not None  # just fetched above, can't vanish mid-request
-        await advance_to_ready_if_complete(updated)
+    if campaign is None:
+        return
+    updated = await db.campaign.update(
+        where={"id": campaign.id},
+        data={"audience": {"connect": {"id": audience_id}}},
+    )
+    assert updated is not None  # just fetched above, can't vanish mid-request
+    await advance_to_ready_if_complete(updated)

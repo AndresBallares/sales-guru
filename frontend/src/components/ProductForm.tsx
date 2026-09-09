@@ -13,6 +13,7 @@ import {
 export function ProductForm({
   businessId,
   product,
+  campaignId,
   urlRequired = false,
   onSaved,
   onCancel,
@@ -21,6 +22,11 @@ export function ProductForm({
   // Omitted = create mode; given = edit mode, pre-filled and PATCHing
   // that product instead of creating a new one.
   product?: Product
+  // The campaign this product is being created for, if any (create mode
+  // only) — passed through so the backend can scope auto-attach to just
+  // this campaign (app/services/campaign_readiness.py) instead of
+  // guessing across the business.
+  campaignId?: string
   urlRequired?: boolean
   onSaved: (product: Product) => void
   onCancel?: () => void
@@ -73,6 +79,7 @@ export function ProductForm({
             features: features || undefined,
             benefits: benefits || undefined,
             url: url ? normalizeDestinationUrl(url) : undefined,
+            campaignId,
           })
       onSaved(saved)
       if (!isEditing) {

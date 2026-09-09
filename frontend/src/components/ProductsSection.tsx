@@ -23,6 +23,13 @@ export function ProductsSection({
   const [loading, setLoading] = useState(true)
   const [listError, setListError] = useState<string | null>(null)
   const [urlRequired, setUrlRequired] = useState(false)
+  // The campaign this section's onboarding step exists to unblock — the
+  // business's one campaign still missing a product (there's only ever
+  // one at this point in the stepper, see BusinessDetailPage). Passed to
+  // "Add a product" below so the backend can auto-attach the new product
+  // to it (app/services/campaign_readiness.py) instead of leaving the
+  // campaign to be filled in manually.
+  const [pendingCampaignId, setPendingCampaignId] = useState<string | undefined>(undefined)
 
   // Which row (if any) is currently swapped into its inline edit form —
   // reuses ProductForm in "edit" mode (Part 1) rather than a second,
@@ -60,6 +67,7 @@ export function ProductsSection({
           (campaign) => campaign.productId === null && requiresDestinationUrl(campaign.objective),
         ),
       )
+      setPendingCampaignId(campaigns.find((campaign) => campaign.productId === null)?.id)
     } catch (err) {
       setListError(err instanceof ApiError ? err.message : 'Could not load products.')
     } finally {
@@ -196,6 +204,7 @@ export function ProductsSection({
         <h2>Add a product</h2>
         <ProductForm
           businessId={businessId}
+          campaignId={pendingCampaignId}
           urlRequired={urlRequired}
           onSaved={() => void refresh()}
         />

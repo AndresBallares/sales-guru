@@ -42,6 +42,8 @@ import {
   type TargetLocation,
   type TestEvaluation,
 } from '../lib/api'
+import { requiresDestinationUrl } from '../lib/urlValidation'
+import { AudienceForm } from './AudienceForm'
 import { NewCampaignFlow } from './NewCampaignFlow'
 import { ProductForm } from './ProductForm'
 
@@ -76,30 +78,34 @@ export function CampaignsSection({
   // audiences need to be.
   const [options, setOptions] = useState<OptionsResponse | null>(null)
 
-  // The manual fallback for the readiness checklist below. Originally
-  // shown only with 2+ audiences (auto-attach, app/services/
-  // campaign_readiness.py, was assumed to always handle the unambiguous
-  // 0-or-1 case) — but auto-attach only fires when a product/audience is
-  // *created*, never when a *campaign* is, so a campaign created after
-  // the business's one-and-only audience already exists never gets it
-  // attached automatically. Shown whenever there's at least one audience
-  // to pick from now (confirmed 2026-09-09, after multiple campaigns per
-  // business exposed exactly this gap) — mirrors "Change product" below,
-  // which was never gated on count in the first place.
+  // The manual fallback for the readiness checklist below — reuses
+  // handleAttachToCampaign above for the actual swap.
   const [pickProductId, setPickProductId] = useState<Record<string, string>>({})
   const [pickAudienceId, setPickAudienceId] = useState<Record<string, string>>({})
   const [attachingId, setAttachingId] = useState<string | null>(null)
   const [attachErrors, setAttachErrors] = useState<Record<string, string>>({})
 
   // "Change product" is always visible (Part 2), not just while a
-  // campaign is DRAFT and missing one — reuses pickProductId/
-  // handleAttachToCampaign above for the actual swap. Only one
-  // campaign's picker is open at a time.
+  // campaign is DRAFT and missing one. Only one campaign's picker is
+  // open at a time. Defaults to the full create form (matching
+  // NewCampaignFlow's guided flow, confirmed 2026-09-09 — a second+
+  // product is almost always a fresh one, not a reused one); reuse is
+  // the secondary path via reuseProductForCampaignId.
   const [productPickerId, setProductPickerId] = useState<string | null>(null)
-  const [addingProductForCampaignId, setAddingProductForCampaignId] = useState<string | null>(
+  const [reuseProductForCampaignId, setReuseProductForCampaignId] = useState<string | null>(
     null,
   )
   const [editingProductForCampaignId, setEditingProductForCampaignId] = useState<string | null>(
+    null,
+  )
+
+  // Mirrors productPickerId/reuseProductForCampaignId above, for the
+  // audience picker in the readiness checklist below — collapsed by
+  // default (one "Attach an audience" click opens it for one campaign
+  // at a time) so it doesn't compete for the same field labels as
+  // NewCampaignFlow's own audience step when both are open together.
+  const [audiencePickerId, setAudiencePickerId] = useState<string | null>(null)
+  const [reuseAudienceForCampaignId, setReuseAudienceForCampaignId] = useState<string | null>(
     null,
   )
 
@@ -725,7 +731,7 @@ export function CampaignsSection({
                     type="button"
                     onClick={() => {
                       setEditingProductForCampaignId(null)
-                      setAddingProductForCampaignId(null)
+                      setReuseProductForCampaignId(null)
                       setProductPickerId((prev) => (prev === campaign.id ? null : campaign.id))
                     }}
                   >
@@ -739,7 +745,7 @@ export function CampaignsSection({
                         type="button"
                         onClick={() => {
                           setProductPickerId(campaign.id)
-                          setAddingProductForCampaignId(null)
+                          setReuseProductForCampaignId(null)
                           setEditingProductForCampaignId(campaign.id)
                         }}
                       >
@@ -759,17 +765,7 @@ export function CampaignsSection({
                         }}
                         onCancel={() => setEditingProductForCampaignId(null)}
                       />
-                    ) : addingProductForCampaignId === campaign.id ? (
-                      <ProductForm
-                        businessId={businessId}
-                        onSaved={(created) => {
-                          setAddingProductForCampaignId(null)
-                          setProductPickerId(null)
-                          void handleAttachToCampaign(campaign.id, { productId: created.id })
-                        }}
-                        onCancel={() => setAddingProductForCampaignId(null)}
-                      />
-                    ) : (
+                    ) : reuseProductForCampaignId === campaign.id ? (
                       <div className="button-row">
                         <select
                           aria-label="Change product"
@@ -802,11 +798,33 @@ export function CampaignsSection({
                         </button>
                         <button
                           type="button"
-                          onClick={() => setAddingProductForCampaignId(campaign.id)}
+                          onClick={() => setReuseProductForCampaignId(null)}
                         >
-                          Add new product
+                          Add a new product instead
                         </button>
                       </div>
+                    ) : (
+                      <>
+                        <ProductForm
+                          businessId={businessId}
+                          campaignId={campaign.id}
+                          urlRequired={!currentProduct && requiresDestinationUrl(campaign.objective)}
+                          onSaved={(created) => {
+                            setReuseProductForCampaignId(null)
+                            setProductPickerId(null)
+                            void handleAttachToCampaign(campaign.id, { productId: created.id })
+                          }}
+                          onCancel={() => setProductPickerId(null)}
+                        />
+                        {products.length > 0 && (
+                          <button
+                            type="button"
+                            onClick={() => setReuseProductForCampaignId(campaign.id)}
+                          >
+                            Use an existing product instead
+                          </button>
+                        )}
+                      </>
                     ))}
                   {attachErrors[campaign.id] && (
                     <p className="form-error" role="alert">
@@ -839,41 +857,86 @@ export function CampaignsSection({
                       <li>{campaign.productId ? '✓' : '✗'} Product</li>
                       <li>
                         {campaign.audienceId ? '✓' : '✗'} Audience
-                        {!campaign.audienceId && audiences.length > 0 && (
+                        {!campaign.audienceId && audiencePickerId !== campaign.id && (
                           <>
                             {' '}
-                            <select
-                              aria-label="Which audience?"
-                              value={pickAudienceId[campaign.id] ?? ''}
-                              onChange={(event) =>
-                                setPickAudienceId((prev) => ({
-                                  ...prev,
-                                  [campaign.id]: event.target.value,
-                                }))
-                              }
-                            >
-                              <option value="">Which audience?</option>
-                              {audiences.map((audience) => (
-                                <option key={audience.id} value={audience.id}>
-                                  {audience.description}
-                                </option>
-                              ))}
-                            </select>
                             <button
                               type="button"
-                              onClick={() =>
-                                void handleAttachToCampaign(campaign.id, {
-                                  audienceId: pickAudienceId[campaign.id],
-                                })
-                              }
-                              disabled={
-                                !pickAudienceId[campaign.id] || attachingId === campaign.id
-                              }
+                              onClick={() => {
+                                setReuseAudienceForCampaignId(null)
+                                setAudiencePickerId(campaign.id)
+                              }}
                             >
-                              Attach
+                              Attach an audience
                             </button>
                           </>
                         )}
+                        {!campaign.audienceId &&
+                          audiencePickerId === campaign.id &&
+                          (reuseAudienceForCampaignId === campaign.id ? (
+                            <div className="button-row">
+                              <select
+                                aria-label="Which audience?"
+                                value={pickAudienceId[campaign.id] ?? ''}
+                                onChange={(event) =>
+                                  setPickAudienceId((prev) => ({
+                                    ...prev,
+                                    [campaign.id]: event.target.value,
+                                  }))
+                                }
+                              >
+                                <option value="">Which audience?</option>
+                                {audiences.map((audience) => (
+                                  <option key={audience.id} value={audience.id}>
+                                    {audience.description}
+                                  </option>
+                                ))}
+                              </select>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  void handleAttachToCampaign(campaign.id, {
+                                    audienceId: pickAudienceId[campaign.id],
+                                  })
+                                  setAudiencePickerId(null)
+                                }}
+                                disabled={
+                                  !pickAudienceId[campaign.id] || attachingId === campaign.id
+                                }
+                              >
+                                Attach
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setReuseAudienceForCampaignId(null)}
+                              >
+                                Add a new audience instead
+                              </button>
+                            </div>
+                          ) : (
+                            <div>
+                              <AudienceForm
+                                businessId={businessId}
+                                campaignId={campaign.id}
+                                onSaved={(created) => {
+                                  setReuseAudienceForCampaignId(null)
+                                  setAudiencePickerId(null)
+                                  void handleAttachToCampaign(campaign.id, {
+                                    audienceId: created.id,
+                                  })
+                                }}
+                                onCancel={() => setAudiencePickerId(null)}
+                              />
+                              {audiences.length > 0 && (
+                                <button
+                                  type="button"
+                                  onClick={() => setReuseAudienceForCampaignId(campaign.id)}
+                                >
+                                  Use an existing audience instead
+                                </button>
+                              )}
+                            </div>
+                          ))}
                       </li>
                     </ul>
                   </div>

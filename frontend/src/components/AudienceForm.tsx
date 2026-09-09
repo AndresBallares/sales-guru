@@ -7,10 +7,15 @@ import { ApiError, createAudience, type Audience } from '../lib/api'
 // endpoint yet, so there's no edit mode to mirror ProductForm's.
 export function AudienceForm({
   businessId,
+  campaignId,
   onSaved,
   onCancel,
 }: {
   businessId: string
+  // The campaign this audience is being created for, if any — passed
+  // through so the backend can scope auto-attach to just this campaign
+  // (app/services/campaign_readiness.py) instead of guessing.
+  campaignId?: string
   onSaved: (audience: Audience) => void
   onCancel?: () => void
 }) {
@@ -37,6 +42,7 @@ export function AudienceForm({
         interests: interests || undefined,
         problem: problem || undefined,
         desire: desire || undefined,
+        campaignId,
       })
       onSaved(saved)
       setDescription('')

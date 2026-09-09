@@ -233,6 +233,7 @@ export function NewCampaignFlow({
             <>
               <ProductForm
                 businessId={businessId}
+                campaignId={campaign?.id}
                 urlRequired={urlRequired}
                 onSaved={(created) => void attachProduct(created.id)}
                 onCancel={onCancel}
@@ -288,6 +289,7 @@ export function NewCampaignFlow({
             <>
               <AudienceForm
                 businessId={businessId}
+                campaignId={campaign?.id}
                 onSaved={(created) => void attachAudience(created.id)}
                 onCancel={onCancel}
               />

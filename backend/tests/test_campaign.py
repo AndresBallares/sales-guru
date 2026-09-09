@@ -30,28 +30,43 @@ def _create_product(
     business_id: str,
     description: str = "Widgets",
     url: str | None = None,
+    campaign_id: str | None = None,
 ) -> str:
     """Create a product under a business, return its id.
 
     url defaults to None, but a SALES/TRAFFIC campaign missing a product
     requires one (app/services/url_validation.py) — pass one explicitly
     whenever the test attaches this product to such a campaign.
+
+    campaign_id scopes auto-attach to that one campaign
+    (app/services/campaign_readiness.py's auto_attach_product) — omit it
+    to exercise the no-campaign-context, no-auto-attach path.
     """
     payload: dict[str, str] = {"description": description}
     if url is not None:
         payload["url"] = url
+    if campaign_id is not None:
+        payload["campaignId"] = campaign_id
     response = client.post(f"/businesses/{business_id}/products", json=payload)
     id_: str = response.json()["id"]
     return id_
 
 
 def _create_audience(
-    client: TestClient, business_id: str, description: str = "Everyone"
+    client: TestClient,
+    business_id: str,
+    description: str = "Everyone",
+    campaign_id: str | None = None,
 ) -> str:
-    """Create an audience under a business, return its id."""
-    response = client.post(
-        f"/businesses/{business_id}/audiences", json={"description": description}
-    )
+    """Create an audience under a business, return its id.
+
+    campaign_id scopes auto-attach to that one campaign
+    (app/services/campaign_readiness.py's auto_attach_audience).
+    """
+    payload: dict[str, str] = {"description": description}
+    if campaign_id is not None:
+        payload["campaignId"] = campaign_id
+    response = client.post(f"/businesses/{business_id}/audiences", json=payload)
     id_: str = response.json()["id"]
     return id_
 
@@ -318,8 +333,8 @@ def test_update_campaign_warns_instead_of_blocking_a_urlless_product_on_sales(
     that should refuse to save)."""
     _signed_up_client(client)
     business_id = _create_business(client)
-    # Two products (rather than one) so auto-attach can't decide and leaves
-    # the campaign alone — the manual PATCH below is what actually binds it.
+    # Created without a campaignId, so auto-attach never runs — the
+    # manual PATCH below is what actually binds it.
     product_id = _create_product(client, business_id, description="First product")
     _create_product(
         client,
@@ -446,10 +461,10 @@ def test_create_campaign_with_only_a_product_stays_draft(client: TestClient) -> 
     assert response.json()["status"] == "DRAFT"
 
 
-def test_creating_a_product_auto_attaches_it_to_a_draft_campaign(
+def test_creating_a_product_auto_attaches_it_to_the_campaign_it_was_made_for(
     client: TestClient,
 ) -> None:
-    """The one-product case attaches to every campaign missing one, no
+    """Passing campaignId attaches the new product to that campaign, no
     user action needed (app/services/campaign_readiness.py)."""
     _signed_up_client(client)
     business_id = _create_business(client)
@@ -458,7 +473,10 @@ def test_creating_a_product_auto_attaches_it_to_a_draft_campaign(
     ).json()["id"]
 
     product_id = _create_product(
-        client, business_id, url="https://acme.example/widgets"
+        client,
+        business_id,
+        url="https://acme.example/widgets",
+        campaign_id=campaign_id,
     )
 
     campaign = client.get(f"/businesses/{business_id}/campaigns").json()[0]
@@ -473,46 +491,76 @@ def test_creating_an_audience_auto_attaches_it_and_completes_readiness(
     """Once both product and audience auto-attach, the campaign flips READY."""
     _signed_up_client(client)
     business_id = _create_business(client)
-    client.post(f"/businesses/{business_id}/campaigns", json={"objective": "SALES"})
-    _create_product(client, business_id, url="https://acme.example/widgets")
-
-    audience_id = _create_audience(client, business_id)
-
-    campaign = client.get(f"/businesses/{business_id}/campaigns").json()[0]
-    assert campaign["audienceId"] == audience_id
-    assert campaign["status"] == "READY"
-
-
-def test_a_second_product_stops_further_auto_attach(client: TestClient) -> None:
-    """With two products, auto-attach can't guess which one — it leaves
-    the campaign alone rather than picking arbitrarily."""
-    _signed_up_client(client)
-    business_id = _create_business(client)
     campaign_id = client.post(
         f"/businesses/{business_id}/campaigns", json={"objective": "SALES"}
     ).json()["id"]
     _create_product(
         client,
         business_id,
-        description="First product",
-        url="https://acme.example/first",
+        url="https://acme.example/widgets",
+        campaign_id=campaign_id,
     )
 
-    _create_product(client, business_id, description="Second product")
+    audience_id = _create_audience(client, business_id, campaign_id=campaign_id)
+
+    campaign = client.get(f"/businesses/{business_id}/campaigns").json()[0]
+    assert campaign["audienceId"] == audience_id
+    assert campaign["status"] == "READY"
+
+
+def test_creating_a_product_without_a_campaign_id_does_not_auto_attach(
+    client: TestClient,
+) -> None:
+    """No campaignId means no campaign context, so auto-attach is a no-op
+    rather than guessing which draft campaign to fill in."""
+    _signed_up_client(client)
+    business_id = _create_business(client)
+    campaign_id = client.post(
+        f"/businesses/{business_id}/campaigns", json={"objective": "SALES"}
+    ).json()["id"]
+
+    _create_product(client, business_id, url="https://acme.example/widgets")
 
     campaign = client.get(f"/businesses/{business_id}/campaigns").json()[0]
     assert campaign["id"] == campaign_id
-    # The first product's own auto-attach already ran before the second
-    # product existed, so it's still attached — the second one just
-    # doesn't retroactively undo or contest that.
-    assert campaign["productId"] is not None
+    assert campaign["productId"] is None
+
+
+def test_creating_a_product_only_attaches_to_the_campaign_it_was_made_for(
+    client: TestClient,
+) -> None:
+    """With two draft campaigns missing a product, auto-attach fills in
+    only the one it was scoped to — never another campaign in the
+    business, even one in the same empty state."""
+    _signed_up_client(client)
+    business_id = _create_business(client)
+    campaign_id = client.post(
+        f"/businesses/{business_id}/campaigns", json={"objective": "SALES"}
+    ).json()["id"]
+    other_campaign_id = client.post(
+        f"/businesses/{business_id}/campaigns", json={"objective": "AWARENESS"}
+    ).json()["id"]
+
+    product_id = _create_product(
+        client,
+        business_id,
+        url="https://acme.example/widgets",
+        campaign_id=campaign_id,
+    )
+
+    campaigns = {
+        c["id"]: c for c in client.get(f"/businesses/{business_id}/campaigns").json()
+    }
+    assert campaigns[campaign_id]["productId"] == product_id
+    assert campaigns[other_campaign_id]["productId"] is None
 
 
 def test_creating_a_product_does_not_attach_to_an_already_complete_campaign(
     client: TestClient,
 ) -> None:
-    """Auto-attach only fills in campaigns missing a product — it never
-    overwrites one that already has a different one."""
+    """Auto-attach only fills in a campaign missing a product — it never
+    overwrites one that already has a different one, even when it's the
+    campaign named by campaignId."""
     _signed_up_client(client)
     business_id = _create_business(client)
     original_product_id = _create_product(
@@ -528,7 +576,9 @@ def test_creating_a_product_does_not_attach_to_an_already_complete_campaign(
         },
     ).json()["id"]
 
-    _create_product(client, business_id, description="New product")
+    _create_product(
+        client, business_id, description="New product", campaign_id=campaign_id
+    )
 
     campaign = next(
         c
@@ -558,8 +608,8 @@ def test_update_campaign_404s_for_a_nonexistent_campaign(client: TestClient) -> 
 
 
 def test_update_campaign_attaches_a_product_and_audience(client: TestClient) -> None:
-    """The manual fallback for when auto-attach can't decide (several
-    products/audiences to choose from)."""
+    """The manual path for attaching a product/audience created without a
+    campaignId (so auto-attach never ran) to an existing campaign."""
     _signed_up_client(client)
     business_id = _create_business(client)
     campaign_id = client.post(
@@ -571,7 +621,12 @@ def test_update_campaign_attaches_a_product_and_audience(client: TestClient) -> 
         description="First product",
         url="https://acme.example/first",
     )
-    _create_product(client, business_id, description="Second product")
+    _create_product(
+        client,
+        business_id,
+        description="Second product",
+        url="https://acme.example/second",
+    )
     audience_id = _create_audience(client, business_id, description="First audience")
     _create_audience(client, business_id, description="Second audience")
 

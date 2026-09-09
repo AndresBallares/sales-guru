@@ -194,6 +194,50 @@ describe('ProductsSection', () => {
     expect(screen.getByText(/required for a Sales or Traffic campaign/)).toBeInTheDocument()
   })
 
+  it('passes the campaign still missing a product so the backend can auto-attach', async () => {
+    mockedApi.listProducts.mockResolvedValue([])
+    mockedApi.listCampaigns.mockResolvedValue([
+      {
+        id: 'camp-1',
+        name: null,
+        objective: 'AWARENESS',
+        status: 'DRAFT',
+        productId: null,
+        audienceId: null,
+        metaCampaignId: null,
+        eventVenueKey: null,
+        startDate: null,
+        endDate: null,
+        pausedReason: null,
+        dailySpendFlag: null,
+        needsDestinationUrl: false,
+      },
+    ])
+    mockedApi.createProduct.mockResolvedValue({
+      id: 'prod-1',
+      description: 'Widgets',
+      price: null,
+      margin: null,
+      features: null,
+      benefits: null,
+      url: null,
+    })
+    const user = userEvent.setup()
+
+    render(<ProductsSection businessId="biz-1" />)
+    await screen.findByText(/No products yet/)
+
+    await user.type(screen.getByLabelText('What do you sell?'), 'Widgets')
+    await user.click(screen.getByRole('button', { name: 'Add product' }))
+
+    await waitFor(() =>
+      expect(mockedApi.createProduct).toHaveBeenCalledWith(
+        'biz-1',
+        expect.objectContaining({ campaignId: 'camp-1' }),
+      ),
+    )
+  })
+
   it('leaves the URL field optional when no pending campaign needs one', async () => {
     mockedApi.listProducts.mockResolvedValue([])
     mockedApi.listCampaigns.mockResolvedValue([
