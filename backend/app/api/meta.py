@@ -47,6 +47,8 @@ callback_router = APIRouter(tags=["meta"])
 _CONNECTION_NOT_FOUND = "Meta connection not found"
 _AD_ACCOUNT_NOT_SET = "Select an ad account and Page before choosing a Pixel"
 _STATE_TTL = timedelta(minutes=10)
+_FAKE_META_DISABLED = "Fake Meta mode is not enabled"
+_FAKE_META_TOKEN_LIFETIME = timedelta(days=60)
 
 
 def _to_response(connection: MetaConnection) -> MetaConnectionResponse:
@@ -116,6 +118,64 @@ async def connect(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)
         ) from exc
     return MetaConnectResponse(authorization_url=url)
+
+
+@router.post(
+    "/fake-connect",
+    response_model=MetaConnectionResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def fake_connect(
+    business: Business = Depends(get_owned_business),
+) -> MetaConnectionResponse:
+    """Create a MetaConnection without a real OAuth round-trip — test-only.
+
+    Exists only so e2e tests (frontend/e2e) can get a business past Meta
+    connection without a real Meta login, which nothing automated can
+    drive. Every subsequent Graph API call this connection is used for
+    (ad accounts/Pages/Pixels, publish, insights — app/services/meta.py)
+    is itself faked whenever fake_meta_enabled is on, so the dummy token
+    below is never actually sent to Meta.
+
+    Args:
+        business: The business to connect, resolved and ownership-checked
+            by get_owned_business.
+
+    Returns:
+        The new (or reset) connection — adAccountId/pageId still null,
+        same as a fresh real connection, so the frontend's real
+        ad-account/Page-picker UI runs completely unchanged from here.
+
+    Raises:
+        HTTPException: 404 if fake_meta_enabled is off — kept
+            indistinguishable from a genuinely missing route, same as
+            app/api/product.py's check_product_url when its own flag
+            is off.
+    """
+    if not get_settings().fake_meta_enabled:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=_FAKE_META_DISABLED
+        )
+    encrypted_access_token = encrypt_token("fake-access-token")
+    connection = await db.metaconnection.upsert(
+        where={"businessId": business.id},
+        data={
+            "create": {
+                "businessId": business.id,
+                "metaUserId": "fake_meta_user",
+                "accessToken": encrypted_access_token,
+                "tokenExpiresAt": datetime.now(UTC) + _FAKE_META_TOKEN_LIFETIME,
+            },
+            "update": {
+                "metaUserId": "fake_meta_user",
+                "accessToken": encrypted_access_token,
+                "tokenExpiresAt": datetime.now(UTC) + _FAKE_META_TOKEN_LIFETIME,
+                "adAccountId": None,
+                "pageId": None,
+            },
+        },
+    )
+    return _to_response(connection)
 
 
 @router.get("", response_model=MetaConnectionResponse)

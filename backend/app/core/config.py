@@ -2,6 +2,7 @@
 
 from functools import lru_cache
 
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -65,6 +66,17 @@ class Settings(BaseSettings):
             check-url (app/services/url_reachability.py) is exposed at
             all. Off by default — this is a scaffold, not yet wired into
             publish (see that module's docstring).
+        fake_meta_enabled: Test-only escape hatch (env var `FAKE_META`,
+            confirmed 2026-09-09) that swaps every real Meta Graph API
+            call (app/services/meta.py) for a canned fake response, and
+            exposes POST .../meta/fake-connect (app/api/meta.py) to
+            create a MetaConnection without real OAuth. Exists so e2e
+            tests can drive a business past the Meta-connection step —
+            which needs a real user's real Meta login, so it can't be
+            driven any other way — through to a published campaign and
+            its (canned, empty) results, without ever touching Meta's
+            real API. Off by default; _forbid_in_production below makes
+            it impossible to accidentally leave on in a real deployment.
     """
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
@@ -84,6 +96,7 @@ class Settings(BaseSettings):
     resend_api_key: str | None = None
     email_from: str = "onboarding@resend.dev"
     url_reachability_check_enabled: bool = False
+    fake_meta_enabled: bool = Field(default=False, validation_alias="FAKE_META")
 
     @property
     def cors_origins_list(self) -> list[str]:
@@ -94,6 +107,31 @@ class Settings(BaseSettings):
         """
         origins = self.cors_origins.split(",")
         return [origin.strip() for origin in origins if origin.strip()]
+
+    @model_validator(mode="after")
+    def _forbid_in_production(self) -> "Settings":
+        """Refuse to construct Settings with fake Meta enabled in production.
+
+        The whole point of fake_meta_enabled is to let a test process
+        skip real Meta API calls entirely — enabling it in production
+        would mean live campaigns silently never reach Meta at all.
+        Failing at Settings construction (get_settings() is called at
+        app.main's module level, before the app object even exists)
+        means a misconfigured deploy never boots, rather than boots and
+        quietly fakes real customer campaigns.
+
+        Returns:
+            self, unchanged, when the combination is safe.
+
+        Raises:
+            ValueError: If fake_meta_enabled is True and environment is
+                "production".
+        """
+        if self.fake_meta_enabled and self.environment == "production":
+            raise ValueError(
+                "FAKE_META must never be enabled when ENVIRONMENT=production"
+            )
+        return self
 
 
 @lru_cache

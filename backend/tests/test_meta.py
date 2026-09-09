@@ -16,6 +16,7 @@ from unittest.mock import AsyncMock, Mock
 
 import pytest
 from app.api import meta as meta_module
+from app.core.config import get_settings
 from app.schemas.meta import MetaAdAccount, MetaPage, MetaPixel
 from fastapi.testclient import TestClient
 from prisma import Prisma
@@ -661,3 +662,68 @@ def test_callback_resets_ad_account_and_page_on_reconnect(client: TestClient) ->
     fetched = client.get(f"/businesses/{business_id}/meta")
     assert fetched.json()["adAccountId"] is None
     assert fetched.json()["pageId"] is None
+
+
+def test_fake_connect_requires_a_session(client: TestClient) -> None:
+    """Fake-connecting with no session cookie returns 401."""
+    response = client.post("/businesses/some-id/meta/fake-connect")
+
+    assert response.status_code == 401
+
+
+def test_fake_connect_404s_when_fake_meta_is_disabled(client: TestClient) -> None:
+    """With FAKE_META off (the default), the route is a 404, like a missing one."""
+    _signed_up_client(client)
+    business_id = _create_business(client)
+
+    response = client.post(f"/businesses/{business_id}/meta/fake-connect")
+
+    assert response.status_code == 404
+
+
+def test_fake_connect_creates_a_connection_without_real_oauth(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """With FAKE_META on, fake-connect creates a connection with no OAuth round-trip."""
+    monkeypatch.setenv("FAKE_META", "true")
+    get_settings.cache_clear()
+    try:
+        _signed_up_client(client)
+        business_id = _create_business(client)
+
+        response = client.post(f"/businesses/{business_id}/meta/fake-connect")
+
+        assert response.status_code == 201
+        body = response.json()
+        assert body["metaUserId"] == "fake_meta_user"
+        assert body["adAccountId"] is None
+        assert body["pageId"] is None
+        fetched = client.get(f"/businesses/{business_id}/meta")
+        assert fetched.status_code == 200
+        assert fetched.json()["id"] == body["id"]
+    finally:
+        get_settings.cache_clear()
+
+
+def test_fake_connect_resets_ad_account_and_page_on_reconnect(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Fake-reconnecting an already-configured business clears old selections."""
+    monkeypatch.setenv("FAKE_META", "true")
+    get_settings.cache_clear()
+    try:
+        _signed_up_client(client)
+        business_id = _create_business(client)
+        client.post(f"/businesses/{business_id}/meta/fake-connect")
+        client.post(
+            f"/businesses/{business_id}/meta/finalize",
+            json={"adAccountId": "act_fake_account", "pageId": "fake_page"},
+        )
+
+        client.post(f"/businesses/{business_id}/meta/fake-connect")
+
+        fetched = client.get(f"/businesses/{business_id}/meta")
+        assert fetched.json()["adAccountId"] is None
+        assert fetched.json()["pageId"] is None
+    finally:
+        get_settings.cache_clear()

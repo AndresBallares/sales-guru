@@ -6,11 +6,26 @@ Campaign/AdSet/AdCreative/Ad creation calls that put an approved campaign
 live on Meta, and pulling performance numbers back for a live one.
 Orchestrating the publish calls against our own data model lives in
 app/services/publish.py; this module only wraps the raw Graph API.
+
+**Fake mode (Settings.fake_meta_enabled, confirmed 2026-09-09):** every
+function below that makes a real outbound Graph API call checks the flag
+first and returns a canned response instead when it's on — this is the
+single place that decision is made, so every caller (app/api/meta.py's
+ad-account/Page/Pixel pickers, app/services/publish.py's publish
+orchestration, app/services/geo.py's location resolution — it calls back
+into this module's search_ad_geolocations — and the scheduled optimization/
+metrics jobs in app/services/optimization_jobs.py) gets fake data
+uniformly with no fake-vs-real branching of its own. Functions only ever
+reachable via the *real* OAuth flow (exchange_code_for_token,
+get_long_lived_token, get_meta_user_id, build_authorization_url) are left
+alone — POST .../meta/fake-connect (app/api/meta.py) bypasses that flow
+entirely, so fake mode never exercises them.
 """
 
 import json
 from datetime import UTC, datetime, timedelta
 from typing import Any, Literal, NamedTuple
+from uuid import uuid4
 
 import httpx
 
@@ -249,6 +264,8 @@ async def list_ad_accounts(access_token: str) -> list[MetaAdAccount]:
     Raises:
         MetaConnectionError: If the call fails.
     """
+    if get_settings().fake_meta_enabled:
+        return [MetaAdAccount(id="act_fake_account", name="Fake Ad Account")]
     body = await _get_json(
         f"{_GRAPH_BASE_URL}/me/adaccounts",
         {"fields": "id,name", "access_token": access_token},
@@ -268,6 +285,8 @@ async def list_pages(access_token: str) -> list[MetaPage]:
     Raises:
         MetaConnectionError: If the call fails.
     """
+    if get_settings().fake_meta_enabled:
+        return [MetaPage(id="fake_page", name="Fake Page")]
     body = await _get_json(
         f"{_GRAPH_BASE_URL}/me/accounts",
         {"fields": "id,name", "access_token": access_token},
@@ -293,6 +312,8 @@ async def list_ad_pixels(access_token: str, ad_account_id: str) -> list[MetaPixe
     Raises:
         MetaConnectionError: If the call fails.
     """
+    if get_settings().fake_meta_enabled:
+        return [MetaPixel(id="fake_pixel", name="Fake Pixel")]
     body = await _get_json(
         f"{_GRAPH_BASE_URL}/{ad_account_id}/adspixels",
         {"fields": "id,name", "access_token": access_token},
@@ -322,6 +343,8 @@ async def create_meta_campaign(
     Raises:
         MetaConnectionError: If the call fails.
     """
+    if get_settings().fake_meta_enabled:
+        return f"fake_campaign_{uuid4().hex[:12]}"
     body = await _post_json(
         f"{_GRAPH_BASE_URL}/{ad_account_id}/campaigns",
         {
@@ -460,6 +483,8 @@ async def create_meta_ad_set(
     Raises:
         MetaConnectionError: If the call fails.
     """
+    if get_settings().fake_meta_enabled:
+        return f"fake_adset_{uuid4().hex[:12]}"
     if custom_location is not None:
         geo_locations: dict[str, object] = {
             "custom_locations": [
@@ -557,6 +582,8 @@ async def create_meta_ad_creative(
     Raises:
         MetaConnectionError: If the call fails.
     """
+    if get_settings().fake_meta_enabled:
+        return f"fake_creative_{uuid4().hex[:12]}"
     link_data: dict[str, Any] = {
         "message": body_text,
         "name": headline,
@@ -603,6 +630,8 @@ async def create_meta_ad(
     Raises:
         MetaConnectionError: If the call fails.
     """
+    if get_settings().fake_meta_enabled:
+        return f"fake_ad_{uuid4().hex[:12]}"
     creative_ref = json.dumps({"creative_id": meta_creative_id})
     body = await _post_json(
         f"{_GRAPH_BASE_URL}/{ad_account_id}/ads",
@@ -784,11 +813,18 @@ async def fetch_campaign_insights(
         meta_campaign_id: The Meta campaign id (Campaign.metaCampaignId).
 
     Returns:
-        The campaign's lifetime-to-date insights.
+        The campaign's lifetime-to-date insights — canned all-zero/all-
+        None (the same shape as a campaign with no delivery data yet, see
+        _fetch_insights) when fake_meta_enabled is on, so downstream
+        consumers (app/api/metric.py's manual refresh, app/services/
+        optimization_jobs.py's scheduled jobs) can be e2e-tested against
+        a fake campaign without a real Insights call.
 
     Raises:
         MetaConnectionError: If the call fails.
     """
+    if get_settings().fake_meta_enabled:
+        return CampaignInsights(impressions=0, clicks=0, spend=0.0, conversions=0)
     return await _fetch_insights(
         access_token=access_token, meta_object_id=meta_campaign_id
     )
@@ -810,11 +846,14 @@ async def fetch_ad_set_insights(
         meta_ad_set_id: The Meta ad set id (AdSet.metaAdSetId).
 
     Returns:
-        That one AdSet's lifetime-to-date insights.
+        That one AdSet's lifetime-to-date insights — canned empty in fake
+        mode, same as fetch_campaign_insights.
 
     Raises:
         MetaConnectionError: If the call fails.
     """
+    if get_settings().fake_meta_enabled:
+        return CampaignInsights(impressions=0, clicks=0, spend=0.0, conversions=0)
     return await _fetch_insights(
         access_token=access_token, meta_object_id=meta_ad_set_id
     )
@@ -850,12 +889,18 @@ async def fetch_account_historical_performance(
 
     Returns:
         One entry per campaign with delivery data, empty if the account
-        has none. Rows with no name are skipped — Meta shouldn't omit it,
-        but a nameless row isn't useful grounding for the agent's prompt.
+        has none (also always empty in fake mode — a fake ad account has
+        no history to speak of, which deterministically steers the
+        Strategist toward a TEST_PLAN rather than depending on what a
+        real account happens to have). Rows with no name are skipped —
+        Meta shouldn't omit it, but a nameless row isn't useful grounding
+        for the agent's prompt.
 
     Raises:
         MetaConnectionError: If the call fails.
     """
+    if get_settings().fake_meta_enabled:
+        return []
     body = await _get_json(
         f"{_GRAPH_BASE_URL}/{ad_account_id}/insights",
         {
@@ -909,6 +954,8 @@ async def pause_meta_ad(*, access_token: str, meta_ad_id: str) -> None:
     Raises:
         MetaConnectionError: If the call fails.
     """
+    if get_settings().fake_meta_enabled:
+        return
     await _post_json(
         f"{_GRAPH_BASE_URL}/{meta_ad_id}",
         {"access_token": access_token, "status": "PAUSED"},
@@ -933,6 +980,8 @@ async def pause_meta_ad_set(*, access_token: str, meta_ad_set_id: str) -> None:
     Raises:
         MetaConnectionError: If the call fails.
     """
+    if get_settings().fake_meta_enabled:
+        return
     await _post_json(
         f"{_GRAPH_BASE_URL}/{meta_ad_set_id}",
         {"access_token": access_token, "status": "PAUSED"},
@@ -953,6 +1002,8 @@ async def update_meta_ad_set_budget(
     Raises:
         MetaConnectionError: If the call fails.
     """
+    if get_settings().fake_meta_enabled:
+        return
     await _post_json(
         f"{_GRAPH_BASE_URL}/{meta_ad_set_id}",
         {"access_token": access_token, "daily_budget": str(daily_budget_cents)},
@@ -1059,6 +1110,17 @@ async def search_ad_geolocations(
     Raises:
         MetaConnectionError: If the call fails.
     """
+    if get_settings().fake_meta_enabled:
+        fake_key = f"fake_{location_type}_{query.strip().lower().replace(' ', '_')}"
+        return [
+            {
+                "key": fake_key,
+                "name": query,
+                "type": location_type,
+                "country_code": "US",
+                "country_name": "United States",
+            }
+        ]
     body = await _get_json(
         f"{_GRAPH_BASE_URL}/search",
         {

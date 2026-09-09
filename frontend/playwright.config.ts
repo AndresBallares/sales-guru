@@ -32,6 +32,12 @@ export default defineConfig({
       env: {
         DATABASE_URL: 'file:./e2e.db',
         CORS_ORIGINS: 'http://localhost:4173',
+        // Swaps every real Meta Graph API call for a canned fake response
+        // and exposes POST .../meta/fake-connect (app/core/config.py's
+        // fake_meta_enabled), so e2e specs can get a business past Meta
+        // connection — which needs a real Meta login, so nothing else can
+        // drive it — without ever touching Meta's real API.
+        FAKE_META: 'true',
       },
       reuseExistingServer: !process.env.CI,
       timeout: 30_000,

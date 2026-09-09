@@ -11,7 +11,7 @@ from typing import Any
 import httpx
 import pytest
 from app.core.config import get_settings
-from app.schemas.meta import MetaPage, MetaPixel
+from app.schemas.meta import MetaAdAccount, MetaPage, MetaPixel
 from app.services import meta
 
 
@@ -1274,3 +1274,211 @@ async def test_validate_ad_interests_sends_the_fbid_list_param(
     assert params["type"] == "adinterestvalid"
     assert params["interest_fbid_list"] == '["6002969885729"]'
     assert params["access_token"] == "token"
+
+
+# Fake mode (Settings.fake_meta_enabled, confirmed 2026-09-09) — every
+# function below returns a canned response and never touches
+# httpx.AsyncClient at all; each test proves that by making the real
+# path (were it reached) raise instead of quietly succeeding or hanging
+# on a real network call.
+@pytest.fixture
+def fake_meta_mode(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    """Turn on fake_meta_enabled and make any real HTTP call blow up loudly."""
+    monkeypatch.setenv("FAKE_META", "true")
+    get_settings.cache_clear()
+    monkeypatch.setattr(
+        httpx,
+        "AsyncClient",
+        lambda: _FakeAsyncClient(
+            error=AssertionError("must not call the real Graph API in fake mode")
+        ),
+    )
+    yield
+    get_settings.cache_clear()
+
+
+@pytest.mark.asyncio
+async def test_list_ad_accounts_returns_a_canned_account_in_fake_mode(
+    fake_meta_mode: None,
+) -> None:
+    """Fake mode returns one canned ad account, no real call."""
+    accounts = await meta.list_ad_accounts("fake-token")
+
+    assert accounts == [MetaAdAccount(id="act_fake_account", name="Fake Ad Account")]
+
+
+@pytest.mark.asyncio
+async def test_list_pages_returns_a_canned_page_in_fake_mode(
+    fake_meta_mode: None,
+) -> None:
+    """Fake mode returns one canned Page, no real call."""
+    pages = await meta.list_pages("fake-token")
+
+    assert pages == [MetaPage(id="fake_page", name="Fake Page")]
+
+
+@pytest.mark.asyncio
+async def test_list_ad_pixels_returns_a_canned_pixel_in_fake_mode(
+    fake_meta_mode: None,
+) -> None:
+    """Fake mode returns one canned Pixel, no real call."""
+    pixels = await meta.list_ad_pixels("fake-token", "act_fake_account")
+
+    assert pixels == [MetaPixel(id="fake_pixel", name="Fake Pixel")]
+
+
+@pytest.mark.asyncio
+async def test_create_meta_campaign_returns_a_fake_id_in_fake_mode(
+    fake_meta_mode: None,
+) -> None:
+    """Fake mode returns a recognizably-fake campaign id, no real call."""
+    campaign_id = await meta.create_meta_campaign(
+        access_token="fake-token",
+        ad_account_id="act_fake_account",
+        name="Some campaign",
+        objective="SALES",
+    )
+
+    assert campaign_id.startswith("fake_campaign_")
+
+
+@pytest.mark.asyncio
+async def test_create_meta_ad_set_returns_a_fake_id_in_fake_mode(
+    fake_meta_mode: None,
+) -> None:
+    """Fake mode returns a recognizably-fake ad set id, no real call."""
+    ad_set_id = await meta.create_meta_ad_set(
+        access_token="fake-token",
+        ad_account_id="act_fake_account",
+        name="Some ad set",
+        meta_campaign_id="fake_campaign_abc",
+        daily_budget_cents=2500,
+        optimization_goal="OFFSITE_CONVERSIONS",
+        age_min=30,
+        age_max=55,
+    )
+
+    assert ad_set_id.startswith("fake_adset_")
+
+
+@pytest.mark.asyncio
+async def test_create_meta_ad_creative_returns_a_fake_id_in_fake_mode(
+    fake_meta_mode: None,
+) -> None:
+    """Fake mode returns a recognizably-fake creative id, no real call."""
+    creative_id = await meta.create_meta_ad_creative(
+        access_token="fake-token",
+        ad_account_id="act_fake_account",
+        page_id="fake_page",
+        name="Creative A",
+        headline="Headline",
+        body_text="Body",
+        description="Description",
+        cta="SHOP_NOW",
+        link="https://acme.example/rings",
+        image_url=None,
+    )
+
+    assert creative_id.startswith("fake_creative_")
+
+
+@pytest.mark.asyncio
+async def test_create_meta_ad_returns_a_fake_id_in_fake_mode(
+    fake_meta_mode: None,
+) -> None:
+    """Fake mode returns a recognizably-fake ad id, no real call."""
+    ad_id = await meta.create_meta_ad(
+        access_token="fake-token",
+        ad_account_id="act_fake_account",
+        name="Creative A",
+        meta_ad_set_id="fake_adset_abc",
+        meta_creative_id="fake_creative_abc",
+    )
+
+    assert ad_id.startswith("fake_ad_")
+
+
+@pytest.mark.asyncio
+async def test_fetch_campaign_insights_returns_canned_empty_metrics_in_fake_mode(
+    fake_meta_mode: None,
+) -> None:
+    """Fake mode returns all-zero/all-None metrics — the "no delivery data"
+    shape — so downstream jobs (app/services/optimization_jobs.py) and the
+    upcoming delete feature can be e2e-tested against a fake campaign."""
+    insights = await meta.fetch_campaign_insights(
+        access_token="fake-token", meta_campaign_id="fake_campaign_abc"
+    )
+
+    assert insights == meta.CampaignInsights(
+        impressions=0, clicks=0, spend=0.0, conversions=0
+    )
+
+
+@pytest.mark.asyncio
+async def test_fetch_ad_set_insights_returns_canned_empty_metrics_in_fake_mode(
+    fake_meta_mode: None,
+) -> None:
+    """Same canned-empty shape as fetch_campaign_insights, scoped to an AdSet."""
+    insights = await meta.fetch_ad_set_insights(
+        access_token="fake-token", meta_ad_set_id="fake_adset_abc"
+    )
+
+    assert insights == meta.CampaignInsights(
+        impressions=0, clicks=0, spend=0.0, conversions=0
+    )
+
+
+@pytest.mark.asyncio
+async def test_fetch_account_historical_performance_returns_empty_in_fake_mode(
+    fake_meta_mode: None,
+) -> None:
+    """A fake ad account has no history — steers the Strategist toward
+    TEST_PLAN deterministically, rather than depending on a real account."""
+    rows = await meta.fetch_account_historical_performance(
+        access_token="fake-token", ad_account_id="act_fake_account"
+    )
+
+    assert rows == []
+
+
+@pytest.mark.asyncio
+async def test_pause_meta_ad_is_a_no_op_in_fake_mode(fake_meta_mode: None) -> None:
+    """Fake mode pauses nothing for real — just returns."""
+    await meta.pause_meta_ad(access_token="fake-token", meta_ad_id="fake_ad_abc")
+
+
+@pytest.mark.asyncio
+async def test_pause_meta_ad_set_is_a_no_op_in_fake_mode(fake_meta_mode: None) -> None:
+    """Fake mode pauses nothing for real — just returns."""
+    await meta.pause_meta_ad_set(
+        access_token="fake-token", meta_ad_set_id="fake_adset_abc"
+    )
+
+
+@pytest.mark.asyncio
+async def test_update_meta_ad_set_budget_is_a_no_op_in_fake_mode(
+    fake_meta_mode: None,
+) -> None:
+    """Fake mode updates nothing for real — just returns."""
+    await meta.update_meta_ad_set_budget(
+        access_token="fake-token",
+        meta_ad_set_id="fake_adset_abc",
+        daily_budget_cents=4000,
+    )
+
+
+@pytest.mark.asyncio
+async def test_search_ad_geolocations_returns_a_resolvable_fake_match_in_fake_mode(
+    fake_meta_mode: None,
+) -> None:
+    """Fake mode returns one always-resolvable US match, for any query — so
+    app/services/geo.py's resolve_target_location never fails on a fake
+    connection, however the AI-generated strategy happened to phrase a
+    location."""
+    results = await meta.search_ad_geolocations(
+        access_token="fake-token", query="Springfield", location_type="city"
+    )
+
+    assert len(results) == 1
+    assert results[0]["country_code"] == "US"
+    assert results[0]["key"]
