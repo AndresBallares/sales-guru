@@ -218,6 +218,11 @@ def mock_services(monkeypatch: pytest.MonkeyPatch) -> dict[str, AsyncMock]:
         AsyncMock(return_value="meta_creative_1"),
     )
     monkeypatch.setattr(
+        meta_service_module,
+        "upload_meta_ad_image",
+        AsyncMock(return_value="fake_image_hash_1"),
+    )
+    monkeypatch.setattr(
         meta_service_module, "create_meta_ad", AsyncMock(return_value="meta_ad_1")
     )
 

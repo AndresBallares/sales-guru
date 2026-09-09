@@ -4,6 +4,8 @@ httpx.AsyncClient is mocked throughout — no test here makes a real network
 call to Meta's Graph API.
 """
 
+import base64
+import json
 from collections.abc import Iterator
 from datetime import UTC, datetime
 from typing import Any
@@ -606,7 +608,9 @@ async def test_create_meta_ad_set_includes_promoted_object_with_a_pixel(
 async def test_create_meta_ad_creative_includes_the_image_when_present(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A creative with an image URL includes it in link_data.picture."""
+    """A creative with an image hash includes it in link_data.image_hash,
+    not a bare link_data.picture URL (confirmed 2026-09-09 — Meta's own
+    real-ad-image mechanism, see upload_meta_ad_image)."""
     client = _mock_client_returning(monkeypatch, _FakeResponse({"id": "creative_123"}))
 
     creative_id = await meta.create_meta_ad_creative(
@@ -619,21 +623,23 @@ async def test_create_meta_ad_creative_includes_the_image_when_present(
         description="Custom handmade emerald jewelry",
         cta="SHOP_NOW",
         link="https://acme.example/rings",
-        image_url="https://acme.example/ring.jpg",
+        image_hash="abc123hash",
     )
 
     assert creative_id == "creative_123"
     url, data = client.calls[0]
     assert url == "https://graph.facebook.com/v21.0/act_1/adcreatives"
-    assert '"picture": "https://acme.example/ring.jpg"' in data["object_story_spec"]
+    assert '"image_hash": "abc123hash"' in data["object_story_spec"]
+    assert "picture" not in data["object_story_spec"]
     assert '"page_id": "page_1"' in data["object_story_spec"]
 
 
 @pytest.mark.asyncio
-async def test_create_meta_ad_creative_omits_picture_without_an_image(
+async def test_create_meta_ad_creative_omits_image_hash_without_an_image(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """No image generated yet (PRD.md §2 step 4) still gives a valid creative call."""
+    """A campaign with no product photo still gives a valid, link-only
+    creative call."""
     client = _mock_client_returning(monkeypatch, _FakeResponse({"id": "creative_123"}))
 
     await meta.create_meta_ad_creative(
@@ -646,10 +652,11 @@ async def test_create_meta_ad_creative_omits_picture_without_an_image(
         description="Custom handmade emerald jewelry",
         cta="SHOP_NOW",
         link="https://acme.example/rings",
-        image_url=None,
+        image_hash=None,
     )
 
     _url, data = client.calls[0]
+    assert "image_hash" not in data["object_story_spec"]
     assert "picture" not in data["object_story_spec"]
 
 
@@ -1376,10 +1383,44 @@ async def test_create_meta_ad_creative_returns_a_fake_id_in_fake_mode(
         description="Description",
         cta="SHOP_NOW",
         link="https://acme.example/rings",
-        image_url=None,
+        image_hash=None,
     )
 
     assert creative_id.startswith("fake_creative_")
+
+
+@pytest.mark.asyncio
+async def test_upload_meta_ad_image_returns_the_hash(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A successful upload returns the hash Meta assigned the image, and
+    sends the base64-encoded bytes under the "bytes" form param."""
+    client = _mock_client_returning(
+        monkeypatch,
+        _FakeResponse({"images": {"image": {"hash": "img_hash_123", "url": "..."}}}),
+    )
+
+    image_hash = await meta.upload_meta_ad_image(
+        access_token="token", ad_account_id="act_1", image_data=b"fake jpeg bytes"
+    )
+
+    assert image_hash == "img_hash_123"
+    url, data = client.calls[0]
+    assert url == "https://graph.facebook.com/v21.0/act_1/adimages"
+    sent = json.loads(data["bytes"])
+    assert base64.b64decode(sent["image"]) == b"fake jpeg bytes"
+
+
+@pytest.mark.asyncio
+async def test_upload_meta_ad_image_returns_a_fake_hash_in_fake_mode(
+    fake_meta_mode: None,
+) -> None:
+    """Fake mode returns a recognizably-fake hash, no real call."""
+    image_hash = await meta.upload_meta_ad_image(
+        access_token="fake-token", ad_account_id="act_fake_account", image_data=b"bytes"
+    )
+
+    assert image_hash.startswith("fake_image_hash_")
 
 
 @pytest.mark.asyncio

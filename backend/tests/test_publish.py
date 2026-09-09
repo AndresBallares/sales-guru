@@ -328,6 +328,8 @@ def mock_services(monkeypatch: pytest.MonkeyPatch) -> dict[str, AsyncMock]:
     monkeypatch.setattr(
         meta_service_module, "create_meta_ad_creative", create_ad_creative
     )
+    upload_ad_image = AsyncMock(return_value="fake_image_hash_1")
+    monkeypatch.setattr(meta_service_module, "upload_meta_ad_image", upload_ad_image)
     create_ad = AsyncMock(return_value="meta_ad_1")
     monkeypatch.setattr(meta_service_module, "create_meta_ad", create_ad)
     pause_ad_set = AsyncMock(return_value=None)
@@ -337,6 +339,7 @@ def mock_services(monkeypatch: pytest.MonkeyPatch) -> dict[str, AsyncMock]:
         "create_campaign": create_campaign,
         "create_ad_set": create_ad_set,
         "create_ad_creative": create_ad_creative,
+        "upload_ad_image": upload_ad_image,
         "create_ad": create_ad,
         "pause_ad_set": pause_ad_set,
     }
@@ -962,6 +965,136 @@ def test_publish_uses_the_product_url_when_available(
     assert kwargs["link"] == "https://acme.example/rings"
 
 
+def test_publish_uploads_the_selected_photo_and_uses_its_hash(
+    client: TestClient, mock_services: dict[str, AsyncMock]
+) -> None:
+    """The creative's attached photo (auto-attached on select — PR-1) is
+    uploaded to Meta for real (confirmed 2026-09-09) and the resulting
+    image_hash — not a bare picture URL — is what create_meta_ad_creative
+    gets, closing out item 5 of the product-photo spec."""
+    _signed_up_client(client)
+    business_id = _create_business(client)
+    product_id = _create_product(client, business_id, url="https://acme.example/rings")
+    campaign_id = _create_campaign(client, business_id, product_id=product_id)
+    client.post(
+        f"/businesses/{business_id}/campaigns/{campaign_id}/strategy",
+        json={"hasPriorAdvertisingExperience": True},
+    )
+    creatives = client.post(
+        f"/businesses/{business_id}/campaigns/{campaign_id}/creatives"
+    ).json()
+    client.post(
+        f"/businesses/{business_id}/campaigns/{campaign_id}"
+        f"/creatives/{creatives[0]['id']}/select"
+    )
+    client.post(f"/businesses/{business_id}/campaigns/{campaign_id}/approve")
+    _connect_meta(client, business_id)
+
+    response = client.post(f"/businesses/{business_id}/campaigns/{campaign_id}/publish")
+
+    assert response.status_code == 200
+    upload_kwargs = mock_services["upload_ad_image"].call_args.kwargs
+    assert upload_kwargs["image_data"] == _valid_jpeg()
+    creative_kwargs = mock_services["create_ad_creative"].call_args.kwargs
+    assert creative_kwargs["image_hash"] == "fake_image_hash_1"
+
+
+@pytest.mark.asyncio
+async def test_publish_fails_loudly_when_the_selected_photo_was_deleted(
+    client: TestClient, mock_services: dict[str, AsyncMock]
+) -> None:
+    """If the selected photo was deleted after selection (a known, flagged
+    gap — no in-use guard on delete yet), publish fails outright with a
+    clear error rather than silently going image-less (confirmed
+    2026-09-09) — a stale reference is a real data problem, not "no photo
+    was ever chosen." The campaign is marked FAILED, same as any other
+    Meta API failure during publish. Uses a fresh Prisma() connection to
+    delete the row directly, same forced-state pattern as
+    test_creative.py's own defense-in-depth tests."""
+    _signed_up_client(client)
+    business_id = _create_business(client)
+    product_id = _create_product(client, business_id, url="https://acme.example/rings")
+    campaign_id = _create_campaign(client, business_id, product_id=product_id)
+    client.post(
+        f"/businesses/{business_id}/campaigns/{campaign_id}/strategy",
+        json={"hasPriorAdvertisingExperience": True},
+    )
+    creatives = client.post(
+        f"/businesses/{business_id}/campaigns/{campaign_id}/creatives"
+    ).json()
+    selected = client.post(
+        f"/businesses/{business_id}/campaigns/{campaign_id}"
+        f"/creatives/{creatives[0]['id']}/select"
+    ).json()
+    client.post(f"/businesses/{business_id}/campaigns/{campaign_id}/approve")
+    _connect_meta(client, business_id)
+
+    seeder = Prisma()
+    await seeder.connect()
+    stored = await seeder.creative.find_unique(where={"id": selected["id"]})
+    assert stored is not None and stored.productImageId is not None
+    await seeder.productimage.delete(where={"id": stored.productImageId})
+    await seeder.disconnect()
+
+    response = client.post(f"/businesses/{business_id}/campaigns/{campaign_id}/publish")
+
+    assert response.status_code == 500
+    assert "deleted" in response.json()["detail"].lower()
+    mock_services["upload_ad_image"].assert_not_awaited()
+    mock_services["create_ad_creative"].assert_not_awaited()
+    campaigns = client.get(f"/businesses/{business_id}/campaigns").json()
+    assert campaigns[0]["status"] == "FAILED"
+
+
+@pytest.mark.asyncio
+async def test_publish_tolerates_a_creative_with_no_photo_id_at_all(
+    client: TestClient,
+    mock_services: dict[str, AsyncMock],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The one permitted image-less path: a creative with imageUrl set but
+    no productImageId at all — unreachable via the normal flow now
+    (select_creative always pairs the two), but covered directly the same
+    forced-state way as the "deleted after selection" case above, rather
+    than trusted transitively. Logs a warning rather than failing or
+    silently doing nothing."""
+    _signed_up_client(client)
+    business_id = _create_business(client)
+    product_id = _create_product(client, business_id, url="https://acme.example/rings")
+    campaign_id = _create_campaign(client, business_id, product_id=product_id)
+    client.post(
+        f"/businesses/{business_id}/campaigns/{campaign_id}/strategy",
+        json={"hasPriorAdvertisingExperience": True},
+    )
+    creatives = client.post(
+        f"/businesses/{business_id}/campaigns/{campaign_id}/creatives"
+    ).json()
+    selected = client.post(
+        f"/businesses/{business_id}/campaigns/{campaign_id}"
+        f"/creatives/{creatives[0]['id']}/select"
+    ).json()
+    client.post(f"/businesses/{business_id}/campaigns/{campaign_id}/approve")
+    _connect_meta(client, business_id)
+
+    seeder = Prisma()
+    await seeder.connect()
+    await seeder.creative.update(
+        where={"id": selected["id"]}, data={"productImageId": None}
+    )
+    await seeder.disconnect()
+
+    with caplog.at_level("WARNING"):
+        response = client.post(
+            f"/businesses/{business_id}/campaigns/{campaign_id}/publish"
+        )
+
+    assert response.status_code == 200
+    mock_services["upload_ad_image"].assert_not_awaited()
+    creative_kwargs = mock_services["create_ad_creative"].call_args.kwargs
+    assert creative_kwargs["image_hash"] is None
+    assert any("no productImageId" in record.message for record in caplog.records)
+
+
 def test_publish_surfaces_meta_failures_as_500_and_marks_failed(
     client: TestClient, mock_services: dict[str, AsyncMock]
 ) -> None:
@@ -977,6 +1110,33 @@ def test_publish_surfaces_meta_failures_as_500_and_marks_failed(
 
     assert response.status_code == 500
     assert "Invalid OAuth access token" in response.json()["detail"]
+
+    campaigns = client.get(f"/businesses/{business_id}/campaigns").json()
+    assert campaigns[0]["status"] == "FAILED"
+
+
+def test_publish_fails_loudly_when_the_meta_image_upload_call_fails(
+    client: TestClient, mock_services: dict[str, AsyncMock]
+) -> None:
+    """A Meta API failure from the adimages upload itself (confirmed
+    2026-09-09) — not just from create_meta_campaign/create_meta_ad_set/
+    create_meta_ad_creative/create_meta_ad, which already had their own
+    coverage — becomes the same clean 500 and FAILED status, not a silent
+    fallback to image-less. _resolve_image_hash (app/services/publish.py)
+    never catches MetaConnectionError from the upload call; it's meant to
+    propagate exactly like every other meta.* call here."""
+    from app.services.meta import MetaConnectionError
+
+    business_id, campaign_id = _ready_campaign(client)
+    mock_services["upload_ad_image"].side_effect = MetaConnectionError(
+        "Invalid image format"
+    )
+
+    response = client.post(f"/businesses/{business_id}/campaigns/{campaign_id}/publish")
+
+    assert response.status_code == 500
+    assert "Invalid image format" in response.json()["detail"]
+    mock_services["create_ad_creative"].assert_not_awaited()
 
     campaigns = client.get(f"/businesses/{business_id}/campaigns").json()
     assert campaigns[0]["status"] == "FAILED"
