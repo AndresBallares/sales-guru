@@ -241,6 +241,7 @@ describe('BusinessDetailPage', () => {
       adAccountId: 'act_1',
       pageId: 'page_1',
       pixelId: 'pixel_1',
+      pixelSkipped: false,
       tokenExpiresAt: '2026-10-01T00:00:00Z',
       createdAt: '2026-08-08T00:00:00Z',
     })

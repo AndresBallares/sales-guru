@@ -692,6 +692,11 @@ export interface MetaConnection {
   adAccountId: string | null
   pageId: string | null
   pixelId: string | null
+  // True once the user explicitly dismissed the Pixel step for this
+  // connection ("Skip for now") rather than never having gotten to it
+  // yet — persisted server-side (app/api/meta.py's skip_pixel) so it
+  // survives a remount instead of re-prompting every time.
+  pixelSkipped: boolean
   tokenExpiresAt: string
   createdAt: string
 }
@@ -738,6 +743,12 @@ export function setMetaPixel(
   return request<MetaConnection>(`/businesses/${businessId}/meta/pixel`, {
     method: 'POST',
     body: JSON.stringify({ pixelId }),
+  })
+}
+
+export function skipMetaPixel(businessId: string): Promise<MetaConnection> {
+  return request<MetaConnection>(`/businesses/${businessId}/meta/pixel/skip`, {
+    method: 'POST',
   })
 }
 

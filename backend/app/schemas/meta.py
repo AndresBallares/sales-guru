@@ -63,5 +63,10 @@ class MetaConnectionResponse(CamelCaseModel):
     ad_account_id: str | None
     page_id: str | None
     pixel_id: str | None
+    # True once the user explicitly dismissed the Pixel step for this
+    # connection ("Skip for now") rather than never having gotten to it
+    # yet — see MetaConnection.pixelSkipped's own docstring for why this
+    # lives on the connection, not the business.
+    pixel_skipped: bool
     token_expires_at: datetime
     created_at: datetime
