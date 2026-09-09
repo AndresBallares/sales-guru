@@ -57,7 +57,7 @@ test('sign up, create a business, log out, log back in', async ({ page }) => {
   await expect(page.getByText('No businesses yet')).toBeVisible()
 
   await page.getByLabel('Name').fill('Acme Widgets')
-  await page.getByLabel('Industry').fill('Manufacturing')
+  await page.getByLabel('Industry').selectOption({ label: 'Fashion / Jewelry' })
   await page.getByLabel('Location').fill('CDMX')
   await page.getByRole('button', { name: 'Create business' }).click()
 
@@ -107,7 +107,7 @@ test('sign up, create a business, log out, log back in', async ({ page }) => {
 
   await page.getByRole('link', { name: '← Back to dashboard' }).click()
   await expect(page.getByRole('heading', { name: 'Sales Guru' })).toBeVisible()
-  await expect(page.getByText('Acme Widgets — Manufacturing · CDMX')).toBeVisible()
+  await expect(page.getByText('Acme Widgets — Fashion / Jewelry · CDMX')).toBeVisible()
 
   const dashboardResults = await new AxeBuilder({ page }).analyze()
   expect(dashboardResults.violations).toEqual([])
@@ -120,7 +120,7 @@ test('sign up, create a business, log out, log back in', async ({ page }) => {
   await page.getByRole('button', { name: 'Log in' }).click()
 
   await expect(page.getByText(`Signed in as ${email}`)).toBeVisible()
-  await expect(page.getByText('Acme Widgets — Manufacturing · CDMX')).toBeVisible()
+  await expect(page.getByText('Acme Widgets — Fashion / Jewelry · CDMX')).toBeVisible()
 })
 
 test('signup rejects a duplicate email', async ({ page }) => {
