@@ -1,15 +1,16 @@
 import { useCallback, useEffect, useState, type ChangeEvent } from 'react'
 import { Link, useParams } from 'react-router-dom'
-import { CTA_LABELS } from '../components/CampaignsSection'
 import {
   ApiError,
   approveCampaign,
   getBusiness,
+  getOptions,
   listCampaigns,
   listCreatives,
   listProductImages,
   publishCampaign,
   selectCreative,
+  toLabelMap,
   uploadProductImage,
   type Business,
   type Campaign,
@@ -41,6 +42,11 @@ export function AdPreviewPage() {
   const [publishing, setPublishing] = useState(false)
   const [publishError, setPublishError] = useState<string | null>(null)
 
+  // Fetched once on mount, same as everywhere else that needs a CTA
+  // label — the fixed CTA list is static, so there's no reason to
+  // re-fetch it as part of refresh() below.
+  const [ctaLabels, setCtaLabels] = useState<Record<string, string>>({})
+
   const refresh = useCallback(async () => {
     if (!businessId || !campaignId) return
     setLoading(true)
@@ -64,6 +70,12 @@ export function AdPreviewPage() {
   useEffect(() => {
     void refresh()
   }, [refresh])
+
+  useEffect(() => {
+    getOptions()
+      .then((options) => setCtaLabels(toLabelMap(options.ctas)))
+      .catch(() => setCtaLabels({}))
+  }, [])
 
   function toggleImageMenu() {
     setImageMenuOpen((prev) => !prev)
@@ -179,7 +191,7 @@ export function AdPreviewPage() {
             <div className="social-post-link-card">
               <p className="social-post-headline">{creative.headline}</p>
               <p className="social-post-description">{creative.description}</p>
-              <span className="ad-preview-cta">{CTA_LABELS[creative.cta]}</span>
+              <span className="ad-preview-cta">{ctaLabels[creative.cta] ?? creative.cta}</span>
             </div>
             <div className="social-post-actions" aria-hidden="true">
               <span>👍 Like</span>

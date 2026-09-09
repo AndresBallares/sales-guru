@@ -1,6 +1,11 @@
 """Tests for campaign creation endpoints."""
 
+from typing import get_args
+
+import pytest
+from app.schemas.campaign import CampaignStatus
 from fastapi.testclient import TestClient
+from prisma import Prisma
 
 
 def _signed_up_client(
@@ -13,7 +18,9 @@ def _signed_up_client(
 
 def _create_business(client: TestClient, name: str = "Acme Widgets") -> str:
     """Create a business on the given (already signed-in) client, return its id."""
-    response = client.post("/businesses", json={"name": name})
+    response = client.post(
+        "/businesses", json={"name": name, "industry": "FASHION_JEWELRY"}
+    )
     id_: str = response.json()["id"]
     return id_
 
@@ -657,3 +664,40 @@ def test_update_campaign_404s_for_another_users_campaign(client: TestClient) -> 
     )
 
     assert response.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_campaign_response_round_trips_every_campaign_status(
+    client: TestClient,
+) -> None:
+    """CampaignResponse.status (CampaignStatus, app/schemas/campaign.py)
+    must serialize every value the type declares — not just the ones a
+    normal create/approve/publish/pause flow happens to reach in one test
+    run. Written directly via Prisma, bypassing the status-transition
+    endpoints entirely, so this can't be fooled by a write site that
+    happens to only ever use a subset of the type (READY was missing from
+    this exact type for that reason — see app/schemas/campaign.py's
+    CampaignStatus docstring — and would have 500'd here before that fix).
+    """
+    _signed_up_client(client)
+    business_id = _create_business(client)
+    campaign_id = client.post(
+        f"/businesses/{business_id}/campaigns", json={"objective": "SALES"}
+    ).json()["id"]
+
+    seeder = Prisma()
+    await seeder.connect()
+    try:
+        for status_value in get_args(CampaignStatus):
+            await seeder.campaign.update(
+                where={"id": campaign_id}, data={"status": status_value}
+            )
+
+            response = client.get(f"/businesses/{business_id}/campaigns")
+
+            assert response.status_code == 200, status_value
+            campaigns = response.json()
+            assert len(campaigns) == 1
+            assert campaigns[0]["status"] == status_value
+    finally:
+        await seeder.disconnect()

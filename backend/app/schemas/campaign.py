@@ -8,6 +8,56 @@ from app.schemas.base import CamelCaseModel
 # Maps directly to Meta's own campaign objectives at publish time (PRD.md §7).
 Objective = Literal["SALES", "LEADS", "TRAFFIC", "MESSAGES", "AWARENESS"]
 
+# Display labels for GET /options (app/api/options.py) — previously
+# hand-copied on the frontend (CampaignsSection.tsx's OBJECTIVE_LABELS,
+# confirmed 2026-09-08 to move to the fetch-from-backend pattern used for
+# Business.industry).
+OBJECTIVE_LABELS: dict[Objective, str] = {
+    "SALES": "Sales",
+    "LEADS": "Leads",
+    "TRAFFIC": "Traffic",
+    "MESSAGES": "Messages",
+    "AWARENESS": "Awareness",
+}
+
+# Campaign.status (schema.prisma) is a plain String, not a Prisma enum
+# (same SQLite/Postgres-parity reasoning as Business.industry). Every
+# value is backend-assigned (never user input), so nothing here needs
+# Business.industry's "must tolerate an unrecognized legacy value"
+# treatment — but that also means this Literal must stay exhaustive
+# against every `data={"status": ...}` write in the codebase (confirmed
+# 2026-09-09 after READY — written by campaign_readiness.py's
+# advance_to_ready_if_complete, informational only per that module's
+# docstring — turned up missing here and in CAMPAIGN_STATUS_LABELS,
+# which would have 500'd CampaignResponse for any READY campaign once
+# status was typed as this Literal instead of plain str).
+CampaignStatus = Literal[
+    "DRAFT",
+    "READY",
+    "STRATEGY_GENERATED",
+    "ADS_GENERATED",
+    "PENDING_APPROVAL",
+    "APPROVED",
+    "LIVE",
+    "PAUSED",
+    "FAILED",
+]
+
+# Previously hand-copied on the frontend (CampaignsSection.tsx's
+# STATUS_LABELS, confirmed 2026-09-08 to move to the fetch-from-backend
+# pattern used for Business.industry).
+CAMPAIGN_STATUS_LABELS: dict[CampaignStatus, str] = {
+    "DRAFT": "Draft",
+    "READY": "Ready",
+    "STRATEGY_GENERATED": "Strategy generated",
+    "ADS_GENERATED": "Ads generated",
+    "PENDING_APPROVAL": "Pending approval",
+    "APPROVED": "Approved",
+    "LIVE": "Live",
+    "PAUSED": "Paused",
+    "FAILED": "Failed",
+}
+
 
 class CampaignCreateRequest(CamelCaseModel):
     """Payload for creating a campaign (PRD.md §7).
@@ -52,7 +102,7 @@ class CampaignResponse(CamelCaseModel):
     id: str
     name: str | None
     objective: str
-    status: str
+    status: CampaignStatus
     product_id: str | None
     audience_id: str | None
     meta_campaign_id: str | None

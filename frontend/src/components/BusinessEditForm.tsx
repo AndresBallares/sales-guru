@@ -1,5 +1,11 @@
-import { useState, type FormEvent } from 'react'
-import { ApiError, updateBusiness, type Business } from '../lib/api'
+import { useEffect, useState, type FormEvent } from 'react'
+import {
+  ApiError,
+  getOptions,
+  updateBusiness,
+  type Business,
+  type Option,
+} from '../lib/api'
 
 // Mirrors the backend's own cap (app/schemas/business.py) — description is
 // pasted verbatim into the Strategist/Creative Agent prompts, so a pasted-in
@@ -8,9 +14,10 @@ const MAX_DESCRIPTION_LENGTH = 1000
 
 // Same create/edit-form approach as ProductForm (Part 1) — inline
 // Edit/Save/Cancel on BusinessDetailPage reuses this one form rather than
-// a second, near-duplicate. Only name and description are editable here
-// (app/schemas/business.py's BusinessUpdateRequest) — website/industry/
-// location aren't, since nothing has asked for that yet.
+// a second, near-duplicate. name, description, and industry are editable
+// here (app/schemas/business.py's BusinessUpdateRequest, industry added
+// 2026-09-08) — website/location still aren't, since nothing has asked
+// for that yet.
 export function BusinessEditForm({
   businessId,
   business,
@@ -23,9 +30,17 @@ export function BusinessEditForm({
   onCancel: () => void
 }) {
   const [name, setName] = useState(business.name)
+  const [industry, setIndustry] = useState(business.industry ?? '')
+  const [industries, setIndustries] = useState<Option[]>([])
   const [description, setDescription] = useState(business.description ?? '')
   const [formError, setFormError] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
+
+  useEffect(() => {
+    getOptions()
+      .then((options) => setIndustries(options.industries))
+      .catch(() => setIndustries([]))
+  }, [])
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
@@ -34,6 +49,12 @@ export function BusinessEditForm({
     try {
       const saved = await updateBusiness(businessId, {
         name,
+        // Omitted (not sent as "") when left blank — the backend's
+        // Industry type has no valid empty value, and exclude_unset means
+        // an omitted key just leaves the business's current industry (or
+        // lack of one, for a legacy business predating this field being
+        // required) untouched rather than erroring.
+        ...(industry ? { industry } : {}),
         description: description || null,
       })
       onSaved(saved)
@@ -54,6 +75,22 @@ export function BusinessEditForm({
           value={name}
           onChange={(event) => setName(event.target.value)}
         />
+      </div>
+      <div className="field">
+        <label htmlFor="business-industry">Industry</label>
+        <select
+          id="business-industry"
+          required
+          value={industry}
+          onChange={(event) => setIndustry(event.target.value)}
+        >
+          <option value="">Select an industry…</option>
+          {industries.map((option) => (
+            <option key={option.value} value={option.value}>
+              {option.label}
+            </option>
+          ))}
+        </select>
       </div>
       <div className="field">
         <label htmlFor="business-description">

@@ -1,7 +1,14 @@
 import { useEffect, useState, type FormEvent } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
-import { ApiError, createBusiness, listBusinesses, type Business } from '../lib/api'
+import {
+  ApiError,
+  createBusiness,
+  getOptions,
+  listBusinesses,
+  type Business,
+  type Option,
+} from '../lib/api'
 
 // Mirrors the backend's own cap (app/schemas/business.py) — description is
 // pasted verbatim into the Strategist/Creative Agent prompts, so a pasted-in
@@ -15,6 +22,12 @@ export function DashboardPage() {
   const [businesses, setBusinesses] = useState<Business[]>([])
   const [loadingBusinesses, setLoadingBusinesses] = useState(true)
   const [listError, setListError] = useState<string | null>(null)
+
+  // Fetched from the backend (GET /options) rather than hard-coded, so
+  // this list can never drift from app/schemas/business.py's fixed set
+  // (confirmed 2026-09-08 — every fixed option list in the app now
+  // follows this same fetch-from-backend pattern, EVENT_VENUES included).
+  const [industries, setIndustries] = useState<Option[]>([])
 
   const [name, setName] = useState('')
   const [website, setWebsite] = useState('')
@@ -38,7 +51,14 @@ export function DashboardPage() {
 
   useEffect(() => {
     void refreshBusinesses()
+    getOptions()
+      .then((options) => setIndustries(options.industries))
+      .catch(() => setIndustries([]))
   }, [])
+
+  function industryLabel(value: string): string {
+    return industries.find((option) => option.value === value)?.label ?? value
+  }
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
@@ -48,7 +68,7 @@ export function DashboardPage() {
       const business = await createBusiness({
         name,
         website: website || undefined,
-        industry: industry || undefined,
+        industry,
         location: location || undefined,
         description: description || undefined,
       })
@@ -85,7 +105,7 @@ export function DashboardPage() {
           {businesses.map((business) => (
             <li key={business.id}>
               <Link to={`/businesses/${business.id}`}>{business.name}</Link>
-              {business.industry && <span> — {business.industry}</span>}
+              {business.industry && <span> — {industryLabel(business.industry)}</span>}
               {business.location && <span> · {business.location}</span>}
             </li>
           ))}
@@ -115,11 +135,19 @@ export function DashboardPage() {
           </div>
           <div className="field">
             <label htmlFor="industry">Industry</label>
-            <input
+            <select
               id="industry"
+              required
               value={industry}
               onChange={(event) => setIndustry(event.target.value)}
-            />
+            >
+              <option value="">Select an industry…</option>
+              {industries.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
           </div>
           <div className="field">
             <label htmlFor="location">Location</label>

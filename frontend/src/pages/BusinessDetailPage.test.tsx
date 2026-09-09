@@ -16,6 +16,7 @@ vi.mock('../lib/api', async (importOriginal) => {
     getMe: vi.fn<typeof actual.getMe>(),
     getBusiness: vi.fn<typeof actual.getBusiness>(),
     updateBusiness: vi.fn<typeof actual.updateBusiness>(),
+    getOptions: vi.fn<typeof actual.getOptions>(),
     listProducts: vi.fn<typeof actual.listProducts>(),
     listProductImages: vi.fn<typeof actual.listProductImages>(),
     listAudiences: vi.fn<typeof actual.listAudiences>(),
@@ -50,10 +51,67 @@ const draftCampaign: api.Campaign = {
   needsDestinationUrl: false,
 }
 
+const INDUSTRY_OPTIONS = [
+  { value: 'ECOMMERCE', label: 'E-commerce' },
+  { value: 'FASHION_JEWELRY', label: 'Fashion / Jewelry' },
+]
+
+// CampaignsSection (rendered by BusinessDetailPage at every onboarding
+// step) calls getOptions too, for its own objective/status/CTA/action-type
+// labels and its event-venue dropdown — same mock as the industries one
+// above, so it needs every list populated, not just industries.
+const ALL_OPTIONS: api.OptionsResponse = {
+  industries: INDUSTRY_OPTIONS,
+  objectives: [
+    { value: 'SALES', label: 'Sales' },
+    { value: 'LEADS', label: 'Leads' },
+    { value: 'TRAFFIC', label: 'Traffic' },
+    { value: 'MESSAGES', label: 'Messages' },
+    { value: 'AWARENESS', label: 'Awareness' },
+  ],
+  campaignStatuses: [
+    { value: 'DRAFT', label: 'Draft' },
+    { value: 'READY', label: 'Ready' },
+    { value: 'STRATEGY_GENERATED', label: 'Strategy generated' },
+    { value: 'ADS_GENERATED', label: 'Ads generated' },
+    { value: 'PENDING_APPROVAL', label: 'Pending approval' },
+    { value: 'APPROVED', label: 'Approved' },
+    { value: 'LIVE', label: 'Live' },
+    { value: 'PAUSED', label: 'Paused' },
+    { value: 'FAILED', label: 'Failed' },
+  ],
+  ctas: [
+    { value: 'SHOP_NOW', label: 'Shop Now' },
+    { value: 'LEARN_MORE', label: 'Learn More' },
+    { value: 'SIGN_UP', label: 'Sign Up' },
+    { value: 'SUBSCRIBE', label: 'Subscribe' },
+    { value: 'CONTACT_US', label: 'Contact Us' },
+    { value: 'MESSAGE_PAGE', label: 'Send Message' },
+    { value: 'GET_OFFER', label: 'Get Offer' },
+    { value: 'DOWNLOAD', label: 'Download' },
+    { value: 'BOOK_NOW', label: 'Book Now' },
+  ],
+  actionTypes: [
+    { value: 'PAUSE_AD', label: 'Pause ad' },
+    { value: 'INCREASE_BUDGET', label: 'Increase budget' },
+    { value: 'DECREASE_BUDGET', label: 'Decrease budget' },
+  ],
+  eventVenues: [
+    { value: 'jck_las_vegas', label: 'JCK Las Vegas — Las Vegas Convention Center, NV' },
+    { value: 'couture_las_vegas', label: 'Couture — Wynn Las Vegas, NV' },
+    {
+      value: 'agta_gemfair_tucson',
+      label: 'AGTA GemFair Tucson — Tucson Convention Center, AZ',
+    },
+    { value: 'ja_new_york', label: 'JA New York — Javits Center, NY' },
+  ],
+}
+
 beforeEach(() => {
   vi.resetAllMocks()
   mockedApi.getMe.mockResolvedValue({ id: '1', email: 'owner@example.com' })
   mockedApi.getBusiness.mockResolvedValue(business)
+  mockedApi.getOptions.mockResolvedValue(ALL_OPTIONS)
   mockedApi.listProducts.mockResolvedValue([])
   mockedApi.listProductImages.mockResolvedValue([])
   mockedApi.listAudiences.mockResolvedValue([])
@@ -193,12 +251,47 @@ describe('BusinessDetailPage', () => {
     // instance has the same heading — so wait for the whole settled state
     // instead of any single element appearing.
     await waitFor(() => {
-      expect(screen.getByText('Sales — DRAFT')).toBeInTheDocument()
+      expect(screen.getByText('Sales — Draft')).toBeInTheDocument()
       expect(screen.queryByRole('heading', { name: 'Create a campaign' })).not.toBeInTheDocument()
       expect(screen.queryByRole('heading', { name: 'Products' })).not.toBeInTheDocument()
       expect(screen.queryByRole('heading', { name: 'Audiences' })).not.toBeInTheDocument()
       expect(screen.queryByRole('heading', { name: 'Meta Ads' })).not.toBeInTheDocument()
     })
+  })
+
+  it("shows the business's industry label on the detail page", async () => {
+    mockedApi.getBusiness.mockResolvedValue({ ...business, industry: 'FASHION_JEWELRY' })
+
+    renderPage()
+
+    expect(await screen.findByRole('heading', { name: 'Acme Widgets' })).toBeInTheDocument()
+    expect(await screen.findByText('Fashion / Jewelry')).toBeInTheDocument()
+  })
+
+  it('edits the business industry inline via the dropdown', async () => {
+    const updated = { ...business, industry: 'FASHION_JEWELRY' }
+    mockedApi.updateBusiness.mockResolvedValue(updated)
+    const user = userEvent.setup()
+
+    renderPage()
+    await screen.findByRole('heading', { name: 'Acme Widgets' })
+
+    await user.click(screen.getByRole('button', { name: 'Edit' }))
+    const select = screen.getByLabelText('Industry')
+    expect(select).toBeRequired()
+    for (const option of INDUSTRY_OPTIONS) {
+      expect(screen.getByRole('option', { name: option.label })).toBeInTheDocument()
+    }
+    await user.selectOptions(select, 'FASHION_JEWELRY')
+    await user.click(screen.getByRole('button', { name: 'Save' }))
+
+    await waitFor(() =>
+      expect(mockedApi.updateBusiness).toHaveBeenCalledWith('biz-1', {
+        name: 'Acme Widgets',
+        industry: 'FASHION_JEWELRY',
+        description: null,
+      }),
+    )
   })
 
   it('edits the business name and description inline', async () => {

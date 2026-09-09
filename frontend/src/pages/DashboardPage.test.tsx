@@ -14,15 +14,38 @@ vi.mock('../lib/api', async (importOriginal) => {
     login: vi.fn<typeof actual.login>(),
     logout: vi.fn<typeof actual.logout>(),
     getMe: vi.fn<typeof actual.getMe>(),
+    getOptions: vi.fn<typeof actual.getOptions>(),
     createBusiness: vi.fn<typeof actual.createBusiness>(),
     listBusinesses: vi.fn<typeof actual.listBusinesses>(),
   }
 })
 const mockedApi = vi.mocked(api)
 
+const INDUSTRY_OPTIONS = [
+  { value: 'ECOMMERCE', label: 'E-commerce' },
+  { value: 'FASHION_JEWELRY', label: 'Fashion / Jewelry' },
+  { value: 'BEAUTY_COSMETICS', label: 'Beauty & Cosmetics' },
+  { value: 'REAL_ESTATE', label: 'Real Estate' },
+  { value: 'AUTOMOTIVE', label: 'Automotive' },
+  { value: 'TRAVEL', label: 'Travel' },
+  { value: 'RESTAURANTS_FOOD', label: 'Restaurants / Food' },
+  { value: 'SAAS_TECHNOLOGY', label: 'SaaS / Technology' },
+  { value: 'PROFESSIONAL_SERVICES', label: 'Professional Services' },
+  { value: 'FITNESS_WELLNESS', label: 'Fitness / Wellness' },
+  { value: 'OTHER', label: 'Other' },
+]
+
 beforeEach(() => {
   vi.resetAllMocks()
   mockedApi.getMe.mockResolvedValue({ id: '1', email: 'owner@example.com' })
+  mockedApi.getOptions.mockResolvedValue({
+    industries: INDUSTRY_OPTIONS,
+    objectives: [],
+    campaignStatuses: [],
+    ctas: [],
+    actionTypes: [],
+    eventVenues: [],
+  })
 })
 
 function renderDashboard() {
@@ -45,7 +68,7 @@ describe('DashboardPage', () => {
         id: '1',
         name: 'Acme',
         website: null,
-        industry: 'Manufacturing',
+        industry: 'FASHION_JEWELRY',
         location: 'CDMX',
         description: null,
       },
@@ -55,6 +78,10 @@ describe('DashboardPage', () => {
 
     await waitFor(() => expect(screen.getByText(/owner@example.com/)).toBeInTheDocument())
     expect(await screen.findByText('Acme')).toBeInTheDocument()
+    // The friendly label, not the raw enum value — from the fetched
+    // industries list, not hard-coded. Matched with the "— " prefix to
+    // disambiguate from the same label inside the create-form's <option>.
+    expect(await screen.findByText(/— Fashion \/ Jewelry/)).toBeInTheDocument()
   })
 
   it('shows an empty state when there are no businesses', async () => {
@@ -90,7 +117,7 @@ describe('DashboardPage', () => {
 
     await user.type(screen.getByLabelText('Name'), 'Acme Widgets')
     await user.type(screen.getByLabelText('Website'), 'https://acme.example')
-    await user.type(screen.getByLabelText('Industry'), 'Manufacturing')
+    await user.selectOptions(screen.getByLabelText('Industry'), 'FASHION_JEWELRY')
     await user.type(screen.getByLabelText('Location'), 'CDMX')
     await user.type(screen.getByLabelText(/About your business/), 'We make widgets.')
     await user.click(screen.getByRole('button', { name: 'Create business' }))
@@ -99,7 +126,7 @@ describe('DashboardPage', () => {
       expect(mockedApi.createBusiness).toHaveBeenCalledWith({
         name: 'Acme Widgets',
         website: 'https://acme.example',
-        industry: 'Manufacturing',
+        industry: 'FASHION_JEWELRY',
         location: 'CDMX',
         description: 'We make widgets.',
       }),
@@ -121,6 +148,35 @@ describe('DashboardPage', () => {
     await user.click(screen.getByRole('button', { name: 'Create business' }))
 
     expect(await screen.findByRole('alert')).toHaveTextContent('Name is required')
+  })
+
+  it('renders the industry dropdown as required with every fetched option', async () => {
+    mockedApi.listBusinesses.mockResolvedValue([])
+
+    renderDashboard()
+    await screen.findByText(/No businesses yet/)
+
+    const select = screen.getByLabelText('Industry')
+    expect(select).toBeRequired()
+    for (const option of INDUSTRY_OPTIONS) {
+      expect(screen.getByRole('option', { name: option.label })).toBeInTheDocument()
+    }
+  })
+
+  it('shows an error if industry is left unselected', async () => {
+    mockedApi.listBusinesses.mockResolvedValue([])
+    mockedApi.createBusiness.mockRejectedValue(
+      new api.ApiError(422, 'Industry is required'),
+    )
+    const user = userEvent.setup()
+
+    renderDashboard()
+    await screen.findByText(/No businesses yet/)
+
+    await user.type(screen.getByLabelText('Name'), 'Acme Widgets')
+    await user.click(screen.getByRole('button', { name: 'Create business' }))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Industry is required')
   })
 
   it('shows a live character counter and caps the description at 1000 characters', async () => {

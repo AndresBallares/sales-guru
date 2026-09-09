@@ -6,6 +6,7 @@ Meta; that connection only matters at publish time (step 8).
 """
 
 from datetime import UTC, datetime, time
+from typing import cast
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from prisma.models import Business, Campaign
@@ -17,6 +18,7 @@ from app.core.meta_connection import get_meta_connection
 from app.schemas.campaign import (
     CampaignCreateRequest,
     CampaignResponse,
+    CampaignStatus,
     CampaignUpdateRequest,
 )
 from app.schemas.strategy import StrategyContentAdapter
@@ -91,7 +93,12 @@ async def _to_response(campaign: Campaign) -> CampaignResponse:
         id=campaign.id,
         name=campaign.name,
         objective=campaign.objective,
-        status=campaign.status,
+        # Prisma types the column as plain str (schema.prisma has no native
+        # enum support); cast is safe since every write site sets one of
+        # CampaignStatus's values (app/schemas/campaign.py's docstring) —
+        # never user input, so there's no unrecognized-value case to guard
+        # against the way Business.industry's response type has to.
+        status=cast(CampaignStatus, campaign.status),
         product_id=campaign.productId,
         audience_id=campaign.audienceId,
         meta_campaign_id=campaign.metaCampaignId,

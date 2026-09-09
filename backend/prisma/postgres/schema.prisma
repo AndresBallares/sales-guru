@@ -226,8 +226,12 @@ model MetaOAuthState {
 // Campaign.objective: SALES | LEADS | TRAFFIC | MESSAGES | AWARENESS
 //                     (PRD.md §7 — maps to Meta's own campaign objectives
 //                     at publish time)
-// Campaign.status: DRAFT | STRATEGY_GENERATED | ADS_GENERATED |
-//                  PENDING_APPROVAL | APPROVED | LIVE | PAUSED | FAILED
+// Campaign.status: see CampaignStatus (backend/app/schemas/campaign.py)
+//                  for the fixed list of values — not copied here, so
+//                  this comment can't drift out of sync with it again
+//                  (confirmed 2026-09-09, after an earlier copy of this
+//                  list here was missing READY and nearly shipped a
+//                  response-serialization 500 for it).
 // Campaign.name is a human-readable label (e.g. "Custom Colombian Emerald
 // Ring") — without it, campaigns are only distinguishable by
 // objective+product+audience, and two campaigns with the same objective

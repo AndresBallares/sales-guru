@@ -86,6 +86,8 @@ Once live, manual click-through testing against the real production deploy (2026
    - **Manual fallback:** `PATCH /businesses/{id}/campaigns/{id}` (`update_campaign`) sets `productId`/`audienceId` explicitly (only-provided-fields-change semantics) — the frontend surfaces this as an inline "which one?" picker, shown only when there's real ambiguity (2+ products/audiences to choose from).
    - **`Campaign.status` gains a `READY` value** between `DRAFT` and `STRATEGY_GENERATED` (still a plain `String` column, no migration) — `advance_to_ready_if_complete` flips it once both product and audience are set, whether via auto-attach, the PATCH endpoint, or being given both at creation time. Purely informational for the frontend's readiness checklist ("Campaign needs: ✓ Objective, ✗ Product, ✗ Audience") — never the source of truth for gating.
    - **Hard readiness gates, checked on the real fields (never the status flag), at every point an incomplete campaign could otherwise slip through:** `POST .../campaigns/{id}/strategy` (428), attaching an image via `POST .../creatives/{id}/select`'s `productImageId` path (428), and `POST .../campaigns/{id}/publish` (400). The strategy gate is the natural chokepoint — creative generation already requires a strategy to exist — but publish and image-attach are gated too, as defense in depth against any future path that creates an incomplete campaign, not just today's UI flow.
+
+   **A business can hold more than one campaign (confirmed 2026-09-08, `done`):** the backend already allowed it (`Campaign.businessId` was never unique) — the gap was `CampaignsSection`'s create form only rendering while a business had zero campaigns. Fixed with a "New campaign" button that reveals the form once at least one campaign exists (hidden again on successful create or Cancel); a business with zero campaigns still shows the form by default, unchanged. Audited every place that could have assumed exactly one campaign per business (auto-attach, Meta publish, the optimizer/metrics jobs) — all already handled multiple correctly; the only other spot found was `BusinessDetailPage`'s onboarding stepper, which swaps `CampaignsSection` out for Products/Audiences/Meta-connection immediately after the first campaign is created, so "New campaign" isn't reachable again until that onboarding sequence finishes — left as-is, a UX consequence of the stepper rather than a bug.
 5. **AI strategy generation** — LLM call grounded in business/product/objective, stored strategy record *(done)*
 
    **Two-mode agent (confirmed 2026-08-31):** the Strategist Agent (`app/services/strategist.py`) generates one of two distinct plan shapes, decided by the backend (never the LLM), same "backend decides, agent never invents it" reasoning as `Campaign.objective` being fixed input: **TEST_PLAN** for a business with no meaningful advertising history, **DATA_DRIVEN_STRATEGY** for one with real historical performance (a full strategy plus `keyLearnings`/`recommendedAdjustments`/`scalingTrigger` — distinct from the live Optimization Agent, step 10 below, which reacts to *this* campaign's own live metrics rather than *other* past campaigns).
@@ -217,20 +219,22 @@ Once live, manual click-through testing against the real production deploy (2026
 - CI/CD: GitHub Actions (path-scoped lint/type/test per package) via `ci-status` aggregate check; Render hosts frontend/backend as separate services, each with `autoDeployTrigger: checksPass` (native Render feature — waits for the GitHub check to pass, no custom deploy-hook plumbing) and a per-service `buildFilter`, so docs-only changes deploy nothing
 - Repo: monorepo at `/Users/andres/Documents/AI-NATIVE/sales-guru` — `frontend/`, `backend/` (includes `backend/prisma/`), `docs/`, `.github/workflows/`
 - Schema changes always go through `prisma migrate dev --name <desc>` (never `prisma db push`) so a real migration history exists for `prisma migrate deploy` to apply in CI/Render
+- **Fixed option lists (confirmed 2026-09-09):** every dropdown/display-label list the frontend needs (industries, campaign objectives, campaign statuses, ad CTAs, optimizer action types, curated event venues) is defined once on the backend and fetched via a single `GET /options` call (`app/api/options.py`) rather than hand-copied as a frontend constant — one pattern, so the frontend can't drift out of sync with the backend's fixed list the way it briefly did for these lists before this date.
 
 ## 7. Onboarding field specifications (confirmed 2026-08-08)
 
 Elaborates MVP steps 2, 3, and 5. Schema lives in `backend/prisma/schema.prisma`;
 this section is the product-facing rationale for those fields.
 
-**Business** (step 2) — `name` required, rest optional (low signup friction; AI
-strategy generation degrades gracefully with less context):
+**Business** (step 2) — `name` and `industry` required, rest optional (low
+signup friction; AI strategy generation degrades gracefully with less
+context):
 
 | Field | Notes |
 |---|---|
 | Nombre (name) | required |
 | Website | |
-| Industria (industry) | |
+| Industria (industry) | required; fixed list (`ECOMMERCE`, `FASHION_JEWELRY`, `BEAUTY_COSMETICS`, `REAL_ESTATE`, `AUTOMOTIVE`, `TRAVEL`, `RESTAURANTS_FOOD`, `SAAS_TECHNOLOGY`, `PROFESSIONAL_SERVICES`, `FITNESS_WELLNESS`, `OTHER`), confirmed 2026-09-08 — was a freeform optional field before that; existing rows aren't backfilled, so a legacy business can still hold an old freeform value until edited |
 | Ubicación (location) | |
 | Descripción (description) | |
 

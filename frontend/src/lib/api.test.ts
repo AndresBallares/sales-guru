@@ -15,6 +15,7 @@ import {
   getBusiness,
   getMe,
   getMetaConnection,
+  getOptions,
   listAudiences,
   listBusinesses,
   listCampaigns,
@@ -32,6 +33,7 @@ import {
   refreshMetrics,
   rejectRecommendation,
   signup,
+  toLabelMap,
 } from './api'
 
 function jsonResponse(body: unknown, status = 200): Response {
@@ -168,16 +170,21 @@ describe('createBusiness', () => {
       id: '1',
       name: 'Acme',
       website: null,
-      industry: null,
+      industry: 'ECOMMERCE',
       location: null,
       description: null,
     }
     const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(jsonResponse(business, 201))
     vi.stubGlobal('fetch', fetchMock)
 
-    await expect(createBusiness({ name: 'Acme' })).resolves.toEqual(business)
+    await expect(
+      createBusiness({ name: 'Acme', industry: 'ECOMMERCE' }),
+    ).resolves.toEqual(business)
     const [, options] = fetchMock.mock.calls[0]
-    expect(JSON.parse(options?.body as string)).toEqual({ name: 'Acme' })
+    expect(JSON.parse(options?.body as string)).toEqual({
+      name: 'Acme',
+      industry: 'ECOMMERCE',
+    })
   })
 })
 
@@ -205,6 +212,40 @@ describe('getBusiness', () => {
     await expect(getBusiness('1')).resolves.toEqual(business)
     const [url] = fetchMock.mock.calls[0]
     expect(url).toContain('/businesses/1')
+  })
+})
+
+describe('toLabelMap', () => {
+  it('builds a {value: label} lookup from an Option list', () => {
+    expect(
+      toLabelMap([
+        { value: 'SALES', label: 'Sales' },
+        { value: 'LEADS', label: 'Leads' },
+      ]),
+    ).toEqual({ SALES: 'Sales', LEADS: 'Leads' })
+  })
+
+  it('returns an empty object for an empty list', () => {
+    expect(toLabelMap([])).toEqual({})
+  })
+})
+
+describe('getOptions', () => {
+  it('fetches every fixed option list in one call', async () => {
+    const options = {
+      industries: [{ value: 'ECOMMERCE', label: 'E-commerce' }],
+      objectives: [{ value: 'SALES', label: 'Sales' }],
+      campaignStatuses: [{ value: 'DRAFT', label: 'Draft' }],
+      ctas: [{ value: 'SHOP_NOW', label: 'Shop Now' }],
+      actionTypes: [{ value: 'PAUSE_AD', label: 'Pause ad' }],
+      eventVenues: [{ value: 'jck_las_vegas', label: 'JCK Las Vegas' }],
+    }
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(jsonResponse(options))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(getOptions()).resolves.toEqual(options)
+    const [url] = fetchMock.mock.calls[0]
+    expect(url).toContain('/options')
   })
 })
 

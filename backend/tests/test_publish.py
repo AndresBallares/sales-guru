@@ -123,7 +123,11 @@ def _create_business(
     client: TestClient, name: str = "Acme Jewelry", website: str | None = None
 ) -> str:
     """Create a business on the given (already signed-in) client, return its id."""
-    payload = {"name": name, **({"website": website} if website else {})}
+    payload = {
+        "name": name,
+        "industry": "FASHION_JEWELRY",
+        **({"website": website} if website else {}),
+    }
     response = client.post("/businesses", json=payload)
     id_: str = response.json()["id"]
     return id_
