@@ -3,6 +3,32 @@ export interface User {
   email: string
 }
 
+// One (value, label) pair — a single dropdown/display option. Every fixed
+// option list in the app (industries, event venues, objectives, campaign
+// statuses, ad CTAs, optimizer action types) is fetched from the backend
+// via getOptions below rather than hand-copied here, so the frontend can
+// never drift from app/schemas/options.py's OptionsResponse.
+export interface Option {
+  value: string
+  label: string
+}
+
+export interface OptionsResponse {
+  industries: Option[]
+  objectives: Option[]
+  campaignStatuses: Option[]
+  ctas: Option[]
+  actionTypes: Option[]
+  eventVenues: Option[]
+}
+
+// Turns a fetched Option[] into a {value: label} lookup — used everywhere
+// an Option list is looked up by value rather than just rendered as
+// <option> elements (e.g. CampaignsSection.tsx, AdPreviewPage.tsx).
+export function toLabelMap(options: Option[]): Record<string, string> {
+  return Object.fromEntries(options.map((option) => [option.value, option.label]))
+}
+
 export interface Business {
   id: string
   name: string
@@ -15,17 +41,18 @@ export interface Business {
 export interface BusinessCreateInput {
   name: string
   website?: string
-  industry?: string
+  industry: string
   location?: string
   description?: string
 }
 
-// Partial update — only name and description are editable through this
-// endpoint (app/schemas/business.py's BusinessUpdateRequest). A field's
-// absence here (vs. an explicit value) decides whether it changes,
-// matching the backend's model_dump exclude_unset semantics.
+// Partial update — name, description, and industry are editable through
+// this endpoint (app/schemas/business.py's BusinessUpdateRequest). A
+// field's absence here (vs. an explicit value) decides whether it
+// changes, matching the backend's model_dump exclude_unset semantics.
 export interface BusinessUpdateInput {
   name?: string
+  industry?: string
   description?: string | null
 }
 
@@ -120,25 +147,6 @@ export interface CampaignCreateInput {
   startDate?: string
   endDate?: string
 }
-
-// Mirrors the backend's curated table (app/services/event_venues.py) —
-// same "small, fixed, hand-curated set" reasoning already used for the
-// Objective union above: no endpoint needed for a list this small and
-// this static.
-export interface EventVenueOption {
-  key: string
-  label: string
-}
-
-export const EVENT_VENUES: EventVenueOption[] = [
-  { key: 'jck_las_vegas', label: 'JCK Las Vegas — Las Vegas Convention Center, NV' },
-  { key: 'couture_las_vegas', label: 'Couture — Wynn Las Vegas, NV' },
-  {
-    key: 'agta_gemfair_tucson',
-    label: 'AGTA GemFair Tucson — Tucson Convention Center, AZ',
-  },
-  { key: 'ja_new_york', label: 'JA New York — Javits Center, NY' },
-]
 
 const API_URL: string = import.meta.env.VITE_API_URL ?? 'http://localhost:8000'
 
@@ -243,6 +251,10 @@ export function resetPassword(token: string, newPassword: string): Promise<Messa
 
 export function getMe(): Promise<User> {
   return request<User>('/auth/me')
+}
+
+export function getOptions(): Promise<OptionsResponse> {
+  return request<OptionsResponse>('/options')
 }
 
 export function createBusiness(input: BusinessCreateInput): Promise<Business> {

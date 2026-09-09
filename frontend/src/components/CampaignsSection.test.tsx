@@ -21,6 +21,7 @@ vi.mock('../lib/api', async (importOriginal) => {
     updateCampaign: vi.fn<typeof actual.updateCampaign>(),
     listCampaigns: vi.fn<typeof actual.listCampaigns>(),
     getBusiness: vi.fn<typeof actual.getBusiness>(),
+    getOptions: vi.fn<typeof actual.getOptions>(),
     listProducts: vi.fn<typeof actual.listProducts>(),
     createProduct: vi.fn<typeof actual.createProduct>(),
     updateProduct: vi.fn<typeof actual.updateProduct>(),
@@ -265,8 +266,62 @@ function fakeTestEvaluation(
   }
 }
 
+// Every label CampaignsSection needs — objective/status/CTA/action-type
+// labels plus the event-venue dropdown — now comes from getOptions
+// (confirmed 2026-09-08) instead of the OBJECTIVE_LABELS/ACTION_LABELS/
+// STATUS_LABELS/CTA_LABELS/EVENT_VENUES constants that used to live in
+// CampaignsSection.tsx itself. Same fixed set and labels the backend
+// returns (backend/tests/test_options.py).
+const ALL_OPTIONS: api.OptionsResponse = {
+  industries: [],
+  objectives: [
+    { value: 'SALES', label: 'Sales' },
+    { value: 'LEADS', label: 'Leads' },
+    { value: 'TRAFFIC', label: 'Traffic' },
+    { value: 'MESSAGES', label: 'Messages' },
+    { value: 'AWARENESS', label: 'Awareness' },
+  ],
+  campaignStatuses: [
+    { value: 'DRAFT', label: 'Draft' },
+    { value: 'READY', label: 'Ready' },
+    { value: 'STRATEGY_GENERATED', label: 'Strategy generated' },
+    { value: 'ADS_GENERATED', label: 'Ads generated' },
+    { value: 'PENDING_APPROVAL', label: 'Pending approval' },
+    { value: 'APPROVED', label: 'Approved' },
+    { value: 'LIVE', label: 'Live' },
+    { value: 'PAUSED', label: 'Paused' },
+    { value: 'FAILED', label: 'Failed' },
+  ],
+  ctas: [
+    { value: 'SHOP_NOW', label: 'Shop Now' },
+    { value: 'LEARN_MORE', label: 'Learn More' },
+    { value: 'SIGN_UP', label: 'Sign Up' },
+    { value: 'SUBSCRIBE', label: 'Subscribe' },
+    { value: 'CONTACT_US', label: 'Contact Us' },
+    { value: 'MESSAGE_PAGE', label: 'Send Message' },
+    { value: 'GET_OFFER', label: 'Get Offer' },
+    { value: 'DOWNLOAD', label: 'Download' },
+    { value: 'BOOK_NOW', label: 'Book Now' },
+  ],
+  actionTypes: [
+    { value: 'PAUSE_AD', label: 'Pause ad' },
+    { value: 'INCREASE_BUDGET', label: 'Increase budget' },
+    { value: 'DECREASE_BUDGET', label: 'Decrease budget' },
+  ],
+  eventVenues: [
+    { value: 'jck_las_vegas', label: 'JCK Las Vegas — Las Vegas Convention Center, NV' },
+    { value: 'couture_las_vegas', label: 'Couture — Wynn Las Vegas, NV' },
+    {
+      value: 'agta_gemfair_tucson',
+      label: 'AGTA GemFair Tucson — Tucson Convention Center, AZ',
+    },
+    { value: 'ja_new_york', label: 'JA New York — Javits Center, NY' },
+  ],
+}
+
 beforeEach(() => {
   vi.resetAllMocks()
+  mockedApi.getOptions.mockResolvedValue(ALL_OPTIONS)
   mockedApi.getBusiness.mockResolvedValue({
     id: 'biz-1',
     name: 'Acme Jewelry',
@@ -324,7 +379,7 @@ describe('CampaignsSection', () => {
 
     renderCampaigns(<CampaignsSection businessId="biz-1" />)
 
-    expect(await screen.findByText('Sales — DRAFT')).toBeInTheDocument()
+    expect(await screen.findByText('Sales — Draft')).toBeInTheDocument()
   })
 
   it('shows the campaign name, when set, ahead of the objective', async () => {
@@ -349,7 +404,7 @@ describe('CampaignsSection', () => {
     renderCampaigns(<CampaignsSection businessId="biz-1" />)
 
     expect(
-      await screen.findByText('Custom Colombian Emerald Ring — Sales — DRAFT'),
+      await screen.findByText('Custom Colombian Emerald Ring — Sales — Draft'),
     ).toBeInTheDocument()
   })
 
@@ -419,7 +474,7 @@ describe('CampaignsSection', () => {
         name: 'Spring Sale',
       }),
     )
-    expect(await screen.findByText('Spring Sale — Leads — DRAFT')).toBeInTheDocument()
+    expect(await screen.findByText('Spring Sale — Leads — Draft')).toBeInTheDocument()
   })
 
   it('does not offer a Product or Audience field on the create-campaign form', async () => {
@@ -524,6 +579,166 @@ describe('CampaignsSection', () => {
     expect(await screen.findByRole('heading', { name: 'Campaigns' })).toBeInTheDocument()
     expect(screen.queryByRole('heading', { name: 'Create a campaign' })).not.toBeInTheDocument()
     expect(screen.queryByLabelText('Name', { exact: true })).not.toBeInTheDocument()
+  })
+
+  it('shows the create form by default, with no New campaign button, when there are no campaigns yet', async () => {
+    mockedApi.listCampaigns.mockResolvedValue([])
+
+    renderCampaigns(<CampaignsSection businessId="biz-1" />)
+
+    expect(await screen.findByRole('heading', { name: 'Create a campaign' })).toBeInTheDocument()
+    expect(
+      screen.queryByRole('button', { name: 'New campaign' }),
+    ).not.toBeInTheDocument()
+  })
+
+  it('reveals the create form via the New campaign button once a campaign already exists', async () => {
+    mockedApi.listCampaigns.mockResolvedValue([
+      {
+        id: 'camp-1',
+        name: 'First campaign',
+        objective: 'SALES',
+        status: 'DRAFT',
+        productId: null,
+        audienceId: null,
+        metaCampaignId: null,
+        eventVenueKey: null,
+        startDate: null,
+        endDate: null,
+        pausedReason: null,
+        dailySpendFlag: null,
+        needsDestinationUrl: false,
+      },
+    ])
+    const user = userEvent.setup()
+
+    renderCampaigns(<CampaignsSection businessId="biz-1" />)
+    await screen.findByText('First campaign — Sales — Draft')
+    expect(screen.queryByRole('heading', { name: 'Create a campaign' })).not.toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'New campaign' }))
+
+    expect(screen.getByRole('heading', { name: 'Create a campaign' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Cancel' })).toBeInTheDocument()
+  })
+
+  it('hides the create form again when Cancel is clicked, without creating a campaign', async () => {
+    mockedApi.listCampaigns.mockResolvedValue([
+      {
+        id: 'camp-1',
+        name: 'First campaign',
+        objective: 'SALES',
+        status: 'DRAFT',
+        productId: null,
+        audienceId: null,
+        metaCampaignId: null,
+        eventVenueKey: null,
+        startDate: null,
+        endDate: null,
+        pausedReason: null,
+        dailySpendFlag: null,
+        needsDestinationUrl: false,
+      },
+    ])
+    const user = userEvent.setup()
+
+    renderCampaigns(<CampaignsSection businessId="biz-1" />)
+    await user.click(await screen.findByRole('button', { name: 'New campaign' }))
+    await user.type(screen.getByLabelText('Name'), 'Discarded draft')
+
+    await user.click(screen.getByRole('button', { name: 'Cancel' }))
+
+    expect(screen.queryByRole('heading', { name: 'Create a campaign' })).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'New campaign' })).toBeInTheDocument()
+    expect(mockedApi.createCampaign).not.toHaveBeenCalled()
+  })
+
+  it('hides the create form and shows the new campaign in the list, without a reload', async () => {
+    mockedApi.listCampaigns
+      .mockResolvedValueOnce([
+        {
+          id: 'camp-1',
+          name: 'First campaign',
+          objective: 'SALES',
+          status: 'DRAFT',
+          productId: null,
+          audienceId: null,
+          metaCampaignId: null,
+          eventVenueKey: null,
+          startDate: null,
+          endDate: null,
+          pausedReason: null,
+          dailySpendFlag: null,
+          needsDestinationUrl: false,
+        },
+      ])
+      .mockResolvedValueOnce([
+        {
+          id: 'camp-1',
+          name: 'First campaign',
+          objective: 'SALES',
+          status: 'DRAFT',
+          productId: null,
+          audienceId: null,
+          metaCampaignId: null,
+          eventVenueKey: null,
+          startDate: null,
+          endDate: null,
+          pausedReason: null,
+          dailySpendFlag: null,
+          needsDestinationUrl: false,
+        },
+        {
+          id: 'camp-2',
+          name: 'Second campaign',
+          objective: 'LEADS',
+          status: 'DRAFT',
+          productId: null,
+          audienceId: null,
+          metaCampaignId: null,
+          eventVenueKey: null,
+          startDate: null,
+          endDate: null,
+          pausedReason: null,
+          dailySpendFlag: null,
+          needsDestinationUrl: false,
+        },
+      ])
+    mockedApi.createCampaign.mockResolvedValue({
+      id: 'camp-2',
+      name: 'Second campaign',
+      objective: 'LEADS',
+      status: 'DRAFT',
+      productId: null,
+      audienceId: null,
+      metaCampaignId: null,
+      eventVenueKey: null,
+      startDate: null,
+      endDate: null,
+      pausedReason: null,
+      dailySpendFlag: null,
+      needsDestinationUrl: false,
+    })
+    const user = userEvent.setup()
+
+    renderCampaigns(<CampaignsSection businessId="biz-1" />)
+    await user.click(await screen.findByRole('button', { name: 'New campaign' }))
+    await user.type(screen.getByLabelText('Name'), 'Second campaign')
+    await user.selectOptions(screen.getByLabelText('Objective'), 'LEADS')
+    await user.click(screen.getByRole('button', { name: 'Create campaign' }))
+
+    await waitFor(() =>
+      expect(mockedApi.createCampaign).toHaveBeenCalledWith('biz-1', {
+        objective: 'LEADS',
+        name: 'Second campaign',
+      }),
+    )
+    // Both campaigns show, and the create form is gone again — having a
+    // second campaign now doesn't reopen it or require a reload.
+    expect(await screen.findByText('Second campaign — Leads — Draft')).toBeInTheDocument()
+    expect(screen.getByText('First campaign — Sales — Draft')).toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: 'Create a campaign' })).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'New campaign' })).toBeInTheDocument()
   })
 
   it('nudges toward adding a business description when the campaign step is empty', async () => {
@@ -889,7 +1104,7 @@ describe('CampaignsSection', () => {
     const user = userEvent.setup()
 
     renderCampaigns(<CampaignsSection businessId="biz-1" />)
-    await screen.findByText('Sales — READY')
+    await screen.findByText('Sales — Ready')
 
     await user.click(screen.getByRole('button', { name: 'Generate strategy' }))
 
@@ -929,7 +1144,7 @@ describe('CampaignsSection', () => {
     const user = userEvent.setup()
 
     renderCampaigns(<CampaignsSection businessId="biz-1" />)
-    await screen.findByText('Sales — READY')
+    await screen.findByText('Sales — Ready')
 
     await user.click(screen.getByRole('button', { name: 'Generate strategy' }))
 
@@ -962,7 +1177,7 @@ describe('CampaignsSection', () => {
     const user = userEvent.setup()
 
     renderCampaigns(<CampaignsSection businessId="biz-1" />)
-    await screen.findByText('Sales — READY')
+    await screen.findByText('Sales — Ready')
 
     await user.click(screen.getByRole('button', { name: 'Generate strategy' }))
     await screen.findByText('Has this business run advertising campaigns before?')
@@ -1003,7 +1218,7 @@ describe('CampaignsSection', () => {
     const user = userEvent.setup()
 
     renderCampaigns(<CampaignsSection businessId="biz-1" />)
-    await screen.findByText('Sales — READY')
+    await screen.findByText('Sales — Ready')
 
     await user.click(screen.getByRole('button', { name: 'Generate strategy' }))
 
@@ -1689,7 +1904,7 @@ describe('CampaignsSection', () => {
     const user = userEvent.setup()
 
     renderCampaigns(<CampaignsSection businessId="biz-1" />)
-    await screen.findByText('Sales — PENDING_APPROVAL')
+    await screen.findByText('Sales — Pending approval')
 
     await user.click(screen.getByRole('button', { name: 'Approve & Publish' }))
 
@@ -2002,7 +2217,7 @@ describe('CampaignsSection', () => {
     const user = userEvent.setup()
 
     renderCampaigns(<CampaignsSection businessId="biz-1" />)
-    await screen.findByText('Sales — PENDING_APPROVAL')
+    await screen.findByText('Sales — Pending approval')
 
     await user.click(screen.getByRole('button', { name: 'Approve & Publish' }))
 
@@ -2053,7 +2268,7 @@ describe('CampaignsSection', () => {
     const user = userEvent.setup()
 
     renderCampaigns(<CampaignsSection businessId="biz-1" />)
-    await screen.findByText('Sales — PENDING_APPROVAL')
+    await screen.findByText('Sales — Pending approval')
 
     await user.click(screen.getByRole('button', { name: 'Approve & Publish' }))
 
@@ -2173,7 +2388,7 @@ describe('CampaignsSection', () => {
     ])
 
     renderCampaigns(<CampaignsSection businessId="biz-1" />)
-    await screen.findByText('Sales — APPROVED')
+    await screen.findByText('Sales — Approved')
 
     expect(
       screen.queryByRole('button', { name: 'Refresh results' }),
@@ -2512,7 +2727,7 @@ describe('CampaignsSection', () => {
     ])
 
     renderCampaigns(<CampaignsSection businessId="biz-1" />)
-    await screen.findByText('Sales — APPROVED')
+    await screen.findByText('Sales — Approved')
 
     expect(screen.queryByRole('button', { name: 'Analyze now' })).not.toBeInTheDocument()
   })

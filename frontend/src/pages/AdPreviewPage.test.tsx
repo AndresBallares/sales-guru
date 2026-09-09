@@ -10,6 +10,7 @@ vi.mock('../lib/api', async (importOriginal) => {
   return {
     ...actual,
     getBusiness: vi.fn<typeof actual.getBusiness>(),
+    getOptions: vi.fn<typeof actual.getOptions>(),
     listCampaigns: vi.fn<typeof actual.listCampaigns>(),
     listCreatives: vi.fn<typeof actual.listCreatives>(),
     listProductImages: vi.fn<typeof actual.listProductImages>(),
@@ -85,6 +86,24 @@ function renderPage() {
 beforeEach(() => {
   vi.resetAllMocks()
   mockedApi.getBusiness.mockResolvedValue(business)
+  mockedApi.getOptions.mockResolvedValue({
+    industries: [],
+    objectives: [],
+    campaignStatuses: [],
+    ctas: [
+      { value: 'SHOP_NOW', label: 'Shop Now' },
+      { value: 'LEARN_MORE', label: 'Learn More' },
+      { value: 'SIGN_UP', label: 'Sign Up' },
+      { value: 'SUBSCRIBE', label: 'Subscribe' },
+      { value: 'CONTACT_US', label: 'Contact Us' },
+      { value: 'MESSAGE_PAGE', label: 'Send Message' },
+      { value: 'GET_OFFER', label: 'Get Offer' },
+      { value: 'DOWNLOAD', label: 'Download' },
+      { value: 'BOOK_NOW', label: 'Book Now' },
+    ],
+    actionTypes: [],
+    eventVenues: [],
+  })
   mockedApi.listCampaigns.mockResolvedValue([makeCampaign()])
   mockedApi.listCreatives.mockResolvedValue([makeCreative()])
 })

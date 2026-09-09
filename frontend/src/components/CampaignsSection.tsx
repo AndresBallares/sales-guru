@@ -9,8 +9,8 @@ import {
   createRecommendation,
   createStrategy,
   createTestEvaluation,
-  EVENT_VENUES,
   getBusiness,
+  getOptions,
   getStrategy,
   listAudiences,
   listCampaigns,
@@ -25,16 +25,16 @@ import {
   refreshMetrics,
   rejectRecommendation,
   selectCreative,
+  toLabelMap,
   updateCampaign,
   uploadProductImage,
-  type ActionType,
   type Audience,
   type Business,
   type Campaign,
   type Creative,
-  type Cta,
   type Metric,
   type Objective,
+  type OptionsResponse,
   type Product,
   type ProductImage,
   type Recommendation,
@@ -48,32 +48,6 @@ function formatLocations(locations: TargetLocation[]): string {
   return locations
     .map((loc) => [loc.city, loc.region].filter(Boolean).join(', '))
     .join('; ')
-}
-
-const OBJECTIVE_LABELS: Record<Objective, string> = {
-  SALES: 'Sales',
-  LEADS: 'Leads',
-  TRAFFIC: 'Traffic',
-  MESSAGES: 'Messages',
-  AWARENESS: 'Awareness',
-}
-
-const ACTION_LABELS: Record<ActionType, string> = {
-  PAUSE_AD: 'Pause ad',
-  INCREASE_BUDGET: 'Increase budget',
-  DECREASE_BUDGET: 'Decrease budget',
-}
-
-export const CTA_LABELS: Record<Cta, string> = {
-  SHOP_NOW: 'Shop Now',
-  LEARN_MORE: 'Learn More',
-  SIGN_UP: 'Sign Up',
-  SUBSCRIBE: 'Subscribe',
-  CONTACT_US: 'Contact Us',
-  MESSAGE_PAGE: 'Send Message',
-  GET_OFFER: 'Get Offer',
-  DOWNLOAD: 'Download',
-  BOOK_NOW: 'Book Now',
 }
 
 const VARIANT_LETTERS = ['A', 'B', 'C', 'D']
@@ -94,6 +68,12 @@ export function CampaignsSection({
   const [audiences, setAudiences] = useState<Audience[]>([])
   const [loading, setLoading] = useState(true)
   const [listError, setListError] = useState<string | null>(null)
+  // Fetched once on mount, not as part of refresh() below — every fixed
+  // option list here (objectives, campaign statuses, ad CTAs, optimizer
+  // action types, event venues) is static, so there's no reason to
+  // re-fetch it after every campaign mutation the way campaigns/products/
+  // audiences need to be.
+  const [options, setOptions] = useState<OptionsResponse | null>(null)
 
   // The manual fallback for the readiness checklist below — only ever
   // needed once a business has more than one product/audience, so
@@ -122,6 +102,11 @@ export function CampaignsSection({
   const [endDate, setEndDate] = useState('')
   const [formError, setFormError] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
+  // Manually toggled via the "New campaign" button/Cancel below. A
+  // business with zero campaigns shows the form regardless (the
+  // formVisible check below), so this only matters once there's at least
+  // one campaign already in the list.
+  const [showCreateForm, setShowCreateForm] = useState(false)
 
   const [strategies, setStrategies] = useState<Record<string, StrategyContent>>({})
   const [generatingId, setGeneratingId] = useState<string | null>(null)
@@ -296,6 +281,12 @@ export function CampaignsSection({
     void refresh()
   }, [refresh])
 
+  useEffect(() => {
+    getOptions()
+      .then(setOptions)
+      .catch(() => setOptions(null))
+  }, [])
+
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     setFormError(null)
@@ -318,12 +309,23 @@ export function CampaignsSection({
       setEventVenueKey('')
       setStartDate('')
       setEndDate('')
+      setShowCreateForm(false)
       await refresh()
     } catch (err) {
       setFormError(err instanceof ApiError ? err.message : 'Could not create campaign.')
     } finally {
       setSubmitting(false)
     }
+  }
+
+  function handleCancelCreate() {
+    setName('')
+    setObjective('SALES')
+    setEventVenueKey('')
+    setStartDate('')
+    setEndDate('')
+    setFormError(null)
+    setShowCreateForm(false)
   }
 
   async function handleAttachToCampaign(
@@ -628,6 +630,13 @@ export function CampaignsSection({
     }
   }
 
+  const objectiveOptions = options?.objectives ?? []
+  const objectiveLabels = toLabelMap(objectiveOptions)
+  const statusLabels = toLabelMap(options?.campaignStatuses ?? [])
+  const ctaLabels = toLabelMap(options?.ctas ?? [])
+  const actionLabels = toLabelMap(options?.actionTypes ?? [])
+  const eventVenueOptions = options?.eventVenues ?? []
+
   return (
     <>
       <section>
@@ -640,6 +649,11 @@ export function CampaignsSection({
         )}
         {!loading && !listError && campaigns.length === 0 && (
           <p>No campaigns yet — create your first one below.</p>
+        )}
+        {!loading && !listError && campaigns.length > 0 && !showCreateForm && (
+          <button type="button" onClick={() => setShowCreateForm(true)}>
+            New campaign
+          </button>
         )}
         <ul>
           {campaigns.map((campaign) => {
@@ -672,12 +686,13 @@ export function CampaignsSection({
             return (
               <li key={campaign.id}>
                 {campaign.name ? `${campaign.name} — ` : ''}
-                {OBJECTIVE_LABELS[campaign.objective]} — {campaign.status}
+                {objectiveLabels[campaign.objective] ?? campaign.objective} —{' '}
+                {statusLabels[campaign.status] ?? campaign.status}
                 {campaign.eventVenueKey && (
                   <p>
                     Event:{' '}
-                    {EVENT_VENUES.find((v) => v.key === campaign.eventVenueKey)?.label ??
-                      campaign.eventVenueKey}
+                    {eventVenueOptions.find((v) => v.value === campaign.eventVenueKey)
+                      ?.label ?? campaign.eventVenueKey}
                     {campaign.startDate && campaign.endDate && (
                       // Sliced, not parsed as a local Date — these are
                       // calendar dates stored at midnight UTC (see
@@ -1082,7 +1097,10 @@ export function CampaignsSection({
                   </div>
                 )}
                 {strategy && (
-                  <div>
+                  <div
+                    className="campaign-block"
+                    aria-label={`Ads for ${campaign.name ?? campaign.id}`}
+                  >
                     <button
                       type="button"
                       onClick={() => handleGenerateCreatives(campaign.id)}
@@ -1198,7 +1216,9 @@ export function CampaignsSection({
                             <p className="ad-preview-description">
                               {selectedCreative.description}
                             </p>
-                            <p className="ad-preview-cta">{CTA_LABELS[selectedCreative.cta]}</p>
+                            <p className="ad-preview-cta">
+                              {ctaLabels[selectedCreative.cta] ?? selectedCreative.cta}
+                            </p>
                           </div>
                           <button
                             type="button"
@@ -1239,7 +1259,7 @@ export function CampaignsSection({
                                 <strong>Description:</strong> {c.description}
                               </p>
                               <p>
-                                <strong>CTA:</strong> {CTA_LABELS[c.cta]}
+                                <strong>CTA:</strong> {ctaLabels[c.cta] ?? c.cta}
                               </p>
                               {c.creativeAngle && (
                                 <p>
@@ -1274,7 +1294,10 @@ export function CampaignsSection({
                   </div>
                 )}
                 {canPublish && (
-                  <div>
+                  <div
+                    className="campaign-block"
+                    aria-label={`Publish ${campaign.name ?? campaign.id}`}
+                  >
                     <button
                       type="button"
                       onClick={() => handleApproveAndPublish(campaign.id, campaign.status)}
@@ -1294,7 +1317,10 @@ export function CampaignsSection({
                   </div>
                 )}
                 {isLive && (
-                  <div>
+                  <div
+                    className="campaign-block"
+                    aria-label={`Live status for ${campaign.name ?? campaign.id}`}
+                  >
                     <p>
                       Live on Meta
                       {campaign.metaCampaignId ? ` (id: ${campaign.metaCampaignId})` : ''}
@@ -1386,7 +1412,10 @@ export function CampaignsSection({
                           return (
                             <li key={recommendation.id}>
                               <p>
-                                <strong>{ACTION_LABELS[recommendation.actionType]}</strong>
+                                <strong>
+                                  {actionLabels[recommendation.actionType] ??
+                                    recommendation.actionType}
+                                </strong>
                                 {' — '}
                                 {statusLabel}
                                 {' — '}
@@ -1490,7 +1519,7 @@ export function CampaignsSection({
         </ul>
       </section>
 
-      {!loading && !listError && campaigns.length === 0 && (
+      {!loading && !listError && (campaigns.length === 0 || showCreateForm) && (
         <section>
           <h2>Create a campaign</h2>
           {business && !business.description && (
@@ -1514,9 +1543,9 @@ export function CampaignsSection({
                 value={objective}
                 onChange={(event) => setObjective(event.target.value as Objective)}
               >
-                {Object.entries(OBJECTIVE_LABELS).map(([value, label]) => (
-                  <option key={value} value={value}>
-                    {label}
+                {objectiveOptions.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
                   </option>
                 ))}
               </select>
@@ -1529,8 +1558,8 @@ export function CampaignsSection({
                 onChange={(event) => setEventVenueKey(event.target.value)}
               >
                 <option value="">None — broad US targeting</option>
-                {EVENT_VENUES.map((venue) => (
-                  <option key={venue.key} value={venue.key}>
+                {eventVenueOptions.map((venue) => (
+                  <option key={venue.value} value={venue.value}>
                     {venue.label}
                   </option>
                 ))}
@@ -1564,9 +1593,16 @@ export function CampaignsSection({
                 {formError}
               </p>
             )}
-            <button type="submit" disabled={submitting}>
-              {submitting ? 'Creating…' : 'Create campaign'}
-            </button>
+            <div className="button-row">
+              <button type="submit" disabled={submitting}>
+                {submitting ? 'Creating…' : 'Create campaign'}
+              </button>
+              {campaigns.length > 0 && (
+                <button type="button" onClick={handleCancelCreate} disabled={submitting}>
+                  Cancel
+                </button>
+              )}
+            </div>
           </form>
         </section>
       )}

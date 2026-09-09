@@ -11,6 +11,16 @@ ActionType = Literal["PAUSE_AD", "INCREASE_BUDGET", "DECREASE_BUDGET"]
 RiskLevel = Literal["LOW", "MEDIUM", "HIGH"]
 RecommendationStatus = Literal["PENDING", "APPLIED", "REJECTED", "SUPERSEDED"]
 
+# Display labels for GET /options (app/api/options.py) — previously
+# hand-copied on the frontend (CampaignsSection.tsx's ACTION_LABELS,
+# confirmed 2026-09-08 to move to the fetch-from-backend pattern used for
+# Business.industry).
+ACTION_TYPE_LABELS: dict[ActionType, str] = {
+    "PAUSE_AD": "Pause ad",
+    "INCREASE_BUDGET": "Increase budget",
+    "DECREASE_BUDGET": "Decrease budget",
+}
+
 
 class GeneratedRecommendation(CamelCaseModel):
     """The one recommendation the LLM generates, as a forced tool call.

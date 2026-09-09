@@ -21,6 +21,22 @@ CtaType = Literal[
 
 CreativeStatus = Literal["GENERATED", "SELECTED", "REJECTED"]
 
+# Display labels for GET /options (app/api/options.py) — previously
+# hand-copied on the frontend (CampaignsSection.tsx's CTA_LABELS, confirmed
+# 2026-09-08 to move to the fetch-from-backend pattern used for
+# Business.industry).
+CTA_LABELS: dict[CtaType, str] = {
+    "SHOP_NOW": "Shop Now",
+    "LEARN_MORE": "Learn More",
+    "SIGN_UP": "Sign Up",
+    "SUBSCRIBE": "Subscribe",
+    "CONTACT_US": "Contact Us",
+    "MESSAGE_PAGE": "Send Message",
+    "GET_OFFER": "Get Offer",
+    "DOWNLOAD": "Download",
+    "BOOK_NOW": "Book Now",
+}
+
 _VARIANT_COUNT = 4
 
 

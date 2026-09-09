@@ -163,7 +163,12 @@ def _signed_up_client(
 def _create_business(client: TestClient, name: str = "Acme Jewelry") -> str:
     """Create a business with a website, return its id."""
     response = client.post(
-        "/businesses", json={"name": name, "website": "https://acme.example"}
+        "/businesses",
+        json={
+            "name": name,
+            "website": "https://acme.example",
+            "industry": "FASHION_JEWELRY",
+        },
     )
     id_: str = response.json()["id"]
     return id_

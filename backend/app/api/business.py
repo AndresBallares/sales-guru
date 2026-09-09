@@ -106,7 +106,7 @@ async def update_business(
 ) -> BusinessResponse:
     """Partially update a business owned by the current user.
 
-    Only name and description can be changed here (see
+    name, description, and industry can be changed here (see
     BusinessUpdateRequest) — only fields present in the request body
     change.
 

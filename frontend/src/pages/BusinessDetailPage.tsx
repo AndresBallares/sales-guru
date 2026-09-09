@@ -8,9 +8,11 @@ import { ProductsSection } from '../components/ProductsSection'
 import {
   ApiError,
   getBusiness,
+  getOptions,
   type Audience,
   type Business,
   type Campaign,
+  type Option,
   type Product,
 } from '../lib/api'
 
@@ -19,6 +21,7 @@ export function BusinessDetailPage() {
 
   const [business, setBusiness] = useState<Business | null>(null)
   const [businessError, setBusinessError] = useState<string | null>(null)
+  const [industries, setIndustries] = useState<Option[]>([])
   // null = not loaded yet; once loaded, a business that already has one
   // moves straight past that step — same reasoning for all four. Campaign
   // comes first (objective needs no product/audience in view yet, and
@@ -43,6 +46,12 @@ export function BusinessDetailPage() {
       })
   }, [businessId])
 
+  useEffect(() => {
+    getOptions()
+      .then((options) => setIndustries(options.industries))
+      .catch(() => setIndustries([]))
+  }, [])
+
   return (
     <main className="business-detail">
       <p>
@@ -61,6 +70,12 @@ export function BusinessDetailPage() {
       ) : (
         <>
           <h1>{business ? business.name : 'Loading…'}</h1>
+          {business?.industry && (
+            <p className="field-hint">
+              {industries.find((option) => option.value === business.industry)?.label ??
+                business.industry}
+            </p>
+          )}
           {business && (
             <button type="button" onClick={() => setEditingBusiness(true)}>
               Edit
