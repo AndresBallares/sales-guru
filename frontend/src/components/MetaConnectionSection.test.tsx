@@ -56,6 +56,7 @@ beforeEach(() => {
     value: { href: '' },
   })
   mockedApi.listMetaPixels.mockResolvedValue([])
+  window.localStorage.clear()
 })
 
 describe('MetaConnectionSection', () => {
@@ -307,5 +308,49 @@ describe('MetaConnectionSection', () => {
     await user.click(screen.getByRole('button', { name: 'Skip for now' }))
 
     await waitFor(() => expect(onSetupComplete).toHaveBeenLastCalledWith(true))
+  })
+
+  it('remembers a skipped Pixel across a remount, instead of asking again', async () => {
+    // Regression test: skipping the Pixel step only ever set local React
+    // state, which reset on every remount (e.g. navigating to the ad page
+    // and back) — bouncing the user straight back to this section instead
+    // of the Campaigns view they were already past. Confirmed 2026-09-09.
+    mockedApi.getMetaConnection.mockResolvedValue(COMPLETE_CONNECTION)
+    const user = userEvent.setup()
+    const firstMount = render(
+      <MemoryRouter initialEntries={['/businesses/biz-1']}>
+        <MetaConnectionSection businessId="biz-1" />
+      </MemoryRouter>,
+    )
+    await user.click(await screen.findByRole('button', { name: 'Skip for now' }))
+    firstMount.unmount()
+
+    const onSetupComplete = vi.fn<(complete: boolean) => void>()
+    renderSection('/businesses/biz-1', onSetupComplete)
+
+    // Reported complete right away this time — no second click needed.
+    await waitFor(() => expect(onSetupComplete).toHaveBeenCalledWith(true))
+  })
+
+  it('forgets a skipped Pixel once the connection is disconnected', async () => {
+    mockedApi.getMetaConnection.mockResolvedValue(COMPLETE_CONNECTION)
+    mockedApi.disconnectMeta.mockResolvedValue(undefined)
+    const user = userEvent.setup()
+    const firstMount = render(
+      <MemoryRouter initialEntries={['/businesses/biz-1']}>
+        <MetaConnectionSection businessId="biz-1" />
+      </MemoryRouter>,
+    )
+    await user.click(await screen.findByRole('button', { name: 'Skip for now' }))
+    await user.click(screen.getByRole('button', { name: 'Disconnect' }))
+    await screen.findByText('Not connected yet.')
+    firstMount.unmount()
+
+    mockedApi.getMetaConnection.mockResolvedValue(COMPLETE_CONNECTION)
+    const onSetupComplete = vi.fn<(complete: boolean) => void>()
+    renderSection('/businesses/biz-1', onSetupComplete)
+
+    await screen.findByRole('button', { name: 'Skip for now' })
+    expect(onSetupComplete).not.toHaveBeenCalledWith(true)
   })
 })

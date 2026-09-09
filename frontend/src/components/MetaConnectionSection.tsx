@@ -16,6 +16,17 @@ import {
   type MetaPixel,
 } from '../lib/api'
 
+// "Skip for now" (below) is a per-business dismissal, not real Meta
+// connection state — persisted here, not on MetaConnection, same
+// "browser-local UI preference" reasoning as ThemeContext's own
+// localStorage use. Without this, the choice was forgotten on every
+// remount (e.g. navigating to the ad page and back), which bounced the
+// user straight back to this section instead of the Campaigns view they
+// were already past (confirmed bug, 2026-09-09).
+function pixelSkippedStorageKey(businessId: string): string {
+  return `sales-guru-pixel-skipped:${businessId}`
+}
+
 export function MetaConnectionSection({
   businessId,
   onSetupComplete,
@@ -28,7 +39,9 @@ export function MetaConnectionSection({
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [connecting, setConnecting] = useState(false)
-  const [pixelSkipped, setPixelSkipped] = useState(false)
+  const [pixelSkipped, setPixelSkipped] = useState(
+    () => window.localStorage.getItem(pixelSkippedStorageKey(businessId)) === 'true',
+  )
 
   const [adAccounts, setAdAccounts] = useState<MetaAdAccount[]>([])
   const [pages, setPages] = useState<MetaPage[]>([])
@@ -152,12 +165,21 @@ export function MetaConnectionSection({
     }
   }
 
+  function handleSkipPixel() {
+    window.localStorage.setItem(pixelSkippedStorageKey(businessId), 'true')
+    setPixelSkipped(true)
+  }
+
   async function handleDisconnect() {
     setDisconnecting(true)
     setError(null)
     try {
       await disconnectMeta(businessId)
       setConnection(null)
+      // A fresh connection deserves a fresh choice about the Pixel, not
+      // one carried over from whatever was connected before.
+      window.localStorage.removeItem(pixelSkippedStorageKey(businessId))
+      setPixelSkipped(false)
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Could not disconnect Meta Ads.')
     } finally {
@@ -285,7 +307,7 @@ export function MetaConnectionSection({
                 >
                   {settingPixel ? 'Saving…' : 'Save Pixel'}
                 </button>
-                <button type="button" className="link-button" onClick={() => setPixelSkipped(true)}>
+                <button type="button" className="link-button" onClick={handleSkipPixel}>
                   Skip for now
                 </button>
               </>
