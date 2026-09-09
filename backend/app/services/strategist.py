@@ -24,6 +24,14 @@ almost-valid JSON" failure mode to handle. tool_choice only forces which
 tool is called though, not that its arguments strictly match the schema —
 see app/services/tool_use.py's parse_tool_input for the one stray-wrapper
 shape that's tolerated before failing.
+
+**Fake mode (Settings.fake_llm_enabled, confirmed 2026-09-09):** _call_agent,
+the single function that actually calls Anthropic, returns a canned,
+schema-valid reply instead when the flag is on — every other line in this
+module (unit economics, benchmark snapshots, budget math, the backend-
+fixed broad baseline) runs unchanged, since none of that is LLM output.
+Exists so e2e tests can generate a strategy with no real ANTHROPIC_API_KEY
+and no dependency on live model output.
 """
 
 from typing import Literal
@@ -46,6 +54,7 @@ from app.schemas.strategy import (
     SECONDARY_HYPOTHESIS_METRICS,
     AudienceVariant,
     BenchmarkContext,
+    BudgetRecommendation,
     DataDrivenStrategyContent,
     GeneratedDataDrivenStrategyFields,
     GeneratedTestPlanFields,
@@ -76,6 +85,37 @@ _TEST_PLAN_TOOL_NAME = "submit_test_plan"
 _DATA_DRIVEN_STRATEGY_TOOL_NAME = "submit_data_driven_strategy"
 
 PlanType = Literal["TEST_PLAN", "DATA_DRIVEN_STRATEGY"]
+
+# Fake mode (Settings.fake_llm_enabled, confirmed 2026-09-09): canned,
+# schema-valid stand-ins for what the LLM would generate, one per plan
+# type — built from the real *Fields models (not a hand-written dict),
+# so a schema change that adds a required field breaks loudly here
+# rather than silently drifting out of sync. Everything downstream of
+# _call_agent (unit economics, benchmarks, budget math, the backend-
+# fixed broad baseline, etc.) is untouched real logic — only the one
+# actual Anthropic call is replaced.
+_FAKE_TEST_PLAN_FIELDS = GeneratedTestPlanFields(
+    hypothesis_audience_name="Fake Hypothesis Audience",
+    hypothesis_audience_targeting=TargetAudience(age_min=25, age_max=45),
+    hypothesis_statement="Fake hypothesis statement (FAKE_LLM mode).",
+    offer="Fake offer copy (FAKE_LLM mode).",
+    positioning="Fake positioning copy (FAKE_LLM mode).",
+    creative_angles=["Fake creative angle A", "Fake creative angle B"],
+    copy_strategy="Fake copy strategy (FAKE_LLM mode).",
+).model_dump()
+_FAKE_DATA_DRIVEN_STRATEGY_FIELDS = GeneratedDataDrivenStrategyFields(
+    target_audience=TargetAudience(age_min=25, age_max=45),
+    offer="Fake offer copy (FAKE_LLM mode).",
+    positioning="Fake positioning copy (FAKE_LLM mode).",
+    creative_angles=["Fake creative angle A", "Fake creative angle B"],
+    copy_strategy="Fake copy strategy (FAKE_LLM mode).",
+    budget_recommendation=BudgetRecommendation(
+        daily=25.0, rationale="Fake rationale (FAKE_LLM mode)."
+    ),
+    key_learnings=["Fake key learning (FAKE_LLM mode)."],
+    recommended_adjustments=["Fake recommended adjustment (FAKE_LLM mode)."],
+    scaling_trigger="Fake scaling trigger (FAKE_LLM mode).",
+).model_dump()
 
 
 class StrategistError(RuntimeError):
@@ -541,6 +581,12 @@ async def _call_agent(
             or the model doesn't return a tool call.
     """
     settings = get_settings()
+    if settings.fake_llm_enabled:
+        if tool_name == _TEST_PLAN_TOOL_NAME:
+            return dict(_FAKE_TEST_PLAN_FIELDS)
+        if tool_name == _DATA_DRIVEN_STRATEGY_TOOL_NAME:
+            return dict(_FAKE_DATA_DRIVEN_STRATEGY_FIELDS)
+        raise StrategistError(f"fake_llm_enabled has no canned reply for {tool_name!r}")
     if not settings.anthropic_api_key:
         raise StrategistError("ANTHROPIC_API_KEY is not configured")
 

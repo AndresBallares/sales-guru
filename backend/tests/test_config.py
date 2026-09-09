@@ -51,3 +51,91 @@ def test_cors_origins_single_env_value(monkeypatch: pytest.MonkeyPatch) -> None:
     settings = Settings(_env_file=None)
 
     assert settings.cors_origins_list == ["https://app.example.com"]
+
+
+def test_fake_meta_defaults_off(monkeypatch: pytest.MonkeyPatch) -> None:
+    """With no override, fake Meta mode is off."""
+    monkeypatch.delenv("FAKE_META", raising=False)
+
+    settings = Settings(_env_file=None)
+
+    assert settings.fake_meta_enabled is False
+
+
+def test_fake_meta_reads_the_fake_meta_env_var(monkeypatch: pytest.MonkeyPatch) -> None:
+    """FAKE_META (not FAKE_META_ENABLED) turns fake Meta mode on."""
+    monkeypatch.setenv("FAKE_META", "true")
+    monkeypatch.setenv("ENVIRONMENT", "development")
+
+    settings = Settings(_env_file=None)
+
+    assert settings.fake_meta_enabled is True
+
+
+def test_fake_meta_in_production_refuses_to_construct(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The one combination that must never boot: fake Meta in production.
+
+    Settings() is called at app.main's module level, before the FastAPI
+    app object even exists — so this raising there means a misconfigured
+    deploy never boots, rather than boots and quietly fakes every real
+    campaign it publishes.
+    """
+    monkeypatch.setenv("FAKE_META", "true")
+    monkeypatch.setenv("ENVIRONMENT", "production")
+
+    with pytest.raises(ValueError, match="FAKE_META must never be enabled"):
+        Settings(_env_file=None)
+
+
+def test_fake_meta_off_in_production_is_fine(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Production with the flag off (the real-world default) constructs fine."""
+    monkeypatch.setenv("FAKE_META", "false")
+    monkeypatch.setenv("ENVIRONMENT", "production")
+
+    settings = Settings(_env_file=None)
+
+    assert settings.fake_meta_enabled is False
+    assert settings.environment == "production"
+
+
+def test_fake_llm_defaults_off(monkeypatch: pytest.MonkeyPatch) -> None:
+    """With no override, fake LLM mode is off."""
+    monkeypatch.delenv("FAKE_LLM", raising=False)
+
+    settings = Settings(_env_file=None)
+
+    assert settings.fake_llm_enabled is False
+
+
+def test_fake_llm_reads_the_fake_llm_env_var(monkeypatch: pytest.MonkeyPatch) -> None:
+    """FAKE_LLM (not FAKE_LLM_ENABLED) turns fake LLM mode on."""
+    monkeypatch.setenv("FAKE_LLM", "true")
+    monkeypatch.setenv("ENVIRONMENT", "development")
+
+    settings = Settings(_env_file=None)
+
+    assert settings.fake_llm_enabled is True
+
+
+def test_fake_llm_in_production_refuses_to_construct(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Same production boot-refusal as FAKE_META, for the LLM-faking flag."""
+    monkeypatch.setenv("FAKE_LLM", "true")
+    monkeypatch.setenv("ENVIRONMENT", "production")
+
+    with pytest.raises(ValueError, match="FAKE_LLM must never be enabled"):
+        Settings(_env_file=None)
+
+
+def test_fake_llm_off_in_production_is_fine(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Production with the flag off (the real-world default) constructs fine."""
+    monkeypatch.setenv("FAKE_LLM", "false")
+    monkeypatch.setenv("ENVIRONMENT", "production")
+
+    settings = Settings(_env_file=None)
+
+    assert settings.fake_llm_enabled is False
+    assert settings.environment == "production"

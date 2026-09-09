@@ -16,3 +16,9 @@ prisma/test.db
 prisma/test.db-journal
 prisma/e2e.db
 prisma/e2e.db-journal
+e2e.db
+e2e.db-journal
+e2e-real-llm.db
+e2e-real-llm.db-journal
+prisma/e2e-real-llm.db
+prisma/e2e-real-llm.db-journal

@@ -520,6 +520,63 @@ async def test_generate_strategy_returns_a_data_driven_strategy_plan(
     ]
 
 
+@pytest.fixture
+def fake_llm_mode(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    """Turn on fake_llm_enabled and make constructing a real client blow up."""
+    monkeypatch.setenv("FAKE_LLM", "true")
+    get_settings.cache_clear()
+
+    def _forbidden(**_kwargs: object) -> None:
+        raise AssertionError("must not call the real Anthropic API in fake mode")
+
+    monkeypatch.setattr(strategist, "AsyncAnthropic", _forbidden)
+    yield
+    get_settings.cache_clear()
+
+
+@pytest.mark.asyncio
+async def test_generate_strategy_returns_a_fake_test_plan_in_fake_llm_mode(
+    fake_llm_mode: None,
+) -> None:
+    """Fake mode still runs every backend-computed assembly step for real
+    (variants, hypothesis structure, budget, success criteria, decision
+    rules, benchmark context) — only the LLM's own content is canned."""
+    result = await strategist.generate_strategy(
+        business=_fake_business(),
+        product=_fake_product(),
+        audience=_fake_audience(),
+        objective="SALES",
+        plan_type="TEST_PLAN",
+    )
+
+    assert result.plan_type == "TEST_PLAN"
+    assert result.offer == "Fake offer copy (FAKE_LLM mode)."
+    assert len(result.audience_variants) == 2
+    assert result.audience_variants[1].name == "Fake Hypothesis Audience"
+    assert result.decision_rules == TEST_PLAN_DECISION_RULES
+    assert len(result.success_criteria.leading_indicators) == 3
+    assert result.benchmark_context.ctr.median == JEWELRY_META_BENCHMARKS.ctr.median
+
+
+@pytest.mark.asyncio
+async def test_generate_strategy_returns_a_fake_data_driven_strategy_in_fake_llm_mode(
+    fake_llm_mode: None,
+) -> None:
+    """Same canned-but-assembled-for-real shape, for the other plan type."""
+    result = await strategist.generate_strategy(
+        business=_fake_business(),
+        product=_fake_product(),
+        audience=_fake_audience(),
+        objective="SALES",
+        plan_type="DATA_DRIVEN_STRATEGY",
+        account_history=[],
+    )
+
+    assert result.plan_type == "DATA_DRIVEN_STRATEGY"
+    assert result.offer == "Fake offer copy (FAKE_LLM mode)."
+    assert result.budget_recommendation.daily == 25.0
+
+
 @pytest.mark.asyncio
 async def test_generate_strategy_recovers_from_a_stray_wrapper(
     anthropic_api_key: None, monkeypatch: pytest.MonkeyPatch

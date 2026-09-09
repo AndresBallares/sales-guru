@@ -226,6 +226,36 @@ async def test_generate_creatives_returns_four_variants(
 
 
 @pytest.mark.asyncio
+async def test_generate_creatives_returns_a_fake_batch_in_fake_llm_mode(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """fake_llm_enabled returns four canned, schema-valid variants with no
+    real Anthropic call at all."""
+    monkeypatch.setenv("FAKE_LLM", "true")
+    get_settings.cache_clear()
+
+    def _forbidden(**_kwargs: object) -> None:
+        raise AssertionError("must not call the real Anthropic API in fake mode")
+
+    monkeypatch.setattr(creative, "AsyncAnthropic", _forbidden)
+    try:
+        result = await creative.generate_creatives(
+            business=_fake_business(), product=_fake_product(), strategy=_FAKE_STRATEGY
+        )
+
+        assert len(result) == 4
+        assert result[0].headline == "Fake headline A"
+        assert {v.cta for v in result} == {
+            "SHOP_NOW",
+            "LEARN_MORE",
+            "SIGN_UP",
+            "SUBSCRIBE",
+        }
+    finally:
+        get_settings.cache_clear()
+
+
+@pytest.mark.asyncio
 async def test_generate_creatives_recovers_from_a_stray_key_wrapper(
     anthropic_api_key: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:

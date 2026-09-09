@@ -11,6 +11,13 @@ four variants) or the call fails cleanly. Also shares that module's
 parse_tool_input (app/services/tool_use.py) to tolerate a model wrapping
 its output under one stray top-level key instead of matching the schema
 directly.
+
+**Fake mode (Settings.fake_llm_enabled, confirmed 2026-09-09):**
+generate_creatives — the single function that actually calls Anthropic —
+returns a canned, schema-valid batch instead when the flag is on. Exists
+so e2e tests can generate ad creatives with no real ANTHROPIC_API_KEY and
+no dependency on live model output, same reasoning as strategist.py's own
+fake mode.
 """
 
 import anthropic
@@ -18,15 +25,48 @@ from anthropic import AsyncAnthropic
 from prisma.models import Business, Campaign, Creative, Product
 
 from app.core.config import get_settings
-from app.schemas.creative import GeneratedCreativeBatch, GeneratedCreativeVariant
+from app.schemas.creative import (
+    CtaType,
+    GeneratedCreativeBatch,
+    GeneratedCreativeVariant,
+)
 from app.schemas.strategy import StrategyContent, primary_audience
 from app.services.prompt_safety import quarantine
 from app.services.tool_use import parse_tool_input
 
 _MODEL = "claude-sonnet-5"
-_MAX_TOKENS = 4096
+# Four variants x {headline, body_text, description, cta, creative_angle,
+# image_prompt, video_prompt} is a lot of real content — 4096 was
+# occasionally too tight and truncated mid-JSON (confirmed 2026-09-09,
+# surfaced by real e2e generation rather than any mocked test: the
+# truncated tail came back as a string tool_use.py's known-quirk
+# recovery couldn't parse, since it wasn't merely mis-shaped JSON but
+# genuinely incomplete).
+_MAX_TOKENS = 8192
 _TOOL_NAME = "submit_creatives"
 _VARIANT_COUNT = 4
+
+# Fake mode canned batch — built from the real GeneratedCreativeVariant
+# model (not a hand-written dict), so a schema change breaks this loudly
+# rather than drifting out of sync silently.
+_FAKE_CTAS: tuple[CtaType, CtaType, CtaType, CtaType] = (
+    "SHOP_NOW",
+    "LEARN_MORE",
+    "SIGN_UP",
+    "SUBSCRIBE",
+)
+_FAKE_VARIANTS: list[GeneratedCreativeVariant] = [
+    GeneratedCreativeVariant(
+        headline=f"Fake headline {letter}",
+        body_text=f"Fake body text {letter} (FAKE_LLM mode).",
+        description=f"Fake description {letter}.",
+        cta=cta,
+        creative_angle=f"Fake creative angle {letter}",
+        image_prompt=f"Fake image prompt {letter}.",
+        video_prompt=f"Fake video prompt {letter}.",
+    )
+    for letter, cta in zip("ABCD", _FAKE_CTAS, strict=True)
+]
 
 
 class CreativeAgentError(RuntimeError):
@@ -114,6 +154,8 @@ async def generate_creatives(
             fails, or the model doesn't return a valid tool call.
     """
     settings = get_settings()
+    if settings.fake_llm_enabled:
+        return list(_FAKE_VARIANTS)
     if not settings.anthropic_api_key:
         raise CreativeAgentError("ANTHROPIC_API_KEY is not configured")
 
