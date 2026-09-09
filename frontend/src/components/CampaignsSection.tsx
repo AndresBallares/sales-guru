@@ -42,6 +42,7 @@ import {
   type TargetLocation,
   type TestEvaluation,
 } from '../lib/api'
+import { NewCampaignFlow } from './NewCampaignFlow'
 import { ProductForm } from './ProductForm'
 
 function formatLocations(locations: TargetLocation[]): string {
@@ -728,7 +729,7 @@ export function CampaignsSection({
                       setProductPickerId((prev) => (prev === campaign.id ? null : campaign.id))
                     }}
                   >
-                    Change product
+                    {currentProduct ? 'Change product' : 'Attach a product'}
                   </button>
                   {campaign.needsDestinationUrl && (
                     <p className="form-error" role="alert">
@@ -1526,7 +1527,7 @@ export function CampaignsSection({
         </ul>
       </section>
 
-      {!loading && !listError && (campaigns.length === 0 || showCreateForm) && (
+      {!loading && !listError && campaigns.length === 0 && (
         <section>
           <h2>Create a campaign</h2>
           {business && !business.description && (
@@ -1600,18 +1601,26 @@ export function CampaignsSection({
                 {formError}
               </p>
             )}
-            <div className="button-row">
-              <button type="submit" disabled={submitting}>
-                {submitting ? 'Creating…' : 'Create campaign'}
-              </button>
-              {campaigns.length > 0 && (
-                <button type="button" onClick={handleCancelCreate} disabled={submitting}>
-                  Cancel
-                </button>
-              )}
-            </div>
+            <button type="submit" disabled={submitting}>
+              {submitting ? 'Creating…' : 'Create campaign'}
+            </button>
           </form>
         </section>
+      )}
+
+      {!loading && !listError && campaigns.length > 0 && showCreateForm && (
+        <NewCampaignFlow
+          businessId={businessId}
+          products={products}
+          audiences={audiences}
+          objectiveOptions={objectiveOptions}
+          eventVenueOptions={eventVenueOptions}
+          onCancel={handleCancelCreate}
+          onDone={() => {
+            setShowCreateForm(false)
+            void refresh()
+          }}
+        />
       )}
     </>
   )
