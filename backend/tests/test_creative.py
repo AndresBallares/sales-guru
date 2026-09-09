@@ -233,6 +233,54 @@ def test_create_creatives_stores_and_returns_four_variants(
     mock_generate_creatives.assert_awaited_once()
 
 
+def test_create_creatives_passes_the_product_s_primary_photo_for_vision_grounding(
+    client: TestClient, mock_generate_creatives: AsyncMock
+) -> None:
+    """The campaign's product has an uploaded photo (position 0) — its
+    record is fetched and forwarded to generate_creatives as
+    primary_image, not just its description text (confirmed 2026-09-09,
+    app/services/creative.py's vision grounding)."""
+    _signed_up_client(client)
+    business_id = _create_business(client)
+    product_id = client.post(
+        f"/businesses/{business_id}/products",
+        json={"description": "Ring", "url": "https://acme.example/ring"},
+    ).json()["id"]
+    image = client.post(
+        f"/businesses/{business_id}/products/{product_id}/images",
+        files={"file": ("ring.jpg", _valid_jpeg(), "image/jpeg")},
+    ).json()
+    campaign_id = _create_campaign(client, business_id, product_id=product_id)
+    _generate_strategy(client, business_id, campaign_id)
+
+    client.post(f"/businesses/{business_id}/campaigns/{campaign_id}/creatives")
+
+    _, kwargs = mock_generate_creatives.call_args
+    assert kwargs["primary_image"] is not None
+    assert kwargs["primary_image"].id == image["id"]
+
+
+def test_create_creatives_passes_no_primary_image_for_a_product_with_none(
+    client: TestClient, mock_generate_creatives: AsyncMock
+) -> None:
+    """A product with zero uploaded photos still generates creatives fine
+    (this endpoint has no photo requirement of its own — only
+    select_creative does) — primary_image is just None."""
+    _signed_up_client(client)
+    business_id = _create_business(client)
+    product_id = client.post(
+        f"/businesses/{business_id}/products",
+        json={"description": "Ring", "url": "https://acme.example/ring"},
+    ).json()["id"]
+    campaign_id = _create_campaign(client, business_id, product_id=product_id)
+    _generate_strategy(client, business_id, campaign_id)
+
+    client.post(f"/businesses/{business_id}/campaigns/{campaign_id}/creatives")
+
+    _, kwargs = mock_generate_creatives.call_args
+    assert kwargs["primary_image"] is None
+
+
 def test_create_creatives_marks_the_campaign_as_ads_generated(
     client: TestClient,
 ) -> None:

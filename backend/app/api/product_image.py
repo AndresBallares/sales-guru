@@ -55,12 +55,29 @@ def product_image_url(image_id: str) -> str:
     return f"{get_settings().backend_url}/product-images/{image_id}"
 
 
+async def get_primary_image(product_id: str) -> ProductImage | None:
+    """The product's primary photo record (position 0), if it has one.
+
+    The "lowest position wins" lookup — shared by get_primary_image_url
+    below and by app/services/creative.py's vision-grounding, which needs
+    the actual image bytes/content-type, not just a URL.
+
+    Args:
+        product_id: The product to look up.
+
+    Returns:
+        The primary photo's Prisma record, or None if it has no photos yet.
+    """
+    return await db.productimage.find_first(
+        where={"productId": product_id}, order={"position": "asc"}
+    )
+
+
 async def get_primary_image_url(product_id: str) -> str | None:
     """The URL of a product's primary photo (position 0), if it has one.
 
     Used by app/api/product.py's ProductResponse.primary_image_url and by
-    app/api/creative.py's own primary-photo auto-attach, both of which
-    need the same "lowest position wins" lookup this wraps.
+    app/api/creative.py's own primary-photo auto-attach.
 
     Args:
         product_id: The product to look up.
@@ -68,9 +85,7 @@ async def get_primary_image_url(product_id: str) -> str | None:
     Returns:
         The primary photo's public URL, or None if it has no photos yet.
     """
-    image = await db.productimage.find_first(
-        where={"productId": product_id}, order={"position": "asc"}
-    )
+    image = await get_primary_image(product_id)
     return product_image_url(image.id) if image is not None else None
 
 
