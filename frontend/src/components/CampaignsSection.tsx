@@ -75,9 +75,16 @@ export function CampaignsSection({
   // audiences need to be.
   const [options, setOptions] = useState<OptionsResponse | null>(null)
 
-  // The manual fallback for the readiness checklist below — only ever
-  // needed once a business has more than one product/audience, so
-  // auto-attach (app/services/campaign_readiness.py) couldn't guess.
+  // The manual fallback for the readiness checklist below. Originally
+  // shown only with 2+ audiences (auto-attach, app/services/
+  // campaign_readiness.py, was assumed to always handle the unambiguous
+  // 0-or-1 case) — but auto-attach only fires when a product/audience is
+  // *created*, never when a *campaign* is, so a campaign created after
+  // the business's one-and-only audience already exists never gets it
+  // attached automatically. Shown whenever there's at least one audience
+  // to pick from now (confirmed 2026-09-09, after multiple campaigns per
+  // business exposed exactly this gap) — mirrors "Change product" below,
+  // which was never gated on count in the first place.
   const [pickProductId, setPickProductId] = useState<Record<string, string>>({})
   const [pickAudienceId, setPickAudienceId] = useState<Record<string, string>>({})
   const [attachingId, setAttachingId] = useState<string | null>(null)
@@ -831,7 +838,7 @@ export function CampaignsSection({
                       <li>{campaign.productId ? '✓' : '✗'} Product</li>
                       <li>
                         {campaign.audienceId ? '✓' : '✗'} Audience
-                        {!campaign.audienceId && audiences.length > 1 && (
+                        {!campaign.audienceId && audiences.length > 0 && (
                           <>
                             {' '}
                             <select

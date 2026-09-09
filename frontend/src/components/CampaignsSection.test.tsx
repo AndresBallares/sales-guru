@@ -799,7 +799,7 @@ describe('CampaignsSection', () => {
     expect(screen.queryByRole('button', { name: 'Generate strategy' })).not.toBeInTheDocument()
   })
 
-  it('does not show a manual audience picker with zero or one to choose from', async () => {
+  it('does not show a manual audience picker with zero audiences to choose from', async () => {
     mockedApi.listCampaigns.mockResolvedValue([draftCampaignFixture])
     mockedApi.listProducts.mockResolvedValue([
       {
@@ -812,11 +812,52 @@ describe('CampaignsSection', () => {
         url: null,
       },
     ])
+    mockedApi.listAudiences.mockResolvedValue([])
 
     renderCampaigns(<CampaignsSection businessId="biz-1" />)
 
     await screen.findByLabelText('Campaign readiness for camp-1')
     expect(screen.queryByLabelText('Which audience?')).not.toBeInTheDocument()
+  })
+
+  it('shows a manual audience picker even with only one audience to choose from', async () => {
+    // Regression test: a campaign created via "New campaign" (Part 2)
+    // after the business's one-and-only audience already exists never
+    // gets it auto-attached — auto-attach only fires when an audience is
+    // *created* (app/services/campaign_readiness.py), never when a
+    // campaign is. Reported 2026-09-09: a campaign was stuck with no way
+    // to attach the business's single existing audience.
+    mockedApi.listCampaigns.mockResolvedValue([draftCampaignFixture])
+    mockedApi.listAudiences.mockResolvedValue([
+      {
+        id: 'aud-1',
+        description: 'Busy professionals, 30-55',
+        ageMin: 30,
+        ageMax: 55,
+        location: null,
+        interests: null,
+        problem: null,
+        desire: null,
+      },
+    ])
+    mockedApi.updateCampaign.mockResolvedValue({
+      ...draftCampaignFixture,
+      audienceId: 'aud-1',
+    })
+    const user = userEvent.setup()
+
+    renderCampaigns(<CampaignsSection businessId="biz-1" />)
+    await screen.findByLabelText('Campaign readiness for camp-1')
+
+    const picker = screen.getByLabelText('Which audience?')
+    await user.selectOptions(picker, 'aud-1')
+    await user.click(screen.getByRole('button', { name: 'Attach' }))
+
+    await waitFor(() =>
+      expect(mockedApi.updateCampaign).toHaveBeenCalledWith('biz-1', 'camp-1', {
+        audienceId: 'aud-1',
+      }),
+    )
   })
 
   it('always shows a "Change product" control, regardless of product count', async () => {
