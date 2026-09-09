@@ -2,6 +2,11 @@ import { defineConfig, devices } from '@playwright/test'
 
 export default defineConfig({
   testDir: './e2e',
+  // real-llm-publish.spec.ts is opt-in/local-only (see
+  // playwright.real-llm.config.ts) — excluded here so the default
+  // `npm run test:e2e` (and therefore CI) never needs a real
+  // ANTHROPIC_API_KEY.
+  testIgnore: '**/real-llm-publish.spec.ts',
   fullyParallel: true,
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 2 : 0,
@@ -38,6 +43,12 @@ export default defineConfig({
         // connection — which needs a real Meta login, so nothing else can
         // drive it — without ever touching Meta's real API.
         FAKE_META: 'true',
+        // Same reasoning, for the Strategist/Creative Agents' Anthropic
+        // calls — canned, schema-valid output instead, so this whole
+        // suite needs no real ANTHROPIC_API_KEY and never depends on
+        // live model output. See playwright.real-llm.config.ts for the
+        // opt-in, local-only spec that exercises the real thing.
+        FAKE_LLM: 'true',
       },
       reuseExistingServer: !process.env.CI,
       timeout: 30_000,

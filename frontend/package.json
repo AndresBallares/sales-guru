@@ -12,6 +12,7 @@
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
     "test:e2e": "playwright test",
+    "test:e2e:real-llm": "playwright test --config=playwright.real-llm.config.ts",
     "test:e2e:install": "playwright install --with-deps chromium"
   },
   "dependencies": {

@@ -98,3 +98,44 @@ def test_fake_meta_off_in_production_is_fine(monkeypatch: pytest.MonkeyPatch) ->
 
     assert settings.fake_meta_enabled is False
     assert settings.environment == "production"
+
+
+def test_fake_llm_defaults_off(monkeypatch: pytest.MonkeyPatch) -> None:
+    """With no override, fake LLM mode is off."""
+    monkeypatch.delenv("FAKE_LLM", raising=False)
+
+    settings = Settings(_env_file=None)
+
+    assert settings.fake_llm_enabled is False
+
+
+def test_fake_llm_reads_the_fake_llm_env_var(monkeypatch: pytest.MonkeyPatch) -> None:
+    """FAKE_LLM (not FAKE_LLM_ENABLED) turns fake LLM mode on."""
+    monkeypatch.setenv("FAKE_LLM", "true")
+    monkeypatch.setenv("ENVIRONMENT", "development")
+
+    settings = Settings(_env_file=None)
+
+    assert settings.fake_llm_enabled is True
+
+
+def test_fake_llm_in_production_refuses_to_construct(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Same production boot-refusal as FAKE_META, for the LLM-faking flag."""
+    monkeypatch.setenv("FAKE_LLM", "true")
+    monkeypatch.setenv("ENVIRONMENT", "production")
+
+    with pytest.raises(ValueError, match="FAKE_LLM must never be enabled"):
+        Settings(_env_file=None)
+
+
+def test_fake_llm_off_in_production_is_fine(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Production with the flag off (the real-world default) constructs fine."""
+    monkeypatch.setenv("FAKE_LLM", "false")
+    monkeypatch.setenv("ENVIRONMENT", "production")
+
+    settings = Settings(_env_file=None)
+
+    assert settings.fake_llm_enabled is False
+    assert settings.environment == "production"

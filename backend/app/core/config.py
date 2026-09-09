@@ -77,6 +77,15 @@ class Settings(BaseSettings):
             its (canned, empty) results, without ever touching Meta's
             real API. Off by default; _forbid_in_production below makes
             it impossible to accidentally leave on in a real deployment.
+        fake_llm_enabled: Test-only escape hatch (env var `FAKE_LLM`,
+            confirmed 2026-09-09), same shape as fake_meta_enabled but for
+            the Anthropic calls instead of Meta's: swaps the Marketing
+            Strategist Agent (app/services/strategist.py) and Creative
+            Agent (app/services/creative.py) for canned, deterministic,
+            schema-valid output at the one shared call each makes, so an
+            e2e run needs no real ANTHROPIC_API_KEY and never depends on
+            live model output. Off by default; also covered by
+            _forbid_in_production below.
     """
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
@@ -97,6 +106,7 @@ class Settings(BaseSettings):
     email_from: str = "onboarding@resend.dev"
     url_reachability_check_enabled: bool = False
     fake_meta_enabled: bool = Field(default=False, validation_alias="FAKE_META")
+    fake_llm_enabled: bool = Field(default=False, validation_alias="FAKE_LLM")
 
     @property
     def cors_origins_list(self) -> list[str]:
@@ -110,26 +120,31 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def _forbid_in_production(self) -> "Settings":
-        """Refuse to construct Settings with fake Meta enabled in production.
+        """Refuse to construct Settings with a fake-dependency flag in production.
 
-        The whole point of fake_meta_enabled is to let a test process
-        skip real Meta API calls entirely — enabling it in production
-        would mean live campaigns silently never reach Meta at all.
-        Failing at Settings construction (get_settings() is called at
-        app.main's module level, before the app object even exists)
-        means a misconfigured deploy never boots, rather than boots and
-        quietly fakes real customer campaigns.
+        The whole point of fake_meta_enabled/fake_llm_enabled is to let a
+        test process skip a real external API entirely — enabling either
+        in production would mean live campaigns silently never reach
+        Meta, or never get a real AI-generated strategy/ad copy. Failing
+        at Settings construction (get_settings() is called at app.main's
+        module level, before the app object even exists) means a
+        misconfigured deploy never boots, rather than boots and quietly
+        fakes real customer campaigns.
 
         Returns:
             self, unchanged, when the combination is safe.
 
         Raises:
-            ValueError: If fake_meta_enabled is True and environment is
-                "production".
+            ValueError: If fake_meta_enabled or fake_llm_enabled is True
+                and environment is "production".
         """
         if self.fake_meta_enabled and self.environment == "production":
             raise ValueError(
                 "FAKE_META must never be enabled when ENVIRONMENT=production"
+            )
+        if self.fake_llm_enabled and self.environment == "production":
+            raise ValueError(
+                "FAKE_LLM must never be enabled when ENVIRONMENT=production"
             )
         return self
 
