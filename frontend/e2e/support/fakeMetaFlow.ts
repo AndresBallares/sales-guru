@@ -4,19 +4,24 @@ export function uniqueEmail(): string {
   return `e2e-${Date.now()}-${Math.random().toString(36).slice(2)}@example.com`
 }
 
-// Shared by fake-meta-publish.spec.ts (fully faked, runs in CI) and
-// real-llm-publish.spec.ts (real Anthropic calls, opt-in local-only) —
-// everything up through a fake Meta connection is identical either way;
-// they only differ in whether FAKE_LLM is also on for the backend this
-// page talks to (a webServer-level config choice, not something this
-// helper can see or needs to).
+// Shared by fake-meta-publish.spec.ts (fully faked, runs in CI),
+// real-llm-publish.spec.ts (real Anthropic calls, opt-in local-only), and
+// meta-pixel-skip.spec.ts — everything up through a fake Meta connection
+// is identical either way; specs only differ in whether FAKE_LLM is also
+// on for the backend they talk to (a webServer-level config choice, not
+// something this helper can see or needs to), or in what they do once
+// they reach the Pixel step.
 //
 // Real Meta OAuth needs a real user's real Meta login — nothing automated
-// can drive it, which is why every e2e spec that isn't this one stops
+// can drive it, which is why every e2e spec that isn't one of these stops
 // right at the "Connect Meta Ads" button (see auth-and-business.spec.ts).
 // fake-connect (gated behind FAKE_META, app/core/config.py's Settings,
 // never on in production) gets past it instead.
-export async function signUpAndReachFakeMetaConnectedBusiness(page: Page): Promise<void> {
+//
+// Returns the business id — callers past this point often need it for a
+// direct API call (fake-connect itself already needed one), and re-
+// deriving it from the URL a second time would just be duplicated work.
+export async function reachMetaPixelStep(page: Page): Promise<string> {
   const email = uniqueEmail()
   const password = 'supersecret123'
 
@@ -68,12 +73,18 @@ export async function signUpAndReachFakeMetaConnectedBusiness(page: Page): Promi
   await page.getByLabel('Ad account').selectOption({ label: 'Fake Ad Account' })
   await page.getByLabel('Page').selectOption({ label: 'Fake Page' })
   await page.getByRole('button', { name: 'Save connection' }).click()
-  // Picking the Pixel for real (not "Skip for now") persists it on the
-  // connection — skipping is a local-only flag that forgets itself on
-  // the next remount, which would otherwise bounce this spec straight
-  // back to this same screen after navigating to the ad page and back.
-  await page.getByLabel('Meta Pixel').selectOption({ label: 'Fake Pixel' })
-  await page.getByRole('button', { name: 'Save Pixel' }).click()
+  await expect(page.getByRole('button', { name: 'Skip for now' })).toBeVisible()
+
+  return businessId
+}
+
+export async function signUpAndReachFakeMetaConnectedBusiness(page: Page): Promise<void> {
+  await reachMetaPixelStep(page)
+
+  // Persisted on the connection itself (app/api/meta.py's skip_pixel),
+  // not local-only state — see meta-pixel-skip.spec.ts for dedicated
+  // coverage of that persistence.
+  await page.getByRole('button', { name: 'Skip for now' }).click()
 
   await expect(page.getByRole('heading', { name: 'Campaigns' })).toBeVisible()
 }

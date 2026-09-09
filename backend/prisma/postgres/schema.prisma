@@ -206,6 +206,14 @@ model MetaConnection {
   // needs an ad account to query against — see app/api/meta.py), not
   // bundled into the initial finalize picker.
   pixelId        String?
+  // True once the user explicitly dismissed the Pixel step for *this*
+  // connection ("Skip for now" — MetaConnectionSection) rather than never
+  // having gotten to it yet. Lives here, not on Business, so it resets
+  // for free when the connection is dropped (disconnect deletes this row
+  // outright) — a fresh connection deserves a fresh choice, not one
+  // carried over from whatever was connected before (confirmed 2026-09-09,
+  // replacing an earlier localStorage-only fix that got this wrong).
+  pixelSkipped   Boolean  @default(false)
   tokenExpiresAt DateTime
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt

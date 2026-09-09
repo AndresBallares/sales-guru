@@ -399,6 +399,83 @@ def test_set_pixel_stores_the_chosen_pixel(client: TestClient) -> None:
     assert response.json()["pixelId"] == "pixel_1"
 
 
+def test_set_pixel_clears_a_previous_skip(client: TestClient) -> None:
+    """Choosing a real Pixel supersedes an earlier "skip" — the two are
+    mutually exclusive facts about the same optional step."""
+    _signed_up_client(client)
+    business_id = _create_business(client)
+    _connect(client, business_id)
+    client.post(
+        f"/businesses/{business_id}/meta/finalize",
+        json={"adAccountId": "act_1", "pageId": "page_1"},
+    )
+    client.post(f"/businesses/{business_id}/meta/pixel/skip")
+
+    response = client.post(
+        f"/businesses/{business_id}/meta/pixel", json={"pixelId": "pixel_1"}
+    )
+
+    assert response.status_code == 200
+    assert response.json()["pixelId"] == "pixel_1"
+    assert response.json()["pixelSkipped"] is False
+
+
+def test_skip_pixel_requires_a_session(client: TestClient) -> None:
+    """Skipping the Pixel with no session cookie returns 401."""
+    response = client.post("/businesses/some-id/meta/pixel/skip")
+
+    assert response.status_code == 401
+
+
+def test_skip_pixel_404s_before_any_connection_started(client: TestClient) -> None:
+    """Skipping the Pixel before a connection exists returns 404."""
+    _signed_up_client(client)
+    business_id = _create_business(client)
+
+    response = client.post(f"/businesses/{business_id}/meta/pixel/skip")
+
+    assert response.status_code == 404
+
+
+def test_skip_pixel_persists_the_choice(client: TestClient) -> None:
+    """Skipping is recorded on the connection, not just returned once —
+    a later fetch reflects it too, which is the actual bug this fixes
+    (the old, localStorage-only fix couldn't survive a remount)."""
+    _signed_up_client(client)
+    business_id = _create_business(client)
+    _connect(client, business_id)
+    client.post(
+        f"/businesses/{business_id}/meta/finalize",
+        json={"adAccountId": "act_1", "pageId": "page_1"},
+    )
+
+    response = client.post(f"/businesses/{business_id}/meta/pixel/skip")
+    assert response.status_code == 200
+    assert response.json()["pixelSkipped"] is True
+
+    fetched = client.get(f"/businesses/{business_id}/meta")
+    assert fetched.json()["pixelSkipped"] is True
+
+
+def test_reconnecting_resets_a_skipped_pixel(client: TestClient) -> None:
+    """A fresh ad-account/Page selection (a real reconnect, not a full
+    disconnect) also resets a skipped Pixel — the old selection's Pixels
+    aren't necessarily even valid for whatever gets chosen next."""
+    _signed_up_client(client)
+    business_id = _create_business(client)
+    _connect(client, business_id)
+    client.post(
+        f"/businesses/{business_id}/meta/finalize",
+        json={"adAccountId": "act_1", "pageId": "page_1"},
+    )
+    client.post(f"/businesses/{business_id}/meta/pixel/skip")
+
+    _connect(client, business_id)
+
+    fetched = client.get(f"/businesses/{business_id}/meta")
+    assert fetched.json()["pixelSkipped"] is False
+
+
 def test_disconnect_requires_a_session(client: TestClient) -> None:
     """Disconnecting with no session cookie returns 401."""
     response = client.delete("/businesses/some-id/meta")
@@ -698,6 +775,7 @@ def test_fake_connect_creates_a_connection_without_real_oauth(
         assert body["metaUserId"] == "fake_meta_user"
         assert body["adAccountId"] is None
         assert body["pageId"] is None
+        assert body["pixelSkipped"] is False
         fetched = client.get(f"/businesses/{business_id}/meta")
         assert fetched.status_code == 200
         assert fetched.json()["id"] == body["id"]
@@ -725,5 +803,35 @@ def test_fake_connect_resets_ad_account_and_page_on_reconnect(
         fetched = client.get(f"/businesses/{business_id}/meta")
         assert fetched.json()["adAccountId"] is None
         assert fetched.json()["pageId"] is None
+    finally:
+        get_settings.cache_clear()
+
+
+def test_disconnecting_then_fake_reconnecting_resets_a_skipped_pixel(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A full disconnect + reconnect (not just a fresh ad-account/Page
+    pick on the same connection) also starts the Pixel choice over —
+    disconnect deletes the row outright, so the new one is a clean
+    default regardless."""
+    monkeypatch.setenv("FAKE_META", "true")
+    get_settings.cache_clear()
+    try:
+        _signed_up_client(client)
+        business_id = _create_business(client)
+        client.post(f"/businesses/{business_id}/meta/fake-connect")
+        client.post(
+            f"/businesses/{business_id}/meta/finalize",
+            json={"adAccountId": "act_fake_account", "pageId": "fake_page"},
+        )
+        client.post(f"/businesses/{business_id}/meta/pixel/skip")
+
+        client.delete(f"/businesses/{business_id}/meta")
+        assert client.get(f"/businesses/{business_id}/meta").status_code == 404
+
+        client.post(f"/businesses/{business_id}/meta/fake-connect")
+
+        fetched = client.get(f"/businesses/{business_id}/meta")
+        assert fetched.json()["pixelSkipped"] is False
     finally:
         get_settings.cache_clear()

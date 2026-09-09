@@ -10,22 +10,12 @@ import {
   listMetaPages,
   listMetaPixels,
   setMetaPixel,
+  skipMetaPixel,
   type MetaAdAccount,
   type MetaConnection,
   type MetaPage,
   type MetaPixel,
 } from '../lib/api'
-
-// "Skip for now" (below) is a per-business dismissal, not real Meta
-// connection state — persisted here, not on MetaConnection, same
-// "browser-local UI preference" reasoning as ThemeContext's own
-// localStorage use. Without this, the choice was forgotten on every
-// remount (e.g. navigating to the ad page and back), which bounced the
-// user straight back to this section instead of the Campaigns view they
-// were already past (confirmed bug, 2026-09-09).
-function pixelSkippedStorageKey(businessId: string): string {
-  return `sales-guru-pixel-skipped:${businessId}`
-}
 
 export function MetaConnectionSection({
   businessId,
@@ -39,9 +29,7 @@ export function MetaConnectionSection({
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [connecting, setConnecting] = useState(false)
-  const [pixelSkipped, setPixelSkipped] = useState(
-    () => window.localStorage.getItem(pixelSkippedStorageKey(businessId)) === 'true',
-  )
+  const [skippingPixel, setSkippingPixel] = useState(false)
 
   const [adAccounts, setAdAccounts] = useState<MetaAdAccount[]>([])
   const [pages, setPages] = useState<MetaPage[]>([])
@@ -100,8 +88,12 @@ export function MetaConnectionSection({
 
   // Reported up so the parent can move on to the Campaigns step — either
   // once a Pixel is actually saved, or once the user explicitly skips it
-  // (the Pixel is optional; see the copy below the picker).
-  const setupComplete = connection !== null && !pending && (connection.pixelId !== null || pixelSkipped)
+  // (the Pixel is optional; see the copy below the picker). pixelSkipped
+  // is persisted on the connection itself (app/api/meta.py's skip_pixel),
+  // not local component state, so this survives a remount instead of
+  // re-prompting every time (confirmed bug, 2026-09-09).
+  const setupComplete =
+    connection !== null && !pending && (connection.pixelId !== null || connection.pixelSkipped)
   useEffect(() => {
     onSetupComplete?.(setupComplete)
   }, [setupComplete, onSetupComplete])
@@ -165,9 +157,17 @@ export function MetaConnectionSection({
     }
   }
 
-  function handleSkipPixel() {
-    window.localStorage.setItem(pixelSkippedStorageKey(businessId), 'true')
-    setPixelSkipped(true)
+  async function handleSkipPixel() {
+    setSkippingPixel(true)
+    setPixelError(null)
+    try {
+      const updated = await skipMetaPixel(businessId)
+      setConnection(updated)
+    } catch (err) {
+      setPixelError(err instanceof ApiError ? err.message : 'Could not skip the Pixel step.')
+    } finally {
+      setSkippingPixel(false)
+    }
   }
 
   async function handleDisconnect() {
@@ -176,10 +176,6 @@ export function MetaConnectionSection({
     try {
       await disconnectMeta(businessId)
       setConnection(null)
-      // A fresh connection deserves a fresh choice about the Pixel, not
-      // one carried over from whatever was connected before.
-      window.localStorage.removeItem(pixelSkippedStorageKey(businessId))
-      setPixelSkipped(false)
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Could not disconnect Meta Ads.')
     } finally {
@@ -307,8 +303,13 @@ export function MetaConnectionSection({
                 >
                   {settingPixel ? 'Saving…' : 'Save Pixel'}
                 </button>
-                <button type="button" className="link-button" onClick={handleSkipPixel}>
-                  Skip for now
+                <button
+                  type="button"
+                  className="link-button"
+                  onClick={handleSkipPixel}
+                  disabled={skippingPixel}
+                >
+                  {skippingPixel ? 'Skipping…' : 'Skip for now'}
                 </button>
               </>
             )}

@@ -16,6 +16,7 @@ vi.mock('../lib/api', async (importOriginal) => {
     listMetaPixels: vi.fn<typeof actual.listMetaPixels>(),
     finalizeMetaConnection: vi.fn<typeof actual.finalizeMetaConnection>(),
     setMetaPixel: vi.fn<typeof actual.setMetaPixel>(),
+    skipMetaPixel: vi.fn<typeof actual.skipMetaPixel>(),
     disconnectMeta: vi.fn<typeof actual.disconnectMeta>(),
   }
 })
@@ -39,6 +40,7 @@ const PENDING_CONNECTION: api.MetaConnection = {
   adAccountId: null,
   pageId: null,
   pixelId: null,
+  pixelSkipped: false,
   tokenExpiresAt: '2026-10-01T00:00:00Z',
   createdAt: '2026-08-08T00:00:00Z',
 }
@@ -56,7 +58,6 @@ beforeEach(() => {
     value: { href: '' },
   })
   mockedApi.listMetaPixels.mockResolvedValue([])
-  window.localStorage.clear()
 })
 
 describe('MetaConnectionSection', () => {
@@ -298,6 +299,7 @@ describe('MetaConnectionSection', () => {
 
   it('reports setup as complete when the Pixel step is skipped', async () => {
     mockedApi.getMetaConnection.mockResolvedValue(COMPLETE_CONNECTION)
+    mockedApi.skipMetaPixel.mockResolvedValue({ ...COMPLETE_CONNECTION, pixelSkipped: true })
     const onSetupComplete = vi.fn<(complete: boolean) => void>()
     const user = userEvent.setup()
 
@@ -308,14 +310,32 @@ describe('MetaConnectionSection', () => {
     await user.click(screen.getByRole('button', { name: 'Skip for now' }))
 
     await waitFor(() => expect(onSetupComplete).toHaveBeenLastCalledWith(true))
+    expect(mockedApi.skipMetaPixel).toHaveBeenCalledWith('biz-1')
+  })
+
+  it('shows an error if skipping the Pixel step fails', async () => {
+    mockedApi.getMetaConnection.mockResolvedValue(COMPLETE_CONNECTION)
+    mockedApi.skipMetaPixel.mockRejectedValue(new api.ApiError(404, 'Meta connection not found'))
+    const user = userEvent.setup()
+
+    renderSection()
+    await user.click(await screen.findByRole('button', { name: 'Skip for now' }))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Meta connection not found')
   })
 
   it('remembers a skipped Pixel across a remount, instead of asking again', async () => {
-    // Regression test: skipping the Pixel step only ever set local React
-    // state, which reset on every remount (e.g. navigating to the ad page
-    // and back) — bouncing the user straight back to this section instead
-    // of the Campaigns view they were already past. Confirmed 2026-09-09.
-    mockedApi.getMetaConnection.mockResolvedValue(COMPLETE_CONNECTION)
+    // Regression test: skipping the Pixel step used to only set local
+    // React state, forgotten on every remount (e.g. navigating to the ad
+    // page and back) — bouncing the user straight back to this section
+    // instead of the Campaigns view they were already past. Fixed by
+    // persisting the choice on MetaConnection itself (confirmed 2026-09-09)
+    // — simulated here by the second mount's getMetaConnection call
+    // already returning pixelSkipped: true, as a real backend would.
+    mockedApi.getMetaConnection
+      .mockResolvedValueOnce(COMPLETE_CONNECTION)
+      .mockResolvedValueOnce({ ...COMPLETE_CONNECTION, pixelSkipped: true })
+    mockedApi.skipMetaPixel.mockResolvedValue({ ...COMPLETE_CONNECTION, pixelSkipped: true })
     const user = userEvent.setup()
     const firstMount = render(
       <MemoryRouter initialEntries={['/businesses/biz-1']}>
@@ -334,6 +354,7 @@ describe('MetaConnectionSection', () => {
 
   it('forgets a skipped Pixel once the connection is disconnected', async () => {
     mockedApi.getMetaConnection.mockResolvedValue(COMPLETE_CONNECTION)
+    mockedApi.skipMetaPixel.mockResolvedValue({ ...COMPLETE_CONNECTION, pixelSkipped: true })
     mockedApi.disconnectMeta.mockResolvedValue(undefined)
     const user = userEvent.setup()
     const firstMount = render(
@@ -346,6 +367,8 @@ describe('MetaConnectionSection', () => {
     await screen.findByText('Not connected yet.')
     firstMount.unmount()
 
+    // The disconnected MetaConnection row is gone server-side, so a fresh
+    // connection comes back with pixelSkipped reset to its default.
     mockedApi.getMetaConnection.mockResolvedValue(COMPLETE_CONNECTION)
     const onSetupComplete = vi.fn<(complete: boolean) => void>()
     renderSection('/businesses/biz-1', onSetupComplete)

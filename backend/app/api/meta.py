@@ -67,6 +67,7 @@ def _to_response(connection: MetaConnection) -> MetaConnectionResponse:
         ad_account_id=connection.adAccountId,
         page_id=connection.pageId,
         pixel_id=connection.pixelId,
+        pixel_skipped=connection.pixelSkipped,
         token_expires_at=connection.tokenExpiresAt,
         created_at=connection.createdAt,
     )
@@ -172,6 +173,7 @@ async def fake_connect(
                 "tokenExpiresAt": datetime.now(UTC) + _FAKE_META_TOKEN_LIFETIME,
                 "adAccountId": None,
                 "pageId": None,
+                "pixelSkipped": False,
             },
         },
     )
@@ -336,7 +338,42 @@ async def set_pixel(
     """
     connection = await _require_connection(business.id)
     updated = await db.metaconnection.update(
-        where={"id": connection.id}, data={"pixelId": payload.pixel_id}
+        where={"id": connection.id},
+        # Setting a real Pixel supersedes an earlier "skip" — a business
+        # can't be both "explicitly has none" and "chose to have one".
+        data={"pixelId": payload.pixel_id, "pixelSkipped": False},
+    )
+    assert updated is not None  # just fetched above, can't vanish mid-request
+    return _to_response(updated)
+
+
+@router.post("/pixel/skip", response_model=MetaConnectionResponse)
+async def skip_pixel(
+    business: Business = Depends(get_owned_business),
+) -> MetaConnectionResponse:
+    """Record that the user explicitly dismissed the Pixel step for now.
+
+    A sibling to set_pixel, not a field on it — skipping and choosing a
+    real Pixel are mutually exclusive actions on the same optional step,
+    not two fields of one request. Persisted on the connection (not just
+    client-side state) so it survives a remount instead of re-prompting
+    every time the business's Meta connection view remounts (confirmed
+    bug, 2026-09-09) — and, because it lives on the connection, resets for
+    free the moment that connection is dropped (see disconnect below).
+
+    Args:
+        business: The business, resolved and ownership-checked by
+            get_owned_business.
+
+    Returns:
+        The updated connection.
+
+    Raises:
+        HTTPException: 404 if no connection exists yet.
+    """
+    connection = await _require_connection(business.id)
+    updated = await db.metaconnection.update(
+        where={"id": connection.id}, data={"pixelSkipped": True}
     )
     assert updated is not None  # just fetched above, can't vanish mid-request
     return _to_response(updated)
@@ -446,6 +483,7 @@ async def meta_callback(
                 "tokenExpiresAt": expires_at,
                 "adAccountId": None,
                 "pageId": None,
+                "pixelSkipped": False,
             },
         },
     )
