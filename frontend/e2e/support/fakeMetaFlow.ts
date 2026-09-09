@@ -1,4 +1,17 @@
+import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { type Page, expect } from '@playwright/test'
+
+// select_creative now 428s a product with zero uploaded photos (confirmed
+// 2026-09-09) — every flow here needs one on file before it can reach
+// creative selection/publish, so this fixture gets uploaded right in the
+// shared onboarding helper below, not per-spec.
+const PRODUCT_PHOTO_PATH = path.join(
+  path.dirname(fileURLToPath(import.meta.url)),
+  '..',
+  'fixtures',
+  'product-photo.jpg',
+)
 
 export function uniqueEmail(): string {
   return `e2e-${Date.now()}-${Math.random().toString(36).slice(2)}@example.com`
@@ -18,10 +31,11 @@ export function uniqueEmail(): string {
 // fake-connect (gated behind FAKE_META, app/core/config.py's Settings,
 // never on in production) gets past it instead.
 //
-// Returns the business id — callers past this point often need it for a
-// direct API call (fake-connect itself already needed one), and re-
-// deriving it from the URL a second time would just be duplicated work.
-export async function reachMetaPixelStep(page: Page): Promise<string> {
+// Signup through business+campaign creation, landing right on the product
+// onboarding step ("No products yet") — split out from reachMetaPixelStep
+// so product-photos.spec.ts can exercise ProductForm's own upload/staging
+// UI directly, instead of going through the single-file default below.
+export async function reachProductStep(page: Page): Promise<void> {
   const email = uniqueEmail()
   const password = 'supersecret123'
 
@@ -43,11 +57,31 @@ export async function reachMetaPixelStep(page: Page): Promise<string> {
   await page.getByRole('button', { name: 'Create campaign' }).click()
 
   await expect(page.getByText('No products yet')).toBeVisible()
+}
+
+// Returns the business id — callers past this point often need it for a
+// direct API call (fake-connect itself already needed one), and re-
+// deriving it from the URL a second time would just be duplicated work.
+//
+// withProductPhoto defaults to true since every normal path needs one to
+// reach creative selection; product-photos.spec.ts passes false to reach
+// the same point deliberately without one, to exercise the 428 block
+// itself.
+export async function reachMetaPixelStep(
+  page: Page,
+  { withProductPhoto = true }: { withProductPhoto?: boolean } = {},
+): Promise<string> {
+  await reachProductStep(page)
+
   await page.getByLabel('What do you sell?').fill('Handmade leather wallets')
   // Optional for an AWARENESS campaign at *creation* time, but publish
   // (app/api/campaign.py's publish_campaign) always needs a destination
   // URL to advertise, whatever the objective — so this still needs one.
   await page.getByLabel(/^URL/).fill('https://acme.example/wallets')
+  if (withProductPhoto) {
+    await page.getByLabel(/Product photos/).setInputFiles(PRODUCT_PHOTO_PATH)
+    await expect(page.getByRole('img')).toBeVisible()
+  }
   await page.getByRole('button', { name: 'Add product' }).click()
 
   await expect(page.getByText('No audiences yet')).toBeVisible()
@@ -78,8 +112,11 @@ export async function reachMetaPixelStep(page: Page): Promise<string> {
   return businessId
 }
 
-export async function signUpAndReachFakeMetaConnectedBusiness(page: Page): Promise<void> {
-  await reachMetaPixelStep(page)
+export async function signUpAndReachFakeMetaConnectedBusiness(
+  page: Page,
+  options: { withProductPhoto?: boolean } = {},
+): Promise<void> {
+  await reachMetaPixelStep(page, options)
 
   // Persisted on the connection itself (app/api/meta.py's skip_pixel),
   // not local-only state — see meta-pixel-skip.spec.ts for dedicated

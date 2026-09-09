@@ -699,6 +699,15 @@ export function CampaignsSection({
             const hasStaleCreatives = campaignCreatives.some((c) => c.isStale)
             return (
               <li key={campaign.id}>
+                {currentProduct?.primaryImageUrl && (
+                  <img
+                    src={currentProduct.primaryImageUrl}
+                    alt={currentProduct.description}
+                    width={40}
+                    height={40}
+                    className="campaign-thumb"
+                  />
+                )}
                 {campaign.name ? `${campaign.name} — ` : ''}
                 {objectiveLabels[campaign.objective] ?? campaign.objective} —{' '}
                 {statusLabels[campaign.status] ?? campaign.status}

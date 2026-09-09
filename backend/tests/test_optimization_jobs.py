@@ -23,6 +23,7 @@ itself — the same "mock where it's imported, not where it's defined" rule
 already established for test_metric.py / test_publish.py.
 """
 
+import struct
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock
@@ -51,6 +52,25 @@ from app.services.benchmarks import JEWELRY_META_BENCHMARKS
 from app.services.meta import CampaignInsights, MetaConnectionError
 from fastapi.testclient import TestClient
 from prisma import Prisma
+
+
+def _valid_jpeg(width: int = 800, height: int = 800) -> bytes:
+    """A minimal but structurally valid JPEG header, same construction as
+    test_creative.py / test_product_image.py — select_creative now 428s a
+    product with zero uploaded photos (confirmed 2026-09-09), so every
+    helper here that auto-creates a product feeding a /select call needs
+    one on file first.
+    """
+    return (
+        b"\xff\xd8"
+        + b"\xff\xc0"
+        + struct.pack(">H", 11)
+        + bytes([8])
+        + struct.pack(">HH", height, width)
+        + bytes([1])
+        + bytes([1, 0x11, 0])
+        + b"\xff\xd9"
+    )
 
 
 def _run[T](client: TestClient, func: Callable[..., Awaitable[T]], *args: object) -> T:
@@ -212,6 +232,10 @@ def _publish_campaign(client: TestClient, business_id: str) -> str:
         f"/businesses/{business_id}/products",
         json={"description": "Ring", "url": "https://acme.example/ring"},
     ).json()["id"]
+    client.post(
+        f"/businesses/{business_id}/products/{product_id}/images",
+        files={"file": ("ring.jpg", _valid_jpeg(), "image/jpeg")},
+    )
     audience_id = client.post(
         f"/businesses/{business_id}/audiences",
         json={"description": "Busy professionals, 30-55"},

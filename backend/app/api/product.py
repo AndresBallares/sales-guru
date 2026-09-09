@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from prisma.models import Business, Product
 from prisma.types import ProductUpdateInput
 
+from app.api.product_image import get_primary_image_url
 from app.core.authz import get_owned_business, get_owned_product
 from app.core.config import get_settings
 from app.core.db import db
@@ -59,7 +60,7 @@ async def _product_url_is_required(business_id: str, campaign_id: str | None) ->
     return any(requires_destination_url(c.objective) for c in campaigns)
 
 
-def _to_response(product: Product) -> ProductResponse:
+async def _to_response(product: Product) -> ProductResponse:
     """Map a Prisma Product record to its public response shape.
 
     Args:
@@ -76,6 +77,7 @@ def _to_response(product: Product) -> ProductResponse:
         features=product.features,
         benefits=product.benefits,
         url=product.url,
+        primary_image_url=await get_primary_image_url(product.id),
     )
 
 
@@ -121,7 +123,7 @@ async def create_product(
         }
     )
     await auto_attach_product(business.id, product.id, payload.campaign_id)
-    return _to_response(product)
+    return await _to_response(product)
 
 
 @router.get("", response_model=list[ProductResponse])
@@ -138,7 +140,7 @@ async def list_products(
         All products under the business.
     """
     products = await db.product.find_many(where={"businessId": business.id})
-    return [_to_response(p) for p in products]
+    return [await _to_response(p) for p in products]
 
 
 @router.patch("/{product_id}", response_model=ProductResponse)
@@ -169,10 +171,10 @@ async def update_product(
     """
     update_data = cast(ProductUpdateInput, payload.model_dump(exclude_unset=True))
     if not update_data:
-        return _to_response(product)
+        return await _to_response(product)
     updated = await db.product.update(where={"id": product.id}, data=update_data)
     assert updated is not None  # just fetched above, can't vanish mid-request
-    return _to_response(updated)
+    return await _to_response(updated)
 
 
 @router.post("/{product_id}/check-url", response_model=CheckUrlResponse)

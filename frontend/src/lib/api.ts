@@ -64,6 +64,10 @@ export interface Product {
   features: string | null
   benefits: string | null
   url: string | null
+  // The primary (first, ProductImage position 0) uploaded photo's URL, or
+  // null if this product has no photos yet — used for campaign-list
+  // thumbnails (CampaignsSection) without a separate images fetch.
+  primaryImageUrl: string | null
 }
 
 export interface ProductCreateInput {
@@ -96,6 +100,10 @@ export interface ProductUpdateInput {
 export interface ProductImage {
   id: string
   url: string
+  // Only ever set on the response to the upload call that produced this
+  // image — never present on a later list/get (app/schemas/
+  // product_image.py's ProductImageResponse docstring explains why).
+  aspectRatioWarning?: string | null
   createdAt: string
 }
 
@@ -345,6 +353,19 @@ export function deleteProductImage(
   return request<void>(
     `/businesses/${businessId}/products/${productId}/images/${imageId}`,
     { method: 'DELETE' },
+  )
+}
+
+// imageIds is the full new order (first = primary), not a single move —
+// mirrors app/schemas/product_image.py's ReorderProductImagesRequest.
+export function reorderProductImages(
+  businessId: string,
+  productId: string,
+  imageIds: string[],
+): Promise<ProductImage[]> {
+  return request<ProductImage[]>(
+    `/businesses/${businessId}/products/${productId}/images/order`,
+    { method: 'PUT', body: JSON.stringify({ imageIds }) },
   )
 }
 

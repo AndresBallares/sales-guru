@@ -155,6 +155,14 @@ model ProductImage {
   productId   String
   data        Bytes
   contentType String
+  // User-controlled display order — the *only* source of truth for it;
+  // createdAt is immutable and can't represent a reorder. Lowest first;
+  // position 0 is "primary" (the photo shown as the product's thumbnail
+  // and auto-attached to a creative with no image yet — see
+  // app/api/creative.py's select_creative). New uploads append past the
+  // current max (app/api/product_image.py), never reusing a deleted
+  // photo's old position, so two photos never tie.
+  position    Int      @default(0)
   createdAt   DateTime @default(now())
 }
 

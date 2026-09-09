@@ -5,6 +5,7 @@ is covered by test_creative_service.py. These tests cover auth, ownership
 scoping, the strategy dependency, storage, selection, and response shape.
 """
 
+import struct
 from unittest.mock import AsyncMock
 
 import pytest
@@ -73,6 +74,26 @@ def _create_audience(client: TestClient, business_id: str) -> str:
     return id_
 
 
+def _valid_jpeg(width: int = 800, height: int = 800) -> bytes:
+    """A structurally-valid minimal JPEG — real header, fake scan data.
+
+    Needs to actually pass app/services/image_dimensions.py's parser (a
+    real width/height, at least the 600px minimum) now that
+    upload_product_image validates that, not just be any old bytes —
+    see test_product_image.py for the same helper.
+    """
+    return (
+        b"\xff\xd8"
+        + b"\xff\xc0"
+        + struct.pack(">H", 11)
+        + bytes([8])
+        + struct.pack(">HH", height, width)
+        + bytes([1])
+        + bytes([1, 0x11, 0])
+        + b"\xff\xd9"
+    )
+
+
 def _create_campaign(
     client: TestClient,
     business_id: str,
@@ -83,13 +104,21 @@ def _create_campaign(
 
     Auto-creates a default product/audience when not given one — every
     campaign needs both to generate a strategy now (readiness gate,
-    app/services/campaign_readiness.py).
+    app/services/campaign_readiness.py). The auto-created product also
+    gets one default photo — select_creative now 428s a product with
+    none at all (confirmed 2026-09-09), and most tests using this
+    convenience helper don't care about photos, just about getting
+    through select_creative to whatever they're actually testing.
     """
     if product_id is None:
         product_id = client.post(
             f"/businesses/{business_id}/products",
             json={"description": "Ring", "url": "https://acme.example/ring"},
         ).json()["id"]
+        client.post(
+            f"/businesses/{business_id}/products/{product_id}/images",
+            files={"file": ("ring.jpg", _valid_jpeg(), "image/jpeg")},
+        )
     if audience_id is None:
         audience_id = _create_audience(client, business_id)
     response = client.post(
@@ -384,7 +413,7 @@ def test_select_creative_attaches_the_products_first_photo(
     ).json()["id"]
     image = client.post(
         f"/businesses/{business_id}/products/{product_id}/images",
-        files={"file": ("ring.jpg", b"\xff\xd8\xff\xe0fake", "image/jpeg")},
+        files={"file": ("ring.jpg", _valid_jpeg(), "image/jpeg")},
     ).json()
     audience_id = _create_audience(client, business_id)
     campaign_id = client.post(
@@ -407,11 +436,12 @@ def test_select_creative_attaches_the_products_first_photo(
     )
 
 
-def test_select_creative_leaves_image_null_without_any_uploaded(
+def test_select_creative_428s_for_a_product_with_no_uploaded_photos(
     client: TestClient,
 ) -> None:
-    """A product with no uploaded photos leaves imageUrl null, unchanged
-    from before this feature — publish already tolerates a null imageUrl."""
+    """Selecting a creative for a product with zero photos is rejected
+    outright (confirmed 2026-09-09) — publishing image-less is no longer
+    tolerated; the old behavior was to select with a null imageUrl."""
     _signed_up_client(client)
     business_id = _create_business(client)
     product_id = client.post(
@@ -433,8 +463,15 @@ def test_select_creative_leaves_image_null_without_any_uploaded(
         f"/creatives/{generated[0]['id']}/select"
     )
 
-    assert response.status_code == 200
-    assert response.json()["imageUrl"] is None
+    assert response.status_code == 428
+    assert "photo" in response.json()["detail"].lower()
+
+    # Neither this creative nor any sibling was mutated — the whole
+    # selection attempt is refused before any of that happens.
+    listed = client.get(
+        f"/businesses/{business_id}/campaigns/{campaign_id}/creatives"
+    ).json()
+    assert all(c["status"] == "GENERATED" for c in listed)
 
 
 def test_select_creative_attaches_an_explicitly_chosen_photo(
@@ -450,11 +487,11 @@ def test_select_creative_attaches_an_explicitly_chosen_photo(
     ).json()["id"]
     older_image = client.post(
         f"/businesses/{business_id}/products/{product_id}/images",
-        files={"file": ("older.jpg", b"\xff\xd8\xff\xe0fake", "image/jpeg")},
+        files={"file": ("older.jpg", _valid_jpeg(), "image/jpeg")},
     ).json()
     chosen_image = client.post(
         f"/businesses/{business_id}/products/{product_id}/images",
-        files={"file": ("chosen.jpg", b"\xff\xd8\xff\xe0fake", "image/jpeg")},
+        files={"file": ("chosen.jpg", _valid_jpeg(), "image/jpeg")},
     ).json()
     audience_id = _create_audience(client, business_id)
     campaign_id = client.post(
@@ -490,13 +527,20 @@ def test_select_creative_404s_for_a_product_image_from_another_product(
         f"/businesses/{business_id}/products",
         json={"description": "Ring", "url": "https://acme.example/ring"},
     ).json()["id"]
+    # The campaign's own product needs at least one photo of its own too
+    # — otherwise the no-photo-at-all 428 would fire first, before this
+    # test ever reaches the check it's actually exercising.
+    client.post(
+        f"/businesses/{business_id}/products/{product_id}/images",
+        files={"file": ("ring.jpg", _valid_jpeg(), "image/jpeg")},
+    )
     other_product_id = client.post(
         f"/businesses/{business_id}/products",
         json={"description": "Necklace", "url": "https://acme.example/necklace"},
     ).json()["id"]
     other_image = client.post(
         f"/businesses/{business_id}/products/{other_product_id}/images",
-        files={"file": ("necklace.jpg", b"\xff\xd8\xff\xe0fake", "image/jpeg")},
+        files={"file": ("necklace.jpg", _valid_jpeg(), "image/jpeg")},
     ).json()
     audience_id = _create_audience(client, business_id)
     campaign_id = client.post(
@@ -537,7 +581,7 @@ async def test_select_creative_428s_for_image_attach_when_not_ready(
     ).json()["id"]
     image = client.post(
         f"/businesses/{business_id}/products/{product_id}/images",
-        files={"file": ("ring.jpg", b"\xff\xd8\xff\xe0fake", "image/jpeg")},
+        files={"file": ("ring.jpg", _valid_jpeg(), "image/jpeg")},
     ).json()
     audience_id = _create_audience(client, business_id)
     campaign_id = client.post(
