@@ -9,6 +9,7 @@ call path) is covered directly in test_optimization_jobs.py.
 """
 
 import json
+import struct
 from datetime import UTC, datetime, timedelta
 from typing import Any, cast
 from unittest.mock import AsyncMock
@@ -123,6 +124,25 @@ def _create_business(client: TestClient, name: str = "Acme Jewelry") -> str:
     return id_
 
 
+def _valid_jpeg(width: int = 800, height: int = 800) -> bytes:
+    """A minimal but structurally valid JPEG header, same construction as
+    test_creative.py / test_product_image.py — select_creative now 428s a
+    product with zero uploaded photos (confirmed 2026-09-09), so every
+    helper here that auto-creates a product feeding a /select call needs
+    one on file first.
+    """
+    return (
+        b"\xff\xd8"
+        + b"\xff\xc0"
+        + struct.pack(">H", 11)
+        + bytes([8])
+        + struct.pack(">HH", height, width)
+        + bytes([1])
+        + bytes([1, 0x11, 0])
+        + b"\xff\xd9"
+    )
+
+
 def _create_campaign(client: TestClient, business_id: str) -> str:
     """Create a campaign under a business, return its id.
 
@@ -134,6 +154,10 @@ def _create_campaign(client: TestClient, business_id: str) -> str:
         f"/businesses/{business_id}/products",
         json={"description": "Ring", "url": "https://acme.example/ring"},
     ).json()["id"]
+    client.post(
+        f"/businesses/{business_id}/products/{product_id}/images",
+        files={"file": ("ring.jpg", _valid_jpeg(), "image/jpeg")},
+    )
     audience_id = client.post(
         f"/businesses/{business_id}/audiences",
         json={"description": "Busy professionals, 30-55"},

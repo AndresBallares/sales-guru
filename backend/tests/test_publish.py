@@ -9,6 +9,7 @@ create_meta_*) are mocked for publish itself — the orchestration
 database, exercised through the real endpoint via TestClient.
 """
 
+import struct
 from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock
 
@@ -133,13 +134,37 @@ def _create_business(
     return id_
 
 
+def _valid_jpeg(width: int = 800, height: int = 800) -> bytes:
+    """A minimal but structurally valid JPEG header, same construction as
+    test_creative.py / test_product_image.py — select_creative now 428s a
+    product with zero uploaded photos (confirmed 2026-09-09), so every
+    helper here that auto-creates a product feeding a /select call needs
+    one on file first.
+    """
+    return (
+        b"\xff\xd8"
+        + b"\xff\xc0"
+        + struct.pack(">H", 11)
+        + bytes([8])
+        + struct.pack(">HH", height, width)
+        + bytes([1])
+        + bytes([1, 0x11, 0])
+        + b"\xff\xd9"
+    )
+
+
 def _create_product(client: TestClient, business_id: str, url: str | None) -> str:
-    """Create a product, optionally with a destination URL, return its id."""
+    """Create a product (with a default photo on file), optionally with a
+    destination URL, return its id."""
     response = client.post(
         f"/businesses/{business_id}/products",
         json={"description": "Custom emerald rings", "url": url},
     )
     id_: str = response.json()["id"]
+    client.post(
+        f"/businesses/{business_id}/products/{id_}/images",
+        files={"file": ("ring.jpg", _valid_jpeg(), "image/jpeg")},
+    )
     return id_
 
 

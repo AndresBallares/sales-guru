@@ -1,10 +1,42 @@
-import { useState, type FormEvent } from 'react'
-import { ApiError, createProduct, updateProduct, type Product } from '../lib/api'
+import { useEffect, useRef, useState, type ChangeEvent, type FormEvent } from 'react'
+import {
+  ApiError,
+  createProduct,
+  deleteProductImage,
+  listProductImages,
+  reorderProductImages,
+  updateProduct,
+  uploadProductImage,
+  type Product,
+  type ProductImage,
+} from '../lib/api'
+import {
+  aspectRatioWarning,
+  dimensionTooSmall,
+  readImageDimensions,
+  TOO_SMALL_ERROR,
+  validateImageFile,
+} from '../lib/imageValidation'
 import {
   DESTINATION_URL_ERROR_MESSAGE,
   isValidDestinationUrl,
   normalizeDestinationUrl,
 } from '../lib/urlValidation'
+
+// A photo not yet uploaded — create mode only, since there's no product
+// id to upload against until the form is actually submitted. Kept in the
+// order the user wants (first = primary); uploaded sequentially in that
+// same order right after the product is created, so the backend's own
+// append-order position assignment (app/api/product_image.py's
+// _next_position) reproduces it without a separate reorder call.
+interface StagedPhoto {
+  id: string
+  file: File
+  previewUrl: string
+  warning: string | null
+}
+
+let stagedPhotoCounter = 0
 
 // Shared by ProductsSection's "Add a product" / "Edit" rows and
 // CampaignsSection's "Change product" picker (Part 1 + Part 2) — one
@@ -44,6 +76,156 @@ export function ProductForm({
   const [formError, setFormError] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
 
+  // Edit mode: the product's already-uploaded photos, fetched on mount
+  // and kept in sync with every upload/remove/reorder below. Create
+  // mode: always empty — see stagedPhotos instead.
+  const [existingImages, setExistingImages] = useState<ProductImage[]>([])
+  // Create mode: photos picked before the product exists yet.
+  const [stagedPhotos, setStagedPhotos] = useState<StagedPhoto[]>([])
+  const [imageError, setImageError] = useState<string | null>(null)
+  const [uploadingImage, setUploadingImage] = useState(false)
+  const [removingImageId, setRemovingImageId] = useState<string | null>(null)
+  const [reorderingImages, setReorderingImages] = useState(false)
+  const fileInputRef = useRef<HTMLInputElement>(null)
+
+  useEffect(() => {
+    if (!isEditing) return
+    let cancelled = false
+    void listProductImages(businessId, product.id).then(
+      (images) => {
+        if (!cancelled) setExistingImages(images)
+      },
+      () => {
+        // Non-fatal — the photo manager just starts out looking empty;
+        // the user can still see the mismatch is off if they check the
+        // product elsewhere, and every action below (upload/remove) will
+        // surface its own error normally.
+      },
+    )
+    return () => {
+      cancelled = true
+    }
+    // Only the identity of the product being edited should re-trigger this.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isEditing, businessId, product?.id])
+
+  useEffect(() => {
+    // Revoke every staged photo's object URL when the form unmounts —
+    // otherwise they leak for the life of the tab.
+    return () => {
+      for (const photo of stagedPhotos) URL.revokeObjectURL(photo.previewUrl)
+    }
+    // Intentionally only on unmount — revoking on every stagedPhotos
+    // change would invalidate previews still in use.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  async function handleFilesSelected(event: ChangeEvent<HTMLInputElement>) {
+    const files = Array.from(event.target.files ?? [])
+    event.target.value = ''
+    if (files.length === 0) return
+
+    setImageError(null)
+    for (const file of files) {
+      const typeOrSizeError = validateImageFile(file)
+      if (typeOrSizeError) {
+        setImageError(typeOrSizeError)
+        continue
+      }
+      let dimensions
+      try {
+        dimensions = await readImageDimensions(file)
+      } catch (err) {
+        setImageError(err instanceof Error ? err.message : 'Could not read this image.')
+        continue
+      }
+      if (dimensionTooSmall(dimensions)) {
+        setImageError(TOO_SMALL_ERROR)
+        continue
+      }
+      const warning = aspectRatioWarning(dimensions)
+
+      if (isEditing) {
+        setUploadingImage(true)
+        try {
+          const image = await uploadProductImage(businessId, product.id, file)
+          setExistingImages((prev) => [...prev, image])
+        } catch (err) {
+          setImageError(err instanceof ApiError ? err.message : 'Could not upload image.')
+        } finally {
+          setUploadingImage(false)
+        }
+      } else {
+        setStagedPhotos((prev) => [
+          ...prev,
+          {
+            id: `staged-${++stagedPhotoCounter}`,
+            file,
+            previewUrl: URL.createObjectURL(file),
+            warning,
+          },
+        ])
+      }
+    }
+  }
+
+  async function handleRemoveExisting(imageId: string) {
+    if (!isEditing) return
+    setRemovingImageId(imageId)
+    setImageError(null)
+    try {
+      await deleteProductImage(businessId, product.id, imageId)
+      setExistingImages((prev) => prev.filter((image) => image.id !== imageId))
+    } catch (err) {
+      setImageError(err instanceof ApiError ? err.message : 'Could not remove image.')
+    } finally {
+      setRemovingImageId(null)
+    }
+  }
+
+  function handleRemoveStaged(photoId: string) {
+    setStagedPhotos((prev) => {
+      const removed = prev.find((photo) => photo.id === photoId)
+      if (removed) URL.revokeObjectURL(removed.previewUrl)
+      return prev.filter((photo) => photo.id !== photoId)
+    })
+  }
+
+  async function handleMoveExisting(imageId: string, direction: -1 | 1) {
+    if (!isEditing) return
+    const index = existingImages.findIndex((image) => image.id === imageId)
+    const swapWith = index + direction
+    if (index === -1 || swapWith < 0 || swapWith >= existingImages.length) return
+
+    const reordered = [...existingImages]
+    ;[reordered[index], reordered[swapWith]] = [reordered[swapWith], reordered[index]]
+    setReorderingImages(true)
+    setImageError(null)
+    try {
+      const saved = await reorderProductImages(
+        businessId,
+        product.id,
+        reordered.map((image) => image.id),
+      )
+      setExistingImages(saved)
+    } catch (err) {
+      setImageError(err instanceof ApiError ? err.message : 'Could not reorder images.')
+    } finally {
+      setReorderingImages(false)
+    }
+  }
+
+  function handleMoveStaged(photoId: string, direction: -1 | 1) {
+    setStagedPhotos((prev) => {
+      const index = prev.findIndex((photo) => photo.id === photoId)
+      const swapWith = index + direction
+      if (index === -1 || swapWith < 0 || swapWith >= prev.length) return prev
+      const reordered = [...prev]
+      ;[reordered[index], reordered[swapWith]] = [reordered[swapWith], reordered[index]]
+      return reordered
+    })
+  }
+
   function handleUrlBlur() {
     if (!url) {
       setUrlFieldError(null)
@@ -81,6 +263,31 @@ export function ProductForm({
             url: url ? normalizeDestinationUrl(url) : undefined,
             campaignId,
           })
+
+      if (!isEditing && stagedPhotos.length > 0) {
+        // Sequential, not parallel — upload order determines display
+        // order (app/api/product_image.py's _next_position appends), so
+        // parallel requests could land in a different order than staged.
+        for (const photo of stagedPhotos) {
+          try {
+            await uploadProductImage(businessId, saved.id, photo.file)
+          } catch (err) {
+            // The product itself was already created successfully — a
+            // photo upload failing here shouldn't hide that. Surfaced as
+            // a form-level warning instead of blocking onSaved; the user
+            // can still add photos afterward via edit mode.
+            setFormError(
+              err instanceof ApiError
+                ? `Product saved, but a photo failed to upload: ${err.message}`
+                : 'Product saved, but a photo failed to upload.',
+            )
+            break
+          }
+        }
+        for (const photo of stagedPhotos) URL.revokeObjectURL(photo.previewUrl)
+        setStagedPhotos([])
+      }
+
       onSaved(saved)
       if (!isEditing) {
         setDescription('')
@@ -178,6 +385,107 @@ export function ProductForm({
         {urlFieldError && (
           <p className="form-error" role="alert">
             {urlFieldError}
+          </p>
+        )}
+      </div>
+      <div className="field">
+        <label htmlFor={`photos-${idSuffix}`}>
+          Product photos{' '}
+          <span className="field-hint">
+            (at least one is needed before an ad can be published — the first is
+            used as the primary image)
+          </span>
+        </label>
+        {(isEditing ? existingImages.length > 0 : stagedPhotos.length > 0) && (
+          <ul className="photo-manager" aria-label="Uploaded product photos">
+            {isEditing
+              ? existingImages.map((image, index) => (
+                  <li key={image.id} className="photo-thumb">
+                    {index === 0 && <span className="photo-primary-badge">Primary</span>}
+                    <img
+                      src={image.url}
+                      alt={`Product ${index + 1}`}
+                      width={96}
+                      height={96}
+                    />
+                    <div className="photo-thumb-actions">
+                      <button
+                        type="button"
+                        onClick={() => void handleMoveExisting(image.id, -1)}
+                        disabled={index === 0 || reorderingImages}
+                        aria-label="Move earlier"
+                      >
+                        ←
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => void handleMoveExisting(image.id, 1)}
+                        disabled={index === existingImages.length - 1 || reorderingImages}
+                        aria-label="Move later"
+                      >
+                        →
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => void handleRemoveExisting(image.id)}
+                        disabled={removingImageId === image.id}
+                      >
+                        {removingImageId === image.id ? 'Removing…' : 'Remove'}
+                      </button>
+                    </div>
+                    {image.aspectRatioWarning && (
+                      <p className="form-warning">{image.aspectRatioWarning}</p>
+                    )}
+                  </li>
+                ))
+              : stagedPhotos.map((photo, index) => (
+                  <li key={photo.id} className="photo-thumb">
+                    {index === 0 && <span className="photo-primary-badge">Primary</span>}
+                    <img
+                      src={photo.previewUrl}
+                      alt={`Product ${index + 1}`}
+                      width={96}
+                      height={96}
+                    />
+                    <div className="photo-thumb-actions">
+                      <button
+                        type="button"
+                        onClick={() => handleMoveStaged(photo.id, -1)}
+                        disabled={index === 0}
+                        aria-label="Move earlier"
+                      >
+                        ←
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleMoveStaged(photo.id, 1)}
+                        disabled={index === stagedPhotos.length - 1}
+                        aria-label="Move later"
+                      >
+                        →
+                      </button>
+                      <button type="button" onClick={() => handleRemoveStaged(photo.id)}>
+                        Remove
+                      </button>
+                    </div>
+                    {photo.warning && <p className="form-warning">{photo.warning}</p>}
+                  </li>
+                ))}
+          </ul>
+        )}
+        <input
+          ref={fileInputRef}
+          id={`photos-${idSuffix}`}
+          type="file"
+          accept="image/jpeg,image/png"
+          multiple
+          disabled={uploadingImage}
+          onChange={(event) => void handleFilesSelected(event)}
+        />
+        {uploadingImage && <p>Uploading…</p>}
+        {imageError && (
+          <p className="form-error" role="alert">
+            {imageError}
           </p>
         )}
       </div>

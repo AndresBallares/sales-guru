@@ -1,14 +1,5 @@
-import { useCallback, useEffect, useState, type ChangeEvent } from 'react'
-import {
-  ApiError,
-  deleteProductImage,
-  listCampaigns,
-  listProductImages,
-  listProducts,
-  uploadProductImage,
-  type Product,
-  type ProductImage,
-} from '../lib/api'
+import { useCallback, useEffect, useState } from 'react'
+import { ApiError, listCampaigns, listProducts, type Product } from '../lib/api'
 import { requiresDestinationUrl } from '../lib/urlValidation'
 import { ProductForm } from './ProductForm'
 
@@ -36,11 +27,6 @@ export function ProductsSection({
   // near-duplicate form.
   const [editingId, setEditingId] = useState<string | null>(null)
 
-  const [images, setImages] = useState<Record<string, ProductImage[]>>({})
-  const [uploadingId, setUploadingId] = useState<string | null>(null)
-  const [imageErrors, setImageErrors] = useState<Record<string, string>>({})
-  const [deletingImageId, setDeletingImageId] = useState<string | null>(null)
-
   const refresh = useCallback(async () => {
     setLoading(true)
     try {
@@ -48,13 +34,6 @@ export function ProductsSection({
       setProducts(loaded)
       onProductsChange?.(loaded)
       setListError(null)
-      const entries = await Promise.all(
-        loaded.map(
-          async (product) =>
-            [product.id, await listProductImages(businessId, product.id)] as const,
-        ),
-      )
-      setImages(Object.fromEntries(entries))
 
       // A campaign still missing a product (auto-attach's target) whose
       // objective needs a click-through destination makes the URL field
@@ -79,48 +58,6 @@ export function ProductsSection({
     void refresh()
   }, [refresh])
 
-  async function handleUpload(productId: string, event: ChangeEvent<HTMLInputElement>) {
-    const file = event.target.files?.[0]
-    event.target.value = ''
-    if (!file) return
-
-    setUploadingId(productId)
-    setImageErrors((prev) => ({ ...prev, [productId]: '' }))
-    try {
-      const image = await uploadProductImage(businessId, productId, file)
-      setImages((prev) => ({
-        ...prev,
-        [productId]: [...(prev[productId] ?? []), image],
-      }))
-    } catch (err) {
-      setImageErrors((prev) => ({
-        ...prev,
-        [productId]: err instanceof ApiError ? err.message : 'Could not upload image.',
-      }))
-    } finally {
-      setUploadingId(null)
-    }
-  }
-
-  async function handleDeleteImage(productId: string, imageId: string) {
-    setDeletingImageId(imageId)
-    setImageErrors((prev) => ({ ...prev, [productId]: '' }))
-    try {
-      await deleteProductImage(businessId, productId, imageId)
-      setImages((prev) => ({
-        ...prev,
-        [productId]: (prev[productId] ?? []).filter((img) => img.id !== imageId),
-      }))
-    } catch (err) {
-      setImageErrors((prev) => ({
-        ...prev,
-        [productId]: err instanceof ApiError ? err.message : 'Could not delete image.',
-      }))
-    } finally {
-      setDeletingImageId(null)
-    }
-  }
-
   return (
     <>
       <section>
@@ -136,8 +73,6 @@ export function ProductsSection({
         )}
         <ul>
           {products.map((product) => {
-            const productImages = images[product.id] ?? []
-            const imageError = imageErrors[product.id]
             if (editingId === product.id) {
               return (
                 <li key={product.id}>
@@ -156,44 +91,19 @@ export function ProductsSection({
             }
             return (
               <li key={product.id}>
+                {product.primaryImageUrl && (
+                  <img
+                    src={product.primaryImageUrl}
+                    alt={product.description}
+                    width={48}
+                    height={48}
+                    style={{ objectFit: 'cover', borderRadius: 6, marginRight: '0.5rem' }}
+                  />
+                )}
                 {product.description}{' '}
                 <button type="button" onClick={() => setEditingId(product.id)}>
                   Edit
                 </button>
-                <div>
-                  {productImages.map((image) => (
-                    <span key={image.id} style={{ display: 'inline-block' }}>
-                      <img
-                        src={image.url}
-                        alt={product.description}
-                        width={80}
-                        height={80}
-                        style={{ objectFit: 'cover' }}
-                      />
-                      <button
-                        type="button"
-                        onClick={() => void handleDeleteImage(product.id, image.id)}
-                        disabled={deletingImageId === image.id}
-                      >
-                        {deletingImageId === image.id ? 'Removing…' : 'Remove'}
-                      </button>
-                    </span>
-                  ))}
-                </div>
-                <label htmlFor={`upload-${product.id}`}>Add a photo</label>
-                <input
-                  id={`upload-${product.id}`}
-                  type="file"
-                  accept="image/jpeg,image/png,image/webp"
-                  disabled={uploadingId === product.id}
-                  onChange={(event) => void handleUpload(product.id, event)}
-                />
-                {uploadingId === product.id && <p>Uploading…</p>}
-                {imageError && (
-                  <p className="form-error" role="alert">
-                    {imageError}
-                  </p>
-                )}
               </li>
             )
           })}

@@ -77,6 +77,10 @@ class ProductResponse(CamelCaseModel):
     features: str | None
     benefits: str | None
     url: str | None
+    # The product's primary (position 0 — ProductImage.position) uploaded
+    # photo, if any — lets a campaign list show a thumbnail without a
+    # separate per-product images fetch (app/components/CampaignsSection).
+    primary_image_url: str | None = None
 
 
 class CheckUrlResponse(CamelCaseModel):

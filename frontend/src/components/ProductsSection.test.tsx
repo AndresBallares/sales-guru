@@ -37,6 +37,7 @@ describe('ProductsSection', () => {
         margin: null,
         features: null,
         benefits: null,
+        primaryImageUrl: null,
         url: null,
       },
     ])
@@ -81,6 +82,7 @@ describe('ProductsSection', () => {
           margin: null,
           features: null,
           benefits: null,
+          primaryImageUrl: null,
           url: null,
         },
       ])
@@ -91,6 +93,7 @@ describe('ProductsSection', () => {
       margin: null,
       features: null,
       benefits: null,
+      primaryImageUrl: null,
       url: null,
     })
     const user = userEvent.setup()
@@ -125,6 +128,7 @@ describe('ProductsSection', () => {
       margin: null,
       features: null,
       benefits: null,
+      primaryImageUrl: null,
       url: null,
     }
     mockedApi.listProducts.mockResolvedValueOnce([]).mockResolvedValueOnce([created])
@@ -220,6 +224,7 @@ describe('ProductsSection', () => {
       margin: null,
       features: null,
       benefits: null,
+      primaryImageUrl: null,
       url: null,
     })
     const user = userEvent.setup()
@@ -348,7 +353,7 @@ describe('ProductsSection', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent('Could not create product.')
   })
 
-  it('shows a product’s uploaded photos as thumbnails', async () => {
+  it('shows a product’s primary photo as a thumbnail', async () => {
     mockedApi.listProducts.mockResolvedValue([
       {
         id: 'prod-1',
@@ -357,11 +362,9 @@ describe('ProductsSection', () => {
         margin: null,
         features: null,
         benefits: null,
+        primaryImageUrl: 'http://localhost:8000/product-images/img-1',
         url: null,
       },
-    ])
-    mockedApi.listProductImages.mockResolvedValue([
-      { id: 'img-1', url: 'http://localhost:8000/product-images/img-1', createdAt: '2026-09-02T00:00:00Z' },
     ])
 
     render(<ProductsSection businessId="biz-1" />)
@@ -370,7 +373,7 @@ describe('ProductsSection', () => {
     expect(thumbnail).toHaveAttribute('src', 'http://localhost:8000/product-images/img-1')
   })
 
-  it('uploads a photo and shows the new thumbnail', async () => {
+  it('shows no thumbnail for a product with no photos yet', async () => {
     mockedApi.listProducts.mockResolvedValue([
       {
         id: 'prod-1',
@@ -379,164 +382,15 @@ describe('ProductsSection', () => {
         margin: null,
         features: null,
         benefits: null,
+        primaryImageUrl: null,
         url: null,
       },
     ])
-    mockedApi.uploadProductImage.mockResolvedValue({
-      id: 'img-1',
-      url: 'http://localhost:8000/product-images/img-1',
-      createdAt: '2026-09-02T00:00:00Z',
-    })
-    const user = userEvent.setup()
-    const file = new File(['fake image bytes'], 'ring.jpg', { type: 'image/jpeg' })
 
     render(<ProductsSection businessId="biz-1" />)
     await screen.findByText('Handmade wallets')
 
-    await user.upload(screen.getByLabelText('Add a photo'), file)
-
-    await waitFor(() =>
-      expect(mockedApi.uploadProductImage).toHaveBeenCalledWith('biz-1', 'prod-1', file),
-    )
-    expect(await screen.findByRole('img')).toHaveAttribute(
-      'src',
-      'http://localhost:8000/product-images/img-1',
-    )
-  })
-
-  it('shows an error if uploading a photo fails', async () => {
-    mockedApi.listProducts.mockResolvedValue([
-      {
-        id: 'prod-1',
-        description: 'Handmade wallets',
-        price: null,
-        margin: null,
-        features: null,
-        benefits: null,
-        url: null,
-      },
-    ])
-    mockedApi.uploadProductImage.mockRejectedValue(
-      new api.ApiError(400, 'Image exceeds the 5MB limit'),
-    )
-    const user = userEvent.setup()
-    const file = new File(['fake'], 'ring.jpg', { type: 'image/jpeg' })
-
-    render(<ProductsSection businessId="biz-1" />)
-    await screen.findByText('Handmade wallets')
-
-    await user.upload(screen.getByLabelText('Add a photo'), file)
-
-    expect(await screen.findByRole('alert')).toHaveTextContent('Image exceeds the 5MB limit')
-  })
-
-  it('falls back to a generic message for a non-ApiError upload failure', async () => {
-    mockedApi.listProducts.mockResolvedValue([
-      {
-        id: 'prod-1',
-        description: 'Handmade wallets',
-        price: null,
-        margin: null,
-        features: null,
-        benefits: null,
-        url: null,
-      },
-    ])
-    mockedApi.uploadProductImage.mockRejectedValue(new Error('network down'))
-    const user = userEvent.setup()
-    const file = new File(['fake'], 'ring.jpg', { type: 'image/jpeg' })
-
-    render(<ProductsSection businessId="biz-1" />)
-    await screen.findByText('Handmade wallets')
-
-    await user.upload(screen.getByLabelText('Add a photo'), file)
-
-    expect(await screen.findByRole('alert')).toHaveTextContent('Could not upload image.')
-  })
-
-  it('removes a photo when Remove is clicked', async () => {
-    mockedApi.listProducts.mockResolvedValue([
-      {
-        id: 'prod-1',
-        description: 'Handmade wallets',
-        price: null,
-        margin: null,
-        features: null,
-        benefits: null,
-        url: null,
-      },
-    ])
-    mockedApi.listProductImages.mockResolvedValue([
-      { id: 'img-1', url: 'http://localhost:8000/product-images/img-1', createdAt: '2026-09-02T00:00:00Z' },
-    ])
-    mockedApi.deleteProductImage.mockResolvedValue(undefined)
-    const user = userEvent.setup()
-
-    render(<ProductsSection businessId="biz-1" />)
-    await screen.findByRole('img')
-
-    await user.click(screen.getByRole('button', { name: 'Remove' }))
-
-    await waitFor(() =>
-      expect(mockedApi.deleteProductImage).toHaveBeenCalledWith('biz-1', 'prod-1', 'img-1'),
-    )
-    await waitFor(() => expect(screen.queryByRole('img')).not.toBeInTheDocument())
-  })
-
-  it('shows an error if removing a photo fails', async () => {
-    mockedApi.listProducts.mockResolvedValue([
-      {
-        id: 'prod-1',
-        description: 'Handmade wallets',
-        price: null,
-        margin: null,
-        features: null,
-        benefits: null,
-        url: null,
-      },
-    ])
-    mockedApi.listProductImages.mockResolvedValue([
-      { id: 'img-1', url: 'http://localhost:8000/product-images/img-1', createdAt: '2026-09-02T00:00:00Z' },
-    ])
-    mockedApi.deleteProductImage.mockRejectedValue(new api.ApiError(404, 'Product image not found'))
-    const user = userEvent.setup()
-
-    render(<ProductsSection businessId="biz-1" />)
-    await screen.findByRole('img')
-
-    await user.click(screen.getByRole('button', { name: 'Remove' }))
-
-    expect(await screen.findByRole('alert')).toHaveTextContent('Product image not found')
-  })
-
-  it('falls back to a generic message for a non-ApiError delete failure', async () => {
-    mockedApi.listProducts.mockResolvedValue([
-      {
-        id: 'prod-1',
-        description: 'Handmade wallets',
-        price: null,
-        margin: null,
-        features: null,
-        benefits: null,
-        url: null,
-      },
-    ])
-    mockedApi.listProductImages.mockResolvedValue([
-      {
-        id: 'img-1',
-        url: 'http://localhost:8000/product-images/img-1',
-        createdAt: '2026-09-02T00:00:00Z',
-      },
-    ])
-    mockedApi.deleteProductImage.mockRejectedValue(new Error('network down'))
-    const user = userEvent.setup()
-
-    render(<ProductsSection businessId="biz-1" />)
-    await screen.findByRole('img')
-
-    await user.click(screen.getByRole('button', { name: 'Remove' }))
-
-    expect(await screen.findByRole('alert')).toHaveTextContent('Could not delete image.')
+    expect(screen.queryByRole('img')).not.toBeInTheDocument()
   })
 
   it('edits a product in place and refreshes the list', async () => {
@@ -547,6 +401,7 @@ describe('ProductsSection', () => {
       margin: null,
       features: null,
       benefits: null,
+      primaryImageUrl: null,
       url: null,
     }
     const updated = { ...original, description: 'Handmade leather wallets' }
@@ -588,6 +443,7 @@ describe('ProductsSection', () => {
         margin: null,
         features: null,
         benefits: null,
+        primaryImageUrl: null,
         url: null,
       },
     ])
@@ -615,6 +471,7 @@ describe('ProductsSection', () => {
         margin: null,
         features: null,
         benefits: null,
+        primaryImageUrl: null,
         url: 'https://acme.example/wallets',
       },
     ])

@@ -332,6 +332,10 @@ beforeEach(() => {
     description: 'Family-run since 1985',
   })
   mockedApi.listProducts.mockResolvedValue([])
+  // Every ProductForm mount in edit mode (Part 1) loads its product's
+  // photos — a sane empty default so tests unrelated to images don't
+  // need to mock this themselves.
+  mockedApi.listProductImages.mockResolvedValue([])
   mockedApi.listAudiences.mockResolvedValue([])
   mockedApi.getStrategy.mockRejectedValue(new api.ApiError(404, 'Strategy not found'))
   mockedApi.listCreatives.mockResolvedValue([])
@@ -699,6 +703,7 @@ describe('CampaignsSection', () => {
       margin: null,
       features: null,
       benefits: null,
+      primaryImageUrl: null,
       url: null,
     })
     mockedApi.createAudience.mockResolvedValue({
@@ -837,6 +842,7 @@ describe('CampaignsSection', () => {
         margin: null,
         features: null,
         benefits: null,
+        primaryImageUrl: null,
         url: null,
       },
     ])
@@ -900,6 +906,7 @@ describe('CampaignsSection', () => {
         margin: null,
         features: null,
         benefits: null,
+        primaryImageUrl: null,
         url: null,
       },
     ])
@@ -927,6 +934,7 @@ describe('CampaignsSection', () => {
         margin: null,
         features: null,
         benefits: null,
+        primaryImageUrl: null,
         url: null,
       },
       {
@@ -936,6 +944,7 @@ describe('CampaignsSection', () => {
         margin: null,
         features: null,
         benefits: null,
+        primaryImageUrl: null,
         url: null,
       },
     ])
@@ -970,6 +979,7 @@ describe('CampaignsSection', () => {
         margin: null,
         features: null,
         benefits: null,
+        primaryImageUrl: null,
         url: null,
       },
     ])
@@ -980,6 +990,7 @@ describe('CampaignsSection', () => {
       margin: null,
       features: null,
       benefits: null,
+      primaryImageUrl: null,
       url: null,
     }
     mockedApi.createProduct.mockResolvedValue(created)
@@ -1019,6 +1030,7 @@ describe('CampaignsSection', () => {
         margin: null,
         features: null,
         benefits: null,
+        primaryImageUrl: null,
         url: null,
       },
     ])
@@ -1158,6 +1170,7 @@ describe('CampaignsSection', () => {
       margin: null,
       features: null,
       benefits: null,
+      primaryImageUrl: null,
       url: null,
     }
     mockedApi.listCampaigns.mockResolvedValue([
@@ -1204,6 +1217,7 @@ describe('CampaignsSection', () => {
         margin: null,
         features: null,
         benefits: null,
+        primaryImageUrl: null,
         url: null,
       },
     ])
@@ -1281,6 +1295,7 @@ describe('CampaignsSection', () => {
         margin: null,
         features: null,
         benefits: null,
+        primaryImageUrl: null,
         url: null,
       },
       {
@@ -1290,6 +1305,7 @@ describe('CampaignsSection', () => {
         margin: null,
         features: null,
         benefits: null,
+        primaryImageUrl: null,
         url: null,
       },
     ])

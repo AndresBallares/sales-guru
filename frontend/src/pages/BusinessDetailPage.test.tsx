@@ -165,6 +165,7 @@ describe('BusinessDetailPage', () => {
         margin: null,
         features: null,
         benefits: null,
+        primaryImageUrl: null,
         url: null,
       },
     ])
@@ -186,6 +187,7 @@ describe('BusinessDetailPage', () => {
         margin: null,
         features: null,
         benefits: null,
+        primaryImageUrl: null,
         url: null,
       },
     ])
@@ -219,6 +221,7 @@ describe('BusinessDetailPage', () => {
         margin: null,
         features: null,
         benefits: null,
+        primaryImageUrl: null,
         url: null,
       },
     ])

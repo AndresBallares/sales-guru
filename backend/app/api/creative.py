@@ -27,6 +27,7 @@ _PRODUCT_IMAGE_NOT_FOUND = "Product image not found"
 _CAMPAIGN_NOT_READY = (
     "Add a product and an audience to this campaign before attaching an image"
 )
+_NO_PRODUCT_PHOTO = "Add at least one product photo before selecting an ad to publish"
 
 
 def _to_response(
@@ -202,11 +203,13 @@ async def select_creative(
 
     If payload.product_image_id names a photo, that photo is attached as
     imageUrl, overriding whatever was there before — the user explicitly
-    chose it. Otherwise, if the campaign's product has at least one
-    uploaded photo (PRD.md §2 step 4) and this creative doesn't already
-    have an image, the product's oldest photo is attached instead — the
-    natural checkpoint moment before publish, and the point where the
-    frontend can show the user what image the ad will actually use.
+    chose it. Otherwise, if this creative doesn't already have an image,
+    the product's primary photo (position 0 — ProductImage.position,
+    "first = primary") is attached instead — the natural checkpoint
+    moment before publish, and the point where the frontend can show the
+    user what image the ad will actually use. A product with zero photos
+    at all is rejected outright (see the 428 below), not silently
+    selected image-less.
 
     Args:
         creative_id: The creative to select.
@@ -220,7 +223,11 @@ async def select_creative(
     Raises:
         HTTPException: 404 if no such creative exists on this campaign, or
             if product_image_id doesn't belong to the campaign's product.
-            428 if product_image_id is given but the campaign has no
+            428 if the campaign's product has no uploaded photo at all
+            (confirmed 2026-09-09 — publishing image-less is no longer
+            allowed; the frontend's own image-upload UI, now built into
+            ProductForm, is the natural place to send the user instead),
+            or if product_image_id is given but the campaign has no
             product and audience attached yet (app/services/
             campaign_readiness.py) — unreachable in the normal flow,
             since generating a strategy already requires readiness, but
@@ -233,6 +240,16 @@ async def select_creative(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail=_CREATIVE_NOT_FOUND
         )
+
+    if campaign.productId is not None:
+        photo_count = await db.productimage.count(
+            where={"productId": campaign.productId}
+        )
+        if photo_count == 0:
+            raise HTTPException(
+                status_code=status.HTTP_428_PRECONDITION_REQUIRED,
+                detail=_NO_PRODUCT_PHOTO,
+            )
 
     await db.creative.update_many(
         where={"campaignId": campaign.id, "NOT": [{"id": creative.id}]},
@@ -260,7 +277,7 @@ async def select_creative(
         update_data["imageUrl"] = product_image_url(product_image.id)
     elif creative.imageUrl is None and campaign.productId is not None:
         product_image = await db.productimage.find_first(
-            where={"productId": campaign.productId}, order={"createdAt": "asc"}
+            where={"productId": campaign.productId}, order={"position": "asc"}
         )
         if product_image is not None:
             update_data["imageUrl"] = product_image_url(product_image.id)
