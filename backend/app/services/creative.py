@@ -18,11 +18,26 @@ returns a canned, schema-valid batch instead when the flag is on. Exists
 so e2e tests can generate ad creatives with no real ANTHROPIC_API_KEY and
 no dependency on live model output, same reasoning as strategist.py's own
 fake mode.
+
+**Vision grounding (confirmed 2026-09-09):** when the product has a
+primary photo (app/api/product_image.py's get_primary_image), it's passed
+as an image content block alongside the text prompt — Claude is a vision-
+capable model already (no model swap needed), so headlines/descriptions
+can reflect what the product actually looks like, not just its written
+description. Fake mode is unaffected either way (see above).
 """
+
+from typing import Literal, cast
 
 import anthropic
 from anthropic import AsyncAnthropic
+from anthropic.types import (
+    ImageBlockParam,
+    MessageParam,
+    TextBlockParam,
+)
 from prisma.models import Business, Campaign, Creative, Product
+from prisma.models import ProductImage as PrismaProductImage
 
 from app.core.config import get_settings
 from app.schemas.creative import (
@@ -45,6 +60,13 @@ _MODEL = "claude-sonnet-5"
 _MAX_TOKENS = 8192
 _TOOL_NAME = "submit_creatives"
 _VARIANT_COUNT = 4
+
+# ProductImage.contentType is a plain str at the type level (validated at
+# upload time, app/schemas/product_image.py's ALLOWED_CONTENT_TYPES), but
+# Anthropic's Base64ImageSourceParam wants this exact Literal — the cast
+# at its one use site below is safe because every stored image was
+# already restricted to this same {jpeg, png} pair on the way in.
+_SupportedImageMediaType = Literal["image/jpeg", "image/png", "image/gif", "image/webp"]
 
 # Fake mode canned batch — built from the real GeneratedCreativeVariant
 # model (not a hand-written dict), so a schema change breaks this loudly
@@ -74,7 +96,11 @@ class CreativeAgentError(RuntimeError):
 
 
 def _build_prompt(
-    business: Business, product: Product | None, strategy: StrategyContent
+    business: Business,
+    product: Product | None,
+    strategy: StrategyContent,
+    *,
+    has_image: bool = False,
 ) -> str:
     """Build the grounding prompt from the business/product and its strategy.
 
@@ -83,6 +109,12 @@ def _build_prompt(
         product: The product being advertised, if one was selected.
         strategy: The campaign's already-generated marketing strategy —
             the creatives must be built around it, not invent a new angle.
+        has_image: Whether the product's primary photo is attached as an
+            image content block alongside this prompt (see
+            generate_creatives) — adds a line telling the model to
+            actually look at it, since a forced-tool-use call otherwise
+            gives it no explicit cue to attend to an earlier image block
+            over the text description.
 
     Returns:
         The prompt text.
@@ -108,6 +140,13 @@ def _build_prompt(
             lines.append(f"Features: {product.features}")
         if product.benefits:
             lines.append(f"Benefits: {product.benefits}")
+        if has_image:
+            lines.append(
+                "A photo of the product is attached above — ground the "
+                "creative angles in what it actually looks like (materials, "
+                "color, style), in addition to the description and "
+                "features/benefits given here."
+            )
     else:
         lines += ["", "No specific product was selected for this campaign."]
 
@@ -138,6 +177,7 @@ async def generate_creatives(
     business: Business,
     product: Product | None,
     strategy: StrategyContent,
+    primary_image: PrismaProductImage | None = None,
 ) -> list[GeneratedCreativeVariant]:
     """Call the Creative Agent and return a batch of ad creative variants.
 
@@ -145,6 +185,13 @@ async def generate_creatives(
         business: The business the creatives are for.
         product: The product being advertised, if one was selected.
         strategy: The campaign's already-generated marketing strategy.
+        primary_image: The product's primary uploaded photo (app/api/
+            product_image.py's get_primary_image), if it has one. Passed
+            to the model as a vision input alongside the text prompt —
+            Claude already reads images, so no model change is needed for
+            this — grounding headlines/descriptions in what the product
+            actually looks like, not just its written description.
+            Ignored in fake mode (see the module docstring).
 
     Returns:
         Exactly four generated creative variants (Creative A-D).
@@ -160,7 +207,26 @@ async def generate_creatives(
         raise CreativeAgentError("ANTHROPIC_API_KEY is not configured")
 
     client = AsyncAnthropic(api_key=settings.anthropic_api_key)
-    prompt = _build_prompt(business, product, strategy)
+    has_image = primary_image is not None
+    prompt = _build_prompt(business, product, strategy, has_image=has_image)
+
+    content: str | list[ImageBlockParam | TextBlockParam]
+    if primary_image is not None:
+        media_type = cast(_SupportedImageMediaType, primary_image.contentType)
+        content = [
+            {
+                "type": "image",
+                "source": {
+                    "type": "base64",
+                    "media_type": media_type,
+                    "data": str(primary_image.data),
+                },
+            },
+            {"type": "text", "text": prompt},
+        ]
+    else:
+        content = prompt
+    message: MessageParam = {"role": "user", "content": content}
 
     try:
         response = await client.messages.create(
@@ -174,7 +240,7 @@ async def generate_creatives(
                 }
             ],
             tool_choice={"type": "tool", "name": _TOOL_NAME},
-            messages=[{"role": "user", "content": prompt}],
+            messages=[message],
         )
     except anthropic.AnthropicError as exc:
         raise CreativeAgentError(f"Anthropic API call failed: {exc}") from exc

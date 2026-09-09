@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from prisma.models import Business, Campaign, Creative, Product
 from prisma.types import CreativeUpdateInput
 
-from app.api.product_image import product_image_url
+from app.api.product_image import get_primary_image, product_image_url
 from app.core.authz import get_owned_campaign
 from app.core.db import db
 from app.schemas.creative import CreativeResponse, SelectCreativeRequest
@@ -100,6 +100,12 @@ async def create_creatives(
 ) -> list[CreativeResponse]:
     """Generate a batch of ad creatives for a campaign, replacing any existing ones.
 
+    If the campaign's product has an uploaded photo, its primary one is
+    passed to the Creative Agent as a vision input alongside the text
+    grounding (app/services/creative.py's generate_creatives) — headlines
+    and descriptions reflect what the product actually looks like, not
+    just its written description.
+
     Args:
         campaign: The campaign, resolved and ownership-checked by
             get_owned_campaign.
@@ -125,12 +131,14 @@ async def create_creatives(
         if campaign.productId
         else None
     )
+    primary_image = await get_primary_image(product.id) if product is not None else None
 
     try:
         variants = await generate_creatives(
             business=business,
             product=product,
             strategy=StrategyContentAdapter.validate_json(strategy.content),
+            primary_image=primary_image,
         )
     except CreativeAgentError as exc:
         raise HTTPException(

@@ -19,7 +19,9 @@ from app.schemas.strategy import (
     TargetAudience,
 )
 from app.services import creative
+from prisma import Base64
 from prisma.models import Business, Campaign, Creative, Product
+from prisma.models import ProductImage as PrismaProductImage
 
 _ONE_VARIANT: dict[str, Any] = {
     "headline": "Emeralds With a Story",
@@ -81,6 +83,16 @@ def _fake_campaign(**overrides: object) -> Campaign:
     defaults: dict[str, object] = {"productId": "product-1"}
     defaults.update(overrides)
     return cast(Campaign, SimpleNamespace(**defaults))
+
+
+def _fake_product_image(**overrides: object) -> PrismaProductImage:
+    defaults: dict[str, object] = {
+        "id": "img-1",
+        "contentType": "image/jpeg",
+        "data": Base64.encode(b"fake jpeg bytes"),
+    }
+    defaults.update(overrides)
+    return cast(PrismaProductImage, SimpleNamespace(**defaults))
 
 
 def _fake_creative(**overrides: object) -> Creative:
@@ -147,6 +159,36 @@ def test_build_prompt_handles_no_product() -> None:
     prompt = creative._build_prompt(_fake_business(), None, _FAKE_STRATEGY)
 
     assert "No specific product was selected" in prompt
+
+
+def test_build_prompt_notes_the_attached_image_when_has_image_is_true() -> None:
+    """has_image=True adds an explicit cue to actually look at the photo —
+    a forced tool-use call gives the model no other reason to attend to
+    an image block over the text description (confirmed 2026-09-09)."""
+    prompt = creative._build_prompt(
+        _fake_business(), _fake_product(), _FAKE_STRATEGY, has_image=True
+    )
+
+    assert "photo of the product is attached" in prompt
+
+
+def test_build_prompt_omits_the_image_note_by_default() -> None:
+    """has_image defaults to False — no dangling image reference when
+    generate_creatives is called with no primary_image."""
+    prompt = creative._build_prompt(_fake_business(), _fake_product(), _FAKE_STRATEGY)
+
+    assert "photo of the product is attached" not in prompt
+
+
+def test_build_prompt_omits_the_image_note_with_no_product() -> None:
+    """has_image is meaningless with no product selected at all — the
+    image note is nested under the product block, not appended
+    unconditionally."""
+    prompt = creative._build_prompt(
+        _fake_business(), None, _FAKE_STRATEGY, has_image=True
+    )
+
+    assert "photo of the product is attached" not in prompt
 
 
 def test_build_prompt_handles_no_problem_or_desire() -> None:
@@ -223,6 +265,94 @@ async def test_generate_creatives_returns_four_variants(
     assert result[0].headline == "Emeralds With a Story"
     assert result[0].cta == "SHOP_NOW"
     assert result[0].video_prompt
+
+
+@pytest.mark.asyncio
+async def test_generate_creatives_sends_the_primary_image_as_a_vision_block(
+    anthropic_api_key: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """primary_image is sent as an image content block ahead of the text
+    prompt, not merged into the text or dropped — the model needs it as
+    an actual vision input to ground creatives in what the product looks
+    like (confirmed 2026-09-09)."""
+    create = _mock_client_returning(
+        monkeypatch, [SimpleNamespace(type="tool_use", input=_VALID_TOOL_INPUT)]
+    )
+    image = _fake_product_image(
+        contentType="image/png", data=Base64.encode(b"png bytes")
+    )
+
+    await creative.generate_creatives(
+        business=_fake_business(),
+        product=_fake_product(),
+        strategy=_FAKE_STRATEGY,
+        primary_image=image,
+    )
+
+    sent_messages = create.call_args.kwargs["messages"]
+    assert len(sent_messages) == 1
+    content = sent_messages[0]["content"]
+    assert isinstance(content, list)
+    assert len(content) == 2
+    image_block, text_block = content
+    assert image_block == {
+        "type": "image",
+        "source": {
+            "type": "base64",
+            "media_type": "image/png",
+            "data": str(Base64.encode(b"png bytes")),
+        },
+    }
+    assert text_block["type"] == "text"
+    assert "photo of the product is attached" in text_block["text"]
+
+
+@pytest.mark.asyncio
+async def test_generate_creatives_sends_plain_text_with_no_primary_image(
+    anthropic_api_key: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """No primary_image (the default) keeps sending a bare text prompt,
+    same shape as before this feature existed — no empty/None image block,
+    no behavior change for a product with no photos."""
+    create = _mock_client_returning(
+        monkeypatch, [SimpleNamespace(type="tool_use", input=_VALID_TOOL_INPUT)]
+    )
+
+    await creative.generate_creatives(
+        business=_fake_business(), product=_fake_product(), strategy=_FAKE_STRATEGY
+    )
+
+    sent_content = create.call_args.kwargs["messages"][0]["content"]
+    assert isinstance(sent_content, str)
+    assert "photo of the product is attached" not in sent_content
+
+
+@pytest.mark.asyncio
+async def test_generate_creatives_ignores_primary_image_in_fake_llm_mode(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Fake mode returns the canned batch without even looking at
+    primary_image — accepting the param is enough, per the spec ("no
+    change needed beyond accepting the image param")."""
+    monkeypatch.setenv("FAKE_LLM", "true")
+    get_settings.cache_clear()
+
+    def _forbidden(**_kwargs: object) -> None:
+        raise AssertionError("must not call the real Anthropic API in fake mode")
+
+    monkeypatch.setattr(creative, "AsyncAnthropic", _forbidden)
+    try:
+        result = await creative.generate_creatives(
+            business=_fake_business(),
+            product=_fake_product(),
+            strategy=_FAKE_STRATEGY,
+            primary_image=_fake_product_image(),
+        )
+
+        assert len(result) == 4
+        assert result[0].headline == "Fake headline A"
+    finally:
+        get_settings.cache_clear()
 
 
 @pytest.mark.asyncio
