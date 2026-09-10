@@ -37,6 +37,7 @@ vi.mock('../lib/api', async (importOriginal) => {
     approveCampaign: vi.fn<typeof actual.approveCampaign>(),
     publishCampaign: vi.fn<typeof actual.publishCampaign>(),
     pauseCampaign: vi.fn<typeof actual.pauseCampaign>(),
+    deleteCampaign: vi.fn<typeof actual.deleteCampaign>(),
     listMetrics: vi.fn<typeof actual.listMetrics>(),
     refreshMetrics: vi.fn<typeof actual.refreshMetrics>(),
     createRecommendation: vi.fn<typeof actual.createRecommendation>(),
@@ -2394,6 +2395,71 @@ describe('CampaignsSection', () => {
     await screen.findByText(/Live on Meta/)
 
     expect(screen.queryByText(/Daily spend above/)).not.toBeInTheDocument()
+  })
+
+  it('deletes a never-published campaign and drops it from the list', async () => {
+    mockedApi.listCampaigns.mockResolvedValue([draftCampaignFixture])
+    mockedApi.deleteCampaign.mockResolvedValue(undefined)
+    const user = userEvent.setup()
+
+    renderCampaigns(<CampaignsSection businessId="biz-1" />)
+    await screen.findByRole('button', { name: 'Delete campaign' })
+
+    await user.click(screen.getByRole('button', { name: 'Delete campaign' }))
+
+    expect(mockedApi.deleteCampaign).toHaveBeenCalledWith('biz-1', 'camp-1')
+    await waitFor(() =>
+      expect(screen.queryByRole('button', { name: 'Delete campaign' })).not.toBeInTheDocument(),
+    )
+  })
+
+  it('shows an error if deleting fails', async () => {
+    mockedApi.listCampaigns.mockResolvedValue([draftCampaignFixture])
+    mockedApi.deleteCampaign.mockRejectedValue(
+      new api.ApiError(400, "This campaign has already been published and can't be deleted"),
+    )
+    const user = userEvent.setup()
+
+    renderCampaigns(<CampaignsSection businessId="biz-1" />)
+    await screen.findByRole('button', { name: 'Delete campaign' })
+
+    await user.click(screen.getByRole('button', { name: 'Delete campaign' }))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      "This campaign has already been published and can't be deleted",
+    )
+    expect(screen.getByRole('button', { name: 'Delete campaign' })).toBeInTheDocument()
+  })
+
+  it('falls back to a generic message for a non-ApiError delete failure', async () => {
+    mockedApi.listCampaigns.mockResolvedValue([draftCampaignFixture])
+    mockedApi.deleteCampaign.mockRejectedValue(new Error('network down'))
+    const user = userEvent.setup()
+
+    renderCampaigns(<CampaignsSection businessId="biz-1" />)
+    await screen.findByRole('button', { name: 'Delete campaign' })
+
+    await user.click(screen.getByRole('button', { name: 'Delete campaign' }))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Could not delete campaign.')
+  })
+
+  it('hides the delete button for a published campaign and explains why', async () => {
+    mockedApi.listCampaigns.mockResolvedValue([
+      {
+        ...draftCampaignFixture,
+        status: 'LIVE',
+        metaCampaignId: 'meta_campaign_1',
+      },
+    ])
+
+    renderCampaigns(<CampaignsSection businessId="biz-1" />)
+    await screen.findByText(/Live on Meta/)
+
+    expect(screen.queryByRole('button', { name: 'Delete campaign' })).not.toBeInTheDocument()
+    expect(
+      screen.getByText(/This campaign has been published, so it can't be deleted/),
+    ).toBeInTheDocument()
   })
 
   it('retries publishing a failed campaign without re-approving', async () => {

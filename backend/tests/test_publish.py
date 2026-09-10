@@ -1280,3 +1280,18 @@ def test_pause_400s_once_already_paused(
     response = client.post(f"/businesses/{business_id}/campaigns/{campaign_id}/pause")
 
     assert response.status_code == 400
+
+
+def test_delete_400s_once_the_campaign_has_been_published(
+    client: TestClient, mock_services: dict[str, AsyncMock]
+) -> None:
+    """A campaign that's ever gone LIVE can't be deleted, even once
+    paused afterward — its metrics feed the Optimizer."""
+    business_id, campaign_id = _ready_campaign(client)
+    client.post(f"/businesses/{business_id}/campaigns/{campaign_id}/publish")
+    client.post(f"/businesses/{business_id}/campaigns/{campaign_id}/pause")
+
+    response = client.delete(f"/businesses/{business_id}/campaigns/{campaign_id}")
+
+    assert response.status_code == 400
+    assert "published" in response.json()["detail"].lower()

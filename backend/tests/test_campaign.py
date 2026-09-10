@@ -721,6 +721,88 @@ def test_update_campaign_404s_for_another_users_campaign(client: TestClient) -> 
     assert response.status_code == 404
 
 
+def test_delete_campaign_requires_a_session(client: TestClient) -> None:
+    """Deleting with no session cookie returns 401."""
+    response = client.delete("/businesses/some-id/campaigns/some-id")
+
+    assert response.status_code == 401
+
+
+def test_delete_campaign_404s_for_a_nonexistent_campaign(client: TestClient) -> None:
+    """Deleting a nonexistent campaign returns 404."""
+    _signed_up_client(client)
+    business_id = _create_business(client)
+
+    response = client.delete(f"/businesses/{business_id}/campaigns/does-not-exist")
+
+    assert response.status_code == 404
+
+
+def test_delete_campaign_404s_for_another_users_campaign(client: TestClient) -> None:
+    """A user can't delete a campaign they don't own."""
+    _signed_up_client(client, email="alice@example.com")
+    business_id = _create_business(client)
+    campaign_id = client.post(
+        f"/businesses/{business_id}/campaigns", json={"objective": "SALES"}
+    ).json()["id"]
+    client.post("/auth/logout")
+
+    _signed_up_client(client, email="bob@example.com")
+    response = client.delete(f"/businesses/{business_id}/campaigns/{campaign_id}")
+
+    assert response.status_code == 404
+
+
+def test_delete_campaign_removes_a_draft_campaign(client: TestClient) -> None:
+    """A never-published DRAFT campaign can be deleted outright."""
+    _signed_up_client(client)
+    business_id = _create_business(client)
+    campaign_id = client.post(
+        f"/businesses/{business_id}/campaigns", json={"objective": "SALES"}
+    ).json()["id"]
+
+    response = client.delete(f"/businesses/{business_id}/campaigns/{campaign_id}")
+
+    assert response.status_code == 204
+    list_response = client.get(f"/businesses/{business_id}/campaigns")
+    assert campaign_id not in [c["id"] for c in list_response.json()]
+
+
+@pytest.mark.asyncio
+async def test_delete_campaign_also_removes_its_strategy_and_creatives(
+    client: TestClient,
+) -> None:
+    """Deleting a campaign that already has a Strategy/Creative doesn't
+    500 on the foreign key — both get cleaned up first, same pattern as
+    the regenerate-strategy/regenerate-ads endpoints."""
+    _signed_up_client(client)
+    business_id = _create_business(client)
+    campaign_id = client.post(
+        f"/businesses/{business_id}/campaigns", json={"objective": "SALES"}
+    ).json()["id"]
+
+    seeder = Prisma()
+    await seeder.connect()
+    try:
+        await seeder.strategy.create(data={"campaignId": campaign_id, "content": "{}"})
+        await seeder.creative.create(
+            data={
+                "campaignId": campaign_id,
+                "headline": "Headline",
+                "bodyText": "Body",
+                "description": "Description",
+                "cta": "SHOP_NOW",
+                "creativeAngle": "angle",
+            }
+        )
+    finally:
+        await seeder.disconnect()
+
+    response = client.delete(f"/businesses/{business_id}/campaigns/{campaign_id}")
+
+    assert response.status_code == 204
+
+
 @pytest.mark.asyncio
 async def test_campaign_response_round_trips_every_campaign_status(
     client: TestClient,

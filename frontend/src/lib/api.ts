@@ -431,6 +431,12 @@ export function pauseCampaign(businessId: string, campaignId: string): Promise<C
   })
 }
 
+export function deleteCampaign(businessId: string, campaignId: string): Promise<void> {
+  return request<void>(`/businesses/${businessId}/campaigns/${campaignId}`, {
+    method: 'DELETE',
+  })
+}
+
 export interface TargetLocation {
   city: string | null
   region: string | null
