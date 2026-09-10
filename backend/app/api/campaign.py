@@ -43,6 +43,10 @@ _NOT_READY_FOR_APPROVAL = "Select an ad creative before approving this campaign"
 _NOT_READY_FOR_PUBLISH = "Approve this campaign before publishing"
 _CAMPAIGN_NOT_READY = "Add a product and an audience to this campaign before publishing"
 _NOT_LIVE_TO_PAUSE = "Only a live campaign can be paused"
+_ALREADY_PUBLISHED = (
+    "This campaign has already been published and can't be deleted — its "
+    "data is used to optimize future campaigns"
+)
 _META_NOT_CONNECTED = (
     "Connect Meta Ads and select an ad account and Page before publishing"
 )
@@ -357,6 +361,39 @@ async def update_campaign(
         result = await advance_to_ready_if_complete(maybe_updated)
 
     return await _to_response(result)
+
+
+@router.delete("/{campaign_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_campaign(
+    campaign: Campaign = Depends(get_owned_campaign),
+) -> None:
+    """Delete a campaign that has never been published to Meta.
+
+    Blocked once the campaign has ever gone LIVE (metaCampaignId set) —
+    from that point on it can carry real performance data
+    (Metric/OptimizationRecommendation/TestEvaluation rows, written only
+    for LIVE campaigns by app/services/optimization_jobs.py) that the
+    Optimizer uses to inform future campaigns, so silently erasing it
+    would throw that history away. A campaign that never published has
+    none of those rows yet, so this one check is sufficient — no need to
+    separately delete AdSet/Metric/etc. rows below, only its own
+    Strategy/Creative rows (regenerable, never load-bearing on their own).
+
+    Args:
+        campaign: The campaign, resolved and ownership-checked by
+            get_owned_campaign.
+
+    Raises:
+        HTTPException: 400 if the campaign has ever been published.
+    """
+    if campaign.metaCampaignId is not None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=_ALREADY_PUBLISHED
+        )
+
+    await db.creative.delete_many(where={"campaignId": campaign.id})
+    await db.strategy.delete_many(where={"campaignId": campaign.id})
+    await db.campaign.delete(where={"id": campaign.id})
 
 
 @router.post("/{campaign_id}/approve", response_model=CampaignResponse)

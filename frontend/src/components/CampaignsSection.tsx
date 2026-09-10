@@ -9,6 +9,7 @@ import {
   createRecommendation,
   createStrategy,
   createTestEvaluation,
+  deleteCampaign,
   getBusiness,
   getOptions,
   getStrategy,
@@ -156,6 +157,8 @@ export function CampaignsSection({
   const [approveErrors, setApproveErrors] = useState<Record<string, string>>({})
   const [pausingId, setPausingId] = useState<string | null>(null)
   const [pauseErrors, setPauseErrors] = useState<Record<string, string>>({})
+  const [deletingId, setDeletingId] = useState<string | null>(null)
+  const [deleteErrors, setDeleteErrors] = useState<Record<string, string>>({})
 
   const [metrics, setMetrics] = useState<Record<string, Metric[]>>({})
   const [refreshingMetricsId, setRefreshingMetricsId] = useState<string | null>(null)
@@ -547,6 +550,30 @@ export function CampaignsSection({
     }
   }
 
+  // No confirmation dialog here, same reasoning as handlePause above —
+  // this is itself the explicit action, and the backend already blocks
+  // it outright once the campaign has ever gone live (metaCampaignId
+  // set), so there's no valuable data this could silently destroy.
+  async function handleDelete(campaignId: string) {
+    setDeletingId(campaignId)
+    setDeleteErrors((prev) => ({ ...prev, [campaignId]: '' }))
+    try {
+      await deleteCampaign(businessId, campaignId)
+      setCampaigns((prev) => {
+        const next = prev.filter((c) => c.id !== campaignId)
+        onCampaignsChange?.(next)
+        return next
+      })
+    } catch (err) {
+      setDeleteErrors((prev) => ({
+        ...prev,
+        [campaignId]: err instanceof ApiError ? err.message : 'Could not delete campaign.',
+      }))
+    } finally {
+      setDeletingId(null)
+    }
+  }
+
   async function handleRefreshMetrics(campaignId: string) {
     setRefreshingMetricsId(campaignId)
     setMetricErrors((prev) => ({ ...prev, [campaignId]: '' }))
@@ -728,6 +755,23 @@ export function CampaignsSection({
                       </>
                     )}
                   </p>
+                )}
+                {campaign.metaCampaignId === null ? (
+                  <button
+                    type="button"
+                    onClick={() => void handleDelete(campaign.id)}
+                    disabled={deletingId === campaign.id}
+                  >
+                    {deletingId === campaign.id ? 'Deleting…' : 'Delete campaign'}
+                  </button>
+                ) : (
+                  <p>
+                    This campaign has been published, so it can't be deleted — its results
+                    are used to optimize future campaigns.
+                  </p>
+                )}
+                {deleteErrors[campaign.id] && (
+                  <p role="alert">{deleteErrors[campaign.id]}</p>
                 )}
                 <div
                   className="campaign-block"
