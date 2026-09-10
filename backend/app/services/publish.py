@@ -386,6 +386,7 @@ async def _resolve_image_hash(
         access_token=access_token,
         ad_account_id=ad_account_id,
         image_data=product_image.data.decode(),
+        content_type=product_image.contentType,
     )
 
 
