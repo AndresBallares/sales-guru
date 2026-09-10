@@ -296,13 +296,23 @@ export function ProductForm({
             campaignId,
           })
 
+      // saved.primaryImageUrl is necessarily null here — a fresh product
+      // can't have a photo before its id exists, so createProduct's own
+      // response never carries one. Track the first successfully
+      // uploaded photo's URL (position 0 = primary, matching the
+      // backend's own append-order convention) so the object handed to
+      // onSaved below reflects reality — every caller (ProductsSection,
+      // CampaignsSection, NewCampaignFlow) otherwise shows a stale,
+      // photo-less product until its own next full data reload.
+      let primaryImageUrl = saved.primaryImageUrl
       if (!isEditing && stagedPhotos.length > 0) {
         // Sequential, not parallel — upload order determines display
         // order (app/api/product_image.py's _next_position appends), so
         // parallel requests could land in a different order than staged.
-        for (const photo of stagedPhotos) {
+        for (const [index, photo] of stagedPhotos.entries()) {
           try {
-            await uploadProductImage(businessId, saved.id, photo.file)
+            const image = await uploadProductImage(businessId, saved.id, photo.file)
+            if (index === 0) primaryImageUrl = image.url
           } catch (err) {
             // The product itself was already created successfully — a
             // photo upload failing here shouldn't hide that. Surfaced as
@@ -320,7 +330,7 @@ export function ProductForm({
         setStagedPhotos([])
       }
 
-      onSaved(saved)
+      onSaved({ ...saved, primaryImageUrl })
       if (!isEditing) {
         setDescription('')
         setPrice('')

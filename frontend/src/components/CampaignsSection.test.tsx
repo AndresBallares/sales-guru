@@ -1020,6 +1020,46 @@ describe('CampaignsSection', () => {
     )
   })
 
+  it('shows the new product\'s thumbnail immediately, no reload needed', async () => {
+    // Regression coverage (confirmed 2026-09-10): creating a brand new
+    // product for a campaign only patched the campaign's own productId
+    // (handleAttachToCampaign) — the section's own products list, which
+    // the thumbnail is looked up from, never learned the new product
+    // existed at all, so the thumbnail stayed blank until an unrelated
+    // full page reload happened to re-fetch it.
+    mockedApi.listCampaigns.mockResolvedValue([draftCampaignFixture])
+    mockedApi.listProducts.mockResolvedValue([])
+    const created = {
+      id: 'prod-2',
+      description: 'Leather belts',
+      price: null,
+      margin: null,
+      features: null,
+      benefits: null,
+      primaryImageUrl: 'http://localhost:8000/product-images/img-1',
+      url: null,
+    }
+    mockedApi.createProduct.mockResolvedValue(created)
+    mockedApi.updateCampaign.mockResolvedValue({
+      ...draftCampaignFixture,
+      productId: 'prod-2',
+    })
+    const user = userEvent.setup()
+
+    renderCampaigns(<CampaignsSection businessId="biz-1" />)
+    await screen.findByLabelText('Product for camp-1')
+    expect(screen.queryByRole('img')).not.toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'Attach a product' }))
+    await user.type(screen.getByLabelText('What do you sell?'), 'Leather belts')
+    await user.click(screen.getByRole('button', { name: 'Add product' }))
+
+    expect(await screen.findByRole('img')).toHaveAttribute(
+      'src',
+      'http://localhost:8000/product-images/img-1',
+    )
+  })
+
   it('toggles the product picker back to the create form via "Add a new product instead"', async () => {
     mockedApi.listCampaigns.mockResolvedValue([draftCampaignFixture])
     mockedApi.listProducts.mockResolvedValue([

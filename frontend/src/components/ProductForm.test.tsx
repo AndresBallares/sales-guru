@@ -181,7 +181,7 @@ describe('ProductForm — create mode photo staging', () => {
     expect(within(restored[0]).getByText('Primary')).toBeInTheDocument()
   })
 
-  it('uploads staged photos in order after the product is created', async () => {
+  it('uploads staged photos in order, reporting the primary photo\'s URL on save', async () => {
     mockedApi.createProduct.mockResolvedValue(product)
     mockedApi.uploadProductImage.mockResolvedValue({
       id: 'img-1',
@@ -199,7 +199,18 @@ describe('ProductForm — create mode photo staging', () => {
     await screen.findAllByRole('img')
     await user.click(screen.getByRole('button', { name: 'Add product' }))
 
-    await waitFor(() => expect(onSaved).toHaveBeenCalledWith(product))
+    // createProduct's own response necessarily has no photo yet (the
+    // product doesn't exist until this call returns) — onSaved must
+    // reflect the photo that was just uploaded afterward instead of
+    // handing the caller a stale, photo-less object (confirmed
+    // 2026-09-10 — this exact gap left campaign-list thumbnails blank
+    // until an unrelated full reload).
+    await waitFor(() =>
+      expect(onSaved).toHaveBeenCalledWith({
+        ...product,
+        primaryImageUrl: 'http://localhost:8000/product-images/img-1',
+      }),
+    )
     expect(mockedApi.uploadProductImage).toHaveBeenNthCalledWith(1, 'biz-1', 'prod-1', fileA)
     expect(mockedApi.uploadProductImage).toHaveBeenNthCalledWith(2, 'biz-1', 'prod-1', fileB)
   })
