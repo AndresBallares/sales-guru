@@ -363,74 +363,6 @@ export function ProductForm({
         />
       </div>
       <div className="field">
-        <label htmlFor={`price-${idSuffix}`}>Price</label>
-        <input
-          id={`price-${idSuffix}`}
-          type="number"
-          step="0.01"
-          value={price}
-          onChange={(event) => setPrice(event.target.value)}
-        />
-      </div>
-      <div className="field">
-        <label htmlFor={`margin-${idSuffix}`}>Margin (as a fraction, e.g. 0.4 for 40%)</label>
-        <input
-          id={`margin-${idSuffix}`}
-          type="number"
-          step="0.01"
-          min="0"
-          max="1"
-          placeholder="0.40"
-          value={margin}
-          onChange={(event) => setMargin(event.target.value)}
-        />
-      </div>
-      <div className="field">
-        <label htmlFor={`features-${idSuffix}`}>Features</label>
-        <textarea
-          id={`features-${idSuffix}`}
-          value={features}
-          onChange={(event) => setFeatures(event.target.value)}
-        />
-      </div>
-      <div className="field">
-        <label htmlFor={`benefits-${idSuffix}`}>Benefits</label>
-        <textarea
-          id={`benefits-${idSuffix}`}
-          value={benefits}
-          onChange={(event) => setBenefits(event.target.value)}
-        />
-      </div>
-      <div className="field">
-        <label htmlFor={`url-${idSuffix}`}>
-          URL{' '}
-          <span className="field-hint">
-            (destination link the ad's CTA button takes people to when clicked
-            {urlRequired
-              ? ' — required for a Sales or Traffic campaign'
-              : ' — optional for brand awareness'}
-            )
-          </span>
-        </label>
-        <input
-          id={`url-${idSuffix}`}
-          type="text"
-          required={urlRequired}
-          value={url}
-          onChange={(event) => {
-            setUrl(event.target.value)
-            setUrlFieldError(null)
-          }}
-          onBlur={handleUrlBlur}
-          aria-invalid={urlFieldError ? true : undefined}
-        />
-        {urlFieldError && (
-          <p className="form-error" role="alert">
-            {urlFieldError}
-          </p>
-        )}
-      </div>
-      <div className="field">
         <label htmlFor={`photos-${idSuffix}`}>
           Product photos{' '}
           <span className="field-hint">
@@ -562,6 +494,74 @@ export function ProductForm({
             {imageError}
           </p>
         )}
+      </div>
+      <div className="field">
+        <label htmlFor={`url-${idSuffix}`}>
+          URL{' '}
+          <span className="field-hint">
+            (destination link the ad's CTA button takes people to when clicked
+            {urlRequired
+              ? ' — required for a Sales or Traffic campaign'
+              : ' — optional for brand awareness'}
+            )
+          </span>
+        </label>
+        <input
+          id={`url-${idSuffix}`}
+          type="text"
+          required={urlRequired}
+          value={url}
+          onChange={(event) => {
+            setUrl(event.target.value)
+            setUrlFieldError(null)
+          }}
+          onBlur={handleUrlBlur}
+          aria-invalid={urlFieldError ? true : undefined}
+        />
+        {urlFieldError && (
+          <p className="form-error" role="alert">
+            {urlFieldError}
+          </p>
+        )}
+      </div>
+      <div className="field">
+        <label htmlFor={`price-${idSuffix}`}>Price</label>
+        <input
+          id={`price-${idSuffix}`}
+          type="number"
+          step="0.01"
+          value={price}
+          onChange={(event) => setPrice(event.target.value)}
+        />
+      </div>
+      <div className="field">
+        <label htmlFor={`margin-${idSuffix}`}>Margin (as a fraction, e.g. 0.4 for 40%)</label>
+        <input
+          id={`margin-${idSuffix}`}
+          type="number"
+          step="0.01"
+          min="0"
+          max="1"
+          placeholder="0.40"
+          value={margin}
+          onChange={(event) => setMargin(event.target.value)}
+        />
+      </div>
+      <div className="field">
+        <label htmlFor={`features-${idSuffix}`}>Features</label>
+        <textarea
+          id={`features-${idSuffix}`}
+          value={features}
+          onChange={(event) => setFeatures(event.target.value)}
+        />
+      </div>
+      <div className="field">
+        <label htmlFor={`benefits-${idSuffix}`}>Benefits</label>
+        <textarea
+          id={`benefits-${idSuffix}`}
+          value={benefits}
+          onChange={(event) => setBenefits(event.target.value)}
+        />
       </div>
       {formError && (
         <p className="form-error" role="alert">
