@@ -821,6 +821,14 @@ export function CampaignsSection({
                           onSaved={(created) => {
                             setReuseProductForCampaignId(null)
                             setProductPickerId(null)
+                            // A freshly created product isn't in this
+                            // section's own products list yet — without
+                            // this, the campaign's thumbnail (looked up
+                            // from that list) would silently stay blank
+                            // until the next full reload, even though
+                            // the campaign's own productId updates right
+                            // away via handleAttachToCampaign below.
+                            setProducts((prev) => [...prev, created])
                             void handleAttachToCampaign(campaign.id, { productId: created.id })
                           }}
                           onCancel={() => setProductPickerId(null)}
