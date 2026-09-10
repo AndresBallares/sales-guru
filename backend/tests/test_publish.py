@@ -995,6 +995,7 @@ def test_publish_uploads_the_selected_photo_and_uses_its_hash(
     assert response.status_code == 200
     upload_kwargs = mock_services["upload_ad_image"].call_args.kwargs
     assert upload_kwargs["image_data"] == _valid_jpeg()
+    assert upload_kwargs["content_type"] == "image/jpeg"
     creative_kwargs = mock_services["create_ad_creative"].call_args.kwargs
     assert creative_kwargs["image_hash"] == "fake_image_hash_1"
 

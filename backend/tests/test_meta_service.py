@@ -4,8 +4,6 @@ httpx.AsyncClient is mocked throughout — no test here makes a real network
 call to Meta's Graph API.
 """
 
-import base64
-import json
 from collections.abc import Iterator
 from datetime import UTC, datetime
 from typing import Any
@@ -40,6 +38,11 @@ class _FakeAsyncClient:
         self._response = response
         self._error = error
         self.calls: list[tuple[str, dict[str, str]]] = []
+        # Only appended by post() when it's given a files= kwarg (the
+        # multipart upload_meta_ad_image call) — kept as a parallel list
+        # rather than widening calls' tuple shape, since ~20 existing
+        # tests destructure client.calls[0] as a plain (url, data) pair.
+        self.post_files: list[dict[str, Any] | None] = []
 
     async def __aenter__(self) -> "_FakeAsyncClient":
         return self
@@ -54,8 +57,14 @@ class _FakeAsyncClient:
         assert self._response is not None
         return self._response
 
-    async def post(self, url: str, data: dict[str, str]) -> _FakeResponse:
+    async def post(
+        self,
+        url: str,
+        data: dict[str, str],
+        files: dict[str, Any] | None = None,
+    ) -> _FakeResponse:
         self.calls.append((url, data))
+        self.post_files.append(files)
         if self._error is not None:
             raise self._error
         assert self._response is not None
@@ -290,6 +299,47 @@ async def test_post_json_raises_on_error_response_body(
             name="Campaign",
             objective="SALES",
         )
+
+
+@pytest.mark.asyncio
+async def test_post_json_error_includes_the_endpoint_and_metas_full_diagnosis(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The raised message names which endpoint failed and surfaces Meta's
+    error_user_msg/error_subcode/fbtrace_id when present (confirmed
+    2026-09-09) — error.message alone is often a generic phrase ("Invalid
+    parameter") shared by many distinct real causes, and not knowing even
+    which of ~5 publish-time Graph calls failed made a real first-live-
+    publish failure hard to diagnose."""
+    _mock_client_returning(
+        monkeypatch,
+        _FakeResponse(
+            {
+                "error": {
+                    "message": "Invalid parameter",
+                    "error_user_msg": "The image format is not supported",
+                    "error_subcode": 1234567,
+                    "fbtrace_id": "AbCdEfGhIjK",
+                }
+            },
+            is_error=True,
+        ),
+    )
+
+    with pytest.raises(meta.MetaConnectionError) as exc_info:
+        await meta.create_meta_campaign(
+            access_token="token",
+            ad_account_id="act_1",
+            name="Campaign",
+            objective="SALES",
+        )
+
+    message = str(exc_info.value)
+    assert "act_1/campaigns" in message
+    assert "Invalid parameter" in message
+    assert "The image format is not supported" in message
+    assert "1234567" in message
+    assert "AbCdEfGhIjK" in message
 
 
 @pytest.mark.asyncio
@@ -1393,22 +1443,108 @@ async def test_create_meta_ad_creative_returns_a_fake_id_in_fake_mode(
 async def test_upload_meta_ad_image_returns_the_hash(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A successful upload returns the hash Meta assigned the image, and
-    sends the base64-encoded bytes under the "bytes" form param."""
+    """A successful upload returns the hash Meta assigned the image, sent
+    as a real multipart file part with an explicit filename/content-type
+    (confirmed 2026-09-09 against a real ad account — see
+    upload_meta_ad_image's own docstring for the three failures this
+    fixes). The response is keyed by "image.jpeg" (the real filename
+    used), not the literal string "image" — confirmed against a real ad
+    account that Meta echoes back the filename, not the multipart field
+    name; a hardcoded body["images"]["image"] lookup raised an uncaught
+    KeyError the moment the filename stopped being literally "image"."""
     client = _mock_client_returning(
         monkeypatch,
-        _FakeResponse({"images": {"image": {"hash": "img_hash_123", "url": "..."}}}),
+        _FakeResponse(
+            {"images": {"image.jpeg": {"hash": "img_hash_123", "url": "..."}}}
+        ),
     )
 
     image_hash = await meta.upload_meta_ad_image(
-        access_token="token", ad_account_id="act_1", image_data=b"fake jpeg bytes"
+        access_token="token",
+        ad_account_id="act_1",
+        image_data=b"fake jpeg bytes",
+        content_type="image/jpeg",
     )
 
     assert image_hash == "img_hash_123"
     url, data = client.calls[0]
     assert url == "https://graph.facebook.com/v21.0/act_1/adimages"
-    sent = json.loads(data["bytes"])
-    assert base64.b64decode(sent["image"]) == b"fake jpeg bytes"
+    assert data == {"access_token": "token"}
+    files = client.post_files[0]
+    assert files is not None
+    assert files["image"] == ("image.jpeg", b"fake jpeg bytes", "image/jpeg")
+
+
+@pytest.mark.asyncio
+async def test_upload_meta_ad_image_raises_on_network_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A network failure surfaces as MetaConnectionError — this function
+    has its own inline try/except (it can't use _post_json, which doesn't
+    support multipart), so it needs its own direct coverage of this path."""
+    fake_client = _FakeAsyncClient(error=httpx.ConnectError("boom"))
+    monkeypatch.setattr(httpx, "AsyncClient", lambda: fake_client)
+
+    with pytest.raises(meta.MetaConnectionError, match="Meta API call failed"):
+        await meta.upload_meta_ad_image(
+            access_token="token",
+            ad_account_id="act_1",
+            image_data=b"fake jpeg bytes",
+            content_type="image/jpeg",
+        )
+
+
+@pytest.mark.asyncio
+async def test_upload_meta_ad_image_raises_on_error_response_body(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A Meta {"error": ...} body surfaces with the endpoint and message —
+    this is the exact real failure mode confirmed against a live ad
+    account 2026-09-09 before the content-type fix (error_subcode
+    1487411, "The type of file is not supported")."""
+    _mock_client_returning(
+        monkeypatch,
+        _FakeResponse(
+            {
+                "error": {
+                    "message": "Invalid parameter",
+                    "error_user_msg": "The type of file is not supported.",
+                    "error_subcode": 1487411,
+                }
+            },
+            is_error=True,
+        ),
+    )
+
+    with pytest.raises(meta.MetaConnectionError, match="act_1/adimages") as exc_info:
+        await meta.upload_meta_ad_image(
+            access_token="token",
+            ad_account_id="act_1",
+            image_data=b"fake jpeg bytes",
+            content_type="image/jpeg",
+        )
+
+    assert "1487411" in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_upload_meta_ad_image_raises_clearly_on_an_empty_images_body(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A 200 response with no "images" entry at all (not observed for
+    real, but not proven impossible either) fails clearly rather than
+    with an opaque KeyError/StopIteration — same "flag it, don't crash on
+    an unexpected but non-error shape" caution the real KeyError incident
+    above (now fixed) shows is worth having here."""
+    _mock_client_returning(monkeypatch, _FakeResponse({"images": {}}))
+
+    with pytest.raises(meta.MetaConnectionError, match="no image"):
+        await meta.upload_meta_ad_image(
+            access_token="token",
+            ad_account_id="act_1",
+            image_data=b"fake jpeg bytes",
+            content_type="image/jpeg",
+        )
 
 
 @pytest.mark.asyncio
@@ -1417,7 +1553,10 @@ async def test_upload_meta_ad_image_returns_a_fake_hash_in_fake_mode(
 ) -> None:
     """Fake mode returns a recognizably-fake hash, no real call."""
     image_hash = await meta.upload_meta_ad_image(
-        access_token="fake-token", ad_account_id="act_fake_account", image_data=b"bytes"
+        access_token="fake-token",
+        ad_account_id="act_fake_account",
+        image_data=b"bytes",
+        content_type="image/png",
     )
 
     assert image_hash.startswith("fake_image_hash_")

@@ -21,23 +21,21 @@ get_long_lived_token, get_meta_user_id, build_authorization_url) are left
 alone — POST .../meta/fake-connect (app/api/meta.py) bypasses that flow
 entirely, so fake mode never exercises them.
 
-**Real ad image upload (confirmed 2026-09-09, NEEDS REAL-API VERIFICATION):**
-upload_meta_ad_image POSTs raw image bytes to .../adimages via the `bytes`
-form param (a JSON object mapping an arbitrary slot name to base64 image
-data — Meta's documented alternative to a multipart file upload) and
-returns the resulting image_hash, which create_meta_ad_creative now sets
-as link_data.image_hash instead of link_data.picture's bare URL. Real
-Meta OAuth can't be driven by anything automated (see above), so this
-exact request shape has only been checked against Meta's public API
-documentation, never against a real ad account — flagged for manual
-verification the first time a real business actually publishes with a
-product photo attached.
+**Real ad image upload (confirmed 2026-09-09, fix NOT YET RE-VERIFIED
+against a real ad account):** upload_meta_ad_image uploads raw image
+bytes to .../adimages as a real multipart file part with an explicit
+content-type, returning the resulting image_hash, which
+create_meta_ad_creative sets as link_data.image_hash instead of
+link_data.picture's bare URL. Three earlier real-account attempts each
+failed differently (a base64-form-field approach; a multipart part with
+no content-type; the upload itself succeeding but a hardcoded response
+key raising an uncaught KeyError) — upload_meta_ad_image's own docstring
+has the full history; flag if this still fails on retry.
 """
 
-import base64
 import json
 from datetime import UTC, datetime, timedelta
-from typing import Any, Literal, NamedTuple
+from typing import Any, Literal, NamedTuple, NoReturn
 from uuid import uuid4
 
 import httpx
@@ -113,6 +111,45 @@ def _require_app_credentials() -> tuple[str, str, str]:
     return settings.meta_app_id, settings.meta_app_secret, settings.meta_redirect_uri
 
 
+def _raise_for_meta_error(
+    url: str, body: dict[str, Any], response: httpx.Response
+) -> NoReturn:
+    """Raise a MetaConnectionError with as much of Meta's own diagnosis as it gave us.
+
+    Meta's top-level error.message is often a generic phrase like "Invalid
+    parameter" shared by dozens of distinct problems — error.error_user_msg
+    (when present) is the specific, human-actionable one, and
+    error.error_subcode/error.fbtrace_id are what Meta support actually
+    needs to look up a request. None of that was surfaced before
+    (confirmed 2026-09-09, needed for real ad-account debugging) — every
+    failure just said "Meta API call failed: <generic message>" with no
+    way to tell even which endpoint was being called.
+
+    Args:
+        url: The endpoint that was called — only its path (not query
+            params/data, which may carry the access token) is included in
+            the raised message.
+        body: The parsed JSON response body.
+        response: The raw httpx response, for a non-JSON-error fallback.
+
+    Raises:
+        MetaConnectionError: Always — this is only called once the caller
+            has already confirmed the response is an error.
+    """
+    endpoint = httpx.URL(url).path
+    error = body.get("error", {})
+    parts = [error.get("message", response.text)]
+    if error.get("error_user_msg"):
+        parts.append(f"user_msg={error['error_user_msg']!r}")
+    if error.get("error_subcode"):
+        parts.append(f"subcode={error['error_subcode']}")
+    if error.get("fbtrace_id"):
+        parts.append(f"fbtrace_id={error['fbtrace_id']}")
+    raise MetaConnectionError(
+        f"Meta API call to {endpoint} failed: {' | '.join(parts)}"
+    )
+
+
 async def _get_json(url: str, params: dict[str, str]) -> dict[str, Any]:
     """GET a Graph API URL and return its parsed JSON body.
 
@@ -135,8 +172,7 @@ async def _get_json(url: str, params: dict[str, str]) -> dict[str, Any]:
 
     body: dict[str, Any] = response.json()
     if response.is_error or "error" in body:
-        message = body.get("error", {}).get("message", response.text)
-        raise MetaConnectionError(f"Meta API call failed: {message}")
+        _raise_for_meta_error(url, body, response)
     return body
 
 
@@ -163,8 +199,7 @@ async def _post_json(url: str, data: dict[str, str]) -> dict[str, Any]:
 
     body: dict[str, Any] = response.json()
     if response.is_error or "error" in body:
-        message = body.get("error", {}).get("message", response.text)
-        raise MetaConnectionError(f"Meta API call failed: {message}")
+        _raise_for_meta_error(url, body, response)
     return body
 
 
@@ -558,7 +593,7 @@ async def create_meta_ad_set(
 
 
 async def upload_meta_ad_image(
-    *, access_token: str, ad_account_id: str, image_data: bytes
+    *, access_token: str, ad_account_id: str, image_data: bytes, content_type: str
 ) -> str:
     """Upload raw image bytes to Meta, returning the image_hash to reference it.
 
@@ -568,12 +603,45 @@ async def upload_meta_ad_image(
     (which link_data.picture used before this and Meta has to fetch
     itself, an extra failure point this avoids).
 
+    **Three real-API surprises found and fixed against a live ad account,
+    2026-09-09 — history kept here since none were obvious:**
+    1. The base64-bytes-in-a-form-field approach (Meta's documented
+       alternative to a real file upload — `bytes={"key": "<base64>"}`
+       sent as a plain application/x-www-form-urlencoded field) failed
+       outright (error_subcode 2446496, "We could not process the image
+       you have uploaded") — didn't survive the round trip intact for a
+       real photo. Every official example of this call actually uses
+       `-F` (multipart/form-data) in curl, i.e. a real file part, not
+       that alternative.
+    2. Switching to a multipart file part fixed *that* failure, but
+       without an explicit filename/content-type on the part, Meta
+       couldn't identify it as an image at all (error_subcode 1487411,
+       "The type of file is not supported") — httpx has no extension to
+       guess a MIME type from a bare field name like `"image"`, so it
+       silently fell back to `application/octet-stream`. Passing the
+       already-known content_type explicitly (both as the filename's
+       extension and the part's real content-type) fixed this.
+    3. With that fixed, the upload itself started succeeding for real —
+       but Meta keys the response's `images` object by the *filename*
+       actually used, not by the multipart field name, so a hardcoded
+       `body["images"]["image"]` lookup raised an uncaught KeyError the
+       instant the filename stopped being literally `"image"` (step 2's
+       fix). Reading the response's one value directly (exactly one file
+       is ever uploaded per call) instead of a specific key fixed this
+       without needing to know or guess Meta's exact echoed key at all.
+    Uses httpx directly, not _post_json/_get_json, since neither of those
+    helpers sends multipart bodies.
+
     Args:
         access_token: The business's Meta access token.
         ad_account_id: The connected ad account to upload into.
         image_data: The raw image bytes (already validated on upload —
             app/schemas/product_image.py's JPG/PNG/size/dimension checks
             — so no further validation happens here).
+        content_type: The image's real MIME type (ProductImage.contentType
+            — "image/jpeg" or "image/png") — Meta needs this to actually
+            recognize the upload as an image (see history above), not
+            just to know what to store it as.
 
     Returns:
         The new image's hash.
@@ -583,15 +651,38 @@ async def upload_meta_ad_image(
     """
     if get_settings().fake_meta_enabled:
         return f"fake_image_hash_{uuid4().hex[:12]}"
-    # The single arbitrary key here ("image") is just a slot name Meta
-    # echoes back in the response under the same key — it has no meaning
-    # to Meta beyond that round-trip.
-    encoded = base64.b64encode(image_data).decode("ascii")
-    body = await _post_json(
-        f"{_GRAPH_BASE_URL}/{ad_account_id}/adimages",
-        {"access_token": access_token, "bytes": json.dumps({"image": encoded})},
-    )
-    image_hash: str = body["images"]["image"]["hash"]
+    url = f"{_GRAPH_BASE_URL}/{ad_account_id}/adimages"
+    # The multipart field name ("image") is arbitrary and has no bearing
+    # on the response; the filename's base ("image.<ext>") does, though —
+    # confirmed 2026-09-09 against a real ad account: Meta keys the
+    # response's images dict by the *filename* actually used, not the
+    # form field name (a third real-API surprise, after the two in the
+    # docstring above) — a hardcoded body["images"]["image"] lookup
+    # raised KeyError once the filename stopped being literally "image".
+    # Since exactly one file is ever uploaded per call, reading the
+    # response's one value rather than a specific key sidesteps needing
+    # to know or guess Meta's exact echoed key at all.
+    extension = content_type.rsplit("/", maxsplit=1)[-1]
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                url,
+                data={"access_token": access_token},
+                files={"image": (f"image.{extension}", image_data, content_type)},
+            )
+    except httpx.HTTPError as exc:
+        raise MetaConnectionError(f"Meta API call failed: {exc}") from exc
+
+    body: dict[str, Any] = response.json()
+    if response.is_error or "error" in body:
+        _raise_for_meta_error(url, body, response)
+    images = body.get("images", {})
+    if not images:
+        raise MetaConnectionError(
+            f"Meta API call to {httpx.URL(url).path} succeeded but returned "
+            f"no image: {body}"
+        )
+    image_hash: str = next(iter(images.values()))["hash"]
     return image_hash
 
 
