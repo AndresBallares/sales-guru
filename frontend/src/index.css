@@ -792,6 +792,61 @@ li ul {
   gap: 0.25rem;
 }
 
+/* A styled, click-or-drag upload target — replaces the browser's own
+   plain "Choose Files" control (still a real <input type="file"> under
+   the hood, just visually hidden inside this <label>; see
+   .photo-dropzone-input below). */
+.photo-dropzone {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 1.5rem 1rem;
+  border: 2px dashed var(--border-strong);
+  border-radius: var(--radius-field);
+  text-align: center;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: border-color 0.15s ease, background-color 0.15s ease;
+}
+
+.photo-dropzone:hover,
+.photo-dropzone-active {
+  border-color: var(--primary);
+  background: var(--glow);
+  color: var(--text);
+}
+
+.photo-dropzone-icon {
+  width: 28px;
+  height: 28px;
+}
+
+.photo-dropzone-text {
+  font-size: 0.85rem;
+  line-height: 1.45;
+}
+
+.photo-dropzone-text strong {
+  color: var(--text);
+}
+
+/* Visually hidden but still a real, focusable, keyboard-operable file
+   input — the enclosing <label> forwards clicks/drops to it, so hiding
+   it with display:none (which would break that) is deliberately not
+   used here. */
+.photo-dropzone-input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
 .campaign-thumb {
   width: 40px;
   height: 40px;

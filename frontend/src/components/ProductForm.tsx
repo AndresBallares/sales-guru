@@ -1,4 +1,11 @@
-import { useEffect, useRef, useState, type ChangeEvent, type FormEvent } from 'react'
+import {
+  useEffect,
+  useRef,
+  useState,
+  type ChangeEvent,
+  type DragEvent,
+  type FormEvent,
+} from 'react'
 import {
   ApiError,
   createProduct,
@@ -86,6 +93,7 @@ export function ProductForm({
   const [uploadingImage, setUploadingImage] = useState(false)
   const [removingImageId, setRemovingImageId] = useState<string | null>(null)
   const [reorderingImages, setReorderingImages] = useState(false)
+  const [isDraggingPhoto, setIsDraggingPhoto] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
@@ -120,9 +128,10 @@ export function ProductForm({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  async function handleFilesSelected(event: ChangeEvent<HTMLInputElement>) {
-    const files = Array.from(event.target.files ?? [])
-    event.target.value = ''
+  // Shared by the file input's change handler and the drop zone's drop
+  // handler below — same validation/staging/upload pipeline regardless
+  // of how the files were picked.
+  async function processFiles(files: File[]) {
     if (files.length === 0) return
 
     setImageError(null)
@@ -167,6 +176,29 @@ export function ProductForm({
         ])
       }
     }
+  }
+
+  async function handleFilesSelected(event: ChangeEvent<HTMLInputElement>) {
+    const files = Array.from(event.target.files ?? [])
+    event.target.value = ''
+    await processFiles(files)
+  }
+
+  function handleDragOver(event: DragEvent<HTMLLabelElement>) {
+    // Required for onDrop to fire at all — a plain dragover is rejected
+    // as a drop target by default.
+    event.preventDefault()
+    setIsDraggingPhoto(true)
+  }
+
+  function handleDragLeave() {
+    setIsDraggingPhoto(false)
+  }
+
+  async function handleDrop(event: DragEvent<HTMLLabelElement>) {
+    event.preventDefault()
+    setIsDraggingPhoto(false)
+    await processFiles(Array.from(event.dataTransfer.files))
   }
 
   async function handleRemoveExisting(imageId: string) {
@@ -473,15 +505,47 @@ export function ProductForm({
                 ))}
           </ul>
         )}
-        <input
-          ref={fileInputRef}
-          id={`photos-${idSuffix}`}
-          type="file"
-          accept="image/jpeg,image/png"
-          multiple
-          disabled={uploadingImage}
-          onChange={(event) => void handleFilesSelected(event)}
-        />
+        {/* The drag handlers are a pure convenience layer on top of a real
+            <label htmlFor> + <input type="file"> — click and keyboard use
+            both go through native label/input semantics unaffected by
+            these, so there's no accessibility regression from attaching
+            them directly to the label. */}
+        {/* eslint-disable-next-line jsx-a11y/no-noninteractive-element-interactions */}
+        <label
+          htmlFor={`photos-${idSuffix}`}
+          className={`photo-dropzone${isDraggingPhoto ? ' photo-dropzone-active' : ''}`}
+          onDragOver={handleDragOver}
+          onDragLeave={handleDragLeave}
+          onDrop={(event) => void handleDrop(event)}
+        >
+          <svg
+            className="photo-dropzone-icon"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="1.5"
+            aria-hidden="true"
+          >
+            <rect x="3" y="3" width="18" height="18" rx="3" />
+            <circle cx="8.5" cy="8.5" r="1.5" />
+            <path d="M21 15l-5-5L5 21" />
+          </svg>
+          <span className="photo-dropzone-text">
+            <strong>Add photos</strong>
+            <br />
+            Drag and drop, or click to browse
+          </span>
+          <input
+            ref={fileInputRef}
+            id={`photos-${idSuffix}`}
+            type="file"
+            accept="image/jpeg,image/png"
+            multiple
+            disabled={uploadingImage}
+            onChange={(event) => void handleFilesSelected(event)}
+            className="photo-dropzone-input"
+          />
+        </label>
         {uploadingImage && <p>Uploading…</p>}
         {imageError && (
           <p className="form-error" role="alert">

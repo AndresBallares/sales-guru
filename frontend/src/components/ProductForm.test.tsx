@@ -78,6 +78,23 @@ describe('ProductForm — create mode photo staging', () => {
     expect(await screen.findAllByRole('img')).toHaveLength(2)
   })
 
+  it('stages a dragged-and-dropped photo the same way as a browsed one', async () => {
+    render(<ProductForm businessId="biz-1" onSaved={vi.fn<(product: api.Product) => void>()} />)
+    const dropzone = screen.getByText(/Drag and drop, or click to browse/).closest('label')
+    if (!dropzone) throw new Error('dropzone label not found')
+
+    fireEvent.dragOver(dropzone)
+    expect(dropzone).toHaveClass('photo-dropzone-active')
+
+    fireEvent.dragLeave(dropzone)
+    expect(dropzone).not.toHaveClass('photo-dropzone-active')
+
+    fireEvent.drop(dropzone, { dataTransfer: { files: [bigJpeg()] } })
+
+    expect(await screen.findByRole('img')).toBeInTheDocument()
+    expect(dropzone).not.toHaveClass('photo-dropzone-active')
+  })
+
   it('rejects an unsupported file type without staging it', async () => {
     // fireEvent, not user.upload — user-event v14 itself filters a
     // mismatched file against the input's accept attribute, so it would
