@@ -104,6 +104,8 @@ beforeEach(() => {
     ],
     actionTypes: [],
     eventVenues: [],
+    voiceTraits: [],
+    pricePositionings: [],
   })
   mockedApi.listCampaigns.mockResolvedValue([makeCampaign()])
   mockedApi.listCreatives.mockResolvedValue([makeCreative()])

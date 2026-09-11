@@ -20,6 +20,8 @@ export interface OptionsResponse {
   ctas: Option[]
   actionTypes: Option[]
   eventVenues: Option[]
+  voiceTraits: Option[]
+  pricePositionings: Option[]
 }
 
 // Turns a fetched Option[] into a {value: label} lookup — used everywhere
@@ -57,6 +59,55 @@ export interface BusinessUpdateInput {
   name?: string
   industry?: string
   description?: string | null
+}
+
+// "Brand DNA" (PRD.md §5 step 3.5) — one per business, feeds the
+// Strategist/Creative Agent prompts as a dedicated "Brand voice" block
+// whenever one exists. voiceTraits/pricePositioning are fixed lists —
+// fetched via getOptions() (voiceTraits/pricePositionings), same pattern
+// as every other fixed list in the app.
+export interface BrandProfile {
+  id: string
+  businessId: string
+  description: string
+  idealCustomer: string
+  voiceTraits: string[]
+  pricePositioning: string
+  brandPhrases: string | null
+  avoidPhrases: string | null
+  tagline: string | null
+  competitors: string | null
+  exampleCopy: string | null
+  // Rides along from the parent business (app/api/brand_profile.py) so
+  // the brand-profile view can show the whole identity together, without
+  // a second business fetch.
+  logoUrl: string | null
+}
+
+export interface BrandProfileCreateInput {
+  description: string
+  idealCustomer: string
+  voiceTraits: string[]
+  pricePositioning: string
+  brandPhrases?: string
+  avoidPhrases?: string
+  tagline?: string
+  competitors?: string
+  exampleCopy?: string
+}
+
+// Partial update — only fields explicitly provided change (same
+// exclude_unset convention as BusinessUpdateInput).
+export interface BrandProfileUpdateInput {
+  description?: string
+  idealCustomer?: string
+  voiceTraits?: string[]
+  pricePositioning?: string
+  brandPhrases?: string | null
+  avoidPhrases?: string | null
+  tagline?: string | null
+  competitors?: string | null
+  exampleCopy?: string | null
 }
 
 export interface Product {
@@ -307,6 +358,30 @@ export function uploadBusinessLogo(businessId: string, file: File): Promise<Busi
   return request<Business>(`/businesses/${businessId}/logo`, {
     method: 'POST',
     body: formData,
+  })
+}
+
+export function createBrandProfile(
+  businessId: string,
+  input: BrandProfileCreateInput,
+): Promise<BrandProfile> {
+  return request<BrandProfile>(`/businesses/${businessId}/brand-profile`, {
+    method: 'POST',
+    body: JSON.stringify(input),
+  })
+}
+
+export function getBrandProfile(businessId: string): Promise<BrandProfile> {
+  return request<BrandProfile>(`/businesses/${businessId}/brand-profile`)
+}
+
+export function updateBrandProfile(
+  businessId: string,
+  input: BrandProfileUpdateInput,
+): Promise<BrandProfile> {
+  return request<BrandProfile>(`/businesses/${businessId}/brand-profile`, {
+    method: 'PATCH',
+    body: JSON.stringify(input),
   })
 }
 

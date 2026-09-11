@@ -38,7 +38,7 @@ from typing import Literal
 
 import anthropic
 from anthropic import AsyncAnthropic
-from prisma.models import Audience, Business, Product
+from prisma.models import Audience, BrandProfile, Business, Product
 
 from app.core.config import get_settings
 from app.schemas.strategy import (
@@ -74,6 +74,7 @@ from app.services.benchmarks import (
     METRIC_DIRECTIONS,
     BenchmarkRange,
 )
+from app.services.brand_voice import brand_voice_lines
 from app.services.meta import AccountCampaignInsights
 from app.services.prompt_safety import quarantine
 from app.services.tool_use import parse_tool_input
@@ -181,7 +182,10 @@ def _vertical_grounding() -> str:
 
 
 def _business_product_audience_lines(
-    business: Business, product: Product | None, audience: Audience | None
+    business: Business,
+    product: Product | None,
+    audience: Audience | None,
+    brand_profile: BrandProfile | None = None,
 ) -> list[str]:
     """Shared grounding lines used by both plan-type prompts."""
     lines = [f"Business: {business.name}"]
@@ -191,6 +195,10 @@ def _business_product_audience_lines(
         lines.append(f"Location: {business.location}")
     if business.description:
         lines.append(quarantine("About", business.description))
+
+    brand_voice = brand_voice_lines(brand_profile)
+    if brand_voice:
+        lines += [""] + brand_voice
 
     if product is not None:
         lines += ["", quarantine("Product", product.description)]
@@ -240,6 +248,7 @@ def _build_test_plan_prompt(
     unit_economics: UnitEconomicsFields | None,
     daily_budget: float,
     duration_days: int,
+    brand_profile: BrandProfile | None = None,
 ) -> str:
     """Build the grounding prompt for a TEST_PLAN generation.
 
@@ -257,6 +266,10 @@ def _build_test_plan_prompt(
             is asked to set. Each of the two variants gets its own AdSet
             at this rate — actual total daily spend is 2x this number.
         duration_days: The already-decided test duration, same reasoning.
+        brand_profile: The business's brand profile, if one exists (PRD.md
+            §5 step 3.5) — folded into a "Brand voice" block via
+            _business_product_audience_lines. None falls back to current
+            (no brand-specific steering) behavior.
 
     Returns:
         The prompt text.
@@ -277,7 +290,7 @@ def _build_test_plan_prompt(
         "",
         _vertical_grounding(),
         "",
-        *_business_product_audience_lines(business, product, audience),
+        *_business_product_audience_lines(business, product, audience, brand_profile),
         "",
         f"Campaign objective: {objective}",
         "",
@@ -513,6 +526,7 @@ def _build_data_driven_strategy_prompt(
     objective: str,
     unit_economics: UnitEconomicsFields | None,
     account_history: list[AccountCampaignInsights],
+    brand_profile: BrandProfile | None = None,
 ) -> str:
     """Build the grounding prompt for a DATA_DRIVEN_STRATEGY generation."""
     lines = [
@@ -523,7 +537,7 @@ def _build_data_driven_strategy_prompt(
         "",
         _vertical_grounding(),
         "",
-        *_business_product_audience_lines(business, product, audience),
+        *_business_product_audience_lines(business, product, audience, brand_profile),
         "",
         f"Campaign objective: {objective}",
     ]
@@ -625,6 +639,7 @@ async def generate_strategy(
     objective: str,
     plan_type: PlanType,
     account_history: list[AccountCampaignInsights] | None = None,
+    brand_profile: BrandProfile | None = None,
 ) -> StrategyContent:
     """Call the Marketing Strategist Agent and return a structured plan.
 
@@ -641,6 +656,9 @@ async def generate_strategy(
             strategy.py), never by the LLM.
         account_history: Real per-campaign Meta ad-account history, if any
             was found — only meaningful for DATA_DRIVEN_STRATEGY.
+        brand_profile: The business's brand profile, if one exists (PRD.md
+            §5 step 3.5) — grounds the plan in a "Brand voice" block. None
+            (the default — no profile yet) falls back to current behavior.
 
     Returns:
         The generated plan, with every backend-computed field (see
@@ -675,6 +693,7 @@ async def generate_strategy(
             unit_economics,
             daily_budget,
             duration_days,
+            brand_profile,
         )
         raw = await _call_agent(
             tool_name=_TEST_PLAN_TOOL_NAME,
@@ -722,7 +741,13 @@ async def generate_strategy(
         )
 
     prompt = _build_data_driven_strategy_prompt(
-        business, product, audience, objective, unit_economics, account_history or []
+        business,
+        product,
+        audience,
+        objective,
+        unit_economics,
+        account_history or [],
+        brand_profile,
     )
     raw = await _call_agent(
         tool_name=_DATA_DRIVEN_STRATEGY_TOOL_NAME,

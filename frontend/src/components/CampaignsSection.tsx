@@ -10,6 +10,7 @@ import {
   createStrategy,
   createTestEvaluation,
   deleteCampaign,
+  getBrandProfile,
   getBusiness,
   getOptions,
   getStrategy,
@@ -68,6 +69,10 @@ export function CampaignsSection({
   // Only fetched for the "add a business description" nudge on the
   // create-campaign step below — nothing else here needs the business.
   const [business, setBusiness] = useState<Business | null>(null)
+  // Only powers the "Regenerate with brand voice" label (PRD.md §5 step
+  // 3.5) — whether the business has filled in a brand profile at all,
+  // not the profile's content.
+  const [hasBrandProfile, setHasBrandProfile] = useState(false)
   const [products, setProducts] = useState<Product[]>([])
   const [audiences, setAudiences] = useState<Audience[]>([])
   const [loading, setLoading] = useState(true)
@@ -198,6 +203,13 @@ export function CampaignsSection({
       getBusiness(businessId)
         .then(setBusiness)
         .catch(() => setBusiness(null))
+
+      // Best-effort too — only powers the "Regenerate with brand voice"
+      // label below (PRD.md §5 step 3.5). A 404 (no profile yet) is the
+      // expected default state, not a failure to surface.
+      getBrandProfile(businessId)
+        .then(() => setHasBrandProfile(true))
+        .catch(() => setHasBrandProfile(false))
 
       // Strategies aren't included on the campaign list itself — fetch each
       // already-generated one so a page reload still shows it, not just a
@@ -1241,7 +1253,9 @@ export function CampaignsSection({
                       {generatingCreativesId === campaign.id
                         ? 'Generating…'
                         : campaignCreatives.length > 0
-                          ? 'Regenerate ads'
+                          ? hasBrandProfile
+                            ? 'Regenerate with brand voice'
+                            : 'Regenerate ads'
                           : 'Generate ads'}
                     </button>
                     {creativeError && (

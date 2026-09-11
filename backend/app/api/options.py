@@ -15,6 +15,7 @@ from fastapi import APIRouter, Depends
 from prisma.models import User
 
 from app.core.session import get_current_user
+from app.schemas.brand_profile import PRICE_POSITIONING_LABELS, VOICE_TRAIT_LABELS
 from app.schemas.business import INDUSTRY_LABELS
 from app.schemas.campaign import CAMPAIGN_STATUS_LABELS, OBJECTIVE_LABELS
 from app.schemas.creative import CTA_LABELS
@@ -70,4 +71,6 @@ async def get_options(
             )
             for venue in EVENT_VENUES.values()
         ],
+        voice_traits=_options(VOICE_TRAIT_LABELS),
+        price_positionings=_options(PRICE_POSITIONING_LABELS),
     )

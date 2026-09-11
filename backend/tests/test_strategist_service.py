@@ -110,6 +110,22 @@ def _fake_audience(**overrides: object) -> Audience:
     return cast(Audience, SimpleNamespace(**defaults))
 
 
+def _fake_brand_profile(**overrides: object) -> Any:
+    defaults: dict[str, object] = {
+        "description": "Family-run studio making handcrafted gold jewelry.",
+        "idealCustomer": "Women 30-55 buying for milestones and self-purchase.",
+        "voiceTraits": '["WARM", "ARTISANAL"]',
+        "pricePositioning": "PREMIUM",
+        "brandPhrases": None,
+        "avoidPhrases": None,
+        "tagline": None,
+        "competitors": None,
+        "exampleCopy": None,
+    }
+    defaults.update(overrides)
+    return SimpleNamespace(**defaults)
+
+
 def _mock_client_returning(
     monkeypatch: pytest.MonkeyPatch, content: list[SimpleNamespace]
 ) -> AsyncMock:
@@ -184,6 +200,30 @@ def test_build_test_plan_prompt_includes_unit_economics_when_available() -> None
     assert "2.50x" in prompt
 
 
+def test_build_test_plan_prompt_omits_brand_voice_with_no_profile() -> None:
+    """No brand profile at all falls back to current (no brand-specific
+    steering) behavior — no "Brand voice" section appears."""
+    prompt = strategist._build_test_plan_prompt(
+        _fake_business(), None, None, "SALES", None, 50.0, 10
+    )
+
+    assert "Brand voice" not in prompt
+
+
+def test_build_test_plan_prompt_includes_brand_voice_when_a_profile_exists() -> None:
+    """A brand profile, when given, is folded in as a dedicated block."""
+    brand_profile = _fake_brand_profile(avoidPhrases="cheap, discount")
+
+    prompt = strategist._build_test_plan_prompt(
+        _fake_business(), None, None, "SALES", None, 50.0, 10, brand_profile
+    )
+
+    assert "Brand voice" in prompt
+    assert "Voice traits: Warm, Artisanal" in prompt
+    assert "NEVER use" in prompt
+    assert "cheap, discount" in prompt
+
+
 def test_build_data_driven_strategy_prompt_includes_account_history() -> None:
     """Real per-campaign Meta history is surfaced as grounding, not omitted."""
     history = [
@@ -212,6 +252,27 @@ def test_build_data_driven_strategy_prompt_notes_missing_history() -> None:
     )
 
     assert "No numeric ad-account history is available" in prompt
+
+
+def test_build_data_driven_strategy_prompt_omits_brand_voice_with_no_profile() -> None:
+    """No brand profile at all falls back to current behavior here too."""
+    prompt = strategist._build_data_driven_strategy_prompt(
+        _fake_business(), None, None, "SALES", None, []
+    )
+
+    assert "Brand voice" not in prompt
+
+
+def test_build_data_driven_strategy_prompt_includes_brand_voice() -> None:
+    """A brand profile, when given, is folded in as a dedicated block here too."""
+    brand_profile = _fake_brand_profile(pricePositioning="LUXURY")
+
+    prompt = strategist._build_data_driven_strategy_prompt(
+        _fake_business(), None, None, "SALES", None, [], brand_profile
+    )
+
+    assert "Brand voice" in prompt
+    assert "Price positioning: Luxury" in prompt
 
 
 def test_build_broad_baseline_variant_is_fixed_and_empty() -> None:
@@ -362,6 +423,32 @@ async def test_generate_strategy_returns_a_test_plan(
     assert result.baseline_metrics.spend is None
     assert result.benchmark_context.ctr.median == JEWELRY_META_BENCHMARKS.ctr.median
     assert result.data_source.historical_meta_data == []
+
+
+@pytest.mark.asyncio
+async def test_generate_strategy_forwards_the_brand_profile_into_the_real_prompt(
+    anthropic_api_key: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """brand_profile, when passed to the public function, actually reaches
+    the prompt sent to the model — not silently dropped somewhere in
+    between."""
+    create = _mock_client_returning(
+        monkeypatch, [SimpleNamespace(type="tool_use", input=_VALID_TEST_PLAN_INPUT)]
+    )
+    brand_profile = _fake_brand_profile()
+
+    await strategist.generate_strategy(
+        business=_fake_business(),
+        product=_fake_product(),
+        audience=_fake_audience(),
+        objective="SALES",
+        plan_type="TEST_PLAN",
+        brand_profile=brand_profile,
+    )
+
+    sent_prompt = create.call_args.kwargs["messages"][0]["content"]
+    assert "Brand voice" in sent_prompt
+    assert "Voice traits: Warm, Artisanal" in sent_prompt
 
 
 def test_compute_test_daily_budget_defaults_with_no_unit_economics() -> None:

@@ -36,7 +36,7 @@ from anthropic.types import (
     MessageParam,
     TextBlockParam,
 )
-from prisma.models import Business, Campaign, Creative, Product
+from prisma.models import BrandProfile, Business, Campaign, Creative, Product
 from prisma.models import ProductImage as PrismaProductImage
 
 from app.core.config import get_settings
@@ -46,6 +46,7 @@ from app.schemas.creative import (
     GeneratedCreativeVariant,
 )
 from app.schemas.strategy import StrategyContent, primary_audience
+from app.services.brand_voice import brand_voice_lines
 from app.services.prompt_safety import quarantine
 from app.services.tool_use import parse_tool_input
 
@@ -101,6 +102,8 @@ def _build_prompt(
     strategy: StrategyContent,
     *,
     has_image: bool = False,
+    brand_profile: BrandProfile | None = None,
+    has_logo: bool = False,
 ) -> str:
     """Build the grounding prompt from the business/product and its strategy.
 
@@ -115,6 +118,13 @@ def _build_prompt(
             actually look at it, since a forced-tool-use call otherwise
             gives it no explicit cue to attend to an earlier image block
             over the text description.
+        brand_profile: The business's brand profile, if one exists (PRD.md
+            §5 step 3.5) — folded in as a "Brand voice" block. None falls
+            back to current (no brand-specific steering) behavior.
+        has_logo: Whether the business's logo is attached as an image
+            content block alongside this prompt (see generate_creatives)
+            — same has_image reasoning, a visual style cue rather than a
+            literal product photo.
 
     Returns:
         The prompt text.
@@ -131,6 +141,16 @@ def _build_prompt(
         lines.append(f"Industry: {business.industry}")
     if business.description:
         lines.append(quarantine("About", business.description))
+    if has_logo:
+        lines.append(
+            "The business's logo is attached above — use it only as a "
+            "visual style cue (color palette, mood, level of formality), "
+            "never as a literal subject to describe in the copy."
+        )
+
+    brand_voice = brand_voice_lines(brand_profile)
+    if brand_voice:
+        lines += [""] + brand_voice
 
     if product is not None:
         lines += ["", quarantine("Product", product.description)]
@@ -178,11 +198,16 @@ async def generate_creatives(
     product: Product | None,
     strategy: StrategyContent,
     primary_image: PrismaProductImage | None = None,
+    brand_profile: BrandProfile | None = None,
 ) -> list[GeneratedCreativeVariant]:
     """Call the Creative Agent and return a batch of ad creative variants.
 
     Args:
-        business: The business the creatives are for.
+        business: The business the creatives are for. Its logo (Business.
+            logoData/logoContentType, if uploaded — app/api/business.py's
+            upload_business_logo) is passed to the model as an additional
+            vision input, same reasoning as primary_image below but as a
+            visual style cue (color/mood) rather than a literal subject.
         product: The product being advertised, if one was selected.
         strategy: The campaign's already-generated marketing strategy.
         primary_image: The product's primary uploaded photo (app/api/
@@ -192,6 +217,10 @@ async def generate_creatives(
             this — grounding headlines/descriptions in what the product
             actually looks like, not just its written description.
             Ignored in fake mode (see the module docstring).
+        brand_profile: The business's brand profile, if one exists (PRD.md
+            §5 step 3.5) — grounds the batch in a "Brand voice" block.
+            None (the default — no profile yet) falls back to current
+            behavior.
 
     Returns:
         Exactly four generated creative variants (Creative A-D).
@@ -208,12 +237,32 @@ async def generate_creatives(
 
     client = AsyncAnthropic(api_key=settings.anthropic_api_key)
     has_image = primary_image is not None
-    prompt = _build_prompt(business, product, strategy, has_image=has_image)
+    has_logo = business.logoData is not None
+    prompt = _build_prompt(
+        business,
+        product,
+        strategy,
+        has_image=has_image,
+        brand_profile=brand_profile,
+        has_logo=has_logo,
+    )
 
-    content: str | list[ImageBlockParam | TextBlockParam]
+    image_blocks: list[ImageBlockParam] = []
+    if business.logoData is not None:
+        logo_media_type = cast(_SupportedImageMediaType, business.logoContentType)
+        image_blocks.append(
+            {
+                "type": "image",
+                "source": {
+                    "type": "base64",
+                    "media_type": logo_media_type,
+                    "data": str(business.logoData),
+                },
+            }
+        )
     if primary_image is not None:
         media_type = cast(_SupportedImageMediaType, primary_image.contentType)
-        content = [
+        image_blocks.append(
             {
                 "type": "image",
                 "source": {
@@ -221,9 +270,12 @@ async def generate_creatives(
                     "media_type": media_type,
                     "data": str(primary_image.data),
                 },
-            },
-            {"type": "text", "text": prompt},
-        ]
+            }
+        )
+
+    content: str | list[ImageBlockParam | TextBlockParam]
+    if image_blocks:
+        content = [*image_blocks, {"type": "text", "text": prompt}]
     else:
         content = prompt
     message: MessageParam = {"role": "user", "content": content}

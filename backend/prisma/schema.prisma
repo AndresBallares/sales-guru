@@ -120,12 +120,42 @@ model Business {
   // separate, not-yet-built pass; for now this just stores and serves it.
   logoData                      Bytes?
   logoContentType               String?
+  brandProfile                  BrandProfile?
   products                      Product[]
   audiences                     Audience[]
   metaConnection                MetaConnection?
   campaigns                     Campaign[]
   createdAt                     DateTime        @default(now())
   updatedAt                     DateTime        @updatedAt
+}
+
+// "Brand DNA" (PRD.md §5 step 3.5, confirmed 2026-09-10) — a short,
+// one-time questionnaire the Strategist/Creative Agents are grounded in
+// (a "Brand voice" prompt block, app/services/strategist.py and
+// creative.py) so generated strategy/ad copy stays consistent and
+// on-brand across campaigns, instead of drifting variant to variant.
+// One per business (businessId unique, same 1:1 shape as MetaConnection
+// below) — created once via the onboarding step, editable later from the
+// business page. voiceTraits is a JSON-serialized string array (SQLite
+// has no native array/Json type — same "serialize at the app layer"
+// convention as Strategy.content), validated as list[VoiceTrait]
+// (app/schemas/brand_profile.py) on the way in and out; every other
+// field here is a plain string.
+model BrandProfile {
+  id               String   @id @default(cuid())
+  business         Business @relation(fields: [businessId], references: [id])
+  businessId       String   @unique
+  description      String
+  idealCustomer    String
+  voiceTraits      String
+  brandPhrases     String?
+  avoidPhrases     String?
+  pricePositioning String
+  tagline          String?
+  competitors      String?
+  exampleCopy      String?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
 }
 
 // Product has no separate name field — `description` ("What do you sell?")

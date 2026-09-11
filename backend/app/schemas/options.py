@@ -28,3 +28,5 @@ class OptionsResponse(CamelCaseModel):
     ctas: list[Option]
     action_types: list[Option]
     event_venues: list[Option]
+    voice_traits: list[Option]
+    price_positionings: list[Option]
