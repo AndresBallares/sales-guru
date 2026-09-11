@@ -847,6 +847,79 @@ li ul {
   border: 0;
 }
 
+/* ---------- Business logo card (DashboardPage) ---------- */
+/* A compact identity row shown once a logo is staged — circular avatar,
+   business name/website, and a small edit button on the right — instead
+   of the plain square thumbnail + text "Remove" button used for product
+   photos above. Replaces the dropzone while a logo is staged (matches
+   the "Brand DNA" reference row's layout — a single clean row, not a
+   row plus a leftover dropzone underneath it). */
+.logo-card {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.6rem 0.75rem;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-field);
+}
+
+.logo-card-avatar {
+  width: 48px;
+  height: 48px;
+  object-fit: cover;
+  border-radius: 50%;
+  border: 1px solid var(--border-strong);
+  flex-shrink: 0;
+}
+
+.logo-card-info {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  min-width: 0;
+  flex: 1;
+}
+
+.logo-card-info strong {
+  font-size: 0.95rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.logo-card-website {
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.logo-card-edit {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  flex-shrink: 0;
+  padding: 0;
+  border: 1px solid var(--border-strong);
+  border-radius: 50%;
+  background: var(--surface);
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.logo-card-edit:hover {
+  border-color: var(--primary);
+  color: var(--text);
+}
+
+.logo-card-edit svg {
+  width: 16px;
+  height: 16px;
+}
+
 .campaign-thumb {
   width: 40px;
   height: 40px;

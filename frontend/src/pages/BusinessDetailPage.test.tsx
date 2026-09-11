@@ -32,6 +32,7 @@ const business = {
   website: null,
   industry: null,
   location: null,
+  logoUrl: null,
   description: null,
 }
 

@@ -1,5 +1,9 @@
 """Tests for business onboarding endpoints."""
 
+import struct
+
+import httpx2
+from app.schemas.product_image import MAX_IMAGE_BYTES
 from fastapi.testclient import TestClient
 
 
@@ -9,6 +13,37 @@ def _signed_up_client(
     """Sign a fresh user up (and thus in) on the given client."""
     client.post("/auth/signup", json={"email": email, "password": "supersecret123"})
     return client
+
+
+def _valid_jpeg(width: int = 800, height: int = 800) -> bytes:
+    """A structurally-valid minimal JPEG — real header, fake scan data."""
+    return (
+        b"\xff\xd8"
+        + b"\xff\xc0"
+        + struct.pack(">H", 11)
+        + bytes([8])
+        + struct.pack(">HH", height, width)
+        + bytes([1])
+        + bytes([1, 0x11, 0])
+        + b"\xff\xd9"
+    )
+
+
+_JPEG_BYTES = _valid_jpeg()
+
+
+def _upload_logo(
+    client: TestClient,
+    business_id: str,
+    *,
+    filename: str = "logo.jpg",
+    content: bytes = _JPEG_BYTES,
+    content_type: str = "image/jpeg",
+) -> httpx2.Response:
+    return client.post(
+        f"/businesses/{business_id}/logo",
+        files={"file": (filename, content, content_type)},
+    )
 
 
 def test_create_business_requires_a_session(client: TestClient) -> None:
@@ -330,6 +365,147 @@ def test_update_business_rejects_an_invalid_industry(client: TestClient) -> None
     )
 
     assert response.status_code == 422
+
+
+def test_create_business_has_no_logo_url_by_default(client: TestClient) -> None:
+    """A freshly created business has no logo yet."""
+    _signed_up_client(client)
+
+    response = client.post(
+        "/businesses", json={"name": "Acme Widgets", "industry": "ECOMMERCE"}
+    )
+
+    assert response.json()["logoUrl"] is None
+
+
+def test_upload_logo_requires_a_session(client: TestClient) -> None:
+    """Uploading a logo with no session cookie returns 401."""
+    response = _upload_logo(client, "some-id")
+
+    assert response.status_code == 401
+
+
+def test_upload_logo_404s_for_a_nonexistent_business(client: TestClient) -> None:
+    """Uploading a logo under a nonexistent business returns 404."""
+    _signed_up_client(client)
+
+    response = _upload_logo(client, "does-not-exist")
+
+    assert response.status_code == 404
+
+
+def test_upload_logo_404s_for_another_users_business(client: TestClient) -> None:
+    """A user can't upload a logo for a business they don't own."""
+    _signed_up_client(client, email="alice@example.com")
+    business_id = client.post(
+        "/businesses", json={"name": "Alice's Business", "industry": "ECOMMERCE"}
+    ).json()["id"]
+    client.post("/auth/logout")
+
+    _signed_up_client(client, email="bob@example.com")
+    response = _upload_logo(client, business_id)
+
+    assert response.status_code == 404
+
+
+def test_upload_logo_succeeds_and_sets_logo_url(client: TestClient) -> None:
+    """A supported image type uploads successfully and the business gets a logo_url."""
+    _signed_up_client(client)
+    business_id = client.post(
+        "/businesses", json={"name": "Acme Widgets", "industry": "ECOMMERCE"}
+    ).json()["id"]
+
+    response = _upload_logo(client, business_id)
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["id"] == business_id
+    assert body["logoUrl"] == f"http://localhost:8000/business-logos/{business_id}"
+
+
+def test_upload_logo_rejects_an_unsupported_content_type(client: TestClient) -> None:
+    """A non-image content type is rejected."""
+    _signed_up_client(client)
+    business_id = client.post(
+        "/businesses", json={"name": "Acme Widgets", "industry": "ECOMMERCE"}
+    ).json()["id"]
+
+    response = _upload_logo(
+        client,
+        business_id,
+        filename="notes.txt",
+        content=b"just some text",
+        content_type="text/plain",
+    )
+
+    assert response.status_code == 400
+    assert "Unsupported image type" in response.json()["detail"]
+
+
+def test_upload_logo_rejects_a_file_over_the_size_limit(client: TestClient) -> None:
+    """A file larger than MAX_IMAGE_BYTES is rejected, not silently truncated."""
+    _signed_up_client(client)
+    business_id = client.post(
+        "/businesses", json={"name": "Acme Widgets", "industry": "ECOMMERCE"}
+    ).json()["id"]
+    oversized = b"\xff\xd8\xff\xe0" + b"x" * MAX_IMAGE_BYTES
+
+    response = _upload_logo(client, business_id, content=oversized)
+
+    assert response.status_code == 400
+    assert "exceeds" in response.json()["detail"]
+
+
+def test_upload_logo_replaces_a_previous_one(client: TestClient) -> None:
+    """A second upload overwrites the first, not appends — only one logo
+    per business ever exists."""
+    _signed_up_client(client)
+    business_id = client.post(
+        "/businesses", json={"name": "Acme Widgets", "industry": "ECOMMERCE"}
+    ).json()["id"]
+    _upload_logo(client, business_id)
+
+    response = _upload_logo(client, business_id, filename="new-logo.jpg")
+
+    assert response.status_code == 200
+    assert (
+        response.json()["logoUrl"]
+        == f"http://localhost:8000/business-logos/{business_id}"
+    )
+
+
+def test_serve_logo_returns_the_raw_bytes(client: TestClient) -> None:
+    """GET /business-logos/{id} serves the stored bytes with the right content-type."""
+    _signed_up_client(client)
+    business_id = client.post(
+        "/businesses", json={"name": "Acme Widgets", "industry": "ECOMMERCE"}
+    ).json()["id"]
+    _upload_logo(client, business_id)
+
+    response = client.get(f"/business-logos/{business_id}")
+
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "image/jpeg"
+    assert response.content == _JPEG_BYTES
+
+
+def test_serve_logo_404s_when_none_uploaded(client: TestClient) -> None:
+    """A business with no logo yet 404s, not an empty response."""
+    _signed_up_client(client)
+    business_id = client.post(
+        "/businesses", json={"name": "Acme Widgets", "industry": "ECOMMERCE"}
+    ).json()["id"]
+
+    response = client.get(f"/business-logos/{business_id}")
+
+    assert response.status_code == 404
+
+
+def test_serve_logo_404s_for_a_nonexistent_business(client: TestClient) -> None:
+    """A nonexistent business id 404s, same message as no-logo-yet."""
+    response = client.get("/business-logos/does-not-exist")
+
+    assert response.status_code == 404
 
 
 # GET /businesses/industries moved to GET /options (test_options.py),

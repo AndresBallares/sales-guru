@@ -104,3 +104,8 @@ class BusinessResponse(CamelCaseModel):
     industry: str | None
     location: str | None
     description: str | None
+    # The absolute, publicly-fetchable serving URL (GET
+    # /business-logos/{business_id}, app/api/business.py) — same shape as
+    # ProductResponse.primary_image_url — or None if no logo has been
+    # uploaded yet.
+    logo_url: str | None = None

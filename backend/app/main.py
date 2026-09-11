@@ -9,6 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.api.audience import router as audience_router
 from app.api.auth import router as auth_router
 from app.api.business import router as business_router
+from app.api.business import serve_router as business_logo_serve_router
 from app.api.campaign import router as campaign_router
 from app.api.creative import router as creative_router
 from app.api.meta import callback_router as meta_callback_router
@@ -58,6 +59,7 @@ app.add_middleware(
 )
 app.include_router(auth_router)
 app.include_router(business_router)
+app.include_router(business_logo_serve_router)
 app.include_router(product_router)
 app.include_router(product_image_router)
 app.include_router(product_image_serve_router)
