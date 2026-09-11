@@ -77,7 +77,7 @@ describe('signup', () => {
     })
   })
 
-  it('joins array-shaped validation error details into one message', async () => {
+  it('joins array-shaped validation error details one per line, unlabeled with no loc', async () => {
     vi.stubGlobal(
       'fetch',
       vi.fn<typeof fetch>().mockResolvedValue(
@@ -95,7 +95,72 @@ describe('signup', () => {
 
     await expect(signup('bad', 'short')).rejects.toMatchObject({
       status: 422,
-      message: 'value is not a valid email address; String should have at least 8 characters',
+      message: 'value is not a valid email address\nString should have at least 8 characters',
+    })
+  })
+
+  it('labels a single validation error with its human field name', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn<typeof fetch>().mockResolvedValue(
+        jsonResponse(
+          {
+            detail: [
+              {
+                loc: ['body', 'idealCustomer'],
+                msg: 'String should have at most 1000 characters',
+              },
+            ],
+          },
+          422,
+        ),
+      ),
+    )
+
+    await expect(signup('a@b.com', 'password123')).rejects.toMatchObject({
+      status: 422,
+      message: 'Ideal customer: String should have at most 1000 characters',
+    })
+  })
+
+  it('puts one labeled line per field when several fields are invalid', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn<typeof fetch>().mockResolvedValue(
+        jsonResponse(
+          {
+            detail: [
+              {
+                loc: ['body', 'idealCustomer'],
+                msg: 'String should have at most 1000 characters',
+              },
+              {
+                loc: ['body', 'brandPhrases'],
+                msg: 'String should have at most 750 characters',
+              },
+              {
+                loc: ['body', 'avoidPhrases'],
+                msg: 'String should have at most 750 characters',
+              },
+              {
+                loc: ['body', 'competitors'],
+                msg: 'String should have at most 1000 characters',
+              },
+            ],
+          },
+          422,
+        ),
+      ),
+    )
+
+    await expect(signup('a@b.com', 'password123')).rejects.toMatchObject({
+      status: 422,
+      message: [
+        'Ideal customer: String should have at most 1000 characters',
+        'Brand phrases: String should have at most 750 characters',
+        'Avoid phrases: String should have at most 750 characters',
+        'Competitors: String should have at most 1000 characters',
+      ].join('\n'),
     })
   })
 

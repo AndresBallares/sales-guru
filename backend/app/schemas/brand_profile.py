@@ -16,10 +16,10 @@ from app.schemas.base import CamelCaseModel
 # via app/services/prompt_safety.py, same reasoning as Business.description
 # and Product.description) — capped so none of these can balloon the prompt.
 _MAX_DESCRIPTION_LENGTH = 1000
-_MAX_IDEAL_CUSTOMER_LENGTH = 500
-_MAX_PHRASES_LENGTH = 500
+_MAX_IDEAL_CUSTOMER_LENGTH = 1000
+_MAX_PHRASES_LENGTH = 750
 _MAX_TAGLINE_LENGTH = 150
-_MAX_COMPETITORS_LENGTH = 500
+_MAX_COMPETITORS_LENGTH = 1000
 _MAX_EXAMPLE_COPY_LENGTH = 2000
 
 # Fixed list, confirmed 2026-09-11 — same Literal-type-alias + *_LABELS
