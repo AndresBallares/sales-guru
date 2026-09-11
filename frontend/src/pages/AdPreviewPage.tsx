@@ -171,7 +171,11 @@ export function AdPreviewPage() {
           <div className="social-post" aria-label="Ad preview">
             <div className="social-post-header">
               <div className="social-post-avatar" aria-hidden="true">
-                {business?.name.slice(0, 1).toUpperCase()}
+                {business?.logoUrl ? (
+                  <img src={business.logoUrl} alt="" />
+                ) : (
+                  business?.name.slice(0, 1).toUpperCase()
+                )}
               </div>
               <div>
                 <p className="social-post-page-name">{business?.name}</p>
@@ -180,18 +184,20 @@ export function AdPreviewPage() {
             </div>
             <p className="social-post-body">{creative.bodyText}</p>
             {creative.imageUrl && (
-              <img
-                className="social-post-image"
-                src={creative.imageUrl}
-                alt={creative.headline}
-                width={500}
-                height={500}
-              />
+              <div className="social-post-image-frame">
+                <img
+                  className="social-post-image"
+                  src={creative.imageUrl}
+                  alt={creative.headline}
+                />
+              </div>
             )}
             <div className="social-post-link-card">
-              <p className="social-post-headline">{creative.headline}</p>
-              <p className="social-post-description">{creative.description}</p>
-              <span className="ad-preview-cta">{ctaLabels[creative.cta] ?? creative.cta}</span>
+              <div className="social-post-link-card-text">
+                <p className="social-post-headline">{creative.headline}</p>
+                <p className="social-post-description">{creative.description}</p>
+              </div>
+              <span className="social-post-cta">{ctaLabels[creative.cta] ?? creative.cta}</span>
             </div>
             <div className="social-post-actions" aria-hidden="true">
               <span>👍 Like</span>

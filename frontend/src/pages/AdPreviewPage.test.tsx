@@ -123,6 +123,25 @@ describe('AdPreviewPage', () => {
     expect(screen.getByText('Sponsored')).toBeInTheDocument()
   })
 
+  it("shows the business's own logo as the post avatar when one is uploaded", async () => {
+    mockedApi.getBusiness.mockResolvedValue({
+      ...business,
+      logoUrl: 'http://localhost:8000/business-logos/biz-1',
+    })
+
+    renderPage()
+
+    const avatar = await screen.findByAltText('')
+    expect(avatar).toHaveAttribute('src', 'http://localhost:8000/business-logos/biz-1')
+  })
+
+  it('falls back to an initial when the business has no logo', async () => {
+    renderPage()
+
+    expect(await screen.findByText('A')).toBeInTheDocument()
+    expect(screen.queryByAltText('')).not.toBeInTheDocument()
+  })
+
   it('shows a fallback message when no ad has been selected yet', async () => {
     mockedApi.listCreatives.mockResolvedValue([makeCreative({ status: 'GENERATED' })])
 
