@@ -367,6 +367,34 @@ def test_update_business_rejects_an_invalid_industry(client: TestClient) -> None
     assert response.status_code == 422
 
 
+def test_update_business_can_change_the_website(client: TestClient) -> None:
+    """website can be changed via PATCH."""
+    _signed_up_client(client)
+    created = client.post(
+        "/businesses", json={"name": "Acme Widgets", "industry": "ECOMMERCE"}
+    ).json()
+
+    response = client.patch(
+        f"/businesses/{created['id']}", json={"website": "https://acme.example"}
+    )
+
+    assert response.status_code == 200
+    assert response.json()["website"] == "https://acme.example"
+
+
+def test_update_business_can_change_the_location(client: TestClient) -> None:
+    """location can be changed via PATCH."""
+    _signed_up_client(client)
+    created = client.post(
+        "/businesses", json={"name": "Acme Widgets", "industry": "ECOMMERCE"}
+    ).json()
+
+    response = client.patch(f"/businesses/{created['id']}", json={"location": "CDMX"})
+
+    assert response.status_code == 200
+    assert response.json()["location"] == "CDMX"
+
+
 def test_create_business_has_no_logo_url_by_default(client: TestClient) -> None:
     """A freshly created business has no logo yet."""
     _signed_up_client(client)

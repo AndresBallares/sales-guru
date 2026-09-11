@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
@@ -16,6 +16,7 @@ vi.mock('../lib/api', async (importOriginal) => {
     getMe: vi.fn<typeof actual.getMe>(),
     getBusiness: vi.fn<typeof actual.getBusiness>(),
     updateBusiness: vi.fn<typeof actual.updateBusiness>(),
+    uploadBusinessLogo: vi.fn<typeof actual.uploadBusinessLogo>(),
     getOptions: vi.fn<typeof actual.getOptions>(),
     listProducts: vi.fn<typeof actual.listProducts>(),
     listProductImages: vi.fn<typeof actual.listProductImages>(),
@@ -330,7 +331,9 @@ describe('BusinessDetailPage', () => {
     await waitFor(() =>
       expect(mockedApi.updateBusiness).toHaveBeenCalledWith('biz-1', {
         name: 'Acme Widgets',
+        website: null,
         industry: 'FASHION_JEWELRY',
+        location: null,
         description: null,
       }),
     )
@@ -357,10 +360,117 @@ describe('BusinessDetailPage', () => {
     await waitFor(() =>
       expect(mockedApi.updateBusiness).toHaveBeenCalledWith('biz-1', {
         name: 'Acme Inc',
+        website: null,
+        location: null,
         description: 'Family-run since 1985',
       }),
     )
     expect(await screen.findByRole('heading', { name: 'Acme Inc' })).toBeInTheDocument()
+  })
+
+  it('edits the business website and location inline', async () => {
+    const updated = { ...business, website: 'https://acme.example', location: 'CDMX' }
+    mockedApi.updateBusiness.mockResolvedValue(updated)
+    const user = userEvent.setup()
+
+    renderPage()
+    await screen.findByRole('heading', { name: 'Acme Widgets' })
+
+    await user.click(screen.getByRole('button', { name: 'Edit' }))
+    await user.type(screen.getByLabelText('Website'), 'https://acme.example')
+    await user.type(screen.getByLabelText('Location'), 'CDMX')
+    await user.click(screen.getByRole('button', { name: 'Save' }))
+
+    await waitFor(() =>
+      expect(mockedApi.updateBusiness).toHaveBeenCalledWith('biz-1', {
+        name: 'Acme Widgets',
+        website: 'https://acme.example',
+        location: 'CDMX',
+        description: null,
+      }),
+    )
+  })
+
+  it('uploads a new logo on save', async () => {
+    const updated = { ...business, logoUrl: 'https://backend.example/business-logos/biz-1' }
+    mockedApi.updateBusiness.mockResolvedValue(business)
+    mockedApi.uploadBusinessLogo.mockResolvedValue(updated)
+    const user = userEvent.setup()
+
+    renderPage()
+    await screen.findByRole('heading', { name: 'Acme Widgets' })
+
+    await user.click(screen.getByRole('button', { name: 'Edit' }))
+    const file = new File(['logo-bytes'], 'logo.png', { type: 'image/png' })
+    const input = document.getElementById('business-logo') as HTMLInputElement
+    await user.upload(input, file)
+    await user.click(screen.getByRole('button', { name: 'Save' }))
+
+    await waitFor(() =>
+      expect(mockedApi.uploadBusinessLogo).toHaveBeenCalledWith('biz-1', file),
+    )
+  })
+
+  it('rejects an oversized logo file', async () => {
+    const user = userEvent.setup()
+
+    renderPage()
+    await screen.findByRole('heading', { name: 'Acme Widgets' })
+
+    await user.click(screen.getByRole('button', { name: 'Edit' }))
+    const oversized = new File([new Uint8Array(8 * 1024 * 1024 + 1)], 'logo.png', {
+      type: 'image/png',
+    })
+    const input = document.getElementById('business-logo') as HTMLInputElement
+    await user.upload(input, oversized)
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(/exceeds the 8MB limit/i)
+    expect(mockedApi.uploadBusinessLogo).not.toHaveBeenCalled()
+  })
+
+  it('stages a dropped logo file', async () => {
+    const user = userEvent.setup()
+
+    renderPage()
+    await screen.findByRole('heading', { name: 'Acme Widgets' })
+
+    await user.click(screen.getByRole('button', { name: 'Edit' }))
+    const dropzone = screen.getByText('Add logo').closest('label') as HTMLLabelElement
+    const file = new File(['logo-bytes'], 'logo.png', { type: 'image/png' })
+
+    fireEvent.dragOver(dropzone, { dataTransfer: { files: [file] } })
+    fireEvent.dragLeave(dropzone)
+    fireEvent.drop(dropzone, { dataTransfer: { files: [file] } })
+
+    expect(await screen.findByAltText('Business logo')).toBeInTheDocument()
+  })
+
+  it('replaces an already-saved logo via the change-logo button', async () => {
+    mockedApi.getBusiness.mockResolvedValue({
+      ...business,
+      logoUrl: 'https://backend.example/business-logos/biz-1',
+    })
+    const updated = {
+      ...business,
+      logoUrl: 'https://backend.example/business-logos/biz-1-v2',
+    }
+    mockedApi.updateBusiness.mockResolvedValue(business)
+    mockedApi.uploadBusinessLogo.mockResolvedValue(updated)
+    const user = userEvent.setup()
+
+    renderPage()
+    await screen.findByRole('heading', { name: 'Acme Widgets' })
+
+    await user.click(screen.getByRole('button', { name: 'Edit' }))
+    await user.click(screen.getByRole('button', { name: 'Change logo' }))
+    const file = new File(['logo-bytes-2'], 'logo2.png', { type: 'image/png' })
+    const input = document.getElementById('business-logo') as HTMLInputElement
+    await user.upload(input, file)
+    await user.click(screen.getByRole('button', { name: 'Save' }))
+
+    await waitFor(() =>
+      expect(mockedApi.uploadBusinessLogo).toHaveBeenCalledWith('biz-1', file),
+    )
   })
 
   it('cancels an edit without saving, restoring the heading unchanged', async () => {

@@ -51,13 +51,16 @@ export interface BusinessCreateInput {
   description?: string
 }
 
-// Partial update — name, description, and industry are editable through
-// this endpoint (app/schemas/business.py's BusinessUpdateRequest). A
-// field's absence here (vs. an explicit value) decides whether it
-// changes, matching the backend's model_dump exclude_unset semantics.
+// Partial update — name, website, industry, location, and description are
+// editable through this endpoint (app/schemas/business.py's
+// BusinessUpdateRequest). A field's absence here (vs. an explicit value)
+// decides whether it changes, matching the backend's model_dump
+// exclude_unset semantics.
 export interface BusinessUpdateInput {
   name?: string
+  website?: string | null
   industry?: string
+  location?: string | null
   description?: string | null
 }
 

@@ -81,17 +81,18 @@ class BusinessCreateRequest(CamelCaseModel):
 class BusinessUpdateRequest(CamelCaseModel):
     """Payload for PATCH .../businesses/{id} — a partial update.
 
-    name, description, and industry can be changed here (industry added
-    2026-09-08, superseding an earlier 2026-09-08 decision that had left
-    it out) — website/location still aren't editable through this
-    endpoint, since nothing has asked for that yet. Only fields explicitly
-    provided change; an omitted field is left as it is (app/api/
-    business.py's update_business uses model_dump's exclude_unset, same
-    convention as ProductUpdateRequest).
+    name, website, industry, location, and description can all be changed
+    here — the same fields the create-business ("Company Information")
+    form collects, so anything set at creation stays editable afterward.
+    Only fields explicitly provided change; an omitted field is left as it
+    is (app/api/business.py's update_business uses model_dump's
+    exclude_unset, same convention as ProductUpdateRequest).
     """
 
     name: str | None = None
+    website: str | None = None
     industry: Industry | None = None
+    location: str | None = None
     description: str | None = Field(default=None, max_length=_MAX_DESCRIPTION_LENGTH)
 
 
