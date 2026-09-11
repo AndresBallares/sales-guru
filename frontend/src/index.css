@@ -415,22 +415,26 @@ legend {
 /* A closer mockup of how the ad actually renders as a Facebook/Instagram
    post (AdPreviewPage) — page header, body copy, image, a link-preview
    card for headline/description/CTA, then the like/comment/share row —
-   rather than .ad-preview's plain data-card version above. */
+   rather than .ad-preview's plain data-card version above. Sizing/colors
+   are tuned against a real Meta Ad Library card (confirmed 2026-09-11),
+   not guessed — e.g. the 1:1 image frame with letterboxing for a
+   non-square photo, and the light-gray (not brand-purple) CTA button. */
 .social-post {
   display: flex;
   flex-direction: column;
   max-width: 420px;
   background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: var(--radius-card);
+  border-radius: 8px;
   overflow: hidden;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
 }
 
 .social-post-header {
   display: flex;
   align-items: center;
-  gap: 0.65rem;
-  padding: 0.85rem 1rem 0.5rem;
+  gap: 0.6rem;
+  padding: 0.75rem 0.75rem 0.5rem;
 }
 
 .social-post-avatar {
@@ -440,61 +444,114 @@ legend {
   width: 2.5rem;
   height: 2.5rem;
   flex-shrink: 0;
+  overflow: hidden;
   border-radius: 999px;
   background: var(--primary);
   color: white;
   font-weight: 700;
 }
 
+.social-post-avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
 .social-post-page-name {
-  font-weight: 600;
+  font-weight: 700;
   color: var(--text);
-  font-size: 0.95rem;
+  font-size: 0.9375rem;
+  line-height: 1.3;
 }
 
 .social-post-sponsored {
-  font-size: 0.8rem;
+  font-size: 0.8125rem;
+  color: var(--text-secondary);
+  line-height: 1.3;
 }
 
 .social-post-body {
-  padding: 0 1rem 0.75rem;
+  padding: 0 0.75rem 0.6rem;
   color: var(--text);
+  font-size: 0.9375rem;
+  line-height: 1.35;
+}
+
+/* A fixed 1:1 canvas, same as the Ad Library's own preview — a
+   non-square photo gets letterboxed on a neutral background (object-fit:
+   contain) rather than cropped or stretched, matching what Meta actually
+   shows rather than assuming every uploaded photo is already square. */
+.social-post-image-frame {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  aspect-ratio: 1 / 1;
+  background: var(--surface-hover);
+  overflow: hidden;
 }
 
 .social-post-image {
   width: 100%;
-  height: auto;
+  height: 100%;
+  object-fit: contain;
   display: block;
 }
 
 .social-post-link-card {
   display: flex;
-  flex-direction: column;
-  gap: 0.375rem;
-  align-items: flex-start;
-  padding: 0.85rem 1rem;
-  background: var(--surface-hover);
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.65rem 0.75rem;
+  background: var(--surface);
   border-top: 1px solid var(--border);
+}
+
+.social-post-link-card-text {
+  flex: 1 1 auto;
+  min-width: 0;
 }
 
 .social-post-headline {
   font-weight: 700;
   color: var(--text);
+  font-size: 0.9375rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .social-post-description {
   color: var(--text-secondary);
-  font-size: 0.85rem;
+  font-size: 0.8125rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Deliberately its own class, not a reuse of .ad-preview-cta
+   (CampaignsSection's brand-purple pill) — a real Meta ad's CTA button
+   is a small, neutral light-gray rectangle sitting inside the link card,
+   not a purple pill floating below it. */
+.social-post-cta {
+  flex-shrink: 0;
+  padding: 0.5rem 0.9rem;
+  background: var(--surface-hover);
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  color: var(--text);
+  font-weight: 600;
+  font-size: 0.8125rem;
+  white-space: nowrap;
 }
 
 .social-post-actions {
   display: flex;
   justify-content: space-around;
-  padding: 0.6rem 1rem;
+  padding: 0.5rem 0.75rem;
   border-top: 1px solid var(--border);
   color: var(--text-secondary);
-  font-size: 0.85rem;
-  font-weight: 500;
+  font-size: 0.8125rem;
+  font-weight: 600;
 }
 
 /* ---------- Form fields ---------- */
