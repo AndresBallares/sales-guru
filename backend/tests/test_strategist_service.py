@@ -4,6 +4,7 @@ The Anthropic client is mocked throughout — no test here needs a real
 ANTHROPIC_API_KEY or makes a network call.
 """
 
+import copy
 from collections.abc import Iterator
 from types import SimpleNamespace
 from typing import Any, cast
@@ -746,4 +747,126 @@ async def test_generate_strategy_raises_on_malformed_tool_input(
             audience=None,
             objective="SALES",
             plan_type="TEST_PLAN",
+        )
+
+
+@pytest.mark.asyncio
+async def test_generate_strategy_drops_an_invalid_interest_from_a_test_plan(
+    anthropic_api_key: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A real claude-sonnet-5 call (2026-09-10) invented an interest key
+    outside the curated InterestKey enum alongside otherwise-valid ones —
+    generate_strategy must still succeed, with just the bad value dropped.
+    See app/services/tool_use.py's parse_tool_input."""
+    tool_input = copy.deepcopy(_VALID_TEST_PLAN_INPUT)
+    tool_input["hypothesisAudienceTargeting"]["interests"] = [
+        "jewelry",
+        "fine_jewelry_adjacent_removed",
+    ]
+    _mock_client_returning(
+        monkeypatch, [SimpleNamespace(type="tool_use", input=tool_input)]
+    )
+
+    result = await strategist.generate_strategy(
+        business=_fake_business(),
+        product=None,
+        audience=None,
+        objective="SALES",
+        plan_type="TEST_PLAN",
+    )
+
+    assert result.plan_type == "TEST_PLAN"
+    hypothesis_variant = result.audience_variants[1]
+    assert hypothesis_variant.targeting.interests == ["jewelry"]
+
+
+@pytest.mark.asyncio
+async def test_generate_strategy_raises_clearly_when_every_test_plan_interest_is_bad(
+    anthropic_api_key: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """If dropping invalid interests would leave the hypothesis audience
+    with none at all, that's a clear, retryable StrategistError — not an
+    unhandled ValidationError turning into a generic 500."""
+    tool_input = copy.deepcopy(_VALID_TEST_PLAN_INPUT)
+    tool_input["hypothesisAudienceTargeting"]["interests"] = [
+        "fine_jewelry_adjacent_removed",
+        "also_not_a_real_interest",
+    ]
+    _mock_client_returning(
+        monkeypatch, [SimpleNamespace(type="tool_use", input=tool_input)]
+    )
+
+    with pytest.raises(strategist.StrategistError, match="no usable interests"):
+        await strategist.generate_strategy(
+            business=_fake_business(),
+            product=None,
+            audience=None,
+            objective="SALES",
+            plan_type="TEST_PLAN",
+        )
+
+
+@pytest.mark.asyncio
+async def test_generate_strategy_drops_an_invalid_interest_from_a_data_driven_strategy(
+    anthropic_api_key: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The same interest-enum recovery applies to the DATA_DRIVEN_STRATEGY
+    plan's target_audience, not just a TEST_PLAN's hypothesis audience."""
+    tool_input = copy.deepcopy(_VALID_DATA_DRIVEN_STRATEGY_INPUT)
+    tool_input["targetAudience"]["interests"] = [
+        "jewelry",
+        "fine_jewelry_adjacent_removed",
+    ]
+    _mock_client_returning(
+        monkeypatch, [SimpleNamespace(type="tool_use", input=tool_input)]
+    )
+
+    result = await strategist.generate_strategy(
+        business=_fake_business(),
+        product=None,
+        audience=None,
+        objective="SALES",
+        plan_type="DATA_DRIVEN_STRATEGY",
+        account_history=[
+            AccountCampaignInsights(
+                campaign_name="Prior campaign",
+                impressions=10000,
+                clicks=200,
+                spend=500.0,
+                conversions=10,
+            )
+        ],
+    )
+
+    assert result.plan_type == "DATA_DRIVEN_STRATEGY"
+    assert result.target_audience.interests == ["jewelry"]
+
+
+@pytest.mark.asyncio
+async def test_generate_strategy_raises_clearly_when_every_data_driven_interest_is_bad(
+    anthropic_api_key: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Same clear, retryable failure for the DATA_DRIVEN_STRATEGY branch."""
+    tool_input = copy.deepcopy(_VALID_DATA_DRIVEN_STRATEGY_INPUT)
+    tool_input["targetAudience"]["interests"] = ["fine_jewelry_adjacent_removed"]
+    _mock_client_returning(
+        monkeypatch, [SimpleNamespace(type="tool_use", input=tool_input)]
+    )
+
+    with pytest.raises(strategist.StrategistError, match="no usable interests"):
+        await strategist.generate_strategy(
+            business=_fake_business(),
+            product=None,
+            audience=None,
+            objective="SALES",
+            plan_type="DATA_DRIVEN_STRATEGY",
+            account_history=[
+                AccountCampaignInsights(
+                    campaign_name="Prior campaign",
+                    impressions=10000,
+                    clicks=200,
+                    spend=500.0,
+                    conversions=10,
+                )
+            ],
         )

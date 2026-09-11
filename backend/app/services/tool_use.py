@@ -34,11 +34,42 @@ validate (`variants` is now a dict, not a list) — it takes unwrapping
 parse_tool_input tries every combination of the two recoveries (decode,
 unwrap, and unwrap-of-decode) rather than just one pass of each, so a
 compounded quirk like this one still resolves.
+
+A third quirk, independent of the two above (observed 2026-09-10): the
+Marketing Strategist Agent's `hypothesisAudienceTargeting.interests`
+came back with an invented value outside the curated, Meta-backed
+InterestKey enum (app/services/interests.py) — the rest of the audience
+was otherwise well-formed. Failing the whole audience over one bad
+interest would waste the call, so parse_tool_input drops just the
+invalid item(s) (logging the rejected value, since it's worth knowing
+what the model keeps inventing) and keeps the rest. If every proposed
+interest is invalid, dropping them all would leave an empty list — that
+resolvable-but-unhelpful shape raises ToolInputRecoveryError instead of
+silently returning it, so the caller can surface a clear, retryable
+error rather than quietly generating an audience with no interests.
 """
 
+import copy
 import json
+import logging
 
 from pydantic import BaseModel, ValidationError
+
+logger = logging.getLogger(__name__)
+
+
+class ToolInputRecoveryError(ValueError):
+    """A recoverable quirk was identified but recovering would help no one.
+
+    Specifically: every item in an otherwise-valid list came back
+    invalid (see _drop_invalid_enum_list_items), so the only "recovery"
+    available is returning an empty list — silently doing that would
+    trade one failure for a worse, quieter one (a real request going out
+    with no targeting at all). Raised instead of a plain ValidationError
+    so callers can tell "the model's answer was unusable in a specific,
+    nameable way" apart from "the shape was wrong in some generic way",
+    and respond with their own clear, retryable error.
+    """
 
 
 def _unwrap_stray_key(
@@ -111,6 +142,75 @@ def _decode_json_string_fields(raw: dict[str, object]) -> dict[str, object] | No
     return decoded if changed else None
 
 
+def _drop_invalid_enum_list_items(
+    raw: dict[str, object], exc: ValidationError
+) -> dict[str, object] | None:
+    """Recover from individual list items that fail Literal/enum validation.
+
+    Observed in production (2026-09-10): the Strategist Agent invented an
+    interest key outside the curated InterestKey enum — everything else
+    about the audience was fine. Dropping just the invalid item(s) (and
+    logging the rejected value, so real invented values stay visible)
+    keeps the rest of a well-formed answer usable.
+
+    Args:
+        raw: The tool call's raw input, already known not to validate
+            as-is.
+        exc: The validation error raised by attempting to validate `raw`.
+
+    Returns:
+        A dict worth retrying validation with, or None if no error in
+        `exc` looks like a droppable list item.
+
+    Raises:
+        ToolInputRecoveryError: If every item in one of the offending
+            lists was invalid, so dropping them all would leave it empty
+            — see the class docstring for why that's raised rather than
+            returned as a candidate.
+    """
+    bad_indices: dict[tuple[int | str, ...], set[int]] = {}
+    for error in exc.errors():
+        if error["type"] != "literal_error":
+            continue
+        loc = error["loc"]
+        if len(loc) < 2 or not isinstance(loc[-1], int):
+            continue
+        bad_indices.setdefault(loc[:-1], set()).add(loc[-1])
+    if not bad_indices:
+        return None
+
+    result = copy.deepcopy(raw)
+    for path, indices in bad_indices.items():
+        target: object = result
+        for segment in path:
+            if (  # noqa: SIM114 -- separate branches needed for type narrowing below
+                isinstance(target, dict)
+                and isinstance(segment, str)
+                and segment in target
+            ):
+                target = target[segment]
+            elif (
+                isinstance(target, list)
+                and isinstance(segment, int)
+                and segment < len(target)
+            ):
+                target = target[segment]
+            else:
+                target = None
+                break
+        if not isinstance(target, list):
+            continue
+        rejected = [target[i] for i in sorted(indices) if i < len(target)]
+        logger.warning("Dropping invalid enum value(s) at %s: %r", path, rejected)
+        if len(indices) >= len(target):
+            raise ToolInputRecoveryError(
+                f"All values at {path!r} were invalid: {rejected!r}"
+            )
+        for index in sorted(indices, reverse=True):
+            del target[index]
+    return result
+
+
 def _recovery_candidates(
     raw: dict[str, object], model: type[BaseModel]
 ) -> list[dict[str, object]]:
@@ -160,6 +260,9 @@ def parse_tool_input[ModelT: BaseModel](
         The validated model instance.
 
     Raises:
+        ToolInputRecoveryError: See _drop_invalid_enum_list_items — a
+            list field's invalid items could all be identified, but
+            dropping them all would leave it empty.
         ValidationError: If `raw` doesn't match `model`, even after every
             recovery attempt (see _recovery_candidates) — the original
             error, not one from a failed recovery attempt.
@@ -167,6 +270,23 @@ def parse_tool_input[ModelT: BaseModel](
     try:
         return model.model_validate(raw)
     except ValidationError as exc:
+        # Known model quirks, tried in this order: (1) drop individual
+        # invalid enum/Literal values out of an otherwise-valid list
+        # (interests, observed 2026-09-10) — raises ToolInputRecoveryError
+        # rather than yielding a candidate if that would empty a list
+        # that had items; (2)/(3) below, tried together via
+        # _recovery_candidates: a stray top-level wrapper key
+        # (2026-08-29), and a field JSON-encoded as a string instead of
+        # the real object/array it should be (2026-09-08) — including
+        # the compounded case where both apply at once. Don't remove any
+        # of these without checking the module docstring for the
+        # production case each one exists to handle.
+        dropped = _drop_invalid_enum_list_items(raw, exc)
+        if dropped is not None:
+            try:
+                return model.model_validate(dropped)
+            except ValidationError:
+                pass
         for candidate in _recovery_candidates(raw, model):
             try:
                 return model.model_validate(candidate)

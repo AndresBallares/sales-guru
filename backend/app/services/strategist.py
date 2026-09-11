@@ -77,7 +77,7 @@ from app.services.benchmarks import (
 from app.services.brand_voice import brand_voice_lines
 from app.services.meta import AccountCampaignInsights
 from app.services.prompt_safety import quarantine
-from app.services.tool_use import parse_tool_input
+from app.services.tool_use import ToolInputRecoveryError, parse_tool_input
 from app.services.unit_economics import compute_unit_economics
 
 _MODEL = "claude-sonnet-5"
@@ -668,7 +668,10 @@ async def generate_strategy(
 
     Raises:
         StrategistError: If no API key is configured, the API call fails,
-            or the model doesn't return a valid tool call.
+            the model doesn't return a valid tool call, or the model's
+            proposed audience had no usable interests left after
+            dropping invalid ones (app/services/tool_use.py's
+            ToolInputRecoveryError).
     """
     unit_economics_tuple = compute_unit_economics(product)
     unit_economics = (
@@ -700,7 +703,14 @@ async def generate_strategy(
             tool_schema=GeneratedTestPlanFields.model_json_schema(),
             prompt=prompt,
         )
-        generated = parse_tool_input(raw, GeneratedTestPlanFields)
+        try:
+            generated = parse_tool_input(raw, GeneratedTestPlanFields)
+        except ToolInputRecoveryError as exc:
+            raise StrategistError(
+                "The model recommended a hypothesis audience with no "
+                "usable interests (every suggested value was invalid) — "
+                "please try generating the strategy again."
+            ) from exc
         benchmark_context = _build_benchmark_context()
         audience_variants = [
             _build_broad_baseline_variant(),
@@ -754,7 +764,14 @@ async def generate_strategy(
         tool_schema=GeneratedDataDrivenStrategyFields.model_json_schema(),
         prompt=prompt,
     )
-    generated_opt = parse_tool_input(raw, GeneratedDataDrivenStrategyFields)
+    try:
+        generated_opt = parse_tool_input(raw, GeneratedDataDrivenStrategyFields)
+    except ToolInputRecoveryError as exc:
+        raise StrategistError(
+            "The model recommended a target audience with no usable "
+            "interests (every suggested value was invalid) — please try "
+            "generating the strategy again."
+        ) from exc
     # model_validate, not the constructor — same objective-is-plain-str
     # reasoning as the TEST_PLAN branch above.
     return DataDrivenStrategyContent.model_validate(
