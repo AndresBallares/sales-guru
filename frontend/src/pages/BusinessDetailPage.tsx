@@ -4,6 +4,7 @@ import { AudiencesSection } from '../components/AudiencesSection'
 import { BrandProfileSection } from '../components/BrandProfileSection'
 import { BusinessEditForm } from '../components/BusinessEditForm'
 import { CampaignsSection } from '../components/CampaignsSection'
+import { DeleteBusinessSection } from '../components/DeleteBusinessSection'
 import { MetaConnectionSection } from '../components/MetaConnectionSection'
 import { ProductsSection } from '../components/ProductsSection'
 import {
@@ -85,6 +86,9 @@ export function BusinessDetailPage() {
             <button type="button" onClick={() => setEditingBusiness(true)}>
               Edit
             </button>
+          )}
+          {business && (
+            <DeleteBusinessSection businessId={business.id} businessName={business.name} />
           )}
         </>
       )}

@@ -624,6 +624,30 @@ def test_callback_redirects_to_error_for_a_state_from_another_users_business(
     )
 
 
+def test_callback_redirects_to_error_for_a_soft_deleted_business(
+    client: TestClient,
+) -> None:
+    """A business soft-deleted between starting the OAuth flow and Meta's
+    redirect back can't have a MetaConnection created for it — same
+    ownership-check rejection as another user's business, even though this
+    route isn't behind get_owned_business."""
+    _signed_up_client(client)
+    business_id = _create_business(client)
+    connect_response = client.get(f"/businesses/{business_id}/meta/connect")
+    state_id = connect_response.json()["authorizationUrl"].rsplit("/", 1)[-1]
+    client.delete(f"/businesses/{business_id}")
+
+    response = client.get(
+        "/meta/callback",
+        params={"code": "some-code", "state": state_id},
+        follow_redirects=False,
+    )
+
+    assert response.headers["location"].endswith(
+        f"/businesses/{business_id}?meta=error"
+    )
+
+
 @pytest.mark.asyncio
 async def test_callback_redirects_to_error_when_the_user_has_no_organization(
     client: TestClient,

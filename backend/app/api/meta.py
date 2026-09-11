@@ -402,13 +402,18 @@ async def _user_owns_business(user_id: str, business_id: str) -> bool:
         business_id: The business to check.
 
     Returns:
-        True if the business exists and belongs to the user's organization.
+        True if the business exists, isn't soft-deleted, and belongs to
+        the user's organization.
     """
     organization = await db.organization.find_first(where={"ownerId": user_id})
     if organization is None:
         return False
     business = await db.business.find_unique(where={"id": business_id})
-    return business is not None and business.organizationId == organization.id
+    return (
+        business is not None
+        and business.deletedAt is None
+        and business.organizationId == organization.id
+    )
 
 
 @callback_router.get("/meta/callback", include_in_schema=False)

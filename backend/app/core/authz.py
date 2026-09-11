@@ -50,13 +50,24 @@ async def get_owned_business(
         The business, if it exists and belongs to the current user.
 
     Raises:
-        HTTPException: 404 if the business doesn't exist or belongs to a
-            different organization — identical response either way, so a
-            caller can't distinguish "not found" from "not yours" and
-            enumerate other users' business ids.
+        HTTPException: 404 if the business doesn't exist, belongs to a
+            different organization, or has been soft-deleted (deletedAt
+            set — DELETE /businesses/{id}) — identical response in every
+            case, so a caller can't distinguish "not found" from "not
+            yours" (or "deleted") and enumerate other users' business ids.
+            This is the single choke point every business-scoped route
+            goes through (directly or via get_owned_campaign/
+            get_owned_product below), so a soft-deleted business
+            disappearing from here excludes it everywhere except the few
+            routes that can't use it — see Business.deletedAt's schema
+            comment for the full list.
     """
     business = await db.business.find_unique(where={"id": business_id})
-    if business is None or business.organizationId != organization_id:
+    if (
+        business is None
+        or business.organizationId != organization_id
+        or business.deletedAt is not None
+    ):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail=_BUSINESS_NOT_FOUND
         )

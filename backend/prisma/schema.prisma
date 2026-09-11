@@ -125,6 +125,16 @@ model Business {
   audiences                     Audience[]
   metaConnection                MetaConnection?
   campaigns                     Campaign[]
+  // Soft delete (DELETE /businesses/{id}, app/api/business.py) — set
+  // instead of removing the row, so child records (products, photos,
+  // brand profile, campaigns, Meta connection) are preserved untouched
+  // rather than cascade-deleted. Null for an active business. Every
+  // business-scoped lookup must filter this out and 404 otherwise — the
+  // single choke point is get_owned_business (app/core/authz.py); the few
+  // routes not behind it (business-logo/product-image serve routes, the
+  // Meta OAuth callback, the scheduled optimization jobs) each check it
+  // directly.
+  deletedAt                     DateTime?
   createdAt                     DateTime        @default(now())
   updatedAt                     DateTime        @updatedAt
 }

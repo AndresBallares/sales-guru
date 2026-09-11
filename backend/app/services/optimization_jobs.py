@@ -477,8 +477,15 @@ async def collect_metrics_for_all_live_campaigns() -> None:
     cycle's own fetch failed — they compare against whatever's already
     stored, since a prior cycle's numbers crossing a threshold is still
     valid grounds to act.
+
+    A LIVE campaign's business can never actually be soft-deleted
+    (DELETE /businesses/{id} 409s while any campaign is LIVE) — the
+    `business.is.deletedAt: None` filter below is a defensive backstop
+    for that invariant, not something reachable in normal operation.
     """
-    campaigns = await db.campaign.find_many(where={"status": "LIVE"})
+    campaigns = await db.campaign.find_many(
+        where={"status": "LIVE", "business": {"is": {"deletedAt": None}}}
+    )
     for campaign in campaigns:
         if campaign.metaCampaignId is None:
             continue
@@ -725,8 +732,13 @@ async def evaluate_all_live_campaigns() -> None:
 
     Each campaign is evaluated independently; one campaign's LLM failure
     doesn't block the others in the same run.
+
+    Same defensive `business.is.deletedAt: None` backstop as
+    collect_metrics_for_all_live_campaigns above — see its docstring.
     """
-    campaigns = await db.campaign.find_many(where={"status": "LIVE"})
+    campaigns = await db.campaign.find_many(
+        where={"status": "LIVE", "business": {"is": {"deletedAt": None}}}
+    )
     for campaign in campaigns:
         try:
             await _evaluate_campaign(campaign)
@@ -753,10 +765,17 @@ async def pause_expired_campaigns() -> None:
 
     One campaign's Meta failure doesn't block the rest of the batch,
     same "skip and log" pattern as collect_metrics_for_all_live_campaigns.
+
+    Same defensive `business.is.deletedAt: None` backstop as
+    collect_metrics_for_all_live_campaigns above — see its docstring.
     """
     now = datetime.now(UTC)
     campaigns = await db.campaign.find_many(
-        where={"status": "LIVE", "endDate": {"lt": now}}
+        where={
+            "status": "LIVE",
+            "endDate": {"lt": now},
+            "business": {"is": {"deletedAt": None}},
+        }
     )
     for campaign in campaigns:
         connection = await get_meta_connection(campaign.businessId)

@@ -1,5 +1,6 @@
 """Business onboarding endpoints (PRD.md §2 step 2, §7)."""
 
+from datetime import UTC, datetime
 from typing import cast
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, status
@@ -34,6 +35,10 @@ _UNSUPPORTED_CONTENT_TYPE = (
 )
 _TOO_LARGE = f"Image exceeds the {MAX_IMAGE_BYTES // (1024 * 1024)}MB limit"
 _LOGO_NOT_FOUND = "This business has no logo"
+_HAS_LIVE_CAMPAIGN = (
+    "Can't delete — this business has a campaign that's still live on Meta. "
+    "Pause or end it before deleting this business."
+)
 
 
 def business_logo_url(business_id: str) -> str:
@@ -105,7 +110,9 @@ async def list_businesses(
     Returns:
         All businesses under the current user's organization.
     """
-    businesses = await db.business.find_many(where={"organizationId": organization_id})
+    businesses = await db.business.find_many(
+        where={"organizationId": organization_id, "deletedAt": None}
+    )
     return [_to_response(b) for b in businesses]
 
 
@@ -156,6 +163,48 @@ async def update_business(
     updated = await db.business.update(where={"id": business.id}, data=update_data)
     assert updated is not None  # just fetched above, can't vanish mid-request
     return _to_response(updated)
+
+
+@router.delete("/{business_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_business(
+    business: Business = Depends(get_owned_business),
+) -> None:
+    """Soft-delete a business owned by the current user.
+
+    Sets deletedAt rather than removing the row — every child record
+    (products, photos, brand profile, Meta connection, campaigns) is left
+    untouched, and every business-scoped lookup excludes a deleted
+    business from here on (get_owned_business is the single choke point;
+    see Business.deletedAt's schema comment for the few routes that
+    aren't behind it and check it directly instead).
+
+    Meta itself is never touched here — a campaign that already went live
+    (metaCampaignId set) stays exactly as it is on Meta's side (paused, if
+    it's been paused; running, if somehow still LIVE, though that's
+    exactly what the check below prevents from being deleted in the first
+    place).
+
+    Args:
+        business: The business, resolved and ownership-checked by
+            get_owned_business.
+
+    Raises:
+        HTTPException: 404 if the business doesn't exist or isn't the
+            current user's (via get_owned_business). 409 if any of its
+            campaigns is still LIVE — the only status that means Meta
+            could be actively spending against it right now.
+    """
+    live_campaign = await db.campaign.find_first(
+        where={"businessId": business.id, "status": "LIVE"}
+    )
+    if live_campaign is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail=_HAS_LIVE_CAMPAIGN
+        )
+
+    await db.business.update(
+        where={"id": business.id}, data={"deletedAt": datetime.now(UTC)}
+    )
 
 
 @router.post("/{business_id}/logo", response_model=BusinessResponse)
@@ -223,6 +272,7 @@ async def serve_business_logo(business_id: str) -> Response:
     business = await db.business.find_unique(where={"id": business_id})
     if (
         business is None
+        or business.deletedAt is not None
         or business.logoData is None
         or business.logoContentType is None
     ):
