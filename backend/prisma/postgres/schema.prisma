@@ -101,14 +101,14 @@ model Subscription {
 // to keep signup friction low — AI strategy generation degrades gracefully
 // with less context rather than blocking onboarding on them.
 model Business {
-  id             String          @id @default(cuid())
-  organization   Organization    @relation(fields: [organizationId], references: [id])
-  organizationId String
-  name           String
-  website        String?
-  industry       String?
-  location       String?
-  description    String?
+  id                            String          @id @default(cuid())
+  organization                  Organization    @relation(fields: [organizationId], references: [id])
+  organizationId                String
+  name                          String
+  website                       String?
+  industry                      String?
+  location                      String?
+  description                   String?
   // Self-reported once, the first time a strategy is generated for this
   // business (app/api/strategy.py) — null until then. Only consulted when
   // the real-data check (Meta account-level ad history, once connected)
@@ -116,12 +116,22 @@ model Business {
   // are available. Feeds the Marketing Strategist Agent's TEST_PLAN vs.
   // STRATEGY_OPTIMIZATION decision (see app/services/strategist.py).
   hasPriorAdvertisingExperience Boolean?
-  products       Product[]
-  audiences      Audience[]
-  metaConnection MetaConnection?
-  campaigns      Campaign[]
-  createdAt      DateTime        @default(now())
-  updatedAt      DateTime        @updatedAt
+  // The business's logo, stored the same way as ProductImage (Option A,
+  // confirmed 2026-09-02) — a single replaceable pair of columns rather
+  // than a separate one-row-per-business model, since unlike product
+  // photos there's never more than one. Uploaded once at business
+  // creation (app/api/business.py's upload_business_logo); both null
+  // until then. Feeds brand-consistent ad generation (the Creative
+  // Agent can ground image generation in it) — that consumption is a
+  // separate, not-yet-built pass; for now this just stores and serves it.
+  logoData                      Bytes?
+  logoContentType               String?
+  products                      Product[]
+  audiences                     Audience[]
+  metaConnection                MetaConnection?
+  campaigns                     Campaign[]
+  createdAt                     DateTime        @default(now())
+  updatedAt                     DateTime        @updatedAt
 }
 
 // Product has no separate name field — `description` ("What do you sell?")
@@ -383,19 +393,19 @@ model Ad {
 // imageUrl (the resulting asset) so a variant can be regenerated/tweaked
 // from its prompt.
 model Creative {
-  id             String   @id @default(cuid())
-  campaign       Campaign @relation(fields: [campaignId], references: [id])
-  campaignId     String
-  ad             Ad?      @relation(fields: [adId], references: [id])
-  adId           String?
-  headline       String
-  bodyText       String
-  description    String
-  cta            String
-  creativeAngle  String?
-  imagePrompt    String?
-  videoPrompt    String?
-  imageUrl       String?
+  id                        String   @id @default(cuid())
+  campaign                  Campaign @relation(fields: [campaignId], references: [id])
+  campaignId                String
+  ad                        Ad?      @relation(fields: [adId], references: [id])
+  adId                      String?
+  headline                  String
+  bodyText                  String
+  description               String
+  cta                       String
+  creativeAngle             String?
+  imagePrompt               String?
+  videoPrompt               String?
+  imageUrl                  String?
   // The ProductImage this creative's imageUrl was built from — a plain
   // id, not a `@relation` (deliberately, same as sourceProductId below):
   // a photo deleted after selection is handled explicitly in application
@@ -406,9 +416,9 @@ model Creative {
   // publish time to fetch the actual image bytes for Meta's real ad
   // image upload (app/services/meta.py's upload_meta_ad_image) — imageUrl
   // alone (our own /product-images/{id} URL) isn't enough for that.
-  productImageId String?
-  status         String   @default("GENERATED")
-  metaCreativeId String?
+  productImageId            String?
+  status                    String   @default("GENERATED")
+  metaCreativeId            String?
   // Snapshot of the product this creative was generated from (PRD.md
   // "stale creative detection"). sourceProductId is nullable — a creative
   // generated with no product selected has nothing to snapshot.
@@ -417,9 +427,9 @@ model Creative {
   // swap can be detected by comparison (see app/services/creative.py's
   // is_creative_stale) without needing a join back to the product's
   // current state to know something changed.
-  sourceProductId String?
-  sourceDescription String?
-  sourceUrl         String?
+  sourceProductId           String?
+  sourceDescription         String?
+  sourceUrl                 String?
   // Same snapshot idea, for the campaign's Business.description — a
   // third staleness source alongside the product fields above (confirmed
   // 2026-09-08): editing a business's own description after generating
@@ -427,8 +437,8 @@ model Creative {
   // surely as editing the product does, so is_creative_stale checks this
   // independently of whether a product is even attached.
   sourceBusinessDescription String?
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
+  createdAt                 DateTime @default(now())
+  updatedAt                 DateTime @updatedAt
 }
 
 // impressions/clicks/spend/conversions are the original step-9 fields —
@@ -440,9 +450,9 @@ model Creative {
 // strategy.py) — see app/services/meta.py's fetch_campaign_insights for
 // exactly when each is populated vs. left null.
 model Metric {
-  id          String   @id @default(cuid())
-  campaign    Campaign @relation(fields: [campaignId], references: [id])
-  campaignId  String
+  id               String   @id @default(cuid())
+  campaign         Campaign @relation(fields: [campaignId], references: [id])
+  campaignId       String
   // Set only when this snapshot is one TEST_PLAN AdSet's own performance
   // (PRD.md build step 10, per-AdSet metric collection, confirmed
   // 2026-09-02) — null for the pre-existing campaign-level aggregate
@@ -450,12 +460,12 @@ model Metric {
   // history collected before this field existed). Lets the TEST_PLAN
   // evaluator compare each variant's own real numbers instead of one
   // undifferentiated pool.
-  adSet       AdSet?   @relation(fields: [adSetId], references: [id])
-  adSetId     String?
-  impressions Int
-  clicks      Int
-  spend       Float
-  conversions Int
+  adSet            AdSet?   @relation(fields: [adSetId], references: [id])
+  adSetId          String?
+  impressions      Int
+  clicks           Int
+  spend            Float
+  conversions      Int
   reach            Int?
   cpm              Float?
   ctr              Float?
@@ -474,7 +484,7 @@ model Metric {
   // rolling-window CAC — app/services/optimization_jobs.py's CAC
   // circuit breaker, confirmed 2026-09-03).
   purchases        Int?
-  fetchedAt   DateTime @default(now())
+  fetchedAt        DateTime @default(now())
 }
 
 // OptimizationRecommendation.actionType: PAUSE_AD | INCREASE_BUDGET |

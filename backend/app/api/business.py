@@ -2,19 +2,43 @@
 
 from typing import cast
 
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, status
+from fastapi.responses import Response
+from prisma import Base64
 from prisma.models import Business
 from prisma.types import BusinessUpdateInput
 
 from app.core.authz import get_owned_business, get_owned_organization_id
+from app.core.config import get_settings
 from app.core.db import db
 from app.schemas.business import (
     BusinessCreateRequest,
     BusinessResponse,
     BusinessUpdateRequest,
 )
+from app.schemas.product_image import ALLOWED_CONTENT_TYPES, MAX_IMAGE_BYTES
 
 router = APIRouter(prefix="/businesses", tags=["businesses"])
+# Separate, unauthenticated router for serving the raw logo bytes — same
+# split and same reasoning as app/api/product_image.py's serve_router: a
+# future consumer (the Creative Agent grounding image generation in it, or
+# eventually Meta itself) may need to fetch this URL directly, not through
+# the browser with the user's session cookie. The id in the URL is the
+# business's own id (unguessable cuid), and a logo — unlike, say, an
+# unpublished product photo — is meant to be publicly visible anyway, so
+# there's no meaningful confidentiality loss.
+serve_router = APIRouter(tags=["businesses"])
+
+_UNSUPPORTED_CONTENT_TYPE = (
+    f"Unsupported image type — use one of {', '.join(sorted(ALLOWED_CONTENT_TYPES))}"
+)
+_TOO_LARGE = f"Image exceeds the {MAX_IMAGE_BYTES // (1024 * 1024)}MB limit"
+_LOGO_NOT_FOUND = "This business has no logo"
+
+
+def business_logo_url(business_id: str) -> str:
+    """Build the absolute, publicly-fetchable URL for a business's logo."""
+    return f"{get_settings().backend_url}/business-logos/{business_id}"
 
 
 def _to_response(business: Business) -> BusinessResponse:
@@ -33,6 +57,9 @@ def _to_response(business: Business) -> BusinessResponse:
         industry=business.industry,
         location=business.location,
         description=business.description,
+        logo_url=business_logo_url(business.id)
+        if business.logoData is not None
+        else None,
     )
 
 
@@ -129,3 +156,79 @@ async def update_business(
     updated = await db.business.update(where={"id": business.id}, data=update_data)
     assert updated is not None  # just fetched above, can't vanish mid-request
     return _to_response(updated)
+
+
+@router.post("/{business_id}/logo", response_model=BusinessResponse)
+async def upload_business_logo(
+    file: UploadFile,
+    business: Business = Depends(get_owned_business),
+) -> BusinessResponse:
+    """Upload (or replace) a business's logo, stored directly in the database.
+
+    Same storage approach as ProductImage (Option A, confirmed
+    2026-09-02) — no object storage account needed at MVP scale. Unlike a
+    product photo there's only ever one per business, so a second upload
+    simply overwrites the first rather than appending.
+
+    Not yet consumed by the Strategist/Creative Agents — this endpoint
+    only stores and serves it; grounding ad generation in it (PRD.md's
+    "brand DNA" — consistent, on-brand ads) is a separate, not-yet-built
+    pass.
+
+    Args:
+        file: The uploaded image (multipart/form-data), jpeg/png only.
+        business: The business, resolved and ownership-checked by
+            get_owned_business.
+
+    Returns:
+        The business, with logo_url now set.
+
+    Raises:
+        HTTPException: 400 if the content type isn't a supported image
+            format, or the file exceeds MAX_IMAGE_BYTES.
+    """
+    if file.content_type not in ALLOWED_CONTENT_TYPES:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=_UNSUPPORTED_CONTENT_TYPE
+        )
+
+    data = await file.read()
+    if len(data) > MAX_IMAGE_BYTES:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=_TOO_LARGE)
+
+    updated = await db.business.update(
+        where={"id": business.id},
+        data={"logoData": Base64.encode(data), "logoContentType": file.content_type},
+    )
+    assert updated is not None  # just fetched above, can't vanish mid-request
+    return _to_response(updated)
+
+
+@serve_router.get("/business-logos/{business_id}", include_in_schema=False)
+async def serve_business_logo(business_id: str) -> Response:
+    """Serve a business's raw logo bytes, publicly and without authentication.
+
+    See this module's router docstring for why this route is deliberately
+    not behind get_owned_business.
+
+    Args:
+        business_id: The business whose logo to serve.
+
+    Returns:
+        The raw image bytes with the original upload's Content-Type.
+
+    Raises:
+        HTTPException: 404 if the business doesn't exist or has no logo.
+    """
+    business = await db.business.find_unique(where={"id": business_id})
+    if (
+        business is None
+        or business.logoData is None
+        or business.logoContentType is None
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=_LOGO_NOT_FOUND
+        )
+    return Response(
+        content=business.logoData.decode(), media_type=business.logoContentType
+    )

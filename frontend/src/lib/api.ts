@@ -36,6 +36,9 @@ export interface Business {
   industry: string | null
   location: string | null
   description: string | null
+  // The uploaded logo's URL, or null if none has been uploaded yet — the
+  // agent uses it to keep generated ads on-brand (brand DNA).
+  logoUrl: string | null
 }
 
 export interface BusinessCreateInput {
@@ -295,6 +298,15 @@ export function updateBusiness(
   return request<Business>(`/businesses/${businessId}`, {
     method: 'PATCH',
     body: JSON.stringify(input),
+  })
+}
+
+export function uploadBusinessLogo(businessId: string, file: File): Promise<Business> {
+  const formData = new FormData()
+  formData.append('file', file)
+  return request<Business>(`/businesses/${businessId}/logo`, {
+    method: 'POST',
+    body: formData,
   })
 }
 

@@ -28,6 +28,7 @@ const business: api.Business = {
   website: null,
   industry: null,
   location: null,
+  logoUrl: null,
   description: null,
 }
 

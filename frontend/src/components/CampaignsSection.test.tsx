@@ -330,6 +330,7 @@ beforeEach(() => {
     website: null,
     industry: null,
     location: null,
+    logoUrl: null,
     description: 'Family-run since 1985',
   })
   mockedApi.listProducts.mockResolvedValue([])
@@ -783,6 +784,7 @@ describe('CampaignsSection', () => {
       website: null,
       industry: null,
       location: null,
+      logoUrl: null,
       description: null,
     })
 
