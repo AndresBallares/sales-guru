@@ -520,6 +520,20 @@ legend {
   font-weight: 400;
 }
 
+/* Live remaining-characters readout under a textarea — quieter than
+   field-hint since it's a passive status, not guidance, until it's close
+   to the limit. */
+.char-counter {
+  align-self: flex-end;
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+}
+
+.char-counter.char-counter-near-limit {
+  color: var(--warning);
+  font-weight: 500;
+}
+
 label {
   color: var(--text-secondary);
   font-weight: 500;
@@ -735,6 +749,10 @@ li ul {
   padding: 0.6rem 0.85rem;
   font-size: 0.9rem;
   text-align: left;
+  /* A multi-field validation error is one line per field (extractErrorMessage,
+     src/lib/api.ts) — preserve those line breaks; a single-line message is
+     unaffected. */
+  white-space: pre-line;
 }
 
 .form-warning {

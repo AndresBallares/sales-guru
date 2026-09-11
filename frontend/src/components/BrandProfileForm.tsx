@@ -8,6 +8,29 @@ import {
   type Option,
 } from '../lib/api'
 
+// Mirrors backend/app/schemas/brand_profile.py's _MAX_*_LENGTH constants —
+// client-side only, for the maxLength attributes/counters below; the
+// backend's own Field(max_length=...) is what's actually authoritative.
+const MAX_DESCRIPTION_LENGTH = 1000
+const MAX_IDEAL_CUSTOMER_LENGTH = 1000
+const MAX_PHRASES_LENGTH = 750
+const MAX_TAGLINE_LENGTH = 150
+const MAX_COMPETITORS_LENGTH = 1000
+const MAX_EXAMPLE_COPY_LENGTH = 2000
+
+// How close to the limit (characters remaining) the counter switches to
+// its near-limit color — a passive status until it's actually relevant.
+const NEAR_LIMIT_THRESHOLD = 50
+
+function CharCounter({ current, max }: { current: number; max: number }) {
+  const nearLimit = max - current <= NEAR_LIMIT_THRESHOLD
+  return (
+    <span className={`char-counter${nearLimit ? ' char-counter-near-limit' : ''}`}>
+      {current} / {max}
+    </span>
+  )
+}
+
 // Shared by BrandProfileSection's onboarding step and its later "Edit"
 // mode (create vs. update, same as ProductForm's own isEditing split) —
 // one form, not two near-duplicates.
@@ -111,18 +134,22 @@ export function BrandProfileForm({
         <textarea
           id="brand-description"
           required
+          maxLength={MAX_DESCRIPTION_LENGTH}
           value={description}
           onChange={(event) => setDescription(event.target.value)}
         />
+        <CharCounter current={description.length} max={MAX_DESCRIPTION_LENGTH} />
       </div>
       <div className="field">
         <label htmlFor="ideal-customer">Ideal customer</label>
         <textarea
           id="ideal-customer"
           required
+          maxLength={MAX_IDEAL_CUSTOMER_LENGTH}
           value={idealCustomer}
           onChange={(event) => setIdealCustomer(event.target.value)}
         />
+        <CharCounter current={idealCustomer.length} max={MAX_IDEAL_CUSTOMER_LENGTH} />
       </div>
       <fieldset>
         <legend>
@@ -165,9 +192,11 @@ export function BrandProfileForm({
         </label>
         <textarea
           id="brand-phrases"
+          maxLength={MAX_PHRASES_LENGTH}
           value={brandPhrases}
           onChange={(event) => setBrandPhrases(event.target.value)}
         />
+        <CharCounter current={brandPhrases.length} max={MAX_PHRASES_LENGTH} />
       </div>
       <div className="field">
         <label htmlFor="avoid-phrases">
@@ -176,14 +205,17 @@ export function BrandProfileForm({
         </label>
         <textarea
           id="avoid-phrases"
+          maxLength={MAX_PHRASES_LENGTH}
           value={avoidPhrases}
           onChange={(event) => setAvoidPhrases(event.target.value)}
         />
+        <CharCounter current={avoidPhrases.length} max={MAX_PHRASES_LENGTH} />
       </div>
       <div className="field">
         <label htmlFor="tagline">Tagline</label>
         <input
           id="tagline"
+          maxLength={MAX_TAGLINE_LENGTH}
           value={tagline}
           onChange={(event) => setTagline(event.target.value)}
         />
@@ -192,9 +224,11 @@ export function BrandProfileForm({
         <label htmlFor="competitors">Competitors</label>
         <textarea
           id="competitors"
+          maxLength={MAX_COMPETITORS_LENGTH}
           value={competitors}
           onChange={(event) => setCompetitors(event.target.value)}
         />
+        <CharCounter current={competitors.length} max={MAX_COMPETITORS_LENGTH} />
       </div>
       <div className="field">
         <label htmlFor="example-copy">
@@ -203,9 +237,11 @@ export function BrandProfileForm({
         </label>
         <textarea
           id="example-copy"
+          maxLength={MAX_EXAMPLE_COPY_LENGTH}
           value={exampleCopy}
           onChange={(event) => setExampleCopy(event.target.value)}
         />
+        <CharCounter current={exampleCopy.length} max={MAX_EXAMPLE_COPY_LENGTH} />
       </div>
       {formError && (
         <p className="form-error" role="alert">

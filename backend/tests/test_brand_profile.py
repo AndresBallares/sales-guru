@@ -120,6 +120,49 @@ def test_create_brand_profile_with_every_field(client: TestClient) -> None:
     assert body["exampleCopy"] == "No two Venzi pieces feel the same."
 
 
+def test_create_brand_profile_accepts_each_fields_new_max_length(
+    client: TestClient,
+) -> None:
+    """Raised caps (confirmed 2026-09-11): idealCustomer/competitors to
+    1000, brand/avoidPhrases to 750 — each field's new limit is accepted
+    right up to the boundary, not just comfortably under it."""
+    _signed_up_client(client)
+    business_id = _create_business(client)
+
+    response = client.post(
+        f"/businesses/{business_id}/brand-profile",
+        json=_valid_payload(
+            idealCustomer="c" * 1000,
+            brandPhrases="p" * 750,
+            avoidPhrases="p" * 750,
+            competitors="c" * 1000,
+        ),
+    )
+
+    assert response.status_code == 201
+    body = response.json()
+    assert len(body["idealCustomer"]) == 1000
+    assert len(body["brandPhrases"]) == 750
+    assert len(body["avoidPhrases"]) == 750
+    assert len(body["competitors"]) == 1000
+
+
+def test_create_brand_profile_rejects_one_character_past_the_new_max_length(
+    client: TestClient,
+) -> None:
+    """One character past the new idealCustomer cap (1000) still 422s —
+    the cap moved, it didn't disappear."""
+    _signed_up_client(client)
+    business_id = _create_business(client)
+
+    response = client.post(
+        f"/businesses/{business_id}/brand-profile",
+        json=_valid_payload(idealCustomer="c" * 1001),
+    )
+
+    assert response.status_code == 422
+
+
 def test_create_brand_profile_requires_description(client: TestClient) -> None:
     """Omitting the required description field returns 422."""
     _signed_up_client(client)

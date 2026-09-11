@@ -231,8 +231,47 @@ export class ApiError extends Error {
 
 interface ValidationErrorItem {
   msg?: string
+  loc?: (string | number)[]
 }
 
+// FastAPI prefixes a request-body field's `loc` with "body" (confirmed
+// against a real 422: `["body", "description"]`) — not a field name, so
+// it's filtered out along with the other non-body-field wrapper segments
+// FastAPI uses for query/path/header params. The last remaining string
+// segment is the actual field the error is about; a list index (e.g. a
+// validation error inside an array item) isn't itself a field name to
+// label the message with, so only string segments count.
+function fieldNameFromLoc(loc: (string | number)[] | undefined): string | null {
+  if (!loc) {
+    return null
+  }
+  const fieldSegments = loc.filter(
+    (segment): segment is string =>
+      typeof segment === 'string' &&
+      segment !== 'body' &&
+      segment !== 'query' &&
+      segment !== 'path' &&
+      segment !== 'header',
+  )
+  return fieldSegments.at(-1) ?? null
+}
+
+// "idealCustomer" -> "Ideal customer" — a generic camelCase/snake_case
+// humanizer rather than a hand-maintained field->label table, so it stays
+// correct for every field across the app (present and future) with no
+// upkeep.
+function humanizeFieldName(field: string): string {
+  const spaced = field
+    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+    .replace(/_/g, ' ')
+    .toLowerCase()
+  return spaced.charAt(0).toUpperCase() + spaced.slice(1)
+}
+
+// One line per field (not one run-on "; "-joined sentence) so a response
+// with several invalid fields — e.g. "Ideal customer: String should have
+// at most 1000 characters" — actually says which fields, instead of
+// repeating the same unlabeled message several times.
 function extractErrorMessage(body: unknown): string | null {
   if (typeof body !== 'object' || body === null || !('detail' in body)) {
     return null
@@ -243,10 +282,13 @@ function extractErrorMessage(body: unknown): string | null {
     return detail
   }
   if (Array.isArray(detail)) {
-    return detail
-      .map((item: ValidationErrorItem) => item.msg)
-      .filter((msg): msg is string => Boolean(msg))
-      .join('; ')
+    const lines = (detail as ValidationErrorItem[])
+      .filter((item): item is ValidationErrorItem & { msg: string } => Boolean(item.msg))
+      .map((item) => {
+        const field = fieldNameFromLoc(item.loc)
+        return field ? `${humanizeFieldName(field)}: ${item.msg}` : item.msg
+      })
+    return lines.length > 0 ? lines.join('\n') : null
   }
   return null
 }
