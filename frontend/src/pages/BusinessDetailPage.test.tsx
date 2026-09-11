@@ -17,6 +17,7 @@ vi.mock('../lib/api', async (importOriginal) => {
     getBusiness: vi.fn<typeof actual.getBusiness>(),
     updateBusiness: vi.fn<typeof actual.updateBusiness>(),
     uploadBusinessLogo: vi.fn<typeof actual.uploadBusinessLogo>(),
+    deleteBusiness: vi.fn<typeof actual.deleteBusiness>(),
     getOptions: vi.fn<typeof actual.getOptions>(),
     listProducts: vi.fn<typeof actual.listProducts>(),
     listProductImages: vi.fn<typeof actual.listProductImages>(),
@@ -148,6 +149,7 @@ function renderPage() {
       <AuthProvider>
         <Routes>
           <Route path="/businesses/:businessId" element={<BusinessDetailPage />} />
+          <Route path="/" element={<p>Dashboard placeholder</p>} />
         </Routes>
       </AuthProvider>
     </MemoryRouter>,
@@ -508,5 +510,114 @@ describe('BusinessDetailPage', () => {
     renderPage()
 
     expect(await screen.findByRole('alert')).toHaveTextContent('Business not found')
+  })
+
+  describe('delete business', () => {
+    it('requires the exact business name before the delete button enables', async () => {
+      const user = userEvent.setup()
+
+      renderPage()
+      await screen.findByRole('heading', { name: 'Acme Widgets' })
+
+      await user.click(screen.getByRole('button', { name: 'Delete business' }))
+      const confirmButton = await screen.findByRole('button', {
+        name: 'Permanently delete business',
+      })
+      expect(confirmButton).toBeDisabled()
+
+      const nameField = screen.getByLabelText(/Acme Widgets/)
+      await user.type(nameField, 'wrong name')
+      expect(confirmButton).toBeDisabled()
+
+      await user.clear(nameField)
+      await user.type(nameField, 'Acme Widgets')
+      expect(confirmButton).toBeEnabled()
+
+      expect(mockedApi.deleteBusiness).not.toHaveBeenCalled()
+    })
+
+    it('deletes the business and redirects to the dashboard on success', async () => {
+      mockedApi.deleteBusiness.mockResolvedValue(undefined)
+      const user = userEvent.setup()
+
+      renderPage()
+      await screen.findByRole('heading', { name: 'Acme Widgets' })
+
+      await user.click(screen.getByRole('button', { name: 'Delete business' }))
+      await user.type(await screen.findByLabelText(/Acme Widgets/), 'Acme Widgets')
+      await user.click(screen.getByRole('button', { name: 'Permanently delete business' }))
+
+      await waitFor(() => expect(mockedApi.deleteBusiness).toHaveBeenCalledWith('biz-1'))
+      expect(await screen.findByText('Dashboard placeholder')).toBeInTheDocument()
+    })
+
+    it('shows the 409 message when blocked by a live campaign', async () => {
+      mockedApi.deleteBusiness.mockRejectedValue(
+        new api.ApiError(
+          409,
+          "Can't delete — this business has a campaign that's still live on Meta. " +
+            'Pause or end it before deleting this business.',
+        ),
+      )
+      const user = userEvent.setup()
+
+      renderPage()
+      await screen.findByRole('heading', { name: 'Acme Widgets' })
+
+      await user.click(screen.getByRole('button', { name: 'Delete business' }))
+      await user.type(await screen.findByLabelText(/Acme Widgets/), 'Acme Widgets')
+      await user.click(screen.getByRole('button', { name: 'Permanently delete business' }))
+
+      expect(await screen.findByRole('alert')).toHaveTextContent(
+        'Pause or end it before deleting this business.',
+      )
+      // Not navigated away — the business is still here to fix.
+      expect(screen.getByRole('heading', { name: 'Acme Widgets' })).toBeInTheDocument()
+    })
+
+    it('notes that Meta campaigns will remain paused when any campaign has one', async () => {
+      mockedApi.listCampaigns.mockResolvedValue([
+        { ...draftCampaign, id: 'camp-live', metaCampaignId: 'meta-1' },
+      ])
+      const user = userEvent.setup()
+
+      renderPage()
+      await screen.findByRole('heading', { name: 'Acme Widgets' })
+
+      await user.click(screen.getByRole('button', { name: 'Delete business' }))
+
+      expect(
+        await screen.findByText(/they'll remain \(paused\) in your Meta account/),
+      ).toBeInTheDocument()
+    })
+
+    it('shows no Meta-campaigns note when no campaign has ever been published', async () => {
+      mockedApi.listCampaigns.mockResolvedValue([draftCampaign])
+      const user = userEvent.setup()
+
+      renderPage()
+      await screen.findByRole('heading', { name: 'Acme Widgets' })
+
+      await user.click(screen.getByRole('button', { name: 'Delete business' }))
+      await screen.findByRole('button', { name: 'Permanently delete business' })
+
+      expect(screen.queryByText(/remain \(paused\)/)).not.toBeInTheDocument()
+    })
+
+    it('cancels out of the confirm panel without deleting', async () => {
+      const user = userEvent.setup()
+
+      renderPage()
+      await screen.findByRole('heading', { name: 'Acme Widgets' })
+
+      await user.click(screen.getByRole('button', { name: 'Delete business' }))
+      await screen.findByRole('button', { name: 'Permanently delete business' })
+      await user.click(screen.getByRole('button', { name: 'Cancel' }))
+
+      expect(
+        screen.queryByRole('button', { name: 'Permanently delete business' }),
+      ).not.toBeInTheDocument()
+      expect(mockedApi.deleteBusiness).not.toHaveBeenCalled()
+    })
   })
 })

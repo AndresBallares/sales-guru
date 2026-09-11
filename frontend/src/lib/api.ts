@@ -397,6 +397,13 @@ export function updateBusiness(
   })
 }
 
+// Soft-deletes the business (app/api/business.py's delete_business) —
+// 409s (surfaced via ApiError.message) if any of its campaigns is still
+// LIVE on Meta.
+export function deleteBusiness(businessId: string): Promise<void> {
+  return request<void>(`/businesses/${businessId}`, { method: 'DELETE' })
+}
+
 export function uploadBusinessLogo(businessId: string, file: File): Promise<Business> {
   const formData = new FormData()
   formData.append('file', file)

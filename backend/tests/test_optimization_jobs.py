@@ -290,6 +290,22 @@ def _live_campaign(client: TestClient) -> tuple[str, str]:
     return business_id, campaign_id
 
 
+async def _soft_delete_business(business_id: str) -> None:
+    """Set a business's deletedAt directly via a fresh connection.
+
+    Normal API use can never soft-delete a business with a LIVE campaign
+    (DELETE /businesses/{id} 409s first) — this simulates that otherwise
+    unreachable state directly, to prove the scheduled jobs' defensive
+    `business.is.deletedAt: None` filter actually works as a backstop.
+    """
+    seeder = Prisma()
+    await seeder.connect()
+    await seeder.business.update(
+        where={"id": business_id}, data={"deletedAt": datetime.now(UTC)}
+    )
+    await seeder.disconnect()
+
+
 async def _seed_metric(
     campaign_id: str,
     *,
@@ -453,6 +469,24 @@ async def test_collect_metrics_skips_a_campaign_with_no_meta_connection(
         f"/businesses/{business_id}/campaigns/{campaign_id}/metrics"
     ).json()
     assert listed == []
+
+
+@pytest.mark.asyncio
+async def test_collect_metrics_skips_a_campaign_whose_business_is_soft_deleted(
+    client: TestClient, mock_services: dict[str, AsyncMock]
+) -> None:
+    """Defense in depth: a soft-deleted business's LIVE campaign (otherwise
+    unreachable — see _soft_delete_business) is never touched."""
+    business_id, campaign_id = _live_campaign(client)
+    await _soft_delete_business(business_id)
+
+    _run(client, optimization_jobs.collect_metrics_for_all_live_campaigns)
+
+    seeder = Prisma()
+    await seeder.connect()
+    metrics = await seeder.metric.find_many(where={"campaignId": campaign_id})
+    await seeder.disconnect()
+    assert metrics == []
 
 
 def test_collect_metrics_collects_per_adset_for_a_test_plan_campaign(
@@ -977,6 +1011,27 @@ async def test_pause_expired_campaigns_pauses_one_past_its_end_date(
 
 
 @pytest.mark.asyncio
+async def test_pause_expired_campaigns_skips_a_campaign_whose_business_is_soft_deleted(
+    client: TestClient, mock_services: dict[str, AsyncMock]
+) -> None:
+    """Defense in depth: a soft-deleted business's LIVE, expired campaign
+    (otherwise unreachable — see _soft_delete_business) is never paused."""
+    business_id, campaign_id = _live_campaign(client)
+    await _set_end_date(campaign_id, datetime.now(UTC) - timedelta(days=1))
+    await _soft_delete_business(business_id)
+
+    _run(client, optimization_jobs.pause_expired_campaigns)
+
+    seeder = Prisma()
+    await seeder.connect()
+    campaign = await seeder.campaign.find_unique(where={"id": campaign_id})
+    await seeder.disconnect()
+    assert campaign is not None
+    assert campaign.status == "LIVE"
+    mock_services["pause_ad_set"].assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_pause_expired_campaigns_auto_evaluates_a_test_plan_it_pauses(
     client: TestClient,
     mock_services: dict[str, AsyncMock],
@@ -1471,6 +1526,49 @@ async def test_evaluate_generates_a_recommendation_when_the_gate_passes(
     await seeder.disconnect()
     assert len(recs) == 1
     assert recs[0].status == "PENDING"
+
+
+@pytest.mark.asyncio
+async def test_evaluate_skips_a_campaign_whose_business_is_soft_deleted(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Defense in depth: a soft-deleted business's LIVE campaign (otherwise
+    unreachable — see _soft_delete_business) never generates a recommendation,
+    even though the gate would otherwise pass."""
+    business_id, campaign_id = _live_campaign(client)
+    now = datetime.now(UTC)
+    await _seed_metric(
+        campaign_id,
+        fetched_at=now - timedelta(hours=25),
+        spend=0.0,
+        clicks=0,
+        impressions=0,
+        conversions=0,
+    )
+    await _seed_metric(
+        campaign_id,
+        fetched_at=now,
+        spend=25.0,
+        clicks=40,
+        impressions=2000,
+        conversions=6,
+    )
+    monkeypatch.setattr(
+        optimizer_module,
+        "generate_recommendation",
+        AsyncMock(return_value=_fake_result()),
+    )
+    await _soft_delete_business(business_id)
+
+    _run(client, optimization_jobs.evaluate_all_live_campaigns)
+
+    seeder = Prisma()
+    await seeder.connect()
+    recs = await seeder.optimizationrecommendation.find_many(
+        where={"campaignId": campaign_id}
+    )
+    await seeder.disconnect()
+    assert recs == []
 
 
 @pytest.mark.asyncio

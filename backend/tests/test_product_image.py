@@ -516,3 +516,19 @@ def test_serve_image_404s_for_a_nonexistent_image(client: TestClient) -> None:
     response = client.get("/product-images/does-not-exist")
 
     assert response.status_code == 404
+
+
+def test_serve_image_404s_once_its_business_is_soft_deleted(client: TestClient) -> None:
+    """A soft-deleted business's product image stops being served, even
+    though this route isn't behind get_owned_business (Meta's own servers
+    fetch it unauthenticated) and the row itself is untouched."""
+    _signed_up_client(client)
+    business_id = _create_business(client)
+    product_id = _create_product(client, business_id)
+    image = _upload(client, business_id, product_id).json()
+
+    client.delete(f"/businesses/{business_id}")
+
+    response = client.get(f"/product-images/{image['id']}")
+
+    assert response.status_code == 404

@@ -3,8 +3,10 @@
 import struct
 
 import httpx2
+import pytest
 from app.schemas.product_image import MAX_IMAGE_BYTES
 from fastapi.testclient import TestClient
+from prisma import Prisma
 
 
 def _signed_up_client(
@@ -13,6 +15,21 @@ def _signed_up_client(
     """Sign a fresh user up (and thus in) on the given client."""
     client.post("/auth/signup", json={"email": email, "password": "supersecret123"})
     return client
+
+
+async def _set_campaign_status(campaign_id: str, status: str) -> None:
+    """Set a campaign's status directly via a fresh connection.
+
+    A real LIVE campaign only ever comes from a full publish flow (Meta
+    OAuth, ad account, pixel, strategy, creative — see
+    test_optimization_jobs.py's _live_campaign) — irrelevant to what
+    delete_business itself checks, so this sets the one field its 409
+    check actually reads, directly.
+    """
+    seeder = Prisma()
+    await seeder.connect()
+    await seeder.campaign.update(where={"id": campaign_id}, data={"status": status})
+    await seeder.disconnect()
 
 
 def _valid_jpeg(width: int = 800, height: int = 800) -> bytes:
@@ -532,6 +549,196 @@ def test_serve_logo_404s_when_none_uploaded(client: TestClient) -> None:
 def test_serve_logo_404s_for_a_nonexistent_business(client: TestClient) -> None:
     """A nonexistent business id 404s, same message as no-logo-yet."""
     response = client.get("/business-logos/does-not-exist")
+
+    assert response.status_code == 404
+
+
+def test_delete_business_requires_a_session(client: TestClient) -> None:
+    """Deleting a business with no session cookie returns 401."""
+    response = client.delete("/businesses/some-id")
+
+    assert response.status_code == 401
+
+
+def test_delete_business_404s_for_a_nonexistent_business(client: TestClient) -> None:
+    """Deleting a business that doesn't exist returns 404."""
+    _signed_up_client(client)
+
+    response = client.delete("/businesses/does-not-exist")
+
+    assert response.status_code == 404
+
+
+def test_delete_business_404s_for_another_users_business(client: TestClient) -> None:
+    """A user can't delete a business they don't own."""
+    _signed_up_client(client, email="alice@example.com")
+    created = client.post(
+        "/businesses", json={"name": "Alice's Business", "industry": "ECOMMERCE"}
+    ).json()
+    client.post("/auth/logout")
+
+    _signed_up_client(client, email="bob@example.com")
+    response = client.delete(f"/businesses/{created['id']}")
+
+    assert response.status_code == 404
+
+
+def test_delete_business_succeeds_and_removes_it_from_list_and_get(
+    client: TestClient,
+) -> None:
+    """A successful delete 204s, and the business disappears from both
+    GET /businesses and GET /businesses/{id} afterward — same 404 as a
+    business that never existed."""
+    _signed_up_client(client)
+    business_id = client.post(
+        "/businesses", json={"name": "Acme Widgets", "industry": "ECOMMERCE"}
+    ).json()["id"]
+
+    response = client.delete(f"/businesses/{business_id}")
+
+    assert response.status_code == 204
+    assert client.get(f"/businesses/{business_id}").status_code == 404
+    listed = client.get("/businesses").json()
+    assert business_id not in [b["id"] for b in listed]
+
+
+@pytest.mark.asyncio
+async def test_delete_business_sets_deleted_at(client: TestClient) -> None:
+    """The row itself is soft-deleted — deletedAt set, not removed."""
+    _signed_up_client(client)
+    business_id = client.post(
+        "/businesses", json={"name": "Acme Widgets", "industry": "ECOMMERCE"}
+    ).json()["id"]
+
+    client.delete(f"/businesses/{business_id}")
+
+    seeder = Prisma()
+    await seeder.connect()
+    business = await seeder.business.find_unique(where={"id": business_id})
+    await seeder.disconnect()
+    assert business is not None
+    assert business.deletedAt is not None
+
+
+@pytest.mark.asyncio
+async def test_delete_business_409s_with_a_live_campaign(client: TestClient) -> None:
+    """A LIVE campaign blocks deletion — the only status that means Meta
+    could be actively spending against it right now."""
+    _signed_up_client(client)
+    business_id = client.post(
+        "/businesses", json={"name": "Acme Widgets", "industry": "ECOMMERCE"}
+    ).json()["id"]
+    campaign_id = client.post(
+        f"/businesses/{business_id}/campaigns", json={"objective": "SALES"}
+    ).json()["id"]
+    await _set_campaign_status(campaign_id, "LIVE")
+
+    response = client.delete(f"/businesses/{business_id}")
+
+    assert response.status_code == 409
+    assert "live on Meta" in response.json()["detail"]
+    # Not actually deleted — still fetchable, unchanged.
+    assert client.get(f"/businesses/{business_id}").status_code == 200
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "status",
+    [
+        "DRAFT",
+        "READY",
+        "STRATEGY_GENERATED",
+        "ADS_GENERATED",
+        "PENDING_APPROVAL",
+        "APPROVED",
+        "PAUSED",
+        "FAILED",
+    ],
+)
+async def test_delete_business_succeeds_with_any_non_live_campaign_status(
+    client: TestClient, status: str
+) -> None:
+    """Every status other than LIVE is safe to delete alongside — including
+    PAUSED regardless of why it paused (manual, end-date-elapsed, or a
+    spend circuit breaker all land on the same PAUSED status)."""
+    _signed_up_client(client)
+    business_id = client.post(
+        "/businesses", json={"name": "Acme Widgets", "industry": "ECOMMERCE"}
+    ).json()["id"]
+    campaign_id = client.post(
+        f"/businesses/{business_id}/campaigns", json={"objective": "SALES"}
+    ).json()["id"]
+    await _set_campaign_status(campaign_id, status)
+
+    response = client.delete(f"/businesses/{business_id}")
+
+    assert response.status_code == 204
+
+
+@pytest.mark.asyncio
+async def test_delete_business_leaves_child_records_untouched(
+    client: TestClient,
+) -> None:
+    """Products, campaigns, and the logo all survive a soft delete —
+    only Business.deletedAt changes."""
+    _signed_up_client(client)
+    business_id = client.post(
+        "/businesses", json={"name": "Acme Widgets", "industry": "ECOMMERCE"}
+    ).json()["id"]
+    product_id = client.post(
+        f"/businesses/{business_id}/products",
+        json={"description": "Ring", "url": "https://acme.example/ring"},
+    ).json()["id"]
+    campaign_id = client.post(
+        f"/businesses/{business_id}/campaigns", json={"objective": "SALES"}
+    ).json()["id"]
+    client.post(
+        f"/businesses/{business_id}/logo",
+        files={"file": ("logo.jpg", _valid_jpeg(), "image/jpeg")},
+    )
+
+    client.delete(f"/businesses/{business_id}")
+
+    seeder = Prisma()
+    await seeder.connect()
+    product = await seeder.product.find_unique(where={"id": product_id})
+    campaign = await seeder.campaign.find_unique(where={"id": campaign_id})
+    business = await seeder.business.find_unique(where={"id": business_id})
+    await seeder.disconnect()
+    assert product is not None
+    assert campaign is not None
+    assert business is not None
+    assert business.logoData is not None
+
+
+def test_deleted_business_404s_for_update(client: TestClient) -> None:
+    """A soft-deleted business can't be PATCHed either — same
+    get_owned_business choke point as GET."""
+    _signed_up_client(client)
+    business_id = client.post(
+        "/businesses", json={"name": "Acme Widgets", "industry": "ECOMMERCE"}
+    ).json()["id"]
+    client.delete(f"/businesses/{business_id}")
+
+    response = client.patch(f"/businesses/{business_id}", json={"name": "New name"})
+
+    assert response.status_code == 404
+
+
+def test_deleted_business_logo_no_longer_served(client: TestClient) -> None:
+    """A soft-deleted business's logo 404s too, even though logoData is
+    still in the row — the public serve route checks deletedAt directly."""
+    _signed_up_client(client)
+    business_id = client.post(
+        "/businesses", json={"name": "Acme Widgets", "industry": "ECOMMERCE"}
+    ).json()["id"]
+    client.post(
+        f"/businesses/{business_id}/logo",
+        files={"file": ("logo.jpg", _valid_jpeg(), "image/jpeg")},
+    )
+    client.delete(f"/businesses/{business_id}")
+
+    response = client.get(f"/business-logos/{business_id}")
 
     assert response.status_code == 404
 

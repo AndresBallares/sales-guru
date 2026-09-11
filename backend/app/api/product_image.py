@@ -298,10 +298,19 @@ async def serve_product_image(image_id: str) -> Response:
         The raw image bytes with the original upload's Content-Type.
 
     Raises:
-        HTTPException: 404 if no such image exists.
+        HTTPException: 404 if no such image exists, or its business has
+            been soft-deleted (Business.deletedAt — this route isn't
+            behind get_owned_business, so it checks directly instead).
     """
     image = await db.productimage.find_unique(where={"id": image_id})
     if image is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=_IMAGE_NOT_FOUND
+        )
+    product = await db.product.find_unique(where={"id": image.productId})
+    assert product is not None  # guaranteed by the FK, not user input
+    business = await db.business.find_unique(where={"id": product.businessId})
+    if business is None or business.deletedAt is not None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail=_IMAGE_NOT_FOUND
         )
