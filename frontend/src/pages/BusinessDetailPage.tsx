@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { AudiencesSection } from '../components/AudiencesSection'
+import { BrandProfileSection } from '../components/BrandProfileSection'
 import { BusinessEditForm } from '../components/BusinessEditForm'
 import { CampaignsSection } from '../components/CampaignsSection'
 import { MetaConnectionSection } from '../components/MetaConnectionSection'
@@ -10,6 +11,7 @@ import {
   getBusiness,
   getOptions,
   type Audience,
+  type BrandProfile,
   type Business,
   type Campaign,
   type Option,
@@ -23,12 +25,15 @@ export function BusinessDetailPage() {
   const [businessError, setBusinessError] = useState<string | null>(null)
   const [industries, setIndustries] = useState<Option[]>([])
   // null = not loaded yet; once loaded, a business that already has one
-  // moves straight past that step — same reasoning for all four. Campaign
-  // comes first (objective needs no product/audience in view yet, and
-  // matches Meta Ads Manager's own "objective first" flow, confirmed
-  // 2026-09-04) — Products/Audiences/Meta fill in the rest, and whichever
-  // of a product/audience shows up first gets auto-attached to it
-  // (app/services/campaign_readiness.py).
+  // moves straight past that step — same reasoning for all five. Brand
+  // comes first, right after Company Information (PRD.md §5 step 3.5,
+  // confirmed 2026-09-11 — "brand DNA" the Strategist/Creative Agents
+  // ground into once filled in) — then Campaign (objective needs no
+  // product/audience in view yet, and matches Meta Ads Manager's own
+  // "objective first" flow, confirmed 2026-09-04) — Products/Audiences/
+  // Meta fill in the rest, and whichever of a product/audience shows up
+  // first gets auto-attached to it (app/services/campaign_readiness.py).
+  const [brandProfile, setBrandProfile] = useState<BrandProfile | null>(null)
   const [campaigns, setCampaigns] = useState<Campaign[] | null>(null)
   const [products, setProducts] = useState<Product[] | null>(null)
   const [audiences, setAudiences] = useState<Audience[] | null>(null)
@@ -89,7 +94,11 @@ export function BusinessDetailPage() {
         </p>
       )}
 
-      {businessId && (
+      {businessId && brandProfile === null && (
+        <BrandProfileSection businessId={businessId} onProfileChange={setBrandProfile} />
+      )}
+
+      {businessId && brandProfile !== null && (
         <>
           {campaigns === null || campaigns.length === 0 ? (
             <CampaignsSection businessId={businessId} onCampaignsChange={setCampaigns} />
@@ -102,6 +111,11 @@ export function BusinessDetailPage() {
           ) : (
             <CampaignsSection businessId={businessId} />
           )}
+          {/* Reachable from every step once a profile exists, not just
+              once onboarding is fully complete — "editable later from
+              the business page" (PRD.md §5 step 3.5), not a one-time-only
+              onboarding gate. */}
+          <BrandProfileSection businessId={businessId} onProfileChange={setBrandProfile} />
         </>
       )}
     </main>

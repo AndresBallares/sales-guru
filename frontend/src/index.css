@@ -937,3 +937,21 @@ code {
   border-radius: 4px;
   padding: 0.1em 0.4em;
 }
+
+/* ---------- Voice-trait multi-select (BrandProfileForm) ---------- */
+
+.checkbox-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem 1.2rem;
+}
+
+.checkbox-option {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.9rem;
+  font-weight: 400;
+  color: var(--text);
+  cursor: pointer;
+}

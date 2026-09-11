@@ -107,6 +107,7 @@ async def create_strategy(
         if campaign.audienceId
         else None
     )
+    brand_profile = await db.brandprofile.find_unique(where={"businessId": business.id})
 
     meta_connection = await get_meta_connection(business.id)
     account_history: list[AccountCampaignInsights] = []
@@ -150,6 +151,7 @@ async def create_strategy(
             objective=campaign.objective,
             plan_type=plan_type,
             account_history=account_history,
+            brand_profile=brand_profile,
         )
     except StrategistError as exc:
         raise HTTPException(

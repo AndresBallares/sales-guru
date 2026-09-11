@@ -22,6 +22,7 @@ vi.mock('../lib/api', async (importOriginal) => {
     listAudiences: vi.fn<typeof actual.listAudiences>(),
     listCampaigns: vi.fn<typeof actual.listCampaigns>(),
     getMetaConnection: vi.fn<typeof actual.getMetaConnection>(),
+    getBrandProfile: vi.fn<typeof actual.getBrandProfile>(),
   }
 })
 const mockedApi = vi.mocked(api)
@@ -50,6 +51,21 @@ const draftCampaign: api.Campaign = {
   pausedReason: null,
   dailySpendFlag: null,
   needsDestinationUrl: false,
+}
+
+const brandProfile: api.BrandProfile = {
+  id: 'brand-1',
+  businessId: 'biz-1',
+  description: 'Family-run studio making handcrafted gold jewelry.',
+  idealCustomer: 'Women 30-55 buying for milestones.',
+  voiceTraits: ['WARM', 'ARTISANAL'],
+  pricePositioning: 'PREMIUM',
+  brandPhrases: null,
+  avoidPhrases: null,
+  tagline: null,
+  competitors: null,
+  exampleCopy: null,
+  logoUrl: null,
 }
 
 const INDUSTRY_OPTIONS = [
@@ -106,6 +122,8 @@ const ALL_OPTIONS: api.OptionsResponse = {
     },
     { value: 'ja_new_york', label: 'JA New York — Javits Center, NY' },
   ],
+  voiceTraits: [],
+  pricePositionings: [],
 }
 
 beforeEach(() => {
@@ -120,6 +138,7 @@ beforeEach(() => {
   mockedApi.getMetaConnection.mockRejectedValue(
     new api.ApiError(404, 'Meta connection not found'),
   )
+  mockedApi.getBrandProfile.mockResolvedValue(brandProfile)
 })
 
 function renderPage() {
@@ -135,6 +154,19 @@ function renderPage() {
 }
 
 describe('BusinessDetailPage', () => {
+  it('starts on the Brand step for a business with no brand profile yet', async () => {
+    mockedApi.getBrandProfile.mockRejectedValue(
+      new api.ApiError(404, 'This business has no brand profile yet'),
+    )
+
+    renderPage()
+
+    expect(
+      await screen.findByRole('button', { name: 'Save brand profile' }),
+    ).toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: 'Create a campaign' })).not.toBeInTheDocument()
+  })
+
   it('starts on the campaign step for a business with no campaign yet', async () => {
     renderPage()
 
@@ -262,6 +294,11 @@ describe('BusinessDetailPage', () => {
       expect(screen.queryByRole('heading', { name: 'Audiences' })).not.toBeInTheDocument()
       expect(screen.queryByRole('heading', { name: 'Meta Ads' })).not.toBeInTheDocument()
     })
+    // Brand is still reachable once onboarding is complete — "editable
+    // later from the business page," not a one-time-only gate.
+    expect(
+      await screen.findByRole('button', { name: 'Edit brand profile' }),
+    ).toBeInTheDocument()
   })
 
   it("shows the business's industry label on the detail page", async () => {

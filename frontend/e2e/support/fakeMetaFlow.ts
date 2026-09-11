@@ -50,6 +50,16 @@ export async function reachProductStep(page: Page): Promise<void> {
   await page.getByRole('button', { name: 'Create business' }).click()
   await expect(page.getByRole('heading', { name: 'Acme Widgets' })).toBeVisible()
 
+  // Brand (PRD.md §5 step 3.5) comes first, ahead of the campaign
+  // objective step — every flow through here needs to clear it once.
+  await expect(page.getByRole('heading', { name: 'Brand' })).toBeVisible()
+  await page.getByLabel(/Brand overview/).fill('Family-run studio since 1985.')
+  await page.getByLabel('Ideal customer').fill('Busy professionals, 30-55.')
+  await page.getByLabel('Warm').check()
+  await page.getByLabel('Price positioning').selectOption({ label: 'Mid-range' })
+  await page.getByRole('button', { name: 'Save brand profile' }).click()
+  await expect(page.getByRole('heading', { name: 'Create a campaign' })).toBeVisible()
+
   // AWARENESS (Meta's REACH goal) needs no Pixel at *creation* time —
   // keeps this helper focused on the fake-Meta path, not every
   // objective's own extra setup step.

@@ -19,7 +19,7 @@ def test_get_options_requires_a_session(client: TestClient) -> None:
 
 
 def test_get_options_returns_every_list(client: TestClient) -> None:
-    """All six fixed lists come back in one response."""
+    """All eight fixed lists come back in one response."""
     _signed_up_client(client)
 
     response = client.get("/options")
@@ -33,7 +33,47 @@ def test_get_options_returns_every_list(client: TestClient) -> None:
         "ctas",
         "actionTypes",
         "eventVenues",
+        "voiceTraits",
+        "pricePositionings",
     }
+
+
+def test_get_options_voice_traits_match_the_fixed_list(client: TestClient) -> None:
+    """voiceTraits comes back in full, each with a display label."""
+    _signed_up_client(client)
+
+    response = client.get("/options")
+
+    body = response.json()
+    assert [option["value"] for option in body["voiceTraits"]] == [
+        "LUXURIOUS",
+        "PLAYFUL",
+        "MINIMAL",
+        "WARM",
+        "BOLD",
+        "ARTISANAL",
+        "EDGY",
+        "PROFESSIONAL",
+    ]
+    assert {"value": "LUXURIOUS", "label": "Luxurious"} in body["voiceTraits"]
+
+
+def test_get_options_price_positionings_match_the_fixed_list(
+    client: TestClient,
+) -> None:
+    """pricePositionings comes back in full, each with a display label."""
+    _signed_up_client(client)
+
+    response = client.get("/options")
+
+    body = response.json()
+    assert [option["value"] for option in body["pricePositionings"]] == [
+        "AFFORDABLE",
+        "MID",
+        "PREMIUM",
+        "LUXURY",
+    ]
+    assert {"value": "PREMIUM", "label": "Premium"} in body["pricePositionings"]
 
 
 def test_get_options_industries_match_the_fixed_list(client: TestClient) -> None:

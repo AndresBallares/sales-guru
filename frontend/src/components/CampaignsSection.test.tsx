@@ -21,6 +21,7 @@ vi.mock('../lib/api', async (importOriginal) => {
     updateCampaign: vi.fn<typeof actual.updateCampaign>(),
     listCampaigns: vi.fn<typeof actual.listCampaigns>(),
     getBusiness: vi.fn<typeof actual.getBusiness>(),
+    getBrandProfile: vi.fn<typeof actual.getBrandProfile>(),
     getOptions: vi.fn<typeof actual.getOptions>(),
     listProducts: vi.fn<typeof actual.listProducts>(),
     createProduct: vi.fn<typeof actual.createProduct>(),
@@ -319,6 +320,8 @@ const ALL_OPTIONS: api.OptionsResponse = {
     },
     { value: 'ja_new_york', label: 'JA New York — Javits Center, NY' },
   ],
+  voiceTraits: [],
+  pricePositionings: [],
 }
 
 beforeEach(() => {
@@ -333,6 +336,9 @@ beforeEach(() => {
     logoUrl: null,
     description: 'Family-run since 1985',
   })
+  mockedApi.getBrandProfile.mockRejectedValue(
+    new api.ApiError(404, 'This business has no brand profile yet'),
+  )
   mockedApi.listProducts.mockResolvedValue([])
   // Every ProductForm mount in edit mode (Part 1) loads its product's
   // photos — a sane empty default so tests unrelated to images don't
@@ -1581,6 +1587,56 @@ describe('CampaignsSection', () => {
     expect(
       screen.getByRole('button', { name: 'Regenerate ads' }),
     ).toBeInTheDocument()
+  })
+
+  it('labels the regenerate button "Regenerate with brand voice" once a brand profile exists', async () => {
+    mockedApi.getBrandProfile.mockResolvedValue({
+      id: 'brand-1',
+      businessId: 'biz-1',
+      description: 'Family-run studio.',
+      idealCustomer: 'Women 30-55.',
+      voiceTraits: ['WARM'],
+      pricePositioning: 'PREMIUM',
+      brandPhrases: null,
+      avoidPhrases: null,
+      tagline: null,
+      competitors: null,
+      exampleCopy: null,
+      logoUrl: null,
+    })
+    mockedApi.listCampaigns.mockResolvedValue([
+      {
+        id: 'camp-1',
+        name: null,
+        objective: 'SALES',
+        status: 'STRATEGY_GENERATED',
+        productId: null,
+        audienceId: null,
+        metaCampaignId: null,
+        eventVenueKey: null,
+        startDate: null,
+        endDate: null,
+        pausedReason: null,
+        dailySpendFlag: null,
+        needsDestinationUrl: false,
+      },
+    ])
+    mockedApi.getStrategy.mockResolvedValue(FAKE_STRATEGY)
+    mockedApi.createCreatives.mockResolvedValue([
+      fakeCreative({ id: 'creative-1', headline: 'Headline A' }),
+      fakeCreative({ id: 'creative-2', headline: 'Headline B' }),
+    ])
+    const user = userEvent.setup()
+
+    renderCampaigns(<CampaignsSection businessId="biz-1" />)
+    await screen.findByText(/Custom emerald rings/)
+    await user.click(screen.getByRole('button', { name: 'Generate ads' }))
+    await screen.findByText('Headline A')
+
+    expect(
+      await screen.findByRole('button', { name: 'Regenerate with brand voice' }),
+    ).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Regenerate ads' })).not.toBeInTheDocument()
   })
 
   it('shows an error if ad generation fails', async () => {

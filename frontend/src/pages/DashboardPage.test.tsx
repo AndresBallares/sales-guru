@@ -46,6 +46,8 @@ beforeEach(() => {
     ctas: [],
     actionTypes: [],
     eventVenues: [],
+    voiceTraits: [],
+    pricePositionings: [],
   })
 })
 

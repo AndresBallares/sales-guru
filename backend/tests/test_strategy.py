@@ -471,6 +471,36 @@ def test_create_strategy_stores_and_returns_the_strategy(
     mock_generate_strategy.assert_awaited_once()
 
 
+def test_create_strategy_forwards_the_businesss_brand_profile(
+    client: TestClient, mock_generate_strategy: AsyncMock
+) -> None:
+    """When the business has a brand profile, it's fetched and passed
+    through to generate_strategy — no profile at all passes None (see
+    test_create_strategy_stores_and_returns_the_strategy, which never sets
+    one up)."""
+    _signed_up_client(client)
+    business_id = _create_business(client)
+    campaign_id = _create_campaign(client, business_id)
+    client.post(
+        f"/businesses/{business_id}/brand-profile",
+        json={
+            "description": "Family-run studio making handcrafted gold jewelry.",
+            "idealCustomer": "Women 30-55 buying for milestones.",
+            "voiceTraits": ["WARM", "ARTISANAL"],
+            "pricePositioning": "PREMIUM",
+        },
+    )
+
+    client.post(
+        f"/businesses/{business_id}/campaigns/{campaign_id}/strategy",
+        json={"hasPriorAdvertisingExperience": True},
+    )
+
+    sent_brand_profile = mock_generate_strategy.call_args.kwargs["brand_profile"]
+    assert sent_brand_profile is not None
+    assert sent_brand_profile.pricePositioning == "PREMIUM"
+
+
 def test_create_strategy_marks_the_campaign_as_strategy_generated(
     client: TestClient,
 ) -> None:

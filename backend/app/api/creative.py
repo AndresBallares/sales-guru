@@ -132,6 +132,7 @@ async def create_creatives(
         else None
     )
     primary_image = await get_primary_image(product.id) if product is not None else None
+    brand_profile = await db.brandprofile.find_unique(where={"businessId": business.id})
 
     try:
         variants = await generate_creatives(
@@ -139,6 +140,7 @@ async def create_creatives(
             product=product,
             strategy=StrategyContentAdapter.validate_json(strategy.content),
             primary_image=primary_image,
+            brand_profile=brand_profile,
         )
     except CreativeAgentError as exc:
         raise HTTPException(

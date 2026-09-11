@@ -281,6 +281,32 @@ def test_create_creatives_passes_no_primary_image_for_a_product_with_none(
     assert kwargs["primary_image"] is None
 
 
+def test_create_creatives_forwards_the_businesss_brand_profile(
+    client: TestClient, mock_generate_creatives: AsyncMock
+) -> None:
+    """When the business has a brand profile, it's fetched and passed
+    through to generate_creatives too — not just the Strategist."""
+    _signed_up_client(client)
+    business_id = _create_business(client)
+    campaign_id = _create_campaign(client, business_id)
+    _generate_strategy(client, business_id, campaign_id)
+    client.post(
+        f"/businesses/{business_id}/brand-profile",
+        json={
+            "description": "Family-run studio making handcrafted gold jewelry.",
+            "idealCustomer": "Women 30-55 buying for milestones.",
+            "voiceTraits": ["WARM", "ARTISANAL"],
+            "pricePositioning": "PREMIUM",
+        },
+    )
+
+    client.post(f"/businesses/{business_id}/campaigns/{campaign_id}/creatives")
+
+    _, kwargs = mock_generate_creatives.call_args
+    assert kwargs["brand_profile"] is not None
+    assert kwargs["brand_profile"].pricePositioning == "PREMIUM"
+
+
 def test_create_creatives_marks_the_campaign_as_ads_generated(
     client: TestClient,
 ) -> None:

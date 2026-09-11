@@ -61,6 +61,8 @@ def _fake_business(**overrides: object) -> Business:
         "name": "Acme Jewelry",
         "industry": None,
         "description": None,
+        "logoData": None,
+        "logoContentType": None,
     }
     defaults.update(overrides)
     return cast(Business, SimpleNamespace(**defaults))
@@ -93,6 +95,22 @@ def _fake_product_image(**overrides: object) -> PrismaProductImage:
     }
     defaults.update(overrides)
     return cast(PrismaProductImage, SimpleNamespace(**defaults))
+
+
+def _fake_brand_profile(**overrides: object) -> Any:
+    defaults: dict[str, object] = {
+        "description": "Family-run studio making handcrafted gold jewelry.",
+        "idealCustomer": "Women 30-55 buying for milestones and self-purchase.",
+        "voiceTraits": '["WARM", "ARTISANAL"]',
+        "pricePositioning": "PREMIUM",
+        "brandPhrases": None,
+        "avoidPhrases": None,
+        "tagline": None,
+        "competitors": None,
+        "exampleCopy": None,
+    }
+    defaults.update(overrides)
+    return SimpleNamespace(**defaults)
 
 
 def _fake_creative(**overrides: object) -> Creative:
@@ -202,6 +220,47 @@ def test_build_prompt_handles_no_problem_or_desire() -> None:
     assert "Target audience desire" not in prompt
 
 
+def test_build_prompt_omits_brand_voice_with_no_profile() -> None:
+    """No brand profile at all falls back to current (no brand-specific
+    steering) behavior — no "Brand voice" section appears."""
+    prompt = creative._build_prompt(_fake_business(), _fake_product(), _FAKE_STRATEGY)
+
+    assert "Brand voice" not in prompt
+
+
+def test_build_prompt_includes_brand_voice_when_a_profile_exists() -> None:
+    """A brand profile, when given, is folded in as a dedicated block."""
+    brand_profile = _fake_brand_profile(avoidPhrases="cheap, discount")
+
+    prompt = creative._build_prompt(
+        _fake_business(), _fake_product(), _FAKE_STRATEGY, brand_profile=brand_profile
+    )
+
+    assert "Brand voice" in prompt
+    assert "Voice traits: Warm, Artisanal" in prompt
+    assert "NEVER use" in prompt
+    assert "cheap, discount" in prompt
+
+
+def test_build_prompt_notes_the_attached_logo_when_has_logo_is_true() -> None:
+    """has_logo=True adds an explicit cue that the logo is a style
+    reference only, not a literal subject — same has_image reasoning."""
+    prompt = creative._build_prompt(
+        _fake_business(), _fake_product(), _FAKE_STRATEGY, has_logo=True
+    )
+
+    assert "logo is attached" in prompt
+    assert "visual style cue" in prompt
+
+
+def test_build_prompt_omits_the_logo_note_by_default() -> None:
+    """has_logo defaults to False — no dangling logo reference when the
+    business has no logo uploaded."""
+    prompt = creative._build_prompt(_fake_business(), _fake_product(), _FAKE_STRATEGY)
+
+    assert "logo is attached" not in prompt
+
+
 def test_build_prompt_quarantines_business_and_product_free_text() -> None:
     """Business.description and Product.description are user-authored free
     text — they're wrapped in a delimited data block with an explicit
@@ -305,6 +364,92 @@ async def test_generate_creatives_sends_the_primary_image_as_a_vision_block(
     }
     assert text_block["type"] == "text"
     assert "photo of the product is attached" in text_block["text"]
+
+
+@pytest.mark.asyncio
+async def test_generate_creatives_sends_the_business_logo_as_a_vision_block(
+    anthropic_api_key: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The business's logo, when uploaded, is sent as an image content
+    block ahead of the text prompt — a visual style cue, same mechanism
+    as the product's primary_image."""
+    create = _mock_client_returning(
+        monkeypatch, [SimpleNamespace(type="tool_use", input=_VALID_TOOL_INPUT)]
+    )
+    business = _fake_business(
+        logoData=Base64.encode(b"logo png bytes"), logoContentType="image/png"
+    )
+
+    await creative.generate_creatives(
+        business=business, product=_fake_product(), strategy=_FAKE_STRATEGY
+    )
+
+    content = create.call_args.kwargs["messages"][0]["content"]
+    assert isinstance(content, list)
+    assert len(content) == 2
+    image_block, text_block = content
+    assert image_block == {
+        "type": "image",
+        "source": {
+            "type": "base64",
+            "media_type": "image/png",
+            "data": str(Base64.encode(b"logo png bytes")),
+        },
+    }
+    assert "logo is attached" in text_block["text"]
+
+
+@pytest.mark.asyncio
+async def test_generate_creatives_sends_logo_and_product_image_together(
+    anthropic_api_key: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """With both a logo and a product photo, both images are attached —
+    logo first, then the product photo, then the text prompt last."""
+    create = _mock_client_returning(
+        monkeypatch, [SimpleNamespace(type="tool_use", input=_VALID_TOOL_INPUT)]
+    )
+    business = _fake_business(
+        logoData=Base64.encode(b"logo bytes"), logoContentType="image/png"
+    )
+    image = _fake_product_image()
+
+    await creative.generate_creatives(
+        business=business,
+        product=_fake_product(),
+        strategy=_FAKE_STRATEGY,
+        primary_image=image,
+    )
+
+    content = create.call_args.kwargs["messages"][0]["content"]
+    assert len(content) == 3
+    logo_block, product_block, text_block = content
+    assert logo_block["source"]["data"] == str(Base64.encode(b"logo bytes"))
+    assert product_block["source"]["data"] == str(image.data)
+    assert text_block["type"] == "text"
+
+
+@pytest.mark.asyncio
+async def test_generate_creatives_forwards_the_brand_profile_into_the_real_prompt(
+    anthropic_api_key: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """brand_profile, when passed to the public function, actually reaches
+    the prompt sent to the model — not silently dropped in between."""
+    create = _mock_client_returning(
+        monkeypatch, [SimpleNamespace(type="tool_use", input=_VALID_TOOL_INPUT)]
+    )
+    brand_profile = _fake_brand_profile()
+
+    await creative.generate_creatives(
+        business=_fake_business(),
+        product=_fake_product(),
+        strategy=_FAKE_STRATEGY,
+        brand_profile=brand_profile,
+    )
+
+    sent_content = create.call_args.kwargs["messages"][0]["content"]
+    assert isinstance(sent_content, str)
+    assert "Brand voice" in sent_content
+    assert "Voice traits: Warm, Artisanal" in sent_content
 
 
 @pytest.mark.asyncio
