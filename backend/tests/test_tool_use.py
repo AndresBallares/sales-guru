@@ -151,13 +151,19 @@ def test_parse_tool_input_raises_original_error_when_decoded_json_still_fails() 
         parse_tool_input({"variants": "[1, 2, 3]"}, _SingleField)
 
 
-def test_parse_tool_input_raises_the_original_error_for_unparseable_json() -> None:
+def test_parse_tool_input_raises_the_original_error_for_unparseable_json(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     """A string that merely starts with `[`/`{` but isn't valid JSON is
     left alone — json.loads failing is caught, not left to bubble up as a
     confusing secondary error — and the original validation error still
-    surfaces."""
+    surfaces. The failed decode attempt is still logged (confirmed
+    2026-09-12), with enough of the actual string to tell a truncated
+    response apart from a genuinely malformed one next time."""
     with pytest.raises(Exception, match="list_type"):
         parse_tool_input({"variants": "[not valid json"}, _SingleField)
+
+    assert "[not valid json" in caplog.text
 
 
 def test_parse_tool_input_drops_an_invalid_enum_value_from_a_list() -> None:

@@ -34,10 +34,12 @@ Exists so e2e tests can generate a strategy with no real ANTHROPIC_API_KEY
 and no dependency on live model output.
 """
 
+import logging
 from typing import Literal
 
 import anthropic
 from anthropic import AsyncAnthropic
+from anthropic.types import Message
 from prisma.models import Audience, BrandProfile, Business, Product
 
 from app.core.config import get_settings
@@ -80,8 +82,15 @@ from app.services.prompt_safety import quarantine
 from app.services.tool_use import ToolInputRecoveryError, parse_tool_input
 from app.services.unit_economics import compute_unit_economics
 
+logger = logging.getLogger(__name__)
+
 _MODEL = "claude-sonnet-5"
-_MAX_TOKENS = 2048
+# Raised 2048 -> 8192 (confirmed 2026-09-12), matching the Creative Agent's
+# own identical fix (app/services/creative.py) — a real TEST_PLAN response
+# (full nested hypothesis audience, budget/copy-strategy/angles) hit the
+# same "truncated mid-JSON" failure mode 2048 was too tight for, surfaced
+# by a real e2e generation rather than any mocked test.
+_MAX_TOKENS = 8192
 _TEST_PLAN_TOOL_NAME = "submit_test_plan"
 _DATA_DRIVEN_STRATEGY_TOOL_NAME = "submit_data_driven_strategy"
 
@@ -591,8 +600,9 @@ async def _call_agent(
         The tool call's raw input, ready for parse_tool_input.
 
     Raises:
-        StrategistError: If no API key is configured, the API call fails,
-            or the model doesn't return a tool call.
+        StrategistError: If no API key is configured, or the API call
+            fails on both the initial attempt and the one retry (see
+            below).
     """
     settings = get_settings()
     if settings.fake_llm_enabled:
@@ -605,22 +615,41 @@ async def _call_agent(
         raise StrategistError("ANTHROPIC_API_KEY is not configured")
 
     client = AsyncAnthropic(api_key=settings.anthropic_api_key)
-    try:
-        response = await client.messages.create(
-            model=_MODEL,
-            max_tokens=_MAX_TOKENS,
-            tools=[
-                {
-                    "name": tool_name,
-                    "description": "Submit the generated plan.",
-                    "input_schema": tool_schema,
-                }
-            ],
-            tool_choice={"type": "tool", "name": tool_name},
-            messages=[{"role": "user", "content": prompt}],
+
+    async def _create() -> Message:
+        try:
+            return await client.messages.create(
+                model=_MODEL,
+                max_tokens=_MAX_TOKENS,
+                tools=[
+                    {
+                        "name": tool_name,
+                        "description": "Submit the generated plan.",
+                        "input_schema": tool_schema,
+                    }
+                ],
+                tool_choice={"type": "tool", "name": tool_name},
+                messages=[{"role": "user", "content": prompt}],
+            )
+        except anthropic.AnthropicError as exc:
+            raise StrategistError(f"Anthropic API call failed: {exc}") from exc
+
+    response = await _create()
+    # A response cut off mid-JSON by the token limit should never reach
+    # parse_tool_input — it can only ever fail there in a way none of that
+    # module's known-quirk recovery can repair (genuinely incomplete, not
+    # just mis-shaped), the same failure mode already documented for the
+    # Creative Agent's own max_tokens bump. One retry, not a loop — a
+    # second truncation is treated as a real, surfaced failure rather than
+    # retried indefinitely.
+    if response.stop_reason == "max_tokens":
+        logger.warning(
+            "Marketing Strategist Agent response truncated at max_tokens "
+            "(%d) for tool %r — retrying once.",
+            _MAX_TOKENS,
+            tool_name,
         )
-    except anthropic.AnthropicError as exc:
-        raise StrategistError(f"Anthropic API call failed: {exc}") from exc
+        response = await _create()
 
     tool_use = next(
         (block for block in response.content if block.type == "tool_use"), None
