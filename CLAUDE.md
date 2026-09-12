@@ -68,6 +68,21 @@ GitHub or Render.
   user-facing flow.
 - **Schema changes**: always `uv run prisma migrate dev --name <desc>`, never
   `prisma db push` — see README.md's Database schema changes section for why.
+- **Destructive commands** (`prisma db push --force-reset`, `prisma migrate
+  reset`, `DROP`, `rm -rf`, `git push --force`, `git reset --hard`, deleting
+  branches): before running any of these, print the exact target (database
+  URL, path, branch) and ask for explicit confirmation. Never run one
+  against a target you have not printed. Treat any `DATABASE_URL` that
+  does not contain `test.db` as protected — confirmed the hard way
+  2026-09-12, when a bare `prisma db push --force-reset` run against the
+  ambient shell's real `DATABASE_URL` wiped the local dev database (whose
+  actual file is `backend/prisma/dev.db`, not `backend/dev.db` — a stale,
+  empty, easy-to-confuse leftover) instead of the intended test one, with
+  no way back. `backend/scripts/db-reset.sh` is now the only supported way
+  to force-reset a database in this repo — it always targets
+  `backend/.env.test`'s database and refuses to run if that value doesn't
+  contain `test.db`; use it (or `make backup-dev` first) rather than
+  calling `prisma` directly.
 - **Products are reusable across campaigns.** If the item being sold is the
   same, edit the product (`PATCH .../products/{id}`, `app/api/product.py`).
   If it's a different item, swap the campaign's product instead

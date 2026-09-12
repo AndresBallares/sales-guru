@@ -10,8 +10,11 @@ htmlcov/
 .env
 dev.db
 dev.db-journal
+*.db.bak*
 prisma/dev.db
 prisma/dev.db-journal
+test.db
+test.db-journal
 prisma/test.db
 prisma/test.db-journal
 prisma/e2e.db
