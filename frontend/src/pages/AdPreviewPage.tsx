@@ -17,6 +17,7 @@ import {
   type Creative,
   type ProductImage,
 } from '../lib/api'
+import { SocialPostPreview } from '../components/SocialPostPreview'
 
 const _PUBLISHABLE_STATUSES = ['PENDING_APPROVAL', 'APPROVED', 'FAILED']
 
@@ -168,43 +169,11 @@ export function AdPreviewPage() {
       {creative && (
         <section>
           <h2>Preview</h2>
-          <div className="social-post" aria-label="Ad preview">
-            <div className="social-post-header">
-              <div className="social-post-avatar" aria-hidden="true">
-                {business?.logoUrl ? (
-                  <img src={business.logoUrl} alt="" />
-                ) : (
-                  business?.name.slice(0, 1).toUpperCase()
-                )}
-              </div>
-              <div>
-                <p className="social-post-page-name">{business?.name}</p>
-                <p className="social-post-sponsored">Sponsored</p>
-              </div>
-            </div>
-            <p className="social-post-body">{creative.bodyText}</p>
-            {creative.imageUrl && (
-              <div className="social-post-image-frame">
-                <img
-                  className="social-post-image"
-                  src={creative.imageUrl}
-                  alt={creative.headline}
-                />
-              </div>
-            )}
-            <div className="social-post-link-card">
-              <div className="social-post-link-card-text">
-                <p className="social-post-headline">{creative.headline}</p>
-                <p className="social-post-description">{creative.description}</p>
-              </div>
-              <span className="social-post-cta">{ctaLabels[creative.cta] ?? creative.cta}</span>
-            </div>
-            <div className="social-post-actions" aria-hidden="true">
-              <span>👍 Like</span>
-              <span>💬 Comment</span>
-              <span>↗ Share</span>
-            </div>
-          </div>
+          <SocialPostPreview
+            business={business}
+            creative={creative}
+            ctaLabel={ctaLabels[creative.cta] ?? creative.cta}
+          />
 
           {campaign?.productId && (
             <div className="image-picker">
