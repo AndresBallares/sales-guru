@@ -81,6 +81,13 @@ export interface BrandProfile {
   tagline: string | null
   competitors: string | null
   exampleCopy: string | null
+  // Both feed the Creative Agent's objective-aware CTA structuring
+  // (app/schemas/creative.py) — proofPoints grounds the description slot/
+  // a trust line; offer is this business's own standing promotion,
+  // distinct from a campaign's own strategy-level offer, and is what
+  // actually gates the GET_OFFER CTA.
+  proofPoints: string[]
+  offer: string | null
   // Rides along from the parent business (app/api/brand_profile.py) so
   // the brand-profile view can show the whole identity together, without
   // a second business fetch.
@@ -97,6 +104,8 @@ export interface BrandProfileCreateInput {
   tagline?: string
   competitors?: string
   exampleCopy?: string
+  proofPoints?: string[]
+  offer?: string
 }
 
 // Partial update — only fields explicitly provided change (same
@@ -111,6 +120,8 @@ export interface BrandProfileUpdateInput {
   tagline?: string | null
   competitors?: string | null
   exampleCopy?: string | null
+  proofPoints?: string[]
+  offer?: string | null
 }
 
 export interface Product {

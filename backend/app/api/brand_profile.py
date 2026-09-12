@@ -57,6 +57,8 @@ def _to_response(profile: BrandProfile, business: Business) -> BrandProfileRespo
         tagline=profile.tagline,
         competitors=profile.competitors,
         example_copy=profile.exampleCopy,
+        proof_points=json.loads(profile.proofPoints) if profile.proofPoints else [],
+        offer=profile.offer,
         logo_url=business_logo_url(business.id)
         if business.logoData is not None
         else None,
@@ -104,6 +106,10 @@ async def create_brand_profile(
             "tagline": payload.tagline,
             "competitors": payload.competitors,
             "exampleCopy": payload.example_copy,
+            "proofPoints": json.dumps(payload.proof_points)
+            if payload.proof_points
+            else None,
+            "offer": payload.offer,
         }
     )
     return _to_response(profile, business)
@@ -162,6 +168,9 @@ async def update_brand_profile(
     update_data = payload.model_dump(exclude_unset=True, by_alias=True)
     if "voiceTraits" in update_data:
         update_data["voiceTraits"] = json.dumps(update_data["voiceTraits"])
+    if "proofPoints" in update_data:
+        proof_points = update_data["proofPoints"]
+        update_data["proofPoints"] = json.dumps(proof_points) if proof_points else None
 
     if not update_data:
         return _to_response(profile, business)

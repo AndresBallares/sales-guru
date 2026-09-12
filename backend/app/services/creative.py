@@ -12,12 +12,25 @@ parse_tool_input (app/services/tool_use.py) to tolerate a model wrapping
 its output under one stray top-level key instead of matching the schema
 directly.
 
+**Objective-aware CTA (confirmed 2026-09-12):** app/schemas/creative.py's
+GeneratedCreativeBatch enforces, at the schema level (not just prompted
+for), that every variant shares one CTA and that CTA is one this
+campaign's objective actually allows (ALLOWED_CTAS_BY_OBJECTIVE) — a SALES
+campaign no longer comes back with LEARN_MORE on one variant and GET_OFFER
+on another. generate_creatives below retries once (with the validation
+error appended to the prompt) on a business-rule failure, then falls back
+to coercing the batch (default CTA for the objective, over-length text
+truncated at a word boundary) rather than failing the whole generation —
+see _coerce_batch.
+
 **Fake mode (Settings.fake_llm_enabled, confirmed 2026-09-09):**
 generate_creatives — the single function that actually calls Anthropic —
 returns a canned, schema-valid batch instead when the flag is on. Exists
 so e2e tests can generate ad creatives with no real ANTHROPIC_API_KEY and
 no dependency on live model output, same reasoning as strategist.py's own
-fake mode.
+fake mode. Deliberately bypasses GeneratedCreativeBatch's own validation
+entirely (returns _FAKE_VARIANTS directly) — it's canned test fixture
+data, not a real objective-aware batch.
 
 **Vision grounding (confirmed 2026-09-09):** when the product has a
 primary photo (app/api/product_image.py's get_primary_image), it's passed
@@ -27,6 +40,9 @@ can reflect what the product actually looks like, not just its written
 description. Fake mode is unaffected either way (see above).
 """
 
+import copy
+import json
+import logging
 from typing import Literal, cast
 
 import anthropic
@@ -38,9 +54,16 @@ from anthropic.types import (
 )
 from prisma.models import BrandProfile, Business, Campaign, Creative, Product
 from prisma.models import ProductImage as PrismaProductImage
+from pydantic import ValidationError
 
 from app.core.config import get_settings
+from app.schemas.campaign import Objective
 from app.schemas.creative import (
+    ALLOWED_CTAS_BY_OBJECTIVE,
+    DEFAULT_CTA_BY_OBJECTIVE,
+    MAX_BODY_TEXT_LENGTH,
+    MAX_DESCRIPTION_LENGTH,
+    MAX_HEADLINE_LENGTH,
     CtaType,
     GeneratedCreativeBatch,
     GeneratedCreativeVariant,
@@ -48,7 +71,9 @@ from app.schemas.creative import (
 from app.schemas.strategy import StrategyContent, primary_audience
 from app.services.brand_voice import brand_voice_lines
 from app.services.prompt_safety import quarantine
-from app.services.tool_use import parse_tool_input
+from app.services.tool_use import ToolInputRecoveryError, parse_tool_input
+
+logger = logging.getLogger(__name__)
 
 _MODEL = "claude-sonnet-5"
 # Four variants x {headline, body_text, description, cta, creative_angle,
@@ -69,9 +94,34 @@ _VARIANT_COUNT = 4
 # already restricted to this same {jpeg, png} pair on the way in.
 _SupportedImageMediaType = Literal["image/jpeg", "image/png", "image/gif", "image/webp"]
 
+# Reference angle structures per industry (Part 3.4, confirmed
+# 2026-09-12) — structural examples the model adapts, never copy to reuse
+# verbatim. A simple dict keyed by Business.industry so per-industry
+# templates can be added later without touching the prompt builder itself;
+# any industry not listed (9 of the app's 10 today) falls back to
+# _DEFAULT_ANGLE_TEMPLATES. "offer + urgency" is dropped from either list
+# in the prompt itself when the business has no standing promotion — an
+# urgency angle around a discount that doesn't exist would be false
+# advertising, not just a weak angle.
+_DEFAULT_ANGLE_TEMPLATES: tuple[str, ...] = (
+    "benefit + trust line",
+    "social proof + product",
+    "offer + urgency",
+)
+_ANGLE_TEMPLATES_BY_INDUSTRY: dict[str, tuple[str, ...]] = {
+    "FASHION_JEWELRY": (
+        "product + material + trust line",
+        "social proof + product",
+        "offer + urgency",
+    ),
+}
+
 # Fake mode canned batch — built from the real GeneratedCreativeVariant
 # model (not a hand-written dict), so a schema change breaks this loudly
-# rather than drifting out of sync silently.
+# rather than drifting out of sync silently. Deliberately four different
+# CTAs (unlike a real batch, which always shares one) — this is canned
+# fixture data for e2e/tests, never passed through GeneratedCreativeBatch's
+# own shared-CTA validation.
 _FAKE_CTAS: tuple[CtaType, CtaType, CtaType, CtaType] = (
     "SHOP_NOW",
     "LEARN_MORE",
@@ -96,6 +146,26 @@ class CreativeAgentError(RuntimeError):
     """Raised when the Creative Agent fails to produce ad creatives."""
 
 
+def _angle_templates_for_industry(industry: str | None) -> tuple[str, ...]:
+    """Reference angle structures for this industry, or the generic fallback."""
+    return _ANGLE_TEMPLATES_BY_INDUSTRY.get(industry or "", _DEFAULT_ANGLE_TEMPLATES)
+
+
+def _truncate_at_word_boundary(text: str, max_length: int) -> str:
+    """Shorten text to at most max_length characters without cutting mid-word.
+
+    Used only by the coercion fallback (generate_creatives) after two
+    real attempts still came back over a slot's limit — falls back to a
+    hard cut only when there's no space to break on at all (one long word).
+    """
+    stripped = text.strip()
+    if len(stripped) <= max_length:
+        return stripped
+    truncated = stripped[:max_length]
+    last_space = truncated.rfind(" ")
+    return (truncated[:last_space] if last_space > 0 else truncated).rstrip()
+
+
 def _build_prompt(
     business: Business,
     product: Product | None,
@@ -106,6 +176,13 @@ def _build_prompt(
     has_logo: bool = False,
 ) -> str:
     """Build the grounding prompt from the business/product and its strategy.
+
+    Order (confirmed with the user 2026-09-12, Part 3): objective + the
+    exact allowed CTA set, brand profile (voice/positioning plus the
+    business's own standing promotion and proof points), product, then
+    industry reference angle structures — each section building on facts
+    established by the one before it, so the model sees "what CTA can I
+    even use" before it sees anything that might tempt a different one.
 
     Args:
         business: The business the creatives are for.
@@ -119,8 +196,12 @@ def _build_prompt(
             gives it no explicit cue to attend to an earlier image block
             over the text description.
         brand_profile: The business's brand profile, if one exists (PRD.md
-            §5 step 3.5) — folded in as a "Brand voice" block. None falls
-            back to current (no brand-specific steering) behavior.
+            §5 step 3.5) — folded in as a "Brand voice" block, plus its
+            own proof_points/offer fields directly (not part of
+            brand_voice_lines, which is shared with the Strategist Agent
+            and doesn't carry this CTA-eligibility-specific framing).
+            None falls back to current (no brand-specific steering)
+            behavior.
         has_logo: Whether the business's logo is attached as an image
             content block alongside this prompt (see generate_creatives)
             — same has_image reasoning, a visual style cue rather than a
@@ -129,14 +210,40 @@ def _build_prompt(
     Returns:
         The prompt text.
     """
+    objective = strategy.objective
+    allowed_ctas = sorted(ALLOWED_CTAS_BY_OBJECTIVE.get(objective, set()))
+    standing_offer = brand_profile.offer if brand_profile is not None else None
+    proof_points = (
+        cast(list[str], json.loads(brand_profile.proofPoints))
+        if brand_profile is not None and brand_profile.proofPoints
+        else []
+    )
+
     lines = [
         "You are an ad copywriter. Generate "
         f"{_VARIANT_COUNT} distinct ad creative variants for the business "
         "described below, grounded in the marketing strategy given — do "
         "not invent facts about the business that weren't provided.",
         "",
-        f"Business: {business.name}",
+        f"Campaign objective: {objective}",
+        "You must choose the CTA from exactly this set: "
+        f"{', '.join(allowed_ctas)}. All four variants in this batch must "
+        "use that same CTA — do not vary it across variants.",
     ]
+    if "GET_OFFER" in allowed_ctas:
+        if standing_offer:
+            lines.append(
+                "GET_OFFER is only usable if every variant's primary text "
+                "actually names or clearly references the standing "
+                "promotion given below — don't choose it otherwise."
+            )
+        else:
+            lines.append(
+                "GET_OFFER is not usable right now: this business has no "
+                "standing promotion set. Do not choose it."
+            )
+
+    lines += ["", f"Business: {business.name}"]
     if business.industry:
         lines.append(f"Industry: {business.industry}")
     if business.description:
@@ -151,11 +258,29 @@ def _build_prompt(
     brand_voice = brand_voice_lines(brand_profile)
     if brand_voice:
         lines += [""] + brand_voice
+    if proof_points:
+        lines.append(
+            "Proof points/trust lines on file — use one for the "
+            "description slot (or a trust line elsewhere) when it fits; "
+            "never invent a proof point that isn't listed here: "
+            + "; ".join(proof_points)
+        )
+    lines += [
+        f"Standing promotion (from brand profile): {standing_offer or 'none'}",
+        f"Campaign strategic offer: {strategy.offer}",
+        "These are two different things, so don't conflate them: the "
+        "standing promotion is this business's own ongoing deal, if any "
+        "(and is what determines whether GET_OFFER is usable above); the "
+        "campaign strategic offer is this campaign's value framing from "
+        "its strategy and isn't necessarily a discount.",
+    ]
 
     if product is not None:
         lines += ["", quarantine("Product", product.description)]
         if product.price is not None:
             lines.append(f"Price: {product.price}")
+        if product.url:
+            lines.append(f"Product URL: {product.url}")
         if product.features:
             lines.append(f"Features: {product.features}")
         if product.benefits:
@@ -172,7 +297,6 @@ def _build_prompt(
 
     lines += [
         "",
-        f"Offer: {strategy.offer}",
         f"Positioning: {strategy.positioning}",
         f"Copy strategy: {strategy.copy_strategy}",
         f"Creative angles to draw from: {', '.join(strategy.creative_angles)}",
@@ -182,14 +306,108 @@ def _build_prompt(
         lines.append(f"Target audience problem: {audience.problem}")
     if audience.desire:
         lines.append(f"Target audience desire: {audience.desire}")
+
     lines += [
-        f"Campaign objective: {strategy.objective}",
+        "",
+        "Reference angle structures for this industry (structural "
+        "examples to adapt, never copy to reuse verbatim):",
+    ]
+    for template in _angle_templates_for_industry(business.industry):
+        if template == "offer + urgency" and not standing_offer:
+            continue
+        lines.append(f"- {template}")
+
+    lines += [
+        "",
+        "Business website (this appears automatically as the ad's display "
+        f"link — never write the domain into the copy itself): "
+        f"{business.website or 'none'}",
         "",
         f"Generate exactly {_VARIANT_COUNT} variants, each built around a "
-        "different creative angle where possible. Submit them using the "
-        "provided tool.",
+        "different creative angle (draw from the creative angles and "
+        "reference structures above where possible) — every variant's "
+        "angle must be distinct from the others. Each variant needs: "
+        f"body_text as the primary text (at most {MAX_BODY_TEXT_LENGTH} "
+        f"characters — it must read complete before Meta's own truncation "
+        f"cuts it off), a headline (at most {MAX_HEADLINE_LENGTH} "
+        f"characters), an optional description (at most "
+        f"{MAX_DESCRIPTION_LENGTH} characters — omit it if no proof point "
+        "fits, don't pad it), the one shared CTA chosen above, and the "
+        "creative angle. Submit them using the provided tool.",
     ]
     return "\n".join(lines)
+
+
+def _coerce_batch(
+    raw: dict[str, object], objective: Objective, failure: Exception
+) -> list[GeneratedCreativeVariant]:
+    """Best-effort recovery after two failed attempts at a valid batch.
+
+    Forces the objective's default CTA onto every variant (resolves both
+    "CTA not allowed for this objective" and any GET_OFFER-eligibility
+    failure at once, since neither applies once the CTA changes) and
+    truncates any over-length headline/body_text/description at a word
+    boundary, then re-validates structurally only (no business-rule
+    context — the coercion above is exactly what would otherwise fail
+    those rules; see GeneratedCreativeBatch's own docstring for why
+    context=None skips them). Doesn't attempt to fix anything else (e.g.
+    two variants sharing an angle, or genuinely malformed input) — those
+    still raise, since no coercion for them was ever specified.
+
+    Args:
+        raw: The second attempt's raw tool_use.input, already known not
+            to validate against the full (context-aware) rules.
+        objective: The campaign's objective, for its default CTA.
+        failure: The validation failure being recovered from, logged for
+            visibility into what the model kept getting wrong.
+
+    Returns:
+        The coerced batch's variants.
+
+    Raises:
+        CreativeAgentError: If the coerced result still doesn't even
+            structurally validate.
+    """
+    default_cta = DEFAULT_CTA_BY_OBJECTIVE.get(objective, "LEARN_MORE")
+    logger.warning(
+        "Creative Agent output still invalid after one retry (%s) — "
+        "coercing every variant's CTA to %s and truncating any "
+        "over-length text.",
+        failure,
+        default_cta,
+    )
+    coerced = copy.deepcopy(raw)
+    variants = coerced.get("variants")
+    if isinstance(variants, list):
+        for variant in variants:
+            if not isinstance(variant, dict):
+                continue
+            variant["cta"] = default_cta
+            if isinstance(variant.get("headline"), str):
+                variant["headline"] = _truncate_at_word_boundary(
+                    variant["headline"], MAX_HEADLINE_LENGTH
+                )
+            if isinstance(variant.get("bodyText"), str):
+                variant["bodyText"] = _truncate_at_word_boundary(
+                    variant["bodyText"], MAX_BODY_TEXT_LENGTH
+                )
+            if isinstance(variant.get("description"), str):
+                variant["description"] = _truncate_at_word_boundary(
+                    variant["description"], MAX_DESCRIPTION_LENGTH
+                )
+    try:
+        # No context — the fixes above target exactly the two
+        # context-dependent rules; re-checking them here would just
+        # re-raise on data we already know is now compliant, or (for
+        # GET_OFFER specifically) reject a CTA we deliberately moved away
+        # from anyway.
+        batch = parse_tool_input(coerced, GeneratedCreativeBatch)
+    except (ValidationError, ToolInputRecoveryError) as exc:
+        raise CreativeAgentError(
+            "Creative Agent output was invalid even after a retry and "
+            f"coercion attempt: {exc}"
+        ) from exc
+    return batch.variants
 
 
 async def generate_creatives(
@@ -218,16 +436,19 @@ async def generate_creatives(
             actually looks like, not just its written description.
             Ignored in fake mode (see the module docstring).
         brand_profile: The business's brand profile, if one exists (PRD.md
-            §5 step 3.5) — grounds the batch in a "Brand voice" block.
-            None (the default — no profile yet) falls back to current
-            behavior.
+            §5 step 3.5) — grounds the batch in a "Brand voice" block,
+            plus its own proof_points/offer fields. None (the default —
+            no profile yet) falls back to current behavior.
 
     Returns:
-        Exactly four generated creative variants (Creative A-D).
+        Exactly four generated creative variants (Creative A-D), their
+        shared CTA guaranteed to be one this campaign's objective allows.
 
     Raises:
         CreativeAgentError: If no API key is configured, the API call
-            fails, or the model doesn't return a valid tool call.
+            fails, the model doesn't return a tool call, or (after one
+            retry and one coercion attempt) its output still doesn't
+            structurally validate.
     """
     settings = get_settings()
     if settings.fake_llm_enabled:
@@ -273,38 +494,60 @@ async def generate_creatives(
             }
         )
 
-    content: str | list[ImageBlockParam | TextBlockParam]
-    if image_blocks:
-        content = [*image_blocks, {"type": "text", "text": prompt}]
-    else:
-        content = prompt
-    message: MessageParam = {"role": "user", "content": content}
+    async def _call(prompt_text: str) -> dict[str, object]:
+        content: str | list[ImageBlockParam | TextBlockParam]
+        if image_blocks:
+            content = [*image_blocks, {"type": "text", "text": prompt_text}]
+        else:
+            content = prompt_text
+        message: MessageParam = {"role": "user", "content": content}
+        try:
+            response = await client.messages.create(
+                model=_MODEL,
+                max_tokens=_MAX_TOKENS,
+                tools=[
+                    {
+                        "name": _TOOL_NAME,
+                        "description": "Submit the generated ad creative variants.",
+                        "input_schema": GeneratedCreativeBatch.model_json_schema(),
+                    }
+                ],
+                tool_choice={"type": "tool", "name": _TOOL_NAME},
+                messages=[message],
+            )
+        except anthropic.AnthropicError as exc:
+            raise CreativeAgentError(f"Anthropic API call failed: {exc}") from exc
 
-    try:
-        response = await client.messages.create(
-            model=_MODEL,
-            max_tokens=_MAX_TOKENS,
-            tools=[
-                {
-                    "name": _TOOL_NAME,
-                    "description": "Submit the generated ad creative variants.",
-                    "input_schema": GeneratedCreativeBatch.model_json_schema(),
-                }
-            ],
-            tool_choice={"type": "tool", "name": _TOOL_NAME},
-            messages=[message],
+        tool_use = next(
+            (block for block in response.content if block.type == "tool_use"), None
         )
-    except anthropic.AnthropicError as exc:
-        raise CreativeAgentError(f"Anthropic API call failed: {exc}") from exc
+        if tool_use is None:
+            raise CreativeAgentError("Model did not return a tool call")
+        return tool_use.input
 
-    tool_use = next(
-        (block for block in response.content if block.type == "tool_use"), None
-    )
-    if tool_use is None:
-        raise CreativeAgentError("Model did not return a tool call")
+    context: dict[str, object] = {
+        "objective": strategy.objective,
+        "standing_offer": brand_profile.offer if brand_profile is not None else None,
+    }
 
-    batch = parse_tool_input(tool_use.input, GeneratedCreativeBatch)
-    return batch.variants
+    raw = await _call(prompt)
+    try:
+        batch = parse_tool_input(raw, GeneratedCreativeBatch, context=context)
+        return batch.variants
+    except (ValidationError, ToolInputRecoveryError) as first_failure:
+        retry_prompt = (
+            f"{prompt}\n\n"
+            "Your previous submission was invalid and must be corrected:\n"
+            f"{first_failure}\n"
+            "Resubmit a complete, corrected batch of "
+            f"{_VARIANT_COUNT} variants."
+        )
+        raw = await _call(retry_prompt)
+        try:
+            batch = parse_tool_input(raw, GeneratedCreativeBatch, context=context)
+            return batch.variants
+        except (ValidationError, ToolInputRecoveryError) as second_failure:
+            return _coerce_batch(raw, strategy.objective, second_failure)
 
 
 def is_creative_stale(

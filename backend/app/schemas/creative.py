@@ -1,11 +1,13 @@
 """Schemas for the Creative Agent (PRD.md build step 6)."""
 
+import re
 from datetime import datetime
-from typing import Literal
+from typing import Literal, Self, get_args
 
-from pydantic import Field
+from pydantic import Field, ValidationInfo, field_validator, model_validator
 
 from app.schemas.base import CamelCaseModel
+from app.schemas.campaign import Objective
 
 CtaType = Literal[
     "SHOP_NOW",
@@ -37,7 +39,57 @@ CTA_LABELS: dict[CtaType, str] = {
     "BOOK_NOW": "Book Now",
 }
 
+# Which CTAs make sense for a given campaign objective (confirmed with the
+# user 2026-09-12) — enforced below in GeneratedCreativeBatch's validator,
+# not just suggested in the prompt, since the prompt alone let a SALES
+# campaign come back with LEARN_MORE/GET_OFFER inconsistently across
+# variants. Only the 5 objectives that actually exist in this app
+# (app/schemas/campaign.py's Objective) are keyed here — there is no
+# ENGAGEMENT or APP_PROMOTION objective in this product.
+# SUBSCRIBE/DOWNLOAD/BOOK_NOW are consequently never selectable by the
+# agent now (no objective maps to them) — left in CtaType rather than
+# removed, since historical Creative rows may still reference them and a
+# future objective could plausibly need one.
+ALLOWED_CTAS_BY_OBJECTIVE: dict[Objective, frozenset[CtaType]] = {
+    "SALES": frozenset({"SHOP_NOW", "GET_OFFER"}),
+    "LEADS": frozenset({"SIGN_UP", "CONTACT_US"}),
+    "TRAFFIC": frozenset({"LEARN_MORE", "SHOP_NOW"}),
+    "MESSAGES": frozenset({"MESSAGE_PAGE"}),
+    "AWARENESS": frozenset({"LEARN_MORE"}),
+}
+
+# The CTA a batch is coerced to (app/services/creative.py's
+# generate_creatives) when the model still can't produce one from the
+# allowed set after one retry — always the first/most standard choice in
+# that objective's allowed set above.
+DEFAULT_CTA_BY_OBJECTIVE: dict[Objective, CtaType] = {
+    "SALES": "SHOP_NOW",
+    "LEADS": "SIGN_UP",
+    "TRAFFIC": "LEARN_MORE",
+    "MESSAGES": "MESSAGE_PAGE",
+    "AWARENESS": "LEARN_MORE",
+}
+
+_ALL_CTAS = frozenset(get_args(CtaType))
+
+# Meta's real per-slot limits for a feed link ad (confirmed with the user
+# 2026-09-12) — primary text must read complete before Meta's own "See
+# more" truncation kicks in. Enforced with len() after stripping, not
+# Pydantic's Field(max_length=...), so the message can name which slot and
+# by how much it overran (app/services/creative.py's retry-then-truncate
+# handles the actual recovery).
+MAX_HEADLINE_LENGTH = 40
+MAX_BODY_TEXT_LENGTH = 125
+MAX_DESCRIPTION_LENGTH = 30
+
 _VARIANT_COUNT = 4
+
+
+def _stripped_or_none(value: str | None) -> str | None:
+    if value is None:
+        return None
+    stripped = value.strip()
+    return stripped or None
 
 
 class GeneratedCreativeVariant(CamelCaseModel):
@@ -45,24 +97,143 @@ class GeneratedCreativeVariant(CamelCaseModel):
 
     Field names mirror Meta's own ad creative terminology (see
     app/services/creative.py and the Creative model's doc comment) — this
-    is what the tool call must produce, one row per variant.
+    is what the tool call must produce, one row per variant. Length caps
+    mirror Meta's real per-slot limits for a feed link ad (see the
+    MAX_*_LENGTH constants above) — validated here (not just documented in
+    the prompt) so a too-long slot fails loudly rather than silently
+    getting cropped by Meta's own UI later.
     """
 
     headline: str
     body_text: str
-    description: str
+    # Nullable (unlike name/cta/etc.) — Part 4 (confirmed 2026-09-12): no
+    # single proof point/trust line fits every business, so the model is
+    # explicitly allowed to omit this slot rather than pad it with filler.
+    description: str | None = None
     cta: CtaType
     creative_angle: str
     image_prompt: str
     video_prompt: str
 
+    @field_validator("headline", "body_text")
+    @classmethod
+    def _strip_required_text(cls, value: str) -> str:
+        return value.strip()
+
+    @field_validator("description")
+    @classmethod
+    def _strip_optional_text(cls, value: str | None) -> str | None:
+        return _stripped_or_none(value)
+
+    @model_validator(mode="after")
+    def _check_length_limits(self) -> Self:
+        overruns: list[str] = []
+        if len(self.headline) > MAX_HEADLINE_LENGTH:
+            overruns.append(
+                f"headline is {len(self.headline)} characters "
+                f"(max {MAX_HEADLINE_LENGTH}): {self.headline!r}"
+            )
+        if len(self.body_text) > MAX_BODY_TEXT_LENGTH:
+            overruns.append(
+                f"primary text is {len(self.body_text)} characters "
+                f"(max {MAX_BODY_TEXT_LENGTH}): {self.body_text!r}"
+            )
+        description = self.description
+        if description is not None and len(description) > MAX_DESCRIPTION_LENGTH:
+            overruns.append(
+                f"description is {len(description)} characters "
+                f"(max {MAX_DESCRIPTION_LENGTH}): {description!r}"
+            )
+        if overruns:
+            raise ValueError("; ".join(overruns))
+        return self
+
 
 class GeneratedCreativeBatch(CamelCaseModel):
-    """The full tool-call payload: exactly _VARIANT_COUNT variants (A-D)."""
+    """The full tool-call payload: exactly _VARIANT_COUNT variants (A-D).
+
+    Two independent groups of cross-variant rules, both confirmed with the
+    user 2026-09-12:
+
+    - Always enforced, no external context needed: every variant shares
+      the same CTA (Meta ad sets don't mix CTAs across an A/B/C/D test the
+      way they might mix headlines/images), and every variant has a
+      distinct creative_angle (case-insensitive) — four variants that are
+      all "the same angle" defeat the point of generating four.
+    - Only enforced when the caller passes validation context
+      (app/services/creative.py's generate_creatives always does; a bare
+      `GeneratedCreativeBatch.model_validate(...)` with no context — e.g.
+      the coercion fallback's structural-only re-check — skips these on
+      purpose): the shared CTA must be one this campaign's objective
+      actually allows (ALLOWED_CTAS_BY_OBJECTIVE), and GET_OFFER
+      specifically requires a non-empty standing promotion
+      (BrandProfile.offer, passed as context["standing_offer"]) that each
+      variant's own primary text actually mentions — otherwise "Get Offer"
+      is a CTA promising a promotion that doesn't exist or isn't named.
+    """
 
     variants: list[GeneratedCreativeVariant] = Field(
         min_length=_VARIANT_COUNT, max_length=_VARIANT_COUNT
     )
+
+    @model_validator(mode="after")
+    def _check_shared_cta_and_distinct_angles(self) -> Self:
+        ctas = {variant.cta for variant in self.variants}
+        if len(ctas) > 1:
+            raise ValueError(
+                f"All variants in a batch must share the same CTA; got {sorted(ctas)}"
+            )
+        angles = [variant.creative_angle.strip().lower() for variant in self.variants]
+        if len(set(angles)) != len(angles):
+            raise ValueError(
+                "All variants must have a distinct creative_angle; got "
+                f"{[variant.creative_angle for variant in self.variants]}"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _check_objective_and_offer_rules(self, info: ValidationInfo) -> Self:
+        context = info.context or {}
+        objective = context.get("objective")
+        if objective is None:
+            return self
+
+        cta = self.variants[0].cta  # shared across all variants, checked above
+        allowed = ALLOWED_CTAS_BY_OBJECTIVE.get(objective, _ALL_CTAS)
+        if cta not in allowed:
+            raise ValueError(
+                f"CTA {cta!r} is not allowed for objective {objective!r}; "
+                f"must be one of {sorted(allowed)}"
+            )
+
+        if cta != "GET_OFFER":
+            return self
+        standing_offer = context.get("standing_offer")
+        if not standing_offer:
+            raise ValueError(
+                "GET_OFFER requires a non-empty standing promotion "
+                "(the business's brand profile has no offer set)"
+            )
+        # A loose, deliberately fuzzy "mentions the offer" check — the
+        # model paraphrases rather than quoting the offer string verbatim
+        # (e.g. offer "20% off first order with WELCOME20" becomes primary
+        # text like "Get 20% off with code WELCOME20 today"), so this
+        # looks for any one significant (3+ char) word from the offer
+        # appearing in the primary text, not an exact substring match.
+        offer_tokens = [
+            token.lower()
+            for token in re.findall(r"[A-Za-z0-9]+", standing_offer)
+            if len(token) >= 3
+        ]
+        for variant in self.variants:
+            body_lower = variant.body_text.lower()
+            if offer_tokens and not any(token in body_lower for token in offer_tokens):
+                raise ValueError(
+                    "GET_OFFER requires the primary text to mention the "
+                    f"standing promotion ({standing_offer!r}); "
+                    f"{variant.body_text!r} does not"
+                )
+        return self
 
 
 class SelectCreativeRequest(CamelCaseModel):
@@ -84,7 +255,7 @@ class CreativeResponse(CamelCaseModel):
     ad_id: str | None
     headline: str
     body_text: str
-    description: str
+    description: str | None
     cta: CtaType
     creative_angle: str | None
     image_prompt: str | None

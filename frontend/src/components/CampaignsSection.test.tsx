@@ -1602,6 +1602,8 @@ describe('CampaignsSection', () => {
       tagline: null,
       competitors: null,
       exampleCopy: null,
+      proofPoints: [],
+      offer: null,
       logoUrl: null,
     })
     mockedApi.listCampaigns.mockResolvedValue([

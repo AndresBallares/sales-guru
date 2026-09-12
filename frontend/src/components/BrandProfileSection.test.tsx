@@ -39,6 +39,8 @@ const profile: api.BrandProfile = {
   tagline: null,
   competitors: null,
   exampleCopy: null,
+  proofPoints: [],
+  offer: null,
   logoUrl: null,
 }
 

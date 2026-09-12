@@ -4,6 +4,7 @@ The Anthropic client is mocked throughout — no test here needs a real
 ANTHROPIC_API_KEY or makes a network call.
 """
 
+import json
 from collections.abc import Iterator
 from types import SimpleNamespace
 from typing import Any, cast
@@ -13,6 +14,7 @@ import anthropic
 import httpx
 import pytest
 from app.core.config import get_settings
+from app.schemas.creative import GeneratedCreativeBatch, GeneratedCreativeVariant
 from app.schemas.strategy import (
     BudgetRecommendation,
     DataDrivenStrategyContent,
@@ -22,11 +24,12 @@ from app.services import creative
 from prisma import Base64
 from prisma.models import Business, Campaign, Creative, Product
 from prisma.models import ProductImage as PrismaProductImage
+from pydantic import ValidationError
 
 _ONE_VARIANT: dict[str, Any] = {
     "headline": "Emeralds With a Story",
     "bodyText": "Custom Colombian emerald rings, handcrafted around you.",
-    "description": "Ethically sourced. Made to order.",
+    "description": "Ethically sourced.",
     "cta": "SHOP_NOW",
     "creativeAngle": "Craftsmanship",
     "imagePrompt": "A close-up of a hand-set emerald ring on dark velvet",
@@ -59,6 +62,7 @@ _FAKE_STRATEGY = DataDrivenStrategyContent(
 def _fake_business(**overrides: object) -> Business:
     defaults: dict[str, object] = {
         "name": "Acme Jewelry",
+        "website": None,
         "industry": None,
         "description": None,
         "logoData": None,
@@ -108,6 +112,8 @@ def _fake_brand_profile(**overrides: object) -> Any:
         "tagline": None,
         "competitors": None,
         "exampleCopy": None,
+        "proofPoints": None,
+        "offer": None,
     }
     defaults.update(overrides)
     return SimpleNamespace(**defaults)
@@ -621,6 +627,376 @@ async def test_generate_creatives_raises_on_malformed_tool_input(
         await creative.generate_creatives(
             business=_fake_business(), product=None, strategy=_FAKE_STRATEGY
         )
+
+
+def _batch_with(cta: str | list[str]) -> dict[str, Any]:
+    """A four-variant tool input, each on a distinct angle, sharing one
+    CTA unless a list of four is given (for the mixed-CTA test)."""
+    angles = ["Craftsmanship", "Luxury", "Personalization", "Heritage"]
+    ctas = cta if isinstance(cta, list) else [cta] * 4
+    return {
+        "variants": [
+            {**_ONE_VARIANT, "cta": c, "creativeAngle": a}
+            for c, a in zip(ctas, angles, strict=True)
+        ]
+    }
+
+
+def _sequenced_client(
+    monkeypatch: pytest.MonkeyPatch, *inputs: dict[str, Any]
+) -> AsyncMock:
+    """Patch AsyncAnthropic to return one canned tool-use response per call,
+    in order — for testing the retry-then-coerce sequence."""
+    create = AsyncMock(
+        side_effect=[
+            SimpleNamespace(content=[SimpleNamespace(type="tool_use", input=i)])
+            for i in inputs
+        ]
+    )
+    fake_client = SimpleNamespace(messages=SimpleNamespace(create=create))
+    monkeypatch.setattr(creative, "AsyncAnthropic", lambda **_kwargs: fake_client)
+    return create
+
+
+# ---------- Part 5(a): objective-aware CTA coercion ----------
+
+
+@pytest.mark.asyncio
+async def test_generate_creatives_coerces_a_disallowed_cta_to_the_objective_default(
+    anthropic_api_key: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A SALES campaign (_FAKE_STRATEGY.objective) that keeps coming back
+    with LEARN_MORE — not in SALES's allowed {SHOP_NOW, GET_OFFER} — is
+    coerced to SHOP_NOW (SALES's default) after a failed retry, rather
+    than failing generation outright."""
+    bad_batch = _batch_with("LEARN_MORE")
+    create = _sequenced_client(monkeypatch, bad_batch, bad_batch)
+
+    result = await creative.generate_creatives(
+        business=_fake_business(), product=_fake_product(), strategy=_FAKE_STRATEGY
+    )
+
+    assert create.call_count == 2
+    assert {v.cta for v in result} == {"SHOP_NOW"}
+    # The retry prompt actually told the model what it got wrong.
+    retry_text = create.call_args.kwargs["messages"][0]["content"]
+    assert "not allowed for objective" in retry_text
+
+
+# ---------- Part 5(b): GET_OFFER needs a non-empty standing offer ----------
+
+
+@pytest.mark.asyncio
+async def test_generate_creatives_coerces_get_offer_with_no_standing_offer(
+    anthropic_api_key: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """GET_OFFER is otherwise in SALES's allowed set, but is still
+    coerced away when the business has no standing promotion
+    (BrandProfile.offer) set at all."""
+    offer_batch = _batch_with("GET_OFFER")
+    create = _sequenced_client(monkeypatch, offer_batch, offer_batch)
+
+    result = await creative.generate_creatives(
+        business=_fake_business(),
+        product=_fake_product(),
+        strategy=_FAKE_STRATEGY,
+        brand_profile=_fake_brand_profile(offer=None),
+    )
+
+    assert create.call_count == 2
+    assert {v.cta for v in result} == {"SHOP_NOW"}
+
+
+@pytest.mark.asyncio
+async def test_generate_creatives_coerces_get_offer_when_primary_text_omits_it(
+    anthropic_api_key: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A standing offer exists, but GET_OFFER is still coerced away if the
+    primary text never actually mentions it."""
+    offer_batch = _batch_with("GET_OFFER")
+    create = _sequenced_client(monkeypatch, offer_batch, offer_batch)
+
+    result = await creative.generate_creatives(
+        business=_fake_business(),
+        product=_fake_product(),
+        strategy=_FAKE_STRATEGY,
+        brand_profile=_fake_brand_profile(offer="20% off first order with WELCOME20"),
+    )
+
+    assert create.call_count == 2
+    assert {v.cta for v in result} == {"SHOP_NOW"}
+
+
+@pytest.mark.asyncio
+async def test_generate_creatives_allows_get_offer_when_primary_text_mentions_it(
+    anthropic_api_key: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The success path: a standing offer exists and every variant's
+    primary text actually mentions it — GET_OFFER is accepted outright,
+    no retry needed."""
+    mentioning_batch = {
+        "variants": [
+            {
+                **_ONE_VARIANT,
+                "cta": "GET_OFFER",
+                "creativeAngle": angle,
+                "bodyText": "Get 20% off with code WELCOME20 today.",
+            }
+            for angle in ["Craftsmanship", "Luxury", "Personalization", "Heritage"]
+        ]
+    }
+    create = _sequenced_client(monkeypatch, mentioning_batch)
+
+    result = await creative.generate_creatives(
+        business=_fake_business(),
+        product=_fake_product(),
+        strategy=_FAKE_STRATEGY,
+        brand_profile=_fake_brand_profile(offer="20% off first order with WELCOME20"),
+    )
+
+    assert create.call_count == 1
+    assert {v.cta for v in result} == {"GET_OFFER"}
+
+
+# ---------- Part 5(c): mixed CTAs fail batch validation ----------
+
+
+def test_batch_rejects_mixed_ctas_across_variants() -> None:
+    """Four variants that don't all share one CTA fail GeneratedCreativeBatch
+    validation outright — a real Meta A/B/C/D test doesn't mix CTAs."""
+    with pytest.raises(ValidationError, match="same CTA"):
+        GeneratedCreativeBatch.model_validate(
+            _batch_with(["SHOP_NOW", "GET_OFFER", "SHOP_NOW", "GET_OFFER"])
+        )
+
+
+def test_batch_rejects_a_repeated_creative_angle() -> None:
+    """Two variants sharing a creative_angle (case-insensitive) fail —
+    four variants that are "the same angle" defeat the point of four."""
+    batch = _batch_with("SHOP_NOW")
+    first_angle = batch["variants"][0]["creativeAngle"]
+    batch["variants"][1]["creativeAngle"] = first_angle.upper()
+
+    with pytest.raises(ValidationError, match="distinct creative_angle"):
+        GeneratedCreativeBatch.model_validate(batch)
+
+
+def test_batch_rejects_a_cta_outside_the_objective_allowed_set() -> None:
+    """Context-aware rejection: LEARN_MORE isn't in SALES's allowed set."""
+    with pytest.raises(ValidationError, match="not allowed for objective"):
+        GeneratedCreativeBatch.model_validate(
+            _batch_with("LEARN_MORE"), context={"objective": "SALES"}
+        )
+
+
+def test_batch_skips_objective_checks_with_no_context() -> None:
+    """Structural-only validation (context=None, as used by the coercion
+    fallback's own re-check) skips the objective-aware CTA rule entirely
+    — LEARN_MORE validates fine with no context given."""
+    batch = GeneratedCreativeBatch.model_validate(_batch_with("LEARN_MORE"))
+    assert {v.cta for v in batch.variants} == {"LEARN_MORE"}
+
+
+# ---------- Part 5(d): character limits ----------
+
+
+def test_variant_rejects_a_too_long_headline() -> None:
+    with pytest.raises(ValidationError, match="headline"):
+        GeneratedCreativeVariant.model_validate({**_ONE_VARIANT, "headline": "x" * 41})
+
+
+def test_variant_rejects_a_too_long_primary_text() -> None:
+    with pytest.raises(ValidationError, match="primary text"):
+        GeneratedCreativeVariant.model_validate({**_ONE_VARIANT, "bodyText": "x" * 126})
+
+
+def test_variant_rejects_a_too_long_description() -> None:
+    with pytest.raises(ValidationError, match="description"):
+        GeneratedCreativeVariant.model_validate(
+            {**_ONE_VARIANT, "description": "x" * 31}
+        )
+
+
+def test_variant_allows_a_null_description() -> None:
+    """Not every business has a proof point that fits every variant — the
+    model is allowed to omit the slot rather than pad it with filler."""
+    variant = GeneratedCreativeVariant.model_validate(
+        {**_ONE_VARIANT, "description": None}
+    )
+    assert variant.description is None
+
+
+@pytest.mark.asyncio
+async def test_generate_creatives_truncates_an_over_length_headline_after_retry(
+    anthropic_api_key: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A headline still over 40 characters after one retry is truncated at
+    a word boundary rather than failing generation outright."""
+    long_headline = (
+        "This headline is deliberately far too long for Meta's forty character limit"
+    )
+    bad_batch = {
+        "variants": [
+            {**_ONE_VARIANT, "headline": long_headline, "creativeAngle": angle}
+            for angle in ["Craftsmanship", "Luxury", "Personalization", "Heritage"]
+        ]
+    }
+    create = _sequenced_client(monkeypatch, bad_batch, bad_batch)
+
+    result = await creative.generate_creatives(
+        business=_fake_business(), product=_fake_product(), strategy=_FAKE_STRATEGY
+    )
+
+    assert create.call_count == 2
+    for variant in result:
+        assert len(variant.headline) <= 40
+        assert not variant.headline.endswith(" ")
+        assert long_headline.startswith(variant.headline)
+
+
+# ---------- Part 5(e): generation succeeds with an empty brand profile ----------
+
+
+@pytest.mark.asyncio
+async def test_generate_creatives_succeeds_with_an_empty_brand_profile(
+    anthropic_api_key: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A brand profile with no proof points or standing offer set still
+    generates successfully in one call — the prompt just skips those
+    blocks rather than erroring or inventing content."""
+    _sequenced_client(monkeypatch, _VALID_TOOL_INPUT)
+    brand_profile = _fake_brand_profile(proofPoints=None, offer=None)
+
+    result = await creative.generate_creatives(
+        business=_fake_business(),
+        product=_fake_product(),
+        strategy=_FAKE_STRATEGY,
+        brand_profile=brand_profile,
+    )
+
+    assert len(result) == 4
+
+
+# ---------- Part 3: prompt structure ----------
+
+
+def test_build_prompt_states_the_allowed_cta_set_for_the_objective() -> None:
+    prompt = creative._build_prompt(_fake_business(), _fake_product(), _FAKE_STRATEGY)
+
+    assert (
+        "You must choose the CTA from exactly this set: GET_OFFER, SHOP_NOW" in prompt
+    )
+
+
+def test_build_prompt_notes_get_offer_is_unusable_with_no_standing_offer() -> None:
+    prompt = creative._build_prompt(_fake_business(), _fake_product(), _FAKE_STRATEGY)
+
+    assert "GET_OFFER is not usable" in prompt
+
+
+def test_build_prompt_notes_get_offer_requirement_with_a_standing_offer() -> None:
+    brand_profile = _fake_brand_profile(offer="20% off first order with WELCOME20")
+
+    prompt = creative._build_prompt(
+        _fake_business(), _fake_product(), _FAKE_STRATEGY, brand_profile=brand_profile
+    )
+
+    assert "GET_OFFER is only usable" in prompt
+    assert "20% off first order with WELCOME20" in prompt
+
+
+def test_build_prompt_distinguishes_standing_offer_from_strategy_offer() -> None:
+    """The two "offer" concepts (BrandProfile.offer vs. Strategy.offer)
+    are labeled distinctly so the model can't conflate them."""
+    brand_profile = _fake_brand_profile(offer="20% off first order with WELCOME20")
+
+    prompt = creative._build_prompt(
+        _fake_business(), _fake_product(), _FAKE_STRATEGY, brand_profile=brand_profile
+    )
+
+    assert (
+        "Standing promotion (from brand profile): "
+        "20% off first order with WELCOME20" in prompt
+    )
+    assert "Campaign strategic offer: Custom emerald rings" in prompt
+
+
+def test_build_prompt_omits_standing_offer_gracefully() -> None:
+    prompt = creative._build_prompt(_fake_business(), _fake_product(), _FAKE_STRATEGY)
+
+    assert "Standing promotion (from brand profile): none" in prompt
+
+
+def test_build_prompt_includes_proof_points_when_set() -> None:
+    brand_profile = _fake_brand_profile(
+        proofPoints=json.dumps(["4.8★ from 2,100 reviews", "Free shipping over $75"])
+    )
+
+    prompt = creative._build_prompt(
+        _fake_business(), _fake_product(), _FAKE_STRATEGY, brand_profile=brand_profile
+    )
+
+    assert "4.8★ from 2,100 reviews" in prompt
+    assert "Free shipping over $75" in prompt
+
+
+def test_build_prompt_omits_proof_points_block_when_none_set() -> None:
+    prompt = creative._build_prompt(
+        _fake_business(),
+        _fake_product(),
+        _FAKE_STRATEGY,
+        brand_profile=_fake_brand_profile(),
+    )
+
+    assert "Proof points" not in prompt
+
+
+def test_build_prompt_uses_jewelry_angle_templates_for_fashion_jewelry() -> None:
+    business = _fake_business(industry="FASHION_JEWELRY")
+
+    prompt = creative._build_prompt(business, _fake_product(), _FAKE_STRATEGY)
+
+    assert "product + material + trust line" in prompt
+
+
+def test_build_prompt_falls_back_to_generic_angle_templates() -> None:
+    business = _fake_business(industry="SAAS_TECHNOLOGY")
+
+    prompt = creative._build_prompt(business, _fake_product(), _FAKE_STRATEGY)
+
+    assert "benefit + trust line" in prompt
+
+
+def test_build_prompt_omits_offer_urgency_template_with_no_standing_offer() -> None:
+    prompt = creative._build_prompt(_fake_business(), _fake_product(), _FAKE_STRATEGY)
+
+    assert "offer + urgency" not in prompt
+
+
+def test_build_prompt_includes_offer_urgency_template_with_a_standing_offer() -> None:
+    brand_profile = _fake_brand_profile(offer="20% off first order with WELCOME20")
+
+    prompt = creative._build_prompt(
+        _fake_business(), _fake_product(), _FAKE_STRATEGY, brand_profile=brand_profile
+    )
+
+    assert "offer + urgency" in prompt
+
+
+def test_build_prompt_includes_the_business_website_as_the_display_link() -> None:
+    business = _fake_business(website="https://acme.example")
+
+    prompt = creative._build_prompt(business, _fake_product(), _FAKE_STRATEGY)
+
+    assert "https://acme.example" in prompt
+    assert "never write the domain into the copy" in prompt
+
+
+def test_build_prompt_handles_no_website() -> None:
+    prompt = creative._build_prompt(_fake_business(), _fake_product(), _FAKE_STRATEGY)
+
+    assert "Business website" in prompt
+    assert "none" in prompt
 
 
 def test_is_creative_stale_false_for_a_freshly_generated_creative() -> None:
