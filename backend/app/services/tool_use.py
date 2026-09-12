@@ -137,7 +137,21 @@ def _decode_json_string_fields(raw: dict[str, object]) -> dict[str, object] | No
                 changed = True
                 continue
             except ValueError:
-                pass
+                # Logged (not raised — this is one candidate recovery
+                # among several, not itself the final failure) so a real
+                # occurrence shows the actual offending text next time,
+                # confirmed 2026-09-12 — the field's own ValidationError
+                # only ever said "expected a dict/list, got a string,"
+                # with no way to tell a genuinely truncated response
+                # (max_tokens cut off mid-JSON) apart from one that was
+                # just malformed from the start. Capped at 200 chars so a
+                # very long field doesn't flood the log.
+                logger.warning(
+                    "Field %r looked JSON-encoded but failed to decode "
+                    "(first 200 chars): %r",
+                    key,
+                    value[:200],
+                )
         decoded[key] = value
     return decoded if changed else None
 

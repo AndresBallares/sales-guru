@@ -128,10 +128,20 @@ def _fake_brand_profile(**overrides: object) -> Any:
 
 
 def _mock_client_returning(
-    monkeypatch: pytest.MonkeyPatch, content: list[SimpleNamespace]
+    monkeypatch: pytest.MonkeyPatch,
+    content: list[SimpleNamespace],
+    *,
+    stop_reason: str = "end_turn",
 ) -> AsyncMock:
-    """Patch AsyncAnthropic to return a canned response, return the create mock."""
-    create = AsyncMock(return_value=SimpleNamespace(content=content))
+    """Patch AsyncAnthropic to return a canned response, return the create mock.
+
+    stop_reason defaults to a normal, non-truncated completion — real
+    Anthropic responses always carry one, so every test double needs it
+    too (_call_agent's own max_tokens retry check reads it directly).
+    """
+    create = AsyncMock(
+        return_value=SimpleNamespace(content=content, stop_reason=stop_reason)
+    )
     fake_client = SimpleNamespace(messages=SimpleNamespace(create=create))
     monkeypatch.setattr(strategist, "AsyncAnthropic", lambda **_kwargs: fake_client)
     return create
@@ -424,6 +434,62 @@ async def test_generate_strategy_returns_a_test_plan(
     assert result.baseline_metrics.spend is None
     assert result.benchmark_context.ctr.median == JEWELRY_META_BENCHMARKS.ctr.median
     assert result.data_source.historical_meta_data == []
+
+
+@pytest.mark.asyncio
+async def test_generate_strategy_retries_once_on_a_max_tokens_truncation(
+    anthropic_api_key: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A response truncated at max_tokens is never handed to
+    parse_tool_input — _call_agent retries once and uses the retry's
+    response instead, rather than trying to parse the cut-off JSON."""
+    truncated = SimpleNamespace(
+        content=[SimpleNamespace(type="tool_use", input={"garbage": "cut off mid"})],
+        stop_reason="max_tokens",
+    )
+    complete = SimpleNamespace(
+        content=[SimpleNamespace(type="tool_use", input=_VALID_TEST_PLAN_INPUT)],
+        stop_reason="end_turn",
+    )
+    create = AsyncMock(side_effect=[truncated, complete])
+    fake_client = SimpleNamespace(messages=SimpleNamespace(create=create))
+    monkeypatch.setattr(strategist, "AsyncAnthropic", lambda **_kwargs: fake_client)
+
+    result = await strategist.generate_strategy(
+        business=_fake_business(),
+        product=_fake_product(),
+        audience=_fake_audience(),
+        objective="SALES",
+        plan_type="TEST_PLAN",
+    )
+
+    assert create.call_count == 2
+    # The complete (second) response's real content was used, not the
+    # truncated first one's garbage input.
+    assert result.creative_angles == ["Craftsmanship", "Price value"]
+
+
+@pytest.mark.asyncio
+async def test_generate_strategy_does_not_retry_a_normal_completion(
+    anthropic_api_key: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A normal (non-truncated) completion is used as-is — only
+    stop_reason == "max_tokens" triggers the retry."""
+    create = _mock_client_returning(
+        monkeypatch,
+        [SimpleNamespace(type="tool_use", input=_VALID_TEST_PLAN_INPUT)],
+        stop_reason="end_turn",
+    )
+
+    await strategist.generate_strategy(
+        business=_fake_business(),
+        product=_fake_product(),
+        audience=_fake_audience(),
+        objective="SALES",
+        plan_type="TEST_PLAN",
+    )
+
+    assert create.call_count == 1
 
 
 @pytest.mark.asyncio
