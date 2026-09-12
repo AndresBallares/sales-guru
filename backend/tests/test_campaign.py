@@ -412,6 +412,29 @@ def test_list_campaigns_returns_only_this_businesss_campaigns(
     assert objectives == ["SALES"]
 
 
+def test_list_campaigns_returns_most_recently_created_first(
+    client: TestClient,
+) -> None:
+    """A just-created campaign appears at the top of the list, not the
+    bottom (confirmed 2026-09-12 — without an explicit order, row order
+    is a DB implementation detail the frontend can't rely on)."""
+    _signed_up_client(client)
+    business_id = _create_business(client)
+
+    first_id = client.post(
+        f"/businesses/{business_id}/campaigns", json={"objective": "SALES"}
+    ).json()["id"]
+    second_id = client.post(
+        f"/businesses/{business_id}/campaigns", json={"objective": "LEADS"}
+    ).json()["id"]
+
+    response = client.get(f"/businesses/{business_id}/campaigns")
+
+    assert response.status_code == 200
+    ids = [c["id"] for c in response.json()]
+    assert ids == [second_id, first_id]
+
+
 def test_approve_campaign_requires_a_session(client: TestClient) -> None:
     """Approving with no session cookie returns 401."""
     response = client.post("/businesses/some-id/campaigns/some-id/approve")

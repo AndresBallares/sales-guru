@@ -290,9 +290,15 @@ async def list_campaigns(
             get_owned_business.
 
     Returns:
-        All campaigns under the business.
+        All campaigns under the business, most recently created first —
+        without an explicit order, row order is a DB implementation
+        detail, not something to rely on for "newest first" in the UI
+        (confirmed 2026-09-12, the frontend showed a just-created campaign
+        at the bottom of the list instead of the top).
     """
-    campaigns = await db.campaign.find_many(where={"businessId": business.id})
+    campaigns = await db.campaign.find_many(
+        where={"businessId": business.id}, order={"createdAt": "desc"}
+    )
     return [await _to_response(c) for c in campaigns]
 
 

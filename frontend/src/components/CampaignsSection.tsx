@@ -710,6 +710,20 @@ export function CampaignsSection({
             New campaign
           </button>
         )}
+        {!loading && !listError && campaigns.length > 0 && showCreateForm && (
+          <NewCampaignFlow
+            businessId={businessId}
+            products={products}
+            audiences={audiences}
+            objectiveOptions={objectiveOptions}
+            eventVenueOptions={eventVenueOptions}
+            onCancel={handleCancelCreate}
+            onDone={() => {
+              setShowCreateForm(false)
+              void refresh()
+            }}
+          />
+        )}
         <ul>
           {campaigns.map((campaign) => {
             const strategy = strategies[campaign.id]
@@ -1732,21 +1746,6 @@ export function CampaignsSection({
             </button>
           </form>
         </section>
-      )}
-
-      {!loading && !listError && campaigns.length > 0 && showCreateForm && (
-        <NewCampaignFlow
-          businessId={businessId}
-          products={products}
-          audiences={audiences}
-          objectiveOptions={objectiveOptions}
-          eventVenueOptions={eventVenueOptions}
-          onCancel={handleCancelCreate}
-          onDone={() => {
-            setShowCreateForm(false)
-            void refresh()
-          }}
-        />
       )}
     </>
   )
