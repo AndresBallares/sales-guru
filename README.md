@@ -130,6 +130,31 @@ Working TDD-style: write the failing test first (`pytest` / `vitest --watch`),
 then implement until it passes. This is the expected workflow for this repo,
 not just a suggestion — coverage thresholds enforce it indirectly.
 
+## Seeding the local dev database
+
+```bash
+make seed   # or: cd backend && uv run python -m app.seed
+```
+
+Populates `backend/prisma/dev.db` (DATABASE_URL=`file:./dev.db` in
+`backend/.env` resolves relative to `schema.prisma`'s own directory —
+don't confuse it with the stale, empty `backend/dev.db` left over from
+early on) with a dev login (`dev@example.com` /
+`devpassword123`), a demo "VENZI JEWELRY" business complete with a brand
+profile, one product with 4 placeholder photos, an audience, and one Sales
+campaign carried through to a generated strategy and ad creatives (via
+`FAKE_LLM`, so no real `ANTHROPIC_API_KEY` is needed) — something to look
+at immediately after a fresh `prisma db push` or `prisma migrate deploy`,
+without manually clicking through the whole onboarding flow first.
+
+Safe to run more than once: every resource is looked up by name/email
+first and only created if missing, never duplicated or overwritten.
+
+Refuses to run against `ENVIRONMENT=production` (enforced by
+`Settings._forbid_in_production`, `backend/app/core/config.py` — the same
+check that already forbids `FAKE_LLM`/`FAKE_META` in production, since
+seeding sets `FAKE_LLM`).
+
 ## Database schema changes
 
 Schema lives at `backend/prisma/schema.prisma` (SQLite, local dev). To
