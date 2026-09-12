@@ -371,54 +371,15 @@ legend {
   border-radius: var(--radius-card);
 }
 
-/* A mockup of how the selected ad will actually look once published,
-   not a data table of its fields — image, then headline/body/description
-   in decreasing emphasis, then the CTA styled like Meta's own button. */
-.ad-preview {
-  display: flex;
-  flex-direction: column;
-  gap: 0.5rem;
-  max-width: 360px;
-  padding: 1rem;
-  background: var(--surface-hover);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-card);
-}
-
-.ad-preview img {
-  width: 100%;
-  height: auto;
-  border-radius: calc(var(--radius-card) - 0.25rem);
-}
-
-.ad-preview-headline {
-  font-weight: 700;
-  font-size: 1.05rem;
-}
-
-.ad-preview-description {
-  color: var(--text-secondary);
-  font-size: 0.85rem;
-}
-
-.ad-preview-cta {
-  align-self: flex-start;
-  margin-top: 0.25rem;
-  padding: 0.6rem 1.25rem;
-  background: var(--primary);
-  color: white;
-  border-radius: 999px;
-  font-weight: 600;
-  font-size: 0.85rem;
-}
-
 /* A closer mockup of how the ad actually renders as a Facebook/Instagram
-   post (AdPreviewPage) — page header, body copy, image, a link-preview
-   card for headline/description/CTA, then the like/comment/share row —
-   rather than .ad-preview's plain data-card version above. Sizing/colors
-   are tuned against a real Meta Ad Library card (confirmed 2026-09-11),
-   not guessed — e.g. the 1:1 image frame with letterboxing for a
-   non-square photo, and the light-gray (not brand-purple) CTA button. */
+   post (SocialPostPreview, shared by AdPreviewPage and CampaignsSection's
+   own "Selected ad" view so the two never show two different-looking
+   previews of the same ad) — page header, body copy, image, a
+   link-preview card for headline/description/CTA, then the
+   like/comment/share row. Sizing/colors are tuned against a real Meta Ad
+   Library card (confirmed 2026-09-11), not guessed — e.g. the 1:1 image
+   frame with letterboxing for a non-square photo, and the light-gray
+   (not brand-purple) CTA button. */
 .social-post {
   display: flex;
   flex-direction: column;
@@ -528,10 +489,9 @@ legend {
   white-space: nowrap;
 }
 
-/* Deliberately its own class, not a reuse of .ad-preview-cta
-   (CampaignsSection's brand-purple pill) — a real Meta ad's CTA button
-   is a small, neutral light-gray rectangle sitting inside the link card,
-   not a purple pill floating below it. */
+/* A real Meta ad's CTA button is a small, neutral light-gray rectangle
+   sitting inside the link card, not a brand-colored pill — deliberately
+   its own class rather than reusing one of the app's own button styles. */
 .social-post-cta {
   flex-shrink: 0;
   padding: 0.5rem 0.9rem;

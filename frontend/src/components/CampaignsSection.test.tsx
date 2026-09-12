@@ -1754,6 +1754,47 @@ describe('CampaignsSection', () => {
     ).toBeInTheDocument()
   })
 
+  it("shows the selected ad as a Facebook-style preview with the business's name and logo", async () => {
+    mockedApi.getBusiness.mockResolvedValue({
+      id: 'biz-1',
+      name: 'Acme Jewelry',
+      website: null,
+      industry: null,
+      location: null,
+      logoUrl: 'http://localhost:8000/business-logos/biz-1',
+      description: null,
+    })
+    const campaign = {
+      id: 'camp-1',
+      name: null,
+      objective: 'SALES' as const,
+      status: 'PENDING_APPROVAL',
+      productId: 'prod-1',
+      audienceId: null,
+      metaCampaignId: null,
+      eventVenueKey: null,
+      startDate: null,
+      endDate: null,
+      pausedReason: null,
+      dailySpendFlag: null,
+      needsDestinationUrl: false,
+    }
+    mockedApi.listCampaigns.mockResolvedValue([campaign])
+    mockedApi.getStrategy.mockResolvedValue(FAKE_STRATEGY)
+    mockedApi.listCreatives.mockResolvedValue([
+      fakeCreative({ id: 'creative-1', status: 'SELECTED' }),
+    ])
+
+    renderCampaigns(<CampaignsSection businessId="biz-1" />)
+
+    expect(await screen.findByText('Acme Jewelry')).toBeInTheDocument()
+    expect(screen.getByText('Sponsored')).toBeInTheDocument()
+    expect(screen.getByAltText('')).toHaveAttribute(
+      'src',
+      'http://localhost:8000/business-logos/biz-1',
+    )
+  })
+
   it('only shows the Upload Image button for a selected ad once the campaign has a linked product', async () => {
     mockedApi.listCampaigns.mockResolvedValue([
       {
@@ -1837,7 +1878,7 @@ describe('CampaignsSection', () => {
       'img-1',
     )
     expect(await screen.findByRole('button', { name: 'Change image' })).toBeInTheDocument()
-    expect(screen.getByAltText('Selected ad')).toHaveAttribute('src', uploadedImage.url)
+    expect(screen.getByAltText('Headline A')).toHaveAttribute('src', uploadedImage.url)
   })
 
   it('lets the user choose an existing photo from the library for the selected ad', async () => {

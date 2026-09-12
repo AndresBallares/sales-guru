@@ -48,6 +48,7 @@ import { requiresDestinationUrl } from '../lib/urlValidation'
 import { AudienceForm } from './AudienceForm'
 import { NewCampaignFlow } from './NewCampaignFlow'
 import { ProductForm } from './ProductForm'
+import { SocialPostPreview } from './SocialPostPreview'
 
 function formatLocations(locations: TargetLocation[]): string {
   return locations
@@ -66,8 +67,9 @@ export function CampaignsSection({
 }) {
   const navigate = useNavigate()
   const [campaigns, setCampaigns] = useState<Campaign[]>([])
-  // Only fetched for the "add a business description" nudge on the
-  // create-campaign step below — nothing else here needs the business.
+  // Feeds the "add a business description" nudge on the create-campaign
+  // step below, and the logo/name shown on a selected ad's
+  // SocialPostPreview further down.
   const [business, setBusiness] = useState<Business | null>(null)
   // Only powers the "Regenerate with brand voice" label (PRD.md §5 step
   // 3.5) — whether the business has filled in a brand profile at all,
@@ -1347,25 +1349,11 @@ export function CampaignsSection({
                               )}
                             </div>
                           )}
-                          <div className="ad-preview">
-                            {selectedCreative.imageUrl && (
-                              <img
-                                src={selectedCreative.imageUrl}
-                                alt="Selected ad"
-                                width={320}
-                                height={320}
-                                style={{ objectFit: 'cover' }}
-                              />
-                            )}
-                            <p className="ad-preview-headline">{selectedCreative.headline}</p>
-                            <p className="ad-preview-body">{selectedCreative.bodyText}</p>
-                            <p className="ad-preview-description">
-                              {selectedCreative.description}
-                            </p>
-                            <p className="ad-preview-cta">
-                              {ctaLabels[selectedCreative.cta] ?? selectedCreative.cta}
-                            </p>
-                          </div>
+                          <SocialPostPreview
+                            business={business}
+                            creative={selectedCreative}
+                            ctaLabel={ctaLabels[selectedCreative.cta] ?? selectedCreative.cta}
+                          />
                           <button
                             type="button"
                             className="link-button"
