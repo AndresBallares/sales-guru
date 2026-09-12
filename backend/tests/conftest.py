@@ -65,6 +65,7 @@ _ALL_TABLES = (
     "session",
     "metric",
     "optimizationrecommendation",
+    "creativecard",
     "creative",
     "ad",
     "adset",

@@ -755,6 +755,98 @@ async def create_meta_ad_creative(
     return creative_id
 
 
+class CarouselCard(NamedTuple):
+    """One card's already-resolved data, ready for a child_attachments entry.
+
+    image_hash is required (unlike create_meta_ad_creative's optional
+    image_hash) — a CreativeCard always has an image (app/schemas/
+    creative.py's CreativeCard.imageUrl is non-nullable), so there's no
+    image-less-card case to handle the way a whole image-less
+    SINGLE_IMAGE creative is handled above.
+    """
+
+    image_hash: str
+    headline: str
+    description: str | None
+    link: str
+
+
+async def create_meta_carousel_ad_creative(
+    *,
+    access_token: str,
+    ad_account_id: str,
+    page_id: str,
+    name: str,
+    body_text: str,
+    cta: str,
+    link: str,
+    cards: list[CarouselCard],
+) -> str:
+    """Create a CAROUSEL ad creative object on Meta (link_data.child_attachments).
+
+    The single-image path (create_meta_ad_creative above) is untouched by
+    this — a distinct function rather than branching inside that one,
+    since the two shapes barely overlap (one image_hash vs. a list of
+    per-card image_hash/name/description/link) and every existing
+    SINGLE_IMAGE caller should see zero behavior change from this
+    existing either way.
+
+    Args:
+        access_token: The business's Meta access token.
+        ad_account_id: The connected ad account.
+        page_id: The connected Page the ad is posted as.
+        name: The creative's display name on Meta.
+        body_text: The shared primary text (Meta's link_data.message) —
+            unlike a card's headline/description, this is one value for
+            the whole carousel, not per-card.
+        cta: A Meta call_to_action type value, shared across every card
+            (V1 has no per-card CTA — see GeneratedCreativeVariant's
+            schema comment).
+        link: The overall post's destination link — Meta requires
+            link_data.link even alongside child_attachments. V1 is
+            single-product, so this is the same URL every card's own
+            link also points to (app/api/creative.py's create_creatives
+            resolves one destination_url and stores it on every
+            CreativeCard.linkUrl).
+        cards: Every card's already-uploaded image_hash plus its own
+            headline/description/link, in display order — Meta renders
+            child_attachments in list order, matching CreativeCard.position.
+
+    Returns:
+        The new Meta ad creative id.
+
+    Raises:
+        MetaConnectionError: If the call fails.
+    """
+    if get_settings().fake_meta_enabled:
+        return f"fake_carousel_creative_{uuid4().hex[:12]}"
+    link_data: dict[str, Any] = {
+        "message": body_text,
+        "link": link,
+        "call_to_action": {"type": cta},
+        "child_attachments": [
+            {
+                "link": card.link,
+                "image_hash": card.image_hash,
+                "name": card.headline,
+                **({"description": card.description} if card.description else {}),
+            }
+            for card in cards
+        ],
+    }
+    object_story_spec = json.dumps({"page_id": page_id, "link_data": link_data})
+    body = await _post_json(
+        f"{_GRAPH_BASE_URL}/{ad_account_id}/adcreatives",
+        {
+            "access_token": access_token,
+            "name": name,
+            "object_story_spec": object_story_spec,
+        },
+    )
+    creative_id: str = body["id"]
+    return creative_id
+
+
 async def create_meta_ad(
     *,
     access_token: str,

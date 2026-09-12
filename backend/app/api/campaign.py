@@ -490,7 +490,8 @@ async def publish_campaign(
     assert connection is not None  # narrowed by connection_incomplete above
 
     creative = await db.creative.find_first(
-        where={"campaignId": campaign.id, "status": "SELECTED"}
+        where={"campaignId": campaign.id, "status": "SELECTED"},
+        include={"cards": {"order_by": {"position": "asc"}}},
     )
     if creative is None:
         raise HTTPException(

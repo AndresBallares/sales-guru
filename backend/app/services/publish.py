@@ -310,7 +310,7 @@ async def _publish_test_plan_variant(
             data={"ad": {"connect": {"id": ad.id}}, "metaCreativeId": meta_creative_id},
         )
     else:
-        await db.creative.create(
+        duplicate = await db.creative.create(
             data={
                 "campaignId": campaign.id,
                 "headline": creative.headline,
@@ -322,11 +322,31 @@ async def _publish_test_plan_variant(
                 "videoPrompt": creative.videoPrompt,
                 "imageUrl": creative.imageUrl,
                 "productImageId": creative.productImageId,
+                "format": creative.format,
                 "status": "SELECTED",
                 "metaCreativeId": meta_creative_id,
                 "adId": ad.id,
             }
         )
+        # A CAROUSEL creative's cards need cloning too — the duplicate row
+        # above is otherwise a CAROUSEL creative with zero cards, which
+        # would render as an empty carousel anywhere this campaign's
+        # creatives are listed (app/api/creative.py's _list_creatives
+        # returns every Creative row for the campaign, this duplicate
+        # included). New rows, not shared ones — a card belongs to
+        # exactly one Creative (CreativeCard.creativeId is a single FK).
+        for card in creative.cards or []:
+            await db.creativecard.create(
+                data={
+                    "creativeId": duplicate.id,
+                    "position": card.position,
+                    "imageUrl": card.imageUrl,
+                    "productImageId": card.productImageId,
+                    "headline": card.headline,
+                    "description": card.description,
+                    "linkUrl": card.linkUrl,
+                }
+            )
 
 
 async def _resolve_image_hash(
@@ -390,6 +410,73 @@ async def _resolve_image_hash(
     )
 
 
+async def _resolve_carousel_cards(
+    creative: Creative, *, access_token: str, ad_account_id: str
+) -> list[meta.CarouselCard]:
+    """Upload every card's photo to Meta, returning card data ready to publish.
+
+    Same "fail loudly, don't coerce" reasoning as _resolve_image_hash
+    above, applied per card: unlike a SINGLE_IMAGE creative,
+    productImageId is never None for a CreativeCard (its image was fixed
+    at generation time — app/services/creative.py's module docstring —
+    not left to a later, possibly-skipped select step), so a missing one
+    only ever means the photo was deleted after generation, the same
+    "real data problem" _resolve_image_hash already treats as a hard
+    failure rather than silently dropping the card.
+
+    Args:
+        creative: The campaign's SELECTED, CAROUSEL-format creative, with
+            its cards relation already loaded (app/api/campaign.py's
+            publish endpoint includes it) and ordered by position.
+        access_token: The business's Meta access token.
+        ad_account_id: The connected ad account to upload into.
+
+    Returns:
+        One CarouselCard per CreativeCard, in the same (position) order.
+
+    Raises:
+        MetaConnectionError: If any card's productImageId no longer names
+            an existing photo, or an upload call itself fails.
+    """
+    cards: list[meta.CarouselCard] = []
+    for card in creative.cards or []:
+        if card.productImageId is None:
+            # Never expected in practice — a CreativeCard's image is
+            # always set from a real ProductImage at generation time
+            # (app/api/creative.py's create_creatives) — but the column
+            # is nullable at the schema level (matching Creative's own
+            # pair), so this is handled rather than trusted away.
+            raise MetaConnectionError(
+                f"Creative {creative.id}'s card {card.id} has no "
+                "productImageId — cannot resolve its image for Meta"
+            )
+        product_image = await db.productimage.find_unique(
+            where={"id": card.productImageId}
+        )
+        if product_image is None:
+            raise MetaConnectionError(
+                f"Creative {creative.id}'s card {card.id} photo "
+                f"(productImageId={card.productImageId}) no longer exists — "
+                "it was deleted after the carousel was generated. "
+                "Regenerate this ad's creatives before publishing."
+            )
+        image_hash = await meta.upload_meta_ad_image(
+            access_token=access_token,
+            ad_account_id=ad_account_id,
+            image_data=product_image.data.decode(),
+            content_type=product_image.contentType,
+        )
+        cards.append(
+            meta.CarouselCard(
+                image_hash=image_hash,
+                headline=card.headline,
+                description=card.description,
+                link=card.linkUrl,
+            )
+        )
+    return cards
+
+
 async def publish_campaign_to_meta(
     *,
     campaign: Campaign,
@@ -427,7 +514,9 @@ async def publish_campaign_to_meta(
             selected photo's Meta upload — see _resolve_image_hash), or
             if the creative's selected photo was deleted after selection
             (also _resolve_image_hash — confirmed 2026-09-09, publish
-            fails loudly rather than silently going image-less). The
+            fails loudly rather than silently going image-less). For a
+            CAROUSEL creative, the same failure modes apply per card
+            (see _resolve_carousel_cards, confirmed 2026-09-12). The
             campaign's status is left for the caller to move to FAILED —
             this function doesn't write that, so a caller can distinguish
             "we never even validated" (never called this) from "we tried
@@ -460,21 +549,36 @@ async def publish_campaign_to_meta(
         name=object_name,
         objective=campaign.objective,
     )
-    image_hash = await _resolve_image_hash(
-        creative, access_token=connection.accessToken, ad_account_id=ad_account_id
-    )
-    meta_creative_id = await meta.create_meta_ad_creative(
-        access_token=connection.accessToken,
-        ad_account_id=ad_account_id,
-        page_id=connection.pageId,
-        name=creative.headline,
-        headline=creative.headline,
-        body_text=creative.bodyText,
-        description=creative.description,
-        cta=creative.cta,
-        link=destination_url,
-        image_hash=image_hash,
-    )
+    if creative.format == "CAROUSEL":
+        carousel_cards = await _resolve_carousel_cards(
+            creative, access_token=connection.accessToken, ad_account_id=ad_account_id
+        )
+        meta_creative_id = await meta.create_meta_carousel_ad_creative(
+            access_token=connection.accessToken,
+            ad_account_id=ad_account_id,
+            page_id=connection.pageId,
+            name=creative.headline,
+            body_text=creative.bodyText,
+            cta=creative.cta,
+            link=destination_url,
+            cards=carousel_cards,
+        )
+    else:
+        image_hash = await _resolve_image_hash(
+            creative, access_token=connection.accessToken, ad_account_id=ad_account_id
+        )
+        meta_creative_id = await meta.create_meta_ad_creative(
+            access_token=connection.accessToken,
+            ad_account_id=ad_account_id,
+            page_id=connection.pageId,
+            name=creative.headline,
+            headline=creative.headline,
+            body_text=creative.bodyText,
+            description=creative.description,
+            cta=creative.cta,
+            link=destination_url,
+            image_hash=image_hash,
+        )
 
     if strategy.plan_type == "TEST_PLAN":
         daily_budget_cents = round(daily_budget(strategy) * 100)
