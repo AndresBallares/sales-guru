@@ -38,6 +38,18 @@ as an image content block alongside the text prompt — Claude is a vision-
 capable model already (no model swap needed), so headlines/descriptions
 can reflect what the product actually looks like, not just its written
 description. Fake mode is unaffected either way (see above).
+
+**Carousel format (confirmed 2026-09-12):** when the caller requests
+CAROUSEL (app/schemas/creative.py's CreativeFormat), every card's image
+is attached to the model up front — a real behavioral difference from
+SINGLE_IMAGE, whose image is chosen later at select_creative
+(app/api/creative.py). CAROUSEL needs its cards' copy written against
+their actual images at generation time, so there's no later "pick an
+image" step for it the way there is for SINGLE_IMAGE. V1 is single-product
+only — every card draws from the same product's photos (ProductImage.
+position order, capped at MAX_CAROUSEL_CARDS) and shares one link. Each
+variant's cards get their own headline/description; body_text/cta/
+creative_angle stay shared across a variant's own cards, same as before.
 """
 
 import copy
@@ -64,8 +76,10 @@ from app.schemas.creative import (
     MAX_BODY_TEXT_LENGTH,
     MAX_DESCRIPTION_LENGTH,
     MAX_HEADLINE_LENGTH,
+    CreativeFormat,
     CtaType,
     GeneratedCreativeBatch,
+    GeneratedCreativeCard,
     GeneratedCreativeVariant,
 )
 from app.schemas.strategy import StrategyContent, primary_audience
@@ -142,6 +156,35 @@ _FAKE_VARIANTS: list[GeneratedCreativeVariant] = [
 ]
 
 
+def _fake_carousel_variants(card_count: int) -> list[GeneratedCreativeVariant]:
+    """Fake mode's CAROUSEL batch — same reasoning as _FAKE_VARIANTS above.
+
+    card_count mirrors however many card images the caller actually
+    attached (2-10) rather than a hardcoded number, so fake mode e2e
+    coverage exercises the same card count a real call would have
+    produced from that same product's photos.
+    """
+    return [
+        GeneratedCreativeVariant(
+            headline=f"Fake headline {letter}",
+            body_text=f"Fake body text {letter} (FAKE_LLM mode).",
+            description=f"Fake description {letter}.",
+            cta=cta,
+            creative_angle=f"Fake creative angle {letter}",
+            image_prompt=f"Fake image prompt {letter}.",
+            video_prompt=f"Fake video prompt {letter}.",
+            cards=[
+                GeneratedCreativeCard(
+                    headline=f"Fake card {position + 1} headline {letter}",
+                    description=f"Fake card {position + 1} description {letter}.",
+                )
+                for position in range(card_count)
+            ],
+        )
+        for letter, cta in zip("ABCD", _FAKE_CTAS, strict=True)
+    ]
+
+
 class CreativeAgentError(RuntimeError):
     """Raised when the Creative Agent fails to produce ad creatives."""
 
@@ -174,6 +217,8 @@ def _build_prompt(
     has_image: bool = False,
     brand_profile: BrandProfile | None = None,
     has_logo: bool = False,
+    format: CreativeFormat = "SINGLE_IMAGE",
+    card_count: int = 0,
 ) -> str:
     """Build the grounding prompt from the business/product and its strategy.
 
@@ -206,6 +251,13 @@ def _build_prompt(
             content block alongside this prompt (see generate_creatives)
             — same has_image reasoning, a visual style cue rather than a
             literal product photo.
+        format: SINGLE_IMAGE (default) or CAROUSEL — CAROUSEL adds
+            instructions for the per-card headline/description structure
+            below and implies has_image is irrelevant (every card image
+            is attached instead of just the primary one).
+        card_count: How many product photos are attached as per-card
+            image blocks, when format is CAROUSEL (see generate_creatives)
+            — ignored for SINGLE_IMAGE.
 
     Returns:
         The prompt text.
@@ -253,6 +305,12 @@ def _build_prompt(
             "The business's logo is attached above — use it only as a "
             "visual style cue (color palette, mood, level of formality), "
             "never as a literal subject to describe in the copy."
+        )
+    if format == "CAROUSEL":
+        lines.append(
+            f"This is a CAROUSEL ad: {card_count} photos of the product "
+            "are attached above, in display order — the first attached "
+            "photo is card 1, the second is card 2, and so on."
         )
 
     brand_voice = brand_voice_lines(brand_profile)
@@ -333,8 +391,22 @@ def _build_prompt(
         f"characters), an optional description (at most "
         f"{MAX_DESCRIPTION_LENGTH} characters — omit it if no proof point "
         "fits, don't pad it), the one shared CTA chosen above, and the "
-        "creative angle. Submit them using the provided tool.",
+        "creative angle.",
     ]
+    if format == "CAROUSEL":
+        lines.append(
+            f"Each variant must also include a cards list of exactly "
+            f"{card_count} cards, one per attached product photo in the "
+            "same order they were attached (card 1 = the first attached "
+            "photo, and so on). Every card needs its own headline (at "
+            f"most {MAX_HEADLINE_LENGTH} characters) calling out something "
+            "specific to that photo — angle, feature, or use case — and an "
+            f"optional description (at most {MAX_DESCRIPTION_LENGTH} "
+            "characters). The variant's own body_text and CTA (above) "
+            "stay shared across all of its cards — don't repeat them per "
+            "card, and don't give cards their own CTA."
+        )
+    lines.append("Submit them using the provided tool.")
     return "\n".join(lines)
 
 
@@ -347,12 +419,15 @@ def _coerce_batch(
     "CTA not allowed for this objective" and any GET_OFFER-eligibility
     failure at once, since neither applies once the CTA changes) and
     truncates any over-length headline/body_text/description at a word
-    boundary, then re-validates structurally only (no business-rule
+    boundary — including each card's own headline/description, for a
+    CAROUSEL batch (confirmed 2026-09-12, same reasoning as the top-level
+    fields) — then re-validates structurally only (no business-rule
     context — the coercion above is exactly what would otherwise fail
     those rules; see GeneratedCreativeBatch's own docstring for why
     context=None skips them). Doesn't attempt to fix anything else (e.g.
-    two variants sharing an angle, or genuinely malformed input) — those
-    still raise, since no coercion for them was ever specified.
+    two variants sharing an angle, a wrong card count, or genuinely
+    malformed input) — those still raise, since no coercion for them was
+    ever specified.
 
     Args:
         raw: The second attempt's raw tool_use.input, already known not
@@ -395,6 +470,19 @@ def _coerce_batch(
                 variant["description"] = _truncate_at_word_boundary(
                     variant["description"], MAX_DESCRIPTION_LENGTH
                 )
+            cards = variant.get("cards")
+            if isinstance(cards, list):
+                for card in cards:
+                    if not isinstance(card, dict):
+                        continue
+                    if isinstance(card.get("headline"), str):
+                        card["headline"] = _truncate_at_word_boundary(
+                            card["headline"], MAX_HEADLINE_LENGTH
+                        )
+                    if isinstance(card.get("description"), str):
+                        card["description"] = _truncate_at_word_boundary(
+                            card["description"], MAX_DESCRIPTION_LENGTH
+                        )
     try:
         # No context — the fixes above target exactly the two
         # context-dependent rules; re-checking them here would just
@@ -410,6 +498,41 @@ def _coerce_batch(
     return batch.variants
 
 
+def _check_card_counts_match_images(
+    variants: list[GeneratedCreativeVariant], expected_card_count: int
+) -> None:
+    """Every CAROUSEL variant has exactly one card per image attached.
+
+    A card count within the general 2-10 range (GeneratedCreativeVariant's
+    own unconditional _check_card_count) isn't enough on its own — each
+    card is meant to correspond 1:1, in order, to one of the product
+    photos actually attached to the request, so the caller can zip cards
+    to images without silently dropping one or the other.
+
+    Applied uniformly after generate_creatives' happy path, retry, *and*
+    coercion fallback (called once, after all three) rather than as a
+    GeneratedCreativeBatch validator gated on a "card_count" context key
+    — a context-gated check would be silently skipped by _coerce_batch's
+    own re-validation, which deliberately drops context (see its
+    docstring), reopening exactly the mismatch this exists to catch.
+
+    Args:
+        variants: The batch about to be returned to the caller.
+        expected_card_count: How many images were actually attached.
+
+    Raises:
+        CreativeAgentError: If any variant's card count doesn't match.
+    """
+    for index, variant in enumerate(variants):
+        if variant.cards is not None and len(variant.cards) != expected_card_count:
+            raise CreativeAgentError(
+                f"Creative Agent variant {index} has {len(variant.cards)} "
+                f"cards but {expected_card_count} product photos were "
+                "attached — every variant needs exactly one card per "
+                "attached photo"
+            )
+
+
 async def generate_creatives(
     *,
     business: Business,
@@ -417,6 +540,8 @@ async def generate_creatives(
     strategy: StrategyContent,
     primary_image: PrismaProductImage | None = None,
     brand_profile: BrandProfile | None = None,
+    format: CreativeFormat = "SINGLE_IMAGE",
+    card_images: list[PrismaProductImage] | None = None,
 ) -> list[GeneratedCreativeVariant]:
     """Call the Creative Agent and return a batch of ad creative variants.
 
@@ -434,15 +559,30 @@ async def generate_creatives(
             Claude already reads images, so no model change is needed for
             this — grounding headlines/descriptions in what the product
             actually looks like, not just its written description.
-            Ignored in fake mode (see the module docstring).
+            Ignored in fake mode (see the module docstring). Ignored
+            entirely when format is CAROUSEL — card_images below is used
+            instead.
         brand_profile: The business's brand profile, if one exists (PRD.md
             §5 step 3.5) — grounds the batch in a "Brand voice" block,
             plus its own proof_points/offer fields. None (the default —
             no profile yet) falls back to current behavior.
+        format: SINGLE_IMAGE (default) or CAROUSEL. The caller
+            (app/api/creative.py) is responsible for confirming the
+            product has at least MIN_CAROUSEL_CARDS photos before
+            requesting CAROUSEL — this function trusts card_images is
+            already a valid-length (2-10), position-ordered list when
+            format is CAROUSEL, and doesn't re-check it.
+        card_images: The product's photos to build cards from, in display
+            order (ProductImage.position order, already capped at
+            MAX_CAROUSEL_CARDS by the caller) — one card is generated per
+            image, in the same order. Required (non-None, 2-10 items)
+            when format is CAROUSEL; ignored for SINGLE_IMAGE.
 
     Returns:
         Exactly four generated creative variants (Creative A-D), their
         shared CTA guaranteed to be one this campaign's objective allows.
+        For CAROUSEL, each variant also carries a cards list matching
+        card_images 1:1 in order.
 
     Raises:
         CreativeAgentError: If no API key is configured, the API call
@@ -451,13 +591,17 @@ async def generate_creatives(
             structurally validate.
     """
     settings = get_settings()
+    is_carousel = format == "CAROUSEL"
     if settings.fake_llm_enabled:
+        if is_carousel:
+            assert card_images is not None  # caller contract, see docstring
+            return _fake_carousel_variants(len(card_images))
         return list(_FAKE_VARIANTS)
     if not settings.anthropic_api_key:
         raise CreativeAgentError("ANTHROPIC_API_KEY is not configured")
 
     client = AsyncAnthropic(api_key=settings.anthropic_api_key)
-    has_image = primary_image is not None
+    has_image = not is_carousel and primary_image is not None
     has_logo = business.logoData is not None
     prompt = _build_prompt(
         business,
@@ -466,6 +610,8 @@ async def generate_creatives(
         has_image=has_image,
         brand_profile=brand_profile,
         has_logo=has_logo,
+        format=format,
+        card_count=len(card_images) if is_carousel and card_images else 0,
     )
 
     image_blocks: list[ImageBlockParam] = []
@@ -481,7 +627,21 @@ async def generate_creatives(
                 },
             }
         )
-    if primary_image is not None:
+    if is_carousel:
+        assert card_images is not None  # caller contract, see docstring
+        for card_image in card_images:
+            card_media_type = cast(_SupportedImageMediaType, card_image.contentType)
+            image_blocks.append(
+                {
+                    "type": "image",
+                    "source": {
+                        "type": "base64",
+                        "media_type": card_media_type,
+                        "data": str(card_image.data),
+                    },
+                }
+            )
+    elif primary_image is not None:
         media_type = cast(_SupportedImageMediaType, primary_image.contentType)
         image_blocks.append(
             {
@@ -528,12 +688,14 @@ async def generate_creatives(
     context: dict[str, object] = {
         "objective": strategy.objective,
         "standing_offer": brand_profile.offer if brand_profile is not None else None,
+        "format": format,
     }
+    expected_card_count = len(card_images) if is_carousel and card_images else None
 
     raw = await _call(prompt)
     try:
         batch = parse_tool_input(raw, GeneratedCreativeBatch, context=context)
-        return batch.variants
+        variants = batch.variants
     except (ValidationError, ToolInputRecoveryError) as first_failure:
         retry_prompt = (
             f"{prompt}\n\n"
@@ -545,9 +707,13 @@ async def generate_creatives(
         raw = await _call(retry_prompt)
         try:
             batch = parse_tool_input(raw, GeneratedCreativeBatch, context=context)
-            return batch.variants
+            variants = batch.variants
         except (ValidationError, ToolInputRecoveryError) as second_failure:
-            return _coerce_batch(raw, strategy.objective, second_failure)
+            variants = _coerce_batch(raw, strategy.objective, second_failure)
+
+    if expected_card_count is not None:
+        _check_card_counts_match_images(variants, expected_card_count)
+    return variants
 
 
 def is_creative_stale(
