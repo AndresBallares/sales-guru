@@ -91,6 +91,8 @@ def test_create_brand_profile_with_only_required_fields(client: TestClient) -> N
     assert body["tagline"] is None
     assert body["competitors"] is None
     assert body["exampleCopy"] is None
+    assert body["proofPoints"] == []
+    assert body["offer"] is None
     assert body["logoUrl"] is None
     assert "id" in body
 
@@ -108,6 +110,8 @@ def test_create_brand_profile_with_every_field(client: TestClient) -> None:
             tagline="Wear your story",
             competitors="Big-box chain jewelers",
             exampleCopy="No two Venzi pieces feel the same.",
+            proofPoints=["4.8★ from 2,100 reviews", "Free shipping over $75"],
+            offer="20% off first order with WELCOME20",
         ),
     )
 
@@ -118,6 +122,36 @@ def test_create_brand_profile_with_every_field(client: TestClient) -> None:
     assert body["tagline"] == "Wear your story"
     assert body["competitors"] == "Big-box chain jewelers"
     assert body["exampleCopy"] == "No two Venzi pieces feel the same."
+    assert body["proofPoints"] == ["4.8★ from 2,100 reviews", "Free shipping over $75"]
+    assert body["offer"] == "20% off first order with WELCOME20"
+
+
+def test_create_brand_profile_strips_blank_proof_points(client: TestClient) -> None:
+    """Blank/whitespace-only proof points are dropped, not stored as-is."""
+    _signed_up_client(client)
+    business_id = _create_business(client)
+
+    response = client.post(
+        f"/businesses/{business_id}/brand-profile",
+        json=_valid_payload(proofPoints=["Free shipping over $75", "   ", ""]),
+    )
+
+    assert response.status_code == 201
+    assert response.json()["proofPoints"] == ["Free shipping over $75"]
+
+
+def test_create_brand_profile_rejects_a_too_long_proof_point(
+    client: TestClient,
+) -> None:
+    _signed_up_client(client)
+    business_id = _create_business(client)
+
+    response = client.post(
+        f"/businesses/{business_id}/brand-profile",
+        json=_valid_payload(proofPoints=["x" * 201]),
+    )
+
+    assert response.status_code == 422
 
 
 def test_create_brand_profile_accepts_each_fields_new_max_length(
@@ -328,6 +362,8 @@ def test_update_brand_profile_changes_only_provided_fields(client: TestClient) -
             "tagline": "Updated tagline",
             "competitors": "Updated competitors",
             "exampleCopy": "Updated example copy",
+            "proofPoints": ["Lifetime tarnish guarantee"],
+            "offer": "Free engraving this month",
         },
     )
 
@@ -342,6 +378,33 @@ def test_update_brand_profile_changes_only_provided_fields(client: TestClient) -
     assert body["tagline"] == "Updated tagline"
     assert body["competitors"] == "Updated competitors"
     assert body["exampleCopy"] == "Updated example copy"
+    assert body["proofPoints"] == ["Lifetime tarnish guarantee"]
+    assert body["offer"] == "Free engraving this month"
+
+
+def test_update_brand_profile_can_clear_proof_points_and_offer(
+    client: TestClient,
+) -> None:
+    """An explicit empty list/null actually clears them, distinct from
+    omitting the field (which leaves them untouched)."""
+    _signed_up_client(client)
+    business_id = _create_business(client)
+    client.post(
+        f"/businesses/{business_id}/brand-profile",
+        json=_valid_payload(
+            proofPoints=["Free shipping over $75"], offer="20% off first order"
+        ),
+    )
+
+    response = client.patch(
+        f"/businesses/{business_id}/brand-profile",
+        json={"proofPoints": [], "offer": None},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["proofPoints"] == []
+    assert body["offer"] is None
 
 
 def test_update_brand_profile_with_an_empty_body_changes_nothing(

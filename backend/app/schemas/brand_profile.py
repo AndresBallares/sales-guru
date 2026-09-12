@@ -8,7 +8,7 @@ across campaigns. One per business — created once, editable later.
 
 from typing import Literal, get_args
 
-from pydantic import Field
+from pydantic import Field, field_validator
 
 from app.schemas.base import CamelCaseModel
 
@@ -21,6 +21,9 @@ _MAX_PHRASES_LENGTH = 750
 _MAX_TAGLINE_LENGTH = 150
 _MAX_COMPETITORS_LENGTH = 1000
 _MAX_EXAMPLE_COPY_LENGTH = 2000
+_MAX_PROOF_POINT_LENGTH = 200
+_MAX_PROOF_POINTS = 10
+_MAX_OFFER_LENGTH = 200
 
 # Fixed list, confirmed 2026-09-11 — same Literal-type-alias + *_LABELS
 # pattern as Objective/Industry (app/schemas/campaign.py, business.py):
@@ -82,6 +85,27 @@ class BrandProfileCreateRequest(CamelCaseModel):
     tagline: str | None = Field(default=None, max_length=_MAX_TAGLINE_LENGTH)
     competitors: str | None = Field(default=None, max_length=_MAX_COMPETITORS_LENGTH)
     example_copy: str | None = Field(default=None, max_length=_MAX_EXAMPLE_COPY_LENGTH)
+    # Both optional and both feed the Creative Agent (Part 2/3, confirmed
+    # 2026-09-12): proof_points grounds the description slot/a trust line
+    # ("4.8★ from 2,100 reviews", "Free shipping over $75", ...);
+    # offer is the business's own standing promotion ("20% off first
+    # order with WELCOME20") — distinct from a campaign's own
+    # Strategy.offer — and is what gates GET_OFFER CTA eligibility
+    # (app/schemas/creative.py's ALLOWED_CTAS_BY_OBJECTIVE validator).
+    proof_points: list[str] = Field(default_factory=list, max_length=_MAX_PROOF_POINTS)
+    offer: str | None = Field(default=None, max_length=_MAX_OFFER_LENGTH)
+
+    @field_validator("proof_points")
+    @classmethod
+    def _validate_proof_points(cls, value: list[str]) -> list[str]:
+        cleaned = [item.strip() for item in value if item.strip()]
+        for item in cleaned:
+            if len(item) > _MAX_PROOF_POINT_LENGTH:
+                raise ValueError(
+                    f"Each proof point must be at most {_MAX_PROOF_POINT_LENGTH} "
+                    f"characters (got {len(item)}): {item!r}"
+                )
+        return cleaned
 
 
 class BrandProfileUpdateRequest(CamelCaseModel):
@@ -105,6 +129,24 @@ class BrandProfileUpdateRequest(CamelCaseModel):
     tagline: str | None = Field(default=None, max_length=_MAX_TAGLINE_LENGTH)
     competitors: str | None = Field(default=None, max_length=_MAX_COMPETITORS_LENGTH)
     example_copy: str | None = Field(default=None, max_length=_MAX_EXAMPLE_COPY_LENGTH)
+    # None (the default) leaves it unchanged, same convention as every
+    # other field here — pass an empty list to actually clear proof_points.
+    proof_points: list[str] | None = Field(default=None, max_length=_MAX_PROOF_POINTS)
+    offer: str | None = Field(default=None, max_length=_MAX_OFFER_LENGTH)
+
+    @field_validator("proof_points")
+    @classmethod
+    def _validate_proof_points(cls, value: list[str] | None) -> list[str] | None:
+        if value is None:
+            return None
+        cleaned = [item.strip() for item in value if item.strip()]
+        for item in cleaned:
+            if len(item) > _MAX_PROOF_POINT_LENGTH:
+                raise ValueError(
+                    f"Each proof point must be at most {_MAX_PROOF_POINT_LENGTH} "
+                    f"characters (got {len(item)}): {item!r}"
+                )
+        return cleaned
 
 
 class BrandProfileResponse(CamelCaseModel):
@@ -127,4 +169,6 @@ class BrandProfileResponse(CamelCaseModel):
     tagline: str | None
     competitors: str | None
     example_copy: str | None
+    proof_points: list[str]
+    offer: str | None
     logo_url: str | None

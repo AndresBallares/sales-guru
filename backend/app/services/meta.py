@@ -694,7 +694,7 @@ async def create_meta_ad_creative(
     name: str,
     headline: str,
     body_text: str,
-    description: str,
+    description: str | None,
     cta: str,
     link: str,
     image_hash: str | None,
@@ -713,7 +713,11 @@ async def create_meta_ad_creative(
         name: The creative's display name on Meta.
         headline: The ad headline.
         body_text: The primary text (Meta's link_data.message).
-        description: The secondary description line.
+        description: The secondary description line. Omitted from the
+            request entirely when None (Part 4, confirmed 2026-09-12 — not
+            every business has a proof point/trust line that fits every
+            variant) — Meta falls back to auto-generating one from the
+            link, same as when nothing is given at all.
         cta: A Meta call_to_action type value.
         link: The destination URL.
         image_hash: An already-uploaded image's hash (see
@@ -730,10 +734,11 @@ async def create_meta_ad_creative(
     link_data: dict[str, Any] = {
         "message": body_text,
         "name": headline,
-        "description": description,
         "link": link,
         "call_to_action": {"type": cta},
     }
+    if description:
+        link_data["description"] = description
     if image_hash:
         link_data["image_hash"] = image_hash
 

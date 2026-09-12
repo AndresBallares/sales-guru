@@ -45,6 +45,8 @@ const profile: api.BrandProfile = {
   tagline: null,
   competitors: null,
   exampleCopy: null,
+  proofPoints: [],
+  offer: null,
   logoUrl: null,
 }
 
@@ -85,6 +87,8 @@ describe('BrandProfileForm — create mode', () => {
         tagline: undefined,
         competitors: undefined,
         exampleCopy: undefined,
+        proofPoints: [],
+        offer: undefined,
       }),
     )
     expect(onSaved).toHaveBeenCalledWith(profile)
@@ -153,6 +157,39 @@ describe('BrandProfileForm — create mode', () => {
           tagline: 'Wear your story',
           competitors: 'Big-box chains',
           exampleCopy: 'No two pieces feel the same.',
+        }),
+      ),
+    )
+  })
+
+  it('splits proof points on newlines and includes the current offer', async () => {
+    mockedApi.createBrandProfile.mockResolvedValue(profile)
+    const user = userEvent.setup()
+    render(
+      <BrandProfileForm
+        businessId="biz-1"
+        onSaved={vi.fn<(profile: api.BrandProfile) => void>()}
+      />,
+    )
+    await screen.findByLabelText('Warm')
+
+    await user.type(screen.getByLabelText(/Brand overview/), 'Overview')
+    await user.type(screen.getByLabelText('Ideal customer'), 'Customer')
+    await user.click(screen.getByLabelText('Warm'))
+    await user.selectOptions(screen.getByLabelText('Price positioning'), 'PREMIUM')
+    await user.type(
+      screen.getByLabelText(/Proof points/),
+      'Free shipping over $75\n\n  4.8★ from 2,100 reviews  \n',
+    )
+    await user.type(screen.getByLabelText(/Current promotion/), '20% off with WELCOME20')
+    await user.click(screen.getByRole('button', { name: 'Save brand profile' }))
+
+    await waitFor(() =>
+      expect(mockedApi.createBrandProfile).toHaveBeenCalledWith(
+        'biz-1',
+        expect.objectContaining({
+          proofPoints: ['Free shipping over $75', '4.8★ from 2,100 reviews'],
+          offer: '20% off with WELCOME20',
         }),
       ),
     )
@@ -238,6 +275,56 @@ describe('BrandProfileForm — edit mode', () => {
     expect(screen.getByLabelText('Bold')).not.toBeChecked()
     expect(screen.getByLabelText('Price positioning')).toHaveValue('PREMIUM')
     expect(screen.getByRole('button', { name: 'Save' })).toBeInTheDocument()
+  })
+
+  it('pre-fills proof points (one per line) and the current offer', async () => {
+    const withOffer = {
+      ...profile,
+      proofPoints: ['Free shipping over $75', '4.8★ from 2,100 reviews'],
+      offer: '20% off with WELCOME20',
+    }
+    render(
+      <BrandProfileForm
+        businessId="biz-1"
+        profile={withOffer}
+        onSaved={vi.fn<(profile: api.BrandProfile) => void>()}
+      />,
+    )
+    await screen.findByLabelText('Warm')
+
+    expect(screen.getByLabelText(/Proof points/)).toHaveValue(
+      'Free shipping over $75\n4.8★ from 2,100 reviews',
+    )
+    expect(screen.getByLabelText(/Current promotion/)).toHaveValue('20% off with WELCOME20')
+  })
+
+  it('can clear proof points and the current offer', async () => {
+    const withOffer = {
+      ...profile,
+      proofPoints: ['Free shipping over $75'],
+      offer: '20% off with WELCOME20',
+    }
+    mockedApi.updateBrandProfile.mockResolvedValue(profile)
+    const user = userEvent.setup()
+    render(
+      <BrandProfileForm
+        businessId="biz-1"
+        profile={withOffer}
+        onSaved={vi.fn<(profile: api.BrandProfile) => void>()}
+      />,
+    )
+    await screen.findByLabelText('Warm')
+
+    await user.clear(screen.getByLabelText(/Proof points/))
+    await user.clear(screen.getByLabelText(/Current promotion/))
+    await user.click(screen.getByRole('button', { name: 'Save' }))
+
+    await waitFor(() =>
+      expect(mockedApi.updateBrandProfile).toHaveBeenCalledWith(
+        'biz-1',
+        expect.objectContaining({ proofPoints: [], offer: null }),
+      ),
+    )
   })
 
   it('updates the profile via PATCH, only sending the current field values', async () => {

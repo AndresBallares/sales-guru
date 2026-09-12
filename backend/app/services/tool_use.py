@@ -248,13 +248,25 @@ def _recovery_candidates(
 
 
 def parse_tool_input[ModelT: BaseModel](
-    raw: dict[str, object], model: type[ModelT]
+    raw: dict[str, object],
+    model: type[ModelT],
+    *,
+    context: dict[str, object] | None = None,
 ) -> ModelT:
     """Validate a tool call's raw input, tolerating known model quirks.
 
     Args:
         raw: The tool_use.input dict as returned by the Anthropic API.
         model: The Pydantic model the input should validate against.
+        context: Optional Pydantic validation context, threaded through
+            every model_validate call below (including recovery retries)
+            via `model.model_validate(data, context=context)`. Lets a
+            model's own validators enforce rules that depend on data the
+            LLM never sees (e.g. GeneratedCreativeBatch's objective-aware
+            CTA check, app/schemas/creative.py) without adding that data
+            as a field the tool schema would expose back to the model.
+            None (the default) skips any context-dependent checks a
+            model's validators define.
 
     Returns:
         The validated model instance.
@@ -268,7 +280,7 @@ def parse_tool_input[ModelT: BaseModel](
             error, not one from a failed recovery attempt.
     """
     try:
-        return model.model_validate(raw)
+        return model.model_validate(raw, context=context)
     except ValidationError as exc:
         # Known model quirks, tried in this order: (1) drop individual
         # invalid enum/Literal values out of an otherwise-valid list
@@ -284,12 +296,12 @@ def parse_tool_input[ModelT: BaseModel](
         dropped = _drop_invalid_enum_list_items(raw, exc)
         if dropped is not None:
             try:
-                return model.model_validate(dropped)
+                return model.model_validate(dropped, context=context)
             except ValidationError:
                 pass
         for candidate in _recovery_candidates(raw, model):
             try:
-                return model.model_validate(candidate)
+                return model.model_validate(candidate, context=context)
             except ValidationError:
                 continue
         raise exc

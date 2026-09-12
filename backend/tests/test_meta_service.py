@@ -707,6 +707,33 @@ async def test_create_meta_ad_creative_omits_image_hash_without_an_image(
 
     _url, data = client.calls[0]
     assert "image_hash" not in data["object_story_spec"]
+
+
+@pytest.mark.asyncio
+async def test_create_meta_ad_creative_omits_description_when_none(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A creative with no description slot filled (Part 4, confirmed
+    2026-09-12 — not every business has a proof point that fits every
+    variant) omits link_data.description entirely, letting Meta
+    auto-generate one from the link, rather than sending an empty string."""
+    client = _mock_client_returning(monkeypatch, _FakeResponse({"id": "creative_123"}))
+
+    await meta.create_meta_ad_creative(
+        access_token="token",
+        ad_account_id="act_1",
+        page_id="page_1",
+        name="Creative A",
+        headline="As Unique As Your Story",
+        body_text="No two stories are the same",
+        description=None,
+        cta="SHOP_NOW",
+        link="https://acme.example/rings",
+        image_hash=None,
+    )
+
+    _url, data = client.calls[0]
+    assert "description" not in data["object_story_spec"]
     assert "picture" not in data["object_story_spec"]
 
 

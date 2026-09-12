@@ -17,6 +17,7 @@ const MAX_PHRASES_LENGTH = 750
 const MAX_TAGLINE_LENGTH = 150
 const MAX_COMPETITORS_LENGTH = 1000
 const MAX_EXAMPLE_COPY_LENGTH = 2000
+const MAX_OFFER_LENGTH = 200
 
 // How close to the limit (characters remaining) the counter switches to
 // its near-limit color — a passive status until it's actually relevant.
@@ -60,6 +61,14 @@ export function BrandProfileForm({
   const [tagline, setTagline] = useState(profile?.tagline ?? '')
   const [competitors, setCompetitors] = useState(profile?.competitors ?? '')
   const [exampleCopy, setExampleCopy] = useState(profile?.exampleCopy ?? '')
+  // One proof point per line in the textarea — split/trimmed/filtered
+  // back into a real list on submit (handleSubmit below), same "simple
+  // textarea, not a dynamic add/remove list UI" tradeoff as every other
+  // free-text field on this form.
+  const [proofPointsText, setProofPointsText] = useState(
+    profile?.proofPoints.join('\n') ?? '',
+  )
+  const [offer, setOffer] = useState(profile?.offer ?? '')
   const [formError, setFormError] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
 
@@ -89,6 +98,10 @@ export function BrandProfileForm({
     setFormError(null)
     setSubmitting(true)
     try {
+      const proofPoints = proofPointsText
+        .split('\n')
+        .map((line) => line.trim())
+        .filter(Boolean)
       const saved = isEditing
         ? await updateBrandProfile(businessId, {
             description,
@@ -100,6 +113,8 @@ export function BrandProfileForm({
             tagline: tagline || null,
             competitors: competitors || null,
             exampleCopy: exampleCopy || null,
+            proofPoints,
+            offer: offer || null,
           })
         : await createBrandProfile(businessId, {
             description,
@@ -111,6 +126,8 @@ export function BrandProfileForm({
             tagline: tagline || undefined,
             competitors: competitors || undefined,
             exampleCopy: exampleCopy || undefined,
+            proofPoints,
+            offer: offer || undefined,
           })
       onSaved(saved)
     } catch (err) {
@@ -242,6 +259,39 @@ export function BrandProfileForm({
           onChange={(event) => setExampleCopy(event.target.value)}
         />
         <CharCounter current={exampleCopy.length} max={MAX_EXAMPLE_COPY_LENGTH} />
+      </div>
+      <div className="field">
+        <label htmlFor="proof-points">
+          Proof points{' '}
+          <span className="field-hint">
+            (one per line — reviews, guarantees, shipping perks — the AI draws on
+            these for trust lines)
+          </span>
+        </label>
+        <textarea
+          id="proof-points"
+          placeholder={
+            '4.8★ from 2,100 reviews\nFree shipping over $75\nLifetime tarnish guarantee'
+          }
+          value={proofPointsText}
+          onChange={(event) => setProofPointsText(event.target.value)}
+        />
+      </div>
+      <div className="field">
+        <label htmlFor="brand-offer">
+          Current promotion{' '}
+          <span className="field-hint">
+            (leave blank if none — the AI only uses a "Get Offer" call-to-action
+            when this is filled in)
+          </span>
+        </label>
+        <input
+          id="brand-offer"
+          maxLength={MAX_OFFER_LENGTH}
+          placeholder="20% off first order with WELCOME20"
+          value={offer}
+          onChange={(event) => setOffer(event.target.value)}
+        />
       </div>
       {formError && (
         <p className="form-error" role="alert">

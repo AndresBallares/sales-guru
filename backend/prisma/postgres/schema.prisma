@@ -171,6 +171,19 @@ model BrandProfile {
   tagline          String?
   competitors      String?
   exampleCopy      String?
+  // Objective-aware CTA structuring (Part 1/3, confirmed 2026-09-12):
+  // proofPoints feeds the Creative Agent's description slot/trust line
+  // ("4.8★ from 2,100 reviews", "Free shipping over $75", ...) — a JSON
+  // array, empty/null meaning none given, in which case the prompt tells
+  // the model to skip that slot rather than invent one. offer is the
+  // business's own standing promotion ("20% off first order with
+  // WELCOME20"), distinct from Strategy.offer (a per-campaign, always-
+  // present, LLM-generated field with a different meaning) — null means
+  // no current promotion, and is what actually gates GET_OFFER eligibility
+  // (app/schemas/creative.py's GeneratedCreativeBatch validator), not
+  // Strategy.offer.
+  proofPoints      String?
+  offer            String?
   createdAt        DateTime @default(now())
   updatedAt        DateTime @updatedAt
 }
@@ -441,7 +454,11 @@ model Creative {
   adId                      String?
   headline                  String
   bodyText                  String
-  description               String
+  // Nullable (confirmed 2026-09-12, Part 4 of the objective-aware CTA/
+  // brand-profile structuring) — not every business has a proof point
+  // that fits every variant, and the Creative Agent is told to skip this
+  // slot rather than invent filler when none does.
+  description               String?
   cta                       String
   creativeAngle             String?
   imagePrompt               String?
