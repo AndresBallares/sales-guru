@@ -385,6 +385,19 @@ class CreateCreativesRequest(CamelCaseModel):
     format: CreativeFormat = "SINGLE_IMAGE"
 
 
+class ReorderCreativeCardsRequest(CamelCaseModel):
+    """A CAROUSEL creative's cards, in the new display order.
+
+    Sent as the full ordered id list, not a single move operation — same
+    reasoning as ReorderProductImagesRequest (app/schemas/product_image.py):
+    a drag-and-drop reorder naturally produces "here's the new order", and
+    rewriting every position from one list is simpler than translating a
+    single move into a position delta.
+    """
+
+    card_ids: list[str]
+
+
 class CreativeCardResponse(CamelCaseModel):
     """Public-facing representation of a stored CreativeCard."""
 

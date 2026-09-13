@@ -7,6 +7,7 @@ import {
   createAudience,
   createBusiness,
   createCampaign,
+  createCreatives,
   createProduct,
   createRecommendation,
   deleteProductImage,
@@ -32,6 +33,9 @@ import {
   publishCampaign,
   refreshMetrics,
   rejectRecommendation,
+  removeCreativeCard,
+  reorderCreativeCards,
+  selectCreative,
   signup,
   toLabelMap,
 } from './api'
@@ -817,5 +821,79 @@ describe('rejectRecommendation', () => {
     const [url, options] = fetchMock.mock.calls[0]
     expect(url).toContain('/businesses/biz-1/campaigns/camp-1/optimize/rec-1/reject')
     expect(options?.method).toBe('POST')
+  })
+})
+
+describe('createCreatives', () => {
+  it('sends no body when no format is given (the SINGLE_IMAGE default)', async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(jsonResponse([]))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(createCreatives('biz-1', 'camp-1')).resolves.toEqual([])
+    const [url, options] = fetchMock.mock.calls[0]
+    expect(url).toContain('/businesses/biz-1/campaigns/camp-1/creatives')
+    expect(options?.method).toBe('POST')
+    expect(options?.body).toBeUndefined()
+  })
+
+  it('sends the format in the body when one is given', async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(jsonResponse([]))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(createCreatives('biz-1', 'camp-1', 'CAROUSEL')).resolves.toEqual([])
+    const [, options] = fetchMock.mock.calls[0]
+    expect(JSON.parse(options?.body as string)).toEqual({ format: 'CAROUSEL' })
+  })
+})
+
+describe('selectCreative', () => {
+  it('sends no body when no product image id is given', async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(jsonResponse({ id: 'creative-1' }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(selectCreative('biz-1', 'camp-1', 'creative-1')).resolves.toEqual({
+      id: 'creative-1',
+    })
+    const [url, options] = fetchMock.mock.calls[0]
+    expect(url).toContain('/creatives/creative-1/select')
+    expect(options?.body).toBeUndefined()
+  })
+
+  it('sends the product image id in the body when one is given', async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(jsonResponse({ id: 'creative-1' }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await selectCreative('biz-1', 'camp-1', 'creative-1', 'img-1')
+    const [, options] = fetchMock.mock.calls[0]
+    expect(JSON.parse(options?.body as string)).toEqual({ productImageId: 'img-1' })
+  })
+})
+
+describe('reorderCreativeCards', () => {
+  it('PUTs the new card order', async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(jsonResponse({ id: 'creative-1' }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(
+      reorderCreativeCards('biz-1', 'camp-1', 'creative-1', ['card-2', 'card-1']),
+    ).resolves.toEqual({ id: 'creative-1' })
+    const [url, options] = fetchMock.mock.calls[0]
+    expect(url).toContain('/creatives/creative-1/cards/order')
+    expect(options?.method).toBe('PUT')
+    expect(JSON.parse(options?.body as string)).toEqual({ cardIds: ['card-2', 'card-1'] })
+  })
+})
+
+describe('removeCreativeCard', () => {
+  it('DELETEs the given card', async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(jsonResponse({ id: 'creative-1' }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(
+      removeCreativeCard('biz-1', 'camp-1', 'creative-1', 'card-1'),
+    ).resolves.toEqual({ id: 'creative-1' })
+    const [url, options] = fetchMock.mock.calls[0]
+    expect(url).toContain('/creatives/creative-1/cards/card-1')
+    expect(options?.method).toBe('DELETE')
   })
 })

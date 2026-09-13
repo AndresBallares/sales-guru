@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react'
+import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import type { ReactElement } from 'react'
 import { MemoryRouter } from 'react-router-dom'
@@ -35,6 +35,8 @@ vi.mock('../lib/api', async (importOriginal) => {
     createCreatives: vi.fn<typeof actual.createCreatives>(),
     listCreatives: vi.fn<typeof actual.listCreatives>(),
     selectCreative: vi.fn<typeof actual.selectCreative>(),
+    reorderCreativeCards: vi.fn<typeof actual.reorderCreativeCards>(),
+    removeCreativeCard: vi.fn<typeof actual.removeCreativeCard>(),
     approveCampaign: vi.fn<typeof actual.approveCampaign>(),
     publishCampaign: vi.fn<typeof actual.publishCampaign>(),
     pauseCampaign: vi.fn<typeof actual.pauseCampaign>(),
@@ -92,6 +94,8 @@ function fakeCreative(overrides: Partial<api.Creative> = {}): api.Creative {
     imagePrompt: 'A close-up of a hand-set emerald ring on dark velvet',
     videoPrompt: 'A jeweler setting an emerald into a ring, slow motion',
     imageUrl: null,
+    format: 'SINGLE_IMAGE',
+    cards: [],
     status: 'GENERATED',
     createdAt: '2026-08-08T00:00:00Z',
     isStale: false,
@@ -1282,7 +1286,7 @@ describe('CampaignsSection', () => {
 
     await user.click(screen.getByRole('button', { name: 'Regenerate' }))
 
-    await waitFor(() => expect(mockedApi.createCreatives).toHaveBeenCalledWith('biz-1', 'camp-1'))
+    await waitFor(() => expect(mockedApi.createCreatives).toHaveBeenCalledWith('biz-1', 'camp-1', 'SINGLE_IMAGE'))
     await waitFor(() =>
       expect(screen.queryByLabelText('Stale ads for camp-1')).not.toBeInTheDocument(),
     )
@@ -1583,10 +1587,112 @@ describe('CampaignsSection', () => {
     expect(await screen.findByText('Headline A')).toBeInTheDocument()
     expect(screen.getByText('Headline B')).toBeInTheDocument()
     expect(screen.getAllByText(/Ethically sourced/)).toHaveLength(2)
-    expect(mockedApi.createCreatives).toHaveBeenCalledWith('biz-1', 'camp-1')
+    expect(mockedApi.createCreatives).toHaveBeenCalledWith('biz-1', 'camp-1', 'SINGLE_IMAGE')
     expect(
       screen.getByRole('button', { name: 'Regenerate ads' }),
     ).toBeInTheDocument()
+  })
+
+  it('generates a carousel batch when the Carousel format is picked', async () => {
+    mockedApi.listCampaigns.mockResolvedValue([
+      {
+        id: 'camp-1',
+        name: null,
+        objective: 'SALES',
+        status: 'STRATEGY_GENERATED',
+        productId: null,
+        audienceId: null,
+        metaCampaignId: null,
+        eventVenueKey: null,
+        startDate: null,
+        endDate: null,
+        pausedReason: null,
+        dailySpendFlag: null,
+        needsDestinationUrl: false,
+      },
+    ])
+    mockedApi.getStrategy.mockResolvedValue(FAKE_STRATEGY)
+    mockedApi.createCreatives.mockResolvedValue([fakeCreative({ format: 'CAROUSEL' })])
+    const user = userEvent.setup()
+
+    renderCampaigns(<CampaignsSection businessId="biz-1" />)
+    await screen.findByText(/Custom emerald rings/)
+
+    await user.click(screen.getByRole('radio', { name: 'Carousel' }))
+    await user.click(screen.getByRole('button', { name: 'Generate ads' }))
+
+    await waitFor(() =>
+      expect(mockedApi.createCreatives).toHaveBeenCalledWith('biz-1', 'camp-1', 'CAROUSEL'),
+    )
+  })
+
+  it('notes when a product has more photos than fit in one carousel', async () => {
+    mockedApi.listCampaigns.mockResolvedValue([
+      {
+        id: 'camp-1',
+        name: null,
+        objective: 'SALES',
+        status: 'STRATEGY_GENERATED',
+        productId: 'prod-1',
+        audienceId: null,
+        metaCampaignId: null,
+        eventVenueKey: null,
+        startDate: null,
+        endDate: null,
+        pausedReason: null,
+        dailySpendFlag: null,
+        needsDestinationUrl: false,
+      },
+    ])
+    mockedApi.getStrategy.mockResolvedValue(FAKE_STRATEGY)
+    mockedApi.listProductImages.mockResolvedValue(
+      Array.from({ length: 12 }, (_, i) => ({
+        id: `img-${i}`,
+        url: `http://x/${i}`,
+        createdAt: '2026-09-05T00:00:00Z',
+      })),
+    )
+    const user = userEvent.setup()
+
+    renderCampaigns(<CampaignsSection businessId="biz-1" />)
+    await screen.findByText(/Custom emerald rings/)
+
+    await user.click(screen.getByRole('radio', { name: 'Carousel' }))
+
+    expect(await screen.findByText(/Using the first 10 of 12 photos/)).toBeInTheDocument()
+  })
+
+  it('does not show the photo-count note for a product with 10 or fewer photos', async () => {
+    mockedApi.listCampaigns.mockResolvedValue([
+      {
+        id: 'camp-1',
+        name: null,
+        objective: 'SALES',
+        status: 'STRATEGY_GENERATED',
+        productId: 'prod-1',
+        audienceId: null,
+        metaCampaignId: null,
+        eventVenueKey: null,
+        startDate: null,
+        endDate: null,
+        pausedReason: null,
+        dailySpendFlag: null,
+        needsDestinationUrl: false,
+      },
+    ])
+    mockedApi.getStrategy.mockResolvedValue(FAKE_STRATEGY)
+    mockedApi.listProductImages.mockResolvedValue([
+      { id: 'img-1', url: 'http://x/1', createdAt: '2026-09-05T00:00:00Z' },
+    ])
+    const user = userEvent.setup()
+
+    renderCampaigns(<CampaignsSection businessId="biz-1" />)
+    await screen.findByText(/Custom emerald rings/)
+
+    await user.click(screen.getByRole('radio', { name: 'Carousel' }))
+    await waitFor(() => expect(mockedApi.listProductImages).toHaveBeenCalled())
+
+    expect(screen.queryByText(/Using the first/)).not.toBeInTheDocument()
   })
 
   it('labels the regenerate button "Regenerate with brand voice" once a brand profile exists', async () => {
@@ -1754,6 +1860,149 @@ describe('CampaignsSection', () => {
     expect(
       await screen.findByRole('button', { name: 'Approve & Publish' }),
     ).toBeInTheDocument()
+  })
+
+  it('manages a selected carousel ad\'s cards from the compact view', async () => {
+    const cards = [
+      { id: 'card-1', position: 0, imageUrl: 'http://x/1', headline: 'Card 1', description: null, linkUrl: 'http://x' },
+      { id: 'card-2', position: 1, imageUrl: 'http://x/2', headline: 'Card 2', description: null, linkUrl: 'http://x' },
+      { id: 'card-3', position: 2, imageUrl: 'http://x/3', headline: 'Card 3', description: null, linkUrl: 'http://x' },
+    ]
+    mockedApi.listCampaigns.mockResolvedValue([
+      {
+        id: 'camp-1',
+        name: null,
+        objective: 'SALES',
+        status: 'PENDING_APPROVAL',
+        productId: 'prod-1',
+        audienceId: null,
+        metaCampaignId: null,
+        eventVenueKey: null,
+        startDate: null,
+        endDate: null,
+        pausedReason: null,
+        dailySpendFlag: null,
+        needsDestinationUrl: false,
+      },
+    ])
+    mockedApi.getStrategy.mockResolvedValue(FAKE_STRATEGY)
+    mockedApi.listCreatives.mockResolvedValue([
+      fakeCreative({ format: 'CAROUSEL', cards, status: 'SELECTED' }),
+    ])
+    mockedApi.removeCreativeCard.mockResolvedValue(
+      fakeCreative({ format: 'CAROUSEL', cards: [cards[0], cards[2]], status: 'SELECTED' }),
+    )
+    mockedApi.reorderCreativeCards.mockResolvedValue(
+      fakeCreative({
+        format: 'CAROUSEL',
+        cards: [cards[1], cards[0], cards[2]],
+        status: 'SELECTED',
+      }),
+    )
+    const user = userEvent.setup()
+
+    renderCampaigns(<CampaignsSection businessId="biz-1" />)
+    await screen.findByRole('list', { name: 'Carousel cards' })
+
+    // Move card-1 (index 0) later, swapping it with card-2.
+    await user.click(screen.getAllByRole('button', { name: 'Move later' })[0])
+    await waitFor(() =>
+      expect(mockedApi.reorderCreativeCards).toHaveBeenCalledWith('biz-1', 'camp-1', 'creative-1', [
+        'card-2',
+        'card-1',
+        'card-3',
+      ]),
+    )
+
+    // The mocked result above put card-2 first — remove it.
+    const manager = await screen.findByRole('list', { name: 'Carousel cards' })
+    await user.click(within(manager).getAllByRole('button', { name: 'Remove' })[0])
+
+    await waitFor(() =>
+      expect(mockedApi.removeCreativeCard).toHaveBeenCalledWith(
+        'biz-1',
+        'camp-1',
+        'creative-1',
+        'card-2',
+      ),
+    )
+    const updatedManager = await screen.findByRole('list', { name: 'Carousel cards' })
+    expect(within(updatedManager).getByText('Card 1')).toBeInTheDocument()
+    expect(within(updatedManager).queryByText('Card 2')).not.toBeInTheDocument()
+  })
+
+  it('shows an error if removing a carousel card fails', async () => {
+    const cards = [
+      { id: 'card-1', position: 0, imageUrl: 'http://x/1', headline: 'Card 1', description: null, linkUrl: 'http://x' },
+      { id: 'card-2', position: 1, imageUrl: 'http://x/2', headline: 'Card 2', description: null, linkUrl: 'http://x' },
+    ]
+    mockedApi.listCampaigns.mockResolvedValue([
+      {
+        id: 'camp-1',
+        name: null,
+        objective: 'SALES',
+        status: 'PENDING_APPROVAL',
+        productId: 'prod-1',
+        audienceId: null,
+        metaCampaignId: null,
+        eventVenueKey: null,
+        startDate: null,
+        endDate: null,
+        pausedReason: null,
+        dailySpendFlag: null,
+        needsDestinationUrl: false,
+      },
+    ])
+    mockedApi.getStrategy.mockResolvedValue(FAKE_STRATEGY)
+    mockedApi.listCreatives.mockResolvedValue([
+      fakeCreative({ format: 'CAROUSEL', cards, status: 'SELECTED' }),
+    ])
+    mockedApi.removeCreativeCard.mockRejectedValue(new Error('network down'))
+    const user = userEvent.setup()
+
+    renderCampaigns(<CampaignsSection businessId="biz-1" />)
+    await screen.findByRole('list', { name: 'Carousel cards' })
+
+    await user.click(screen.getAllByRole('button', { name: 'Remove' })[0])
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Could not remove card.')
+  })
+
+  it('shows an error if reordering carousel cards fails', async () => {
+    const cards = [
+      { id: 'card-1', position: 0, imageUrl: 'http://x/1', headline: 'Card 1', description: null, linkUrl: 'http://x' },
+      { id: 'card-2', position: 1, imageUrl: 'http://x/2', headline: 'Card 2', description: null, linkUrl: 'http://x' },
+    ]
+    mockedApi.listCampaigns.mockResolvedValue([
+      {
+        id: 'camp-1',
+        name: null,
+        objective: 'SALES',
+        status: 'PENDING_APPROVAL',
+        productId: 'prod-1',
+        audienceId: null,
+        metaCampaignId: null,
+        eventVenueKey: null,
+        startDate: null,
+        endDate: null,
+        pausedReason: null,
+        dailySpendFlag: null,
+        needsDestinationUrl: false,
+      },
+    ])
+    mockedApi.getStrategy.mockResolvedValue(FAKE_STRATEGY)
+    mockedApi.listCreatives.mockResolvedValue([
+      fakeCreative({ format: 'CAROUSEL', cards, status: 'SELECTED' }),
+    ])
+    mockedApi.reorderCreativeCards.mockRejectedValue(new Error('network down'))
+    const user = userEvent.setup()
+
+    renderCampaigns(<CampaignsSection businessId="biz-1" />)
+    await screen.findByRole('list', { name: 'Carousel cards' })
+
+    await user.click(screen.getAllByRole('button', { name: 'Move later' })[0])
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Could not reorder cards.')
   })
 
   it("shows the selected ad as a Facebook-style preview with the business's name and logo", async () => {

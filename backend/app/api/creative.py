@@ -12,6 +12,7 @@ from app.schemas.creative import (
     MIN_CAROUSEL_CARDS,
     CreateCreativesRequest,
     CreativeResponse,
+    ReorderCreativeCardsRequest,
     SelectCreativeRequest,
 )
 from app.schemas.strategy import StrategyContentAdapter
@@ -44,6 +45,15 @@ _CAROUSEL_NEEDS_MORE_PHOTOS = (
 _CAROUSEL_NEEDS_DESTINATION_URL = (
     "Add a product URL or a business website before generating a carousel "
     "ad — every card needs somewhere to link to"
+)
+_NOT_A_CAROUSEL = "This creative isn't a carousel"
+_CARD_NOT_FOUND = "Card not found"
+_CARD_REORDER_MISMATCH = (
+    "cardIds must name exactly this creative's current cards, once each"
+)
+_MIN_CARDS_REQUIRED = (
+    f"A carousel needs at least {MIN_CAROUSEL_CARDS} cards — regenerate "
+    "with more product photos instead of removing this one"
 )
 
 
@@ -425,6 +435,136 @@ async def select_creative(
         where={"id": campaign.id}, data={"status": "PENDING_APPROVAL"}
     )
 
+    product = await _current_product(campaign)
+    business = await _current_business(campaign)
+    return _to_response(updated, campaign, product, business)
+
+
+async def _find_carousel_creative(creative_id: str, campaign: Campaign) -> Creative:
+    """Fetch a campaign's creative (with cards loaded), confirming it's a carousel.
+
+    Shared by reorder_creative_cards and remove_creative_card below.
+
+    Args:
+        creative_id: The creative to fetch.
+        campaign: The creative's parent campaign, already ownership-checked.
+
+    Returns:
+        The creative, with its cards relation loaded and position-ordered.
+
+    Raises:
+        HTTPException: 404 if no such creative exists on this campaign, 400
+            if it exists but isn't a CAROUSEL creative.
+    """
+    creative = await db.creative.find_first(
+        where={"id": creative_id, "campaignId": campaign.id},
+        include={"cards": {"order_by": {"position": "asc"}}},
+    )
+    if creative is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=_CREATIVE_NOT_FOUND
+        )
+    if creative.format != "CAROUSEL":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=_NOT_A_CAROUSEL
+        )
+    return creative
+
+
+@router.put("/{creative_id}/cards/order", response_model=CreativeResponse)
+async def reorder_creative_cards(
+    creative_id: str,
+    payload: ReorderCreativeCardsRequest,
+    campaign: Campaign = Depends(get_owned_campaign),
+) -> CreativeResponse:
+    """Set a CAROUSEL creative's card display order.
+
+    Takes the full new order, not a single move — same reasoning as
+    app/api/product_image.py's reorder_product_images.
+
+    Args:
+        creative_id: The carousel creative whose cards are being reordered.
+        payload: Every one of the creative's current card ids, in the new
+            order.
+        campaign: The campaign, resolved and ownership-checked by
+            get_owned_campaign.
+
+    Returns:
+        The creative, with its cards in their new order.
+
+    Raises:
+        HTTPException: 404 if no such creative exists on this campaign. 400
+            if it isn't a CAROUSEL creative, or if payload.card_ids isn't
+            exactly the creative's current set of card ids (missing, extra,
+            or duplicated).
+    """
+    creative = await _find_carousel_creative(creative_id, campaign)
+    current_ids = {card.id for card in creative.cards or []}
+    if current_ids != set(payload.card_ids) or len(payload.card_ids) != len(
+        set(payload.card_ids)
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=_CARD_REORDER_MISMATCH
+        )
+
+    for position, card_id in enumerate(payload.card_ids):
+        await db.creativecard.update(where={"id": card_id}, data={"position": position})
+
+    updated = await db.creative.find_unique(
+        where={"id": creative.id}, include={"cards": {"order_by": {"position": "asc"}}}
+    )
+    assert updated is not None  # just fetched above, can't vanish mid-request
+    product = await _current_product(campaign)
+    business = await _current_business(campaign)
+    return _to_response(updated, campaign, product, business)
+
+
+@router.delete("/{creative_id}/cards/{card_id}", response_model=CreativeResponse)
+async def remove_creative_card(
+    creative_id: str,
+    card_id: str,
+    campaign: Campaign = Depends(get_owned_campaign),
+) -> CreativeResponse:
+    """Remove one card from a CAROUSEL creative, renumbering the rest.
+
+    Args:
+        creative_id: The carousel creative to remove a card from.
+        card_id: The card to remove.
+        campaign: The campaign, resolved and ownership-checked by
+            get_owned_campaign.
+
+    Returns:
+        The creative, with the card removed and its remaining cards
+        renumbered to stay contiguous (0-indexed, in their existing
+        relative order).
+
+    Raises:
+        HTTPException: 404 if no such creative exists on this campaign, or
+            no such card exists on it. 400 if the creative isn't a
+            CAROUSEL creative, or removing this card would leave fewer
+            than MIN_CAROUSEL_CARDS (Meta's own minimum) — regenerate with
+            more product photos instead.
+    """
+    creative = await _find_carousel_creative(creative_id, campaign)
+    current_cards = creative.cards or []
+    if not any(card.id == card_id for card in current_cards):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=_CARD_NOT_FOUND
+        )
+    if len(current_cards) <= MIN_CAROUSEL_CARDS:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=_MIN_CARDS_REQUIRED
+        )
+
+    await db.creativecard.delete(where={"id": card_id})
+    remaining = [card for card in current_cards if card.id != card_id]
+    for position, card in enumerate(remaining):
+        await db.creativecard.update(where={"id": card.id}, data={"position": position})
+
+    updated = await db.creative.find_unique(
+        where={"id": creative.id}, include={"cards": {"order_by": {"position": "asc"}}}
+    )
+    assert updated is not None  # just fetched above, can't vanish mid-request
     product = await _current_product(campaign)
     business = await _current_business(campaign)
     return _to_response(updated, campaign, product, business)

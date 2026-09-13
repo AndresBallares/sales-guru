@@ -26,6 +26,8 @@ import {
   publishCampaign,
   refreshMetrics,
   rejectRecommendation,
+  removeCreativeCard,
+  reorderCreativeCards,
   selectCreative,
   toLabelMap,
   updateCampaign,
@@ -34,6 +36,7 @@ import {
   type Business,
   type Campaign,
   type Creative,
+  type CreativeFormat,
   type Metric,
   type Objective,
   type OptionsResponse,
@@ -57,6 +60,12 @@ function formatLocations(locations: TargetLocation[]): string {
 }
 
 const VARIANT_LETTERS = ['A', 'B', 'C', 'D']
+
+// Meta's own per-carousel-ad card limit (backend/app/schemas/creative.py's
+// MAX_CAROUSEL_CARDS) — mirrored here only to show the "using the first N
+// of M photos" note before generating; the backend enforces the cap
+// either way.
+const MAX_CAROUSEL_CARDS = 10
 
 export function CampaignsSection({
   businessId,
@@ -143,6 +152,16 @@ export function CampaignsSection({
   const [generatingCreativesId, setGeneratingCreativesId] = useState<string | null>(null)
   const [creativeErrors, setCreativeErrors] = useState<Record<string, string>>({})
   const [selectingId, setSelectingId] = useState<string | null>(null)
+  // Which format to generate next — per campaign, defaults to
+  // SINGLE_IMAGE (the pre-existing behavior) until the user picks
+  // Carousel. Never inferred from anything else, per the design decision
+  // to keep format an explicit, deliberate choice.
+  const [creativeFormat, setCreativeFormat] = useState<Record<string, CreativeFormat>>({})
+  // Reorder/remove state for a carousel creative's cards, keyed by
+  // creative id — mirrors the productImages upload/reorder state further
+  // down (uploadingImageId etc.) in shape.
+  const [cardActionId, setCardActionId] = useState<string | null>(null)
+  const [cardErrors, setCardErrors] = useState<Record<string, string>>({})
   // Once a creative is selected, its campaign collapses to that one ad
   // (the ad-set preview) instead of the full 4-variant list — keyed by
   // campaign id, this reopens the list so the user can pick a different
@@ -406,7 +425,11 @@ export function CampaignsSection({
     setGeneratingCreativesId(campaignId)
     setCreativeErrors((prev) => ({ ...prev, [campaignId]: '' }))
     try {
-      const generated = await createCreatives(businessId, campaignId)
+      const generated = await createCreatives(
+        businessId,
+        campaignId,
+        creativeFormat[campaignId] ?? 'SINGLE_IMAGE',
+      )
       setCreatives((prev) => ({ ...prev, [campaignId]: generated }))
     } catch (err) {
       setCreativeErrors((prev) => ({
@@ -415,6 +438,48 @@ export function CampaignsSection({
       }))
     } finally {
       setGeneratingCreativesId(null)
+    }
+  }
+
+  async function handleReorderCreativeCards(
+    campaignId: string,
+    creativeId: string,
+    cardIds: string[],
+  ) {
+    setCardActionId(creativeId)
+    setCardErrors((prev) => ({ ...prev, [creativeId]: '' }))
+    try {
+      const updated = await reorderCreativeCards(businessId, campaignId, creativeId, cardIds)
+      setCreatives((prev) => ({
+        ...prev,
+        [campaignId]: (prev[campaignId] ?? []).map((c) => (c.id === updated.id ? updated : c)),
+      }))
+    } catch (err) {
+      setCardErrors((prev) => ({
+        ...prev,
+        [creativeId]: err instanceof ApiError ? err.message : 'Could not reorder cards.',
+      }))
+    } finally {
+      setCardActionId(null)
+    }
+  }
+
+  async function handleRemoveCreativeCard(campaignId: string, creativeId: string, cardId: string) {
+    setCardActionId(creativeId)
+    setCardErrors((prev) => ({ ...prev, [creativeId]: '' }))
+    try {
+      const updated = await removeCreativeCard(businessId, campaignId, creativeId, cardId)
+      setCreatives((prev) => ({
+        ...prev,
+        [campaignId]: (prev[campaignId] ?? []).map((c) => (c.id === updated.id ? updated : c)),
+      }))
+    } catch (err) {
+      setCardErrors((prev) => ({
+        ...prev,
+        [creativeId]: err instanceof ApiError ? err.message : 'Could not remove card.',
+      }))
+    } finally {
+      setCardActionId(null)
     }
   }
 
@@ -1261,6 +1326,49 @@ export function CampaignsSection({
                     className="campaign-block"
                     aria-label={`Ads for ${campaign.name ?? campaign.id}`}
                   >
+                    <fieldset className="format-picker">
+                      <legend>Ad format</legend>
+                      <label>
+                        <input
+                          type="radio"
+                          name={`creative-format-${campaign.id}`}
+                          checked={(creativeFormat[campaign.id] ?? 'SINGLE_IMAGE') === 'SINGLE_IMAGE'}
+                          onChange={() =>
+                            setCreativeFormat((prev) => ({ ...prev, [campaign.id]: 'SINGLE_IMAGE' }))
+                          }
+                        />
+                        Single image
+                      </label>
+                      <label>
+                        <input
+                          type="radio"
+                          name={`creative-format-${campaign.id}`}
+                          checked={creativeFormat[campaign.id] === 'CAROUSEL'}
+                          onChange={() => {
+                            setCreativeFormat((prev) => ({ ...prev, [campaign.id]: 'CAROUSEL' }))
+                            if (campaignProductId && !productImages[campaignProductId]) {
+                              void listProductImages(businessId, campaignProductId).then(
+                                (images) =>
+                                  setProductImages((prev) => ({
+                                    ...prev,
+                                    [campaignProductId]: images,
+                                  })),
+                              )
+                            }
+                          }}
+                        />
+                        Carousel
+                      </label>
+                    </fieldset>
+                    {creativeFormat[campaign.id] === 'CAROUSEL' &&
+                      campaignProductId &&
+                      (productImages[campaignProductId]?.length ?? 0) > MAX_CAROUSEL_CARDS && (
+                        <p className="field-hint">
+                          Using the first {MAX_CAROUSEL_CARDS} of{' '}
+                          {productImages[campaignProductId]?.length} photos — reorder product
+                          photos to change which are included.
+                        </p>
+                      )}
                     <button
                       type="button"
                       onClick={() => handleGenerateCreatives(campaign.id)}
@@ -1285,7 +1393,93 @@ export function CampaignsSection({
                           <button type="button" disabled>
                             Selected
                           </button>
-                          {campaignProductId && (
+                          {selectedCreative.format === 'CAROUSEL' ? (
+                            <>
+                              <ul className="photo-manager" aria-label="Carousel cards">
+                                {selectedCreative.cards.map((card, index) => (
+                                  <li key={card.id} className="photo-thumb">
+                                    <img
+                                      src={card.imageUrl}
+                                      alt={card.headline}
+                                      width={96}
+                                      height={96}
+                                    />
+                                    <p>{card.headline}</p>
+                                    <div className="photo-thumb-actions">
+                                      <button
+                                        type="button"
+                                        onClick={() =>
+                                          void handleReorderCreativeCards(
+                                            campaign.id,
+                                            selectedCreative.id,
+                                            (() => {
+                                              const ids = selectedCreative.cards.map((c) => c.id)
+                                              if (index === 0) return ids
+                                              ;[ids[index - 1], ids[index]] = [
+                                                ids[index],
+                                                ids[index - 1],
+                                              ]
+                                              return ids
+                                            })(),
+                                          )
+                                        }
+                                        disabled={index === 0 || cardActionId === selectedCreative.id}
+                                        aria-label="Move earlier"
+                                      >
+                                        ←
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={() =>
+                                          void handleReorderCreativeCards(
+                                            campaign.id,
+                                            selectedCreative.id,
+                                            (() => {
+                                              const ids = selectedCreative.cards.map((c) => c.id)
+                                              if (index === ids.length - 1) return ids
+                                              ;[ids[index + 1], ids[index]] = [
+                                                ids[index],
+                                                ids[index + 1],
+                                              ]
+                                              return ids
+                                            })(),
+                                          )
+                                        }
+                                        disabled={
+                                          index === selectedCreative.cards.length - 1 ||
+                                          cardActionId === selectedCreative.id
+                                        }
+                                        aria-label="Move later"
+                                      >
+                                        →
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={() =>
+                                          void handleRemoveCreativeCard(
+                                            campaign.id,
+                                            selectedCreative.id,
+                                            card.id,
+                                          )
+                                        }
+                                        disabled={cardActionId === selectedCreative.id}
+                                      >
+                                        {cardActionId === selectedCreative.id
+                                          ? 'Removing…'
+                                          : 'Remove'}
+                                      </button>
+                                    </div>
+                                  </li>
+                                ))}
+                              </ul>
+                              {cardErrors[selectedCreative.id] && (
+                                <p className="form-error" role="alert">
+                                  {cardErrors[selectedCreative.id]}
+                                </p>
+                              )}
+                            </>
+                          ) : (
+                            campaignProductId && (
                             <div className="image-picker">
                               <button
                                 type="button"
@@ -1362,6 +1556,7 @@ export function CampaignsSection({
                                 </p>
                               )}
                             </div>
+                            )
                           )}
                           <SocialPostPreview
                             business={business}

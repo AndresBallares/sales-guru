@@ -30,18 +30,46 @@ export function SocialPostPreview({
         </div>
       </div>
       <p className="social-post-body">{creative.bodyText}</p>
-      {creative.imageUrl && (
-        <div className="social-post-image-frame">
-          <img className="social-post-image" src={creative.imageUrl} alt={creative.headline} />
-        </div>
+      {creative.format === 'CAROUSEL' ? (
+        <ul className="social-post-carousel">
+          {creative.cards.map((card) => (
+            <li className="social-post-carousel-card" key={card.id}>
+              <div className="social-post-carousel-image-frame">
+                <img
+                  className="social-post-carousel-image"
+                  src={card.imageUrl}
+                  alt={card.headline}
+                />
+              </div>
+              <div className="social-post-carousel-card-text">
+                <p className="social-post-headline">{card.headline}</p>
+                {card.description && (
+                  <p className="social-post-description">{card.description}</p>
+                )}
+              </div>
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <>
+          {creative.imageUrl && (
+            <div className="social-post-image-frame">
+              <img
+                className="social-post-image"
+                src={creative.imageUrl}
+                alt={creative.headline}
+              />
+            </div>
+          )}
+          <div className="social-post-link-card">
+            <div className="social-post-link-card-text">
+              <p className="social-post-headline">{creative.headline}</p>
+              <p className="social-post-description">{creative.description}</p>
+            </div>
+            <span className="social-post-cta">{ctaLabel}</span>
+          </div>
+        </>
       )}
-      <div className="social-post-link-card">
-        <div className="social-post-link-card-text">
-          <p className="social-post-headline">{creative.headline}</p>
-          <p className="social-post-description">{creative.description}</p>
-        </div>
-        <span className="social-post-cta">{ctaLabel}</span>
-      </div>
       <div className="social-post-actions" aria-hidden="true">
         <span>👍 Like</span>
         <span>💬 Comment</span>
