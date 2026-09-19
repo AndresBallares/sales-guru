@@ -793,6 +793,58 @@ async def test_publish_creates_two_real_adsets_for_a_test_plan_campaign(
     assert {c.metaCreativeId for c in db_creatives} == {"meta_creative_1"}
 
 
+@pytest.mark.asyncio
+async def test_publish_test_plan_duplicate_creative_carries_the_source_snapshot(
+    client: TestClient,
+    mock_services: dict[str, AsyncMock],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression test for a real bug (fixed 2026-09-19): the hypothesis
+    variant's duplicate Creative row (see the "two real AdSets" test
+    above for why a TEST_PLAN needs one at all) was created without
+    copying sourceProductId/sourceDescription/sourceUrl/
+    sourceBusinessDescription from the original — leaving every
+    TEST_PLAN campaign's duplicate permanently "stale" the instant it
+    was created (is_creative_stale, app/services/creative.py, reads a
+    null sourceProductId as "doesn't match the campaign's real
+    product"), surfacing a false "these ads are outdated, regenerate?"
+    banner on the dashboard right after every TEST_PLAN publish."""
+    from app.services.creative import is_creative_stale
+
+    business_id, campaign_id = _ready_campaign(
+        client, monkeypatch=monkeypatch, test_plan=True
+    )
+
+    response = client.post(f"/businesses/{business_id}/campaigns/{campaign_id}/publish")
+    assert response.status_code == 200
+
+    seeder = Prisma()
+    await seeder.connect()
+    db_creatives = await seeder.creative.find_many(
+        where={"campaignId": campaign_id, "status": "SELECTED"},
+        order={"createdAt": "asc"},
+    )
+    assert len(db_creatives) == 2  # the original row, plus the duplicate
+    original, duplicate = db_creatives
+
+    db_campaign = await seeder.campaign.find_unique(where={"id": campaign_id})
+    assert db_campaign is not None
+    db_product = (
+        await seeder.product.find_unique(where={"id": db_campaign.productId})
+        if db_campaign.productId
+        else None
+    )
+    db_business = await seeder.business.find_unique(where={"id": business_id})
+    assert db_business is not None
+    await seeder.disconnect()
+
+    assert duplicate.sourceProductId == original.sourceProductId
+    assert duplicate.sourceDescription == original.sourceDescription
+    assert duplicate.sourceUrl == original.sourceUrl
+    assert duplicate.sourceBusinessDescription == original.sourceBusinessDescription
+    assert is_creative_stale(duplicate, db_campaign, db_product, db_business) is False
+
+
 def test_publish_targets_the_curated_venue_for_an_event_campaign(
     client: TestClient, mock_services: dict[str, AsyncMock]
 ) -> None:

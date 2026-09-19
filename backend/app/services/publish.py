@@ -330,7 +330,17 @@ async def _publish_test_plan_variant(
     else:
         duplicate = await db.creative.create(
             data={
-                "campaignId": campaign.id,
+                # Every scalar field copied straight from the source
+                # creative — including sourceProductId/sourceDescription/
+                # sourceUrl/sourceBusinessDescription (bug, fixed
+                # 2026-09-19: previously omitted here, so every TEST_PLAN
+                # campaign's duplicate Creative had a null source
+                # snapshot and read as permanently stale the instant it
+                # was created — is_creative_stale, app/services/
+                # creative.py, treats a null sourceProductId as "doesn't
+                # match the campaign's real product" — surfacing a false
+                # "these ads are outdated, regenerate?" banner on every
+                # TEST_PLAN campaign right after publish).
                 "headline": creative.headline,
                 "bodyText": creative.bodyText,
                 "description": creative.description,
@@ -341,6 +351,14 @@ async def _publish_test_plan_variant(
                 "imageUrl": creative.imageUrl,
                 "productImageId": creative.productImageId,
                 "format": creative.format,
+                "sourceProductId": creative.sourceProductId,
+                "sourceDescription": creative.sourceDescription,
+                "sourceUrl": creative.sourceUrl,
+                "sourceBusinessDescription": creative.sourceBusinessDescription,
+                # Deliberately different from the source row, not copied:
+                # this is a new local row for a new Ad, tied to this
+                # campaign and this variant's own Meta creative id.
+                "campaignId": campaign.id,
                 "status": "SELECTED",
                 "metaCreativeId": meta_creative_id,
                 "adId": ad.id,
