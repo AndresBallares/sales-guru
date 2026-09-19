@@ -29,7 +29,7 @@ describe('App', () => {
   })
 
   it('shows the dashboard for an authenticated visitor', async () => {
-    mockedApi.getMe.mockResolvedValue({ id: '1', email: 'a@b.com' })
+    mockedApi.getMe.mockResolvedValue({ id: '1', email: 'a@b.com', needsTermsAcceptance: false })
 
     render(<App />)
 

@@ -1,5 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from 'react'
 import {
+  acceptTerms as apiAcceptTerms,
   getMe,
   login as apiLogin,
   logout as apiLogout,
@@ -11,8 +12,9 @@ interface AuthContextValue {
   user: User | null
   loading: boolean
   login: (email: string, password: string) => Promise<void>
-  signup: (email: string, password: string) => Promise<void>
+  signup: (email: string, password: string, termsAccepted: boolean) => Promise<void>
   logout: () => Promise<void>
+  acceptTerms: () => Promise<void>
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null)
@@ -32,17 +34,24 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setUser(await apiLogin(email, password))
   }, [])
 
-  const signup = useCallback(async (email: string, password: string) => {
-    setUser(await apiSignup(email, password))
-  }, [])
+  const signup = useCallback(
+    async (email: string, password: string, termsAccepted: boolean) => {
+      setUser(await apiSignup(email, password, termsAccepted))
+    },
+    [],
+  )
 
   const logout = useCallback(async () => {
     await apiLogout()
     setUser(null)
   }, [])
 
+  const acceptTerms = useCallback(async () => {
+    setUser(await apiAcceptTerms())
+  }, [])
+
   return (
-    <AuthContext.Provider value={{ user, loading, login, signup, logout }}>
+    <AuthContext.Provider value={{ user, loading, login, signup, logout, acceptTerms }}>
       {children}
     </AuthContext.Provider>
   )

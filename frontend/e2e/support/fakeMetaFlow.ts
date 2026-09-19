@@ -42,6 +42,7 @@ export async function reachProductStep(page: Page): Promise<void> {
   await page.goto('/signup')
   await page.getByLabel('Email').fill(email)
   await page.getByLabel('Password').fill(password)
+  await page.getByRole('checkbox').check()
   await page.getByRole('button', { name: 'Sign up' }).click()
   await expect(page.getByText(`Signed in as ${email}`)).toBeVisible()
 
@@ -79,7 +80,10 @@ export async function reachProductStep(page: Page): Promise<void> {
 // itself.
 export async function reachMetaPixelStep(
   page: Page,
-  { withProductPhoto = true }: { withProductPhoto?: boolean } = {},
+  {
+    withProductPhoto = true,
+    adAccountLabel = 'Fake Ad Account',
+  }: { withProductPhoto?: boolean; adAccountLabel?: string } = {},
 ): Promise<string> {
   await reachProductStep(page)
 
@@ -114,7 +118,7 @@ export async function reachMetaPixelStep(
   expect(fakeConnectResponse.ok()).toBe(true)
   await page.reload()
 
-  await page.getByLabel('Ad account').selectOption({ label: 'Fake Ad Account' })
+  await page.getByLabel('Ad account').selectOption({ label: adAccountLabel })
   await page.getByLabel('Page').selectOption({ label: 'Fake Page' })
   await page.getByRole('button', { name: 'Save connection' }).click()
   await expect(page.getByRole('button', { name: 'Skip for now' })).toBeVisible()

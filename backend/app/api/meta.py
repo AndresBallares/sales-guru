@@ -36,6 +36,7 @@ from app.services.meta import (
     exchange_code_for_token,
     get_long_lived_token,
     get_meta_user_id,
+    is_business_tools_terms_error,
     list_ad_accounts,
     list_ad_pixels,
     list_pages,
@@ -49,6 +50,10 @@ _AD_ACCOUNT_NOT_SET = "Select an ad account and Page before choosing a Pixel"
 _STATE_TTL = timedelta(minutes=10)
 _FAKE_META_DISABLED = "Fake Meta mode is not enabled"
 _FAKE_META_TOKEN_LIFETIME = timedelta(days=60)
+_BUSINESS_TOOLS_TERMS_NOT_ACCEPTED = (
+    "Your Meta ad account hasn't accepted the Business Tools Terms yet. "
+    "Accept them in Meta Business Settings, then retry."
+)
 
 
 def _to_response(connection: MetaConnection) -> MetaConnectionResponse:
@@ -298,8 +303,12 @@ async def get_pixels(
 
     Raises:
         HTTPException: 404 if no connection exists yet; 400 if an ad
-            account hasn't been chosen yet; 500 if the Graph API call
-            fails.
+            account hasn't been chosen yet; 409 if the ad account hasn't
+            accepted Meta's Business Tools Terms (a precondition on
+            Meta's own side — retrying the same call won't help until
+            that's done; the frontend offers Skip/Retry instead of
+            failing the whole Meta connection over it); 500 for any
+            other Graph API failure.
     """
     connection = await _require_connection(business.id)
     if connection.adAccountId is None:
@@ -309,6 +318,11 @@ async def get_pixels(
     try:
         return await list_ad_pixels(connection.accessToken, connection.adAccountId)
     except MetaConnectionError as exc:
+        if is_business_tools_terms_error(exc):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=_BUSINESS_TOOLS_TERMS_NOT_ACCEPTED,
+            ) from exc
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)
         ) from exc

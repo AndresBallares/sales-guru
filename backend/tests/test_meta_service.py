@@ -340,6 +340,75 @@ async def test_post_json_error_includes_the_endpoint_and_metas_full_diagnosis(
     assert "The image format is not supported" in message
     assert "1234567" in message
     assert "AbCdEfGhIjK" in message
+    assert exc_info.value.error_subcode == 1234567
+
+
+@pytest.mark.asyncio
+async def test_raised_error_carries_metas_code_as_a_structured_field(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """error.code lands on MetaConnectionError.code, not just in the
+    formatted message string — is_business_tools_terms_error (and any
+    future caller that needs to distinguish specific Graph errors) reads
+    this field directly rather than parsing text."""
+    _mock_client_returning(
+        monkeypatch,
+        _FakeResponse(
+            {
+                "error": {
+                    "message": "Terms of service has not been accepted",
+                    "code": 2655,
+                }
+            },
+            is_error=True,
+        ),
+    )
+
+    with pytest.raises(meta.MetaConnectionError) as exc_info:
+        await meta.create_meta_campaign(
+            access_token="token",
+            ad_account_id="act_1",
+            name="Campaign",
+            objective="SALES",
+        )
+
+    assert exc_info.value.code == 2655
+
+
+class TestIsBusinessToolsTermsError:
+    """Unit coverage for the Business Tools Terms detection helper itself
+    (app/services/meta.py) — separate from the fake-mode/API-mapping
+    tests elsewhere, which exercise it end to end."""
+
+    def test_matches_the_confirmed_custom_audience_terms_code(self) -> None:
+        exc = meta.MetaConnectionError("some generic message", code=2655)
+
+        assert meta.is_business_tools_terms_error(exc) is True
+
+    def test_matches_the_pixel_terms_wording_with_no_confirmed_code(self) -> None:
+        exc = meta.MetaConnectionError(
+            "Meta API call to /adspixels failed: "
+            "Business has not accepted Pixel Terms of Service"
+        )
+
+        assert meta.is_business_tools_terms_error(exc) is True
+
+    def test_match_is_case_insensitive(self) -> None:
+        exc = meta.MetaConnectionError(
+            "BUSINESS HAS NOT ACCEPTED PIXEL TERMS OF SERVICE"
+        )
+
+        assert meta.is_business_tools_terms_error(exc) is True
+
+    def test_does_not_match_an_unrelated_error(self) -> None:
+        exc = meta.MetaConnectionError("Invalid OAuth access token", code=190)
+
+        assert meta.is_business_tools_terms_error(exc) is False
+
+    def test_does_not_match_an_error_with_neither_signal(self) -> None:
+        exc = meta.MetaConnectionError("Meta API call failed: some network error")
+
+        assert meta.is_business_tools_terms_error(exc) is False
 
 
 @pytest.mark.asyncio
@@ -1385,10 +1454,17 @@ def fake_meta_mode(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
 async def test_list_ad_accounts_returns_a_canned_account_in_fake_mode(
     fake_meta_mode: None,
 ) -> None:
-    """Fake mode returns one canned ad account, no real call."""
+    """Fake mode returns the canned ad account, no real call.
+
+    Also returns a second, deliberately-selectable "Terms Not Accepted"
+    ad account (see test_list_ad_pixels_raises_business_tools_terms_error_
+    in_fake_mode below) — asserted by membership, not exact list equality,
+    so this test doesn't need to change again if a third fake account is
+    ever added for a different scenario.
+    """
     accounts = await meta.list_ad_accounts("fake-token")
 
-    assert accounts == [MetaAdAccount(id="act_fake_account", name="Fake Ad Account")]
+    assert MetaAdAccount(id="act_fake_account", name="Fake Ad Account") in accounts
 
 
 @pytest.mark.asyncio
@@ -1409,6 +1485,20 @@ async def test_list_ad_pixels_returns_a_canned_pixel_in_fake_mode(
     pixels = await meta.list_ad_pixels("fake-token", "act_fake_account")
 
     assert pixels == [MetaPixel(id="fake_pixel", name="Fake Pixel")]
+
+
+@pytest.mark.asyncio
+async def test_list_ad_pixels_raises_business_tools_terms_error_in_fake_mode(
+    fake_meta_mode: None,
+) -> None:
+    """Selecting the "Terms Not Accepted" fake ad account simulates the
+    real Business Tools Terms failure end to end — this is what makes
+    app/api/meta.py's 409 mapping e2e-testable without a real ad account
+    that's actually in that state."""
+    with pytest.raises(meta.MetaConnectionError) as exc_info:
+        await meta.list_ad_pixels("fake-token", "act_fake_terms_not_accepted")
+
+    assert meta.is_business_tools_terms_error(exc_info.value)
 
 
 @pytest.mark.asyncio

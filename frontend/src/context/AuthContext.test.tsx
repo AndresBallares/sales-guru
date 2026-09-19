@@ -12,6 +12,7 @@ vi.mock('../lib/api', async (importOriginal) => {
     login: vi.fn<typeof actual.login>(),
     logout: vi.fn<typeof actual.logout>(),
     getMe: vi.fn<typeof actual.getMe>(),
+    acceptTerms: vi.fn<typeof actual.acceptTerms>(),
     createBusiness: vi.fn<typeof actual.createBusiness>(),
     listBusinesses: vi.fn<typeof actual.listBusinesses>(),
   }
@@ -30,7 +31,7 @@ function TestConsumer() {
     <div>
       <p>user: {user ? user.email : 'none'}</p>
       <button onClick={() => void login('a@b.com', 'password123')}>login</button>
-      <button onClick={() => void signup('a@b.com', 'password123')}>signup</button>
+      <button onClick={() => void signup('a@b.com', 'password123', true)}>signup</button>
       <button onClick={() => void logout()}>logout</button>
     </div>
   )
@@ -42,7 +43,7 @@ beforeEach(() => {
 
 describe('AuthProvider', () => {
   it('resolves the current user from getMe on mount', async () => {
-    mockedApi.getMe.mockResolvedValue({ id: '1', email: 'a@b.com' })
+    mockedApi.getMe.mockResolvedValue({ id: '1', email: 'a@b.com', needsTermsAcceptance: false })
 
     render(
       <AuthProvider>
@@ -68,7 +69,7 @@ describe('AuthProvider', () => {
 
   it('login updates the user from the API response', async () => {
     mockedApi.getMe.mockRejectedValue(new api.ApiError(401, 'Not authenticated'))
-    mockedApi.login.mockResolvedValue({ id: '1', email: 'a@b.com' })
+    mockedApi.login.mockResolvedValue({ id: '1', email: 'a@b.com', needsTermsAcceptance: false })
     const user = userEvent.setup()
 
     render(
@@ -85,7 +86,7 @@ describe('AuthProvider', () => {
 
   it('signup updates the user from the API response', async () => {
     mockedApi.getMe.mockRejectedValue(new api.ApiError(401, 'Not authenticated'))
-    mockedApi.signup.mockResolvedValue({ id: '1', email: 'a@b.com' })
+    mockedApi.signup.mockResolvedValue({ id: '1', email: 'a@b.com', needsTermsAcceptance: false })
     const user = userEvent.setup()
 
     render(
@@ -101,7 +102,7 @@ describe('AuthProvider', () => {
   })
 
   it('logout clears the user', async () => {
-    mockedApi.getMe.mockResolvedValue({ id: '1', email: 'a@b.com' })
+    mockedApi.getMe.mockResolvedValue({ id: '1', email: 'a@b.com', needsTermsAcceptance: false })
     mockedApi.logout.mockResolvedValue(undefined)
     const user = userEvent.setup()
 

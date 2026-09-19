@@ -28,6 +28,7 @@ test.describe('mobile viewport', () => {
     await page.goto('/signup')
     await page.getByLabel('Email').fill(email)
     await page.getByLabel('Password').fill('supersecret123')
+    await page.getByRole('checkbox').check()
     await page.getByRole('button', { name: 'Sign up' }).click()
     await expect(page.getByText(`Signed in as ${email}`)).toBeVisible()
 
@@ -62,6 +63,7 @@ test.describe('mobile viewport', () => {
     await page.goto('/signup')
     await page.getByLabel('Email').fill(email)
     await page.getByLabel('Password').fill('supersecret123')
+    await page.getByRole('checkbox').check()
     await page.getByRole('button', { name: 'Sign up' }).click()
     await expect(page.getByText(`Signed in as ${email}`)).toBeVisible()
 
@@ -77,6 +79,7 @@ test.describe('mobile viewport', () => {
     await page.goto('/signup')
     await page.getByLabel('Email').fill(email)
     await page.getByLabel('Password').fill('supersecret123')
+    await page.getByRole('checkbox').check()
     await page.getByRole('button', { name: 'Sign up' }).click()
     await expect(page.getByText(`Signed in as ${email}`)).toBeVisible()
 

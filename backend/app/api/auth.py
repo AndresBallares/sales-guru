@@ -1,6 +1,7 @@
 """Authentication endpoints."""
 
 import logging
+from datetime import UTC, datetime
 from typing import Literal
 
 from fastapi import APIRouter, Cookie, Depends, HTTPException, Response, status
@@ -18,6 +19,7 @@ from app.core.session import (
     delete_session,
     get_current_user,
 )
+from app.core.terms import TERMS_VERSION, needs_terms_acceptance
 from app.schemas.auth import (
     ForgotPasswordRequest,
     LoginRequest,
@@ -61,6 +63,15 @@ def _cookie_cross_site_attrs() -> tuple[bool, Literal["lax", "none"]]:
     return False, "lax"
 
 
+def _to_user_response(user: User) -> UserResponse:
+    """Map a Prisma User to its public representation."""
+    return UserResponse(
+        id=user.id,
+        email=user.email,
+        needs_terms_acceptance=needs_terms_acceptance(user),
+    )
+
+
 def _set_session_cookie(response: Response, token: str) -> None:
     """Attach a session cookie to the response.
 
@@ -97,7 +108,11 @@ async def signup(payload: SignupRequest, response: Response) -> UserResponse:
         The newly created user's public representation.
 
     Raises:
-        HTTPException: 409 if the email is already registered.
+        HTTPException: 409 if the email is already registered. 422 if
+            terms acceptance is missing or false (SignupRequest's own
+            validator — FastAPI raises this before the handler body ever
+            runs, so it's never actually reachable here, but documented
+            for completeness).
     """
     existing = await db.user.find_unique(where={"email": payload.email})
     if existing is not None:
@@ -113,6 +128,8 @@ async def signup(payload: SignupRequest, response: Response) -> UserResponse:
                 "email": payload.email,
                 "hashedPassword": hash_password(payload.password),
                 "organizations": {"create": [{"name": org_name}]},
+                "termsAcceptedAt": datetime.now(UTC),
+                "termsVersion": TERMS_VERSION,
             }
         )
     except UniqueViolationError as exc:
@@ -122,7 +139,7 @@ async def signup(payload: SignupRequest, response: Response) -> UserResponse:
 
     token = await create_session(user.id)
     _set_session_cookie(response, token)
-    return UserResponse(id=user.id, email=user.email)
+    return _to_user_response(user)
 
 
 @router.post("/login", response_model=UserResponse)
@@ -147,7 +164,7 @@ async def login(payload: LoginRequest, response: Response) -> UserResponse:
 
     token = await create_session(user.id)
     _set_session_cookie(response, token)
-    return UserResponse(id=user.id, email=user.email)
+    return _to_user_response(user)
 
 
 def _reset_email_html(reset_url: str) -> str:
@@ -268,4 +285,31 @@ async def me(current_user: User = Depends(get_current_user)) -> UserResponse:
     Returns:
         The current user's public representation.
     """
-    return UserResponse(id=current_user.id, email=current_user.email)
+    return _to_user_response(current_user)
+
+
+@router.post("/accept-terms", response_model=UserResponse)
+async def accept_terms(current_user: User = Depends(get_current_user)) -> UserResponse:
+    """Record the current user's acceptance of the current terms.
+
+    Used by the one-time full-page TermsAcceptancePrompt (frontend) shown
+    to an existing account whose termsAcceptedAt is null or whose
+    termsVersion doesn't match TERMS_VERSION — this is the only way that
+    prompt can ever be dismissed. Not gated on anything but a valid
+    session: a user who otherwise can't use the app for some other reason
+    still isn't blocked here specifically by this feature.
+
+    Args:
+        current_user: Resolved from the session cookie.
+
+    Returns:
+        The updated user, with needsTermsAcceptance now false.
+    """
+    updated = await db.user.update(
+        where={"id": current_user.id},
+        data={"termsAcceptedAt": datetime.now(UTC), "termsVersion": TERMS_VERSION},
+    )
+    assert (
+        updated is not None
+    )  # just fetched via get_current_user, can't vanish mid-request
+    return _to_user_response(updated)

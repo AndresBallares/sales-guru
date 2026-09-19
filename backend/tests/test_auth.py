@@ -11,6 +11,7 @@ from app.api import auth as auth_module
 from app.core.config import get_settings
 from app.core.db import db
 from app.core.password_reset import _hash_token
+from app.core.terms import TERMS_VERSION
 from app.services.email import EmailDeliveryError
 from fastapi.testclient import TestClient
 from prisma import Prisma
@@ -79,7 +80,11 @@ def test_login_cookie_is_lax_in_development(client: TestClient) -> None:
     """Dev (same-origin localhost) keeps SameSite=Lax and no Secure flag."""
     response = client.post(
         "/auth/signup",
-        json={"email": "dev-cookie@example.com", "password": "supersecret123"},
+        json={
+            "email": "dev-cookie@example.com",
+            "password": "supersecret123",
+            "termsAccepted": True,
+        },
     )
 
     raw = _session_set_cookie(response)
@@ -93,7 +98,11 @@ def test_login_cookie_is_none_secure_in_production(
     """Prod (separate Render subdomains) needs SameSite=None; Secure."""
     response = client.post(
         "/auth/signup",
-        json={"email": "prod-cookie@example.com", "password": "supersecret123"},
+        json={
+            "email": "prod-cookie@example.com",
+            "password": "supersecret123",
+            "termsAccepted": True,
+        },
     )
 
     raw = _session_set_cookie(response)
@@ -107,7 +116,11 @@ def test_logout_clears_cookie_with_matching_attrs_in_production(
     """Logout's Set-Cookie (deletion) also uses SameSite=None; Secure in prod."""
     client.post(
         "/auth/signup",
-        json={"email": "prod-logout@example.com", "password": "supersecret123"},
+        json={
+            "email": "prod-logout@example.com",
+            "password": "supersecret123",
+            "termsAccepted": True,
+        },
     )
 
     response = client.post("/auth/logout")
@@ -121,7 +134,11 @@ def test_signup_creates_user(client: TestClient) -> None:
     """A new signup returns 201 with the created user's id and email."""
     response = client.post(
         "/auth/signup",
-        json={"email": "new@example.com", "password": "supersecret123"},
+        json={
+            "email": "new@example.com",
+            "password": "supersecret123",
+            "termsAccepted": True,
+        },
     )
 
     assert response.status_code == 201
@@ -130,11 +147,147 @@ def test_signup_creates_user(client: TestClient) -> None:
     assert "id" in body
     assert "password" not in body
     assert "hashedPassword" not in body
+    assert body["needsTermsAcceptance"] is False
+
+
+# --- terms acceptance ---------------------------------------------------
+
+
+def test_signup_rejects_missing_terms_acceptance(client: TestClient) -> None:
+    """Omitting termsAccepted entirely is a 422, not a silent default."""
+    response = client.post(
+        "/auth/signup",
+        json={"email": "no-terms-field@example.com", "password": "supersecret123"},
+    )
+
+    assert response.status_code == 422
+
+
+def test_signup_rejects_false_terms_acceptance(client: TestClient) -> None:
+    """An explicit termsAccepted: false is also a 422, not just a missing field."""
+    response = client.post(
+        "/auth/signup",
+        json={
+            "email": "unchecked@example.com",
+            "password": "supersecret123",
+            "termsAccepted": False,
+        },
+    )
+
+    assert response.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_signup_records_terms_acceptance(client: TestClient) -> None:
+    """A successful signup stamps termsAcceptedAt/termsVersion right away."""
+    response = client.post(
+        "/auth/signup",
+        json={
+            "email": "records-terms@example.com",
+            "password": "supersecret123",
+            "termsAccepted": True,
+        },
+    )
+    user_id = response.json()["id"]
+
+    seeder = Prisma()
+    await seeder.connect()
+    user = await seeder.user.find_unique(where={"id": user_id})
+    await seeder.disconnect()
+
+    assert user is not None
+    assert user.termsAcceptedAt is not None
+    assert user.termsVersion == TERMS_VERSION
+
+
+@pytest.mark.asyncio
+async def test_existing_user_needs_terms_acceptance(client: TestClient) -> None:
+    """An account predating this feature (termsAcceptedAt null) is flagged.
+
+    Simulated by signing up normally, then clearing the fields back to
+    null via a fresh connection — the same "pretend this account is
+    older than the feature" trick used elsewhere in this file
+    (_expire_token) to seed state the API itself can't produce anymore.
+    """
+    signup = client.post(
+        "/auth/signup",
+        json={
+            "email": "predates-terms@example.com",
+            "password": "supersecret123",
+            "termsAccepted": True,
+        },
+    )
+    user_id = signup.json()["id"]
+
+    seeder = Prisma()
+    await seeder.connect()
+    await seeder.user.update(
+        where={"id": user_id}, data={"termsAcceptedAt": None, "termsVersion": None}
+    )
+    await seeder.disconnect()
+
+    me = client.get("/auth/me")
+    assert me.status_code == 200
+    assert me.json()["needsTermsAcceptance"] is True
+
+    login = client.post(
+        "/auth/login",
+        json={"email": "predates-terms@example.com", "password": "supersecret123"},
+    )
+    assert login.status_code == 200
+    assert login.json()["needsTermsAcceptance"] is True
+
+
+def test_accept_terms_requires_a_session(client: TestClient) -> None:
+    """/auth/accept-terms with no session cookie returns 401."""
+    response = client.post("/auth/accept-terms")
+
+    assert response.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_accept_terms_clears_the_flag(client: TestClient) -> None:
+    """Accepting terms sets both fields and needsTermsAcceptance flips false."""
+
+    signup = client.post(
+        "/auth/signup",
+        json={
+            "email": "accepts-terms@example.com",
+            "password": "supersecret123",
+            "termsAccepted": True,
+        },
+    )
+    user_id = signup.json()["id"]
+
+    seeder = Prisma()
+    await seeder.connect()
+    await seeder.user.update(
+        where={"id": user_id}, data={"termsAcceptedAt": None, "termsVersion": None}
+    )
+    await seeder.disconnect()
+    assert client.get("/auth/me").json()["needsTermsAcceptance"] is True
+
+    response = client.post("/auth/accept-terms")
+
+    assert response.status_code == 200
+    assert response.json()["needsTermsAcceptance"] is False
+
+    seeder = Prisma()
+    await seeder.connect()
+    user = await seeder.user.find_unique(where={"id": user_id})
+    await seeder.disconnect()
+    assert user is not None
+    assert user.termsAcceptedAt is not None
+    assert user.termsVersion == TERMS_VERSION
 
 
 def test_signup_rejects_duplicate_email(client: TestClient) -> None:
     """Signing up twice with the same email returns 409, not a second user."""
-    payload = {"email": "dupe@example.com", "password": "supersecret123"}
+    payload = {
+        "email": "dupe@example.com",
+        "password": "supersecret123",
+        "termsAccepted": True,
+    }
 
     first = client.post("/auth/signup", json=payload)
     assert first.status_code == 201
@@ -147,7 +300,11 @@ def test_signup_lowercases_the_email(client: TestClient) -> None:
     """A mixed-case email is stored (and returned) lowercase."""
     response = client.post(
         "/auth/signup",
-        json={"email": "MixedCase@Example.com", "password": "supersecret123"},
+        json={
+            "email": "MixedCase@Example.com",
+            "password": "supersecret123",
+            "termsAccepted": True,
+        },
     )
 
     assert response.status_code == 201
@@ -158,13 +315,21 @@ def test_signup_rejects_duplicate_email_case_insensitively(client: TestClient) -
     """A different-cased duplicate of an existing email is still rejected."""
     first = client.post(
         "/auth/signup",
-        json={"email": "dupe-case@example.com", "password": "supersecret123"},
+        json={
+            "email": "dupe-case@example.com",
+            "password": "supersecret123",
+            "termsAccepted": True,
+        },
     )
     assert first.status_code == 201
 
     second = client.post(
         "/auth/signup",
-        json={"email": "Dupe-Case@Example.com", "password": "supersecret123"},
+        json={
+            "email": "Dupe-Case@Example.com",
+            "password": "supersecret123",
+            "termsAccepted": True,
+        },
     )
     assert second.status_code == 409
 
@@ -173,13 +338,21 @@ def test_login_matches_regardless_of_email_case(client: TestClient) -> None:
     """Logging in with a different-cased email than used at signup still works."""
     client.post(
         "/auth/signup",
-        json={"email": "casetest@example.com", "password": "supersecret123"},
+        json={
+            "email": "casetest@example.com",
+            "password": "supersecret123",
+            "termsAccepted": True,
+        },
     )
     client.post("/auth/logout")
 
     response = client.post(
         "/auth/login",
-        json={"email": "CaseTest@Example.com", "password": "supersecret123"},
+        json={
+            "email": "CaseTest@Example.com",
+            "password": "supersecret123",
+            "termsAccepted": True,
+        },
     )
 
     assert response.status_code == 200
@@ -189,7 +362,8 @@ def test_login_matches_regardless_of_email_case(client: TestClient) -> None:
 def test_signup_rejects_short_password(client: TestClient) -> None:
     """A password under the minimum length is rejected with 422."""
     response = client.post(
-        "/auth/signup", json={"email": "short@example.com", "password": "short"}
+        "/auth/signup",
+        json={"email": "short@example.com", "password": "short", "termsAccepted": True},
     )
 
     assert response.status_code == 422
@@ -199,7 +373,11 @@ def test_signup_rejects_invalid_email(client: TestClient) -> None:
     """A malformed email is rejected with 422."""
     response = client.post(
         "/auth/signup",
-        json={"email": "not-an-email", "password": "supersecret123"},
+        json={
+            "email": "not-an-email",
+            "password": "supersecret123",
+            "termsAccepted": True,
+        },
     )
 
     assert response.status_code == 422
@@ -217,7 +395,11 @@ def test_signup_handles_races_as_409(
 
     response = client.post(
         "/auth/signup",
-        json={"email": "race@example.com", "password": "supersecret123"},
+        json={
+            "email": "race@example.com",
+            "password": "supersecret123",
+            "termsAccepted": True,
+        },
     )
 
     assert response.status_code == 409
@@ -227,7 +409,11 @@ def test_signup_logs_in_immediately(client: TestClient) -> None:
     """Signup sets a session cookie that /auth/me accepts right away."""
     client.post(
         "/auth/signup",
-        json={"email": "auto@example.com", "password": "supersecret123"},
+        json={
+            "email": "auto@example.com",
+            "password": "supersecret123",
+            "termsAccepted": True,
+        },
     )
 
     response = client.get("/auth/me")
@@ -245,7 +431,11 @@ def test_me_requires_a_session(client: TestClient) -> None:
 
 def test_login_succeeds_with_correct_credentials(client: TestClient) -> None:
     """Logging in with the right password sets a session and returns the user."""
-    payload = {"email": "returning@example.com", "password": "supersecret123"}
+    payload = {
+        "email": "returning@example.com",
+        "password": "supersecret123",
+        "termsAccepted": True,
+    }
     client.post("/auth/signup", json=payload)
     client.post("/auth/logout")
 
@@ -260,13 +450,21 @@ def test_login_rejects_wrong_password(client: TestClient) -> None:
     """Logging in with the wrong password returns 401."""
     client.post(
         "/auth/signup",
-        json={"email": "wrongpw@example.com", "password": "supersecret123"},
+        json={
+            "email": "wrongpw@example.com",
+            "password": "supersecret123",
+            "termsAccepted": True,
+        },
     )
     client.post("/auth/logout")
 
     response = client.post(
         "/auth/login",
-        json={"email": "wrongpw@example.com", "password": "notthepassword"},
+        json={
+            "email": "wrongpw@example.com",
+            "password": "notthepassword",
+            "termsAccepted": True,
+        },
     )
 
     assert response.status_code == 401
@@ -276,7 +474,11 @@ def test_login_rejects_unknown_email(client: TestClient) -> None:
     """Logging in with an email that was never registered returns 401."""
     response = client.post(
         "/auth/login",
-        json={"email": "ghost@example.com", "password": "supersecret123"},
+        json={
+            "email": "ghost@example.com",
+            "password": "supersecret123",
+            "termsAccepted": True,
+        },
     )
 
     assert response.status_code == 401
@@ -286,7 +488,11 @@ def test_logout_invalidates_the_session(client: TestClient) -> None:
     """After logout, the old session cookie no longer authenticates."""
     client.post(
         "/auth/signup",
-        json={"email": "loggingout@example.com", "password": "supersecret123"},
+        json={
+            "email": "loggingout@example.com",
+            "password": "supersecret123",
+            "termsAccepted": True,
+        },
     )
     assert client.get("/auth/me").status_code == 200
 
@@ -313,7 +519,11 @@ def test_forgot_password_sends_an_email_for_a_registered_user(
     """A real account gets a reset email with a working link."""
     client.post(
         "/auth/signup",
-        json={"email": "reset-me@example.com", "password": "supersecret123"},
+        json={
+            "email": "reset-me@example.com",
+            "password": "supersecret123",
+            "termsAccepted": True,
+        },
     )
 
     response = client.post(
@@ -332,7 +542,11 @@ def test_forgot_password_lowercases_the_email(
     """A mixed-case request still matches the lowercase-stored account."""
     client.post(
         "/auth/signup",
-        json={"email": "casematch@example.com", "password": "supersecret123"},
+        json={
+            "email": "casematch@example.com",
+            "password": "supersecret123",
+            "termsAccepted": True,
+        },
     )
 
     response = client.post(
@@ -363,7 +577,11 @@ def test_forgot_password_returns_the_generic_message_even_when_send_fails(
     resend_configured.side_effect = EmailDeliveryError("boom")
     client.post(
         "/auth/signup",
-        json={"email": "send-fails@example.com", "password": "supersecret123"},
+        json={
+            "email": "send-fails@example.com",
+            "password": "supersecret123",
+            "termsAccepted": True,
+        },
     )
 
     response = client.post(
@@ -379,7 +597,11 @@ def test_forgot_password_is_rate_limited_after_three_requests(
     """A 4th request within the hour is silently skipped — still 200, no email."""
     client.post(
         "/auth/signup",
-        json={"email": "rate-limited@example.com", "password": "supersecret123"},
+        json={
+            "email": "rate-limited@example.com",
+            "password": "supersecret123",
+            "termsAccepted": True,
+        },
     )
 
     for _ in range(3):
@@ -404,7 +626,11 @@ def test_forgot_password_supersedes_the_previous_token(
     the moment a new one is issued, not just once the new one is used."""
     client.post(
         "/auth/signup",
-        json={"email": "supersede@example.com", "password": "supersecret123"},
+        json={
+            "email": "supersede@example.com",
+            "password": "supersecret123",
+            "termsAccepted": True,
+        },
     )
 
     client.post("/auth/forgot-password", json={"email": "supersede@example.com"})
@@ -432,7 +658,11 @@ def test_reset_password_updates_the_password(
     """The new password works at login afterward; the old one no longer does."""
     client.post(
         "/auth/signup",
-        json={"email": "full-reset@example.com", "password": "originalpassword"},
+        json={
+            "email": "full-reset@example.com",
+            "password": "originalpassword",
+            "termsAccepted": True,
+        },
     )
     client.post("/auth/forgot-password", json={"email": "full-reset@example.com"})
     token = _extract_token(resend_configured)
@@ -445,13 +675,21 @@ def test_reset_password_updates_the_password(
 
     old_password_attempt = client.post(
         "/auth/login",
-        json={"email": "full-reset@example.com", "password": "originalpassword"},
+        json={
+            "email": "full-reset@example.com",
+            "password": "originalpassword",
+            "termsAccepted": True,
+        },
     )
     assert old_password_attempt.status_code == 401
 
     new_password_attempt = client.post(
         "/auth/login",
-        json={"email": "full-reset@example.com", "password": "brandnewpassword"},
+        json={
+            "email": "full-reset@example.com",
+            "password": "brandnewpassword",
+            "termsAccepted": True,
+        },
     )
     assert new_password_attempt.status_code == 200
 
@@ -468,7 +706,11 @@ async def test_reset_password_bumps_updated_at(
     """
     signup = client.post(
         "/auth/signup",
-        json={"email": "bumps-updated-at@example.com", "password": "supersecret123"},
+        json={
+            "email": "bumps-updated-at@example.com",
+            "password": "supersecret123",
+            "termsAccepted": True,
+        },
     )
     user_id = signup.json()["id"]
 
@@ -507,7 +749,11 @@ async def test_reset_password_rejects_an_expired_token(
     """A token past its 1-hour TTL is rejected, even if otherwise unused."""
     client.post(
         "/auth/signup",
-        json={"email": "expired-token@example.com", "password": "supersecret123"},
+        json={
+            "email": "expired-token@example.com",
+            "password": "supersecret123",
+            "termsAccepted": True,
+        },
     )
     client.post("/auth/forgot-password", json={"email": "expired-token@example.com"})
     token = _extract_token(resend_configured)
@@ -527,7 +773,11 @@ def test_reset_password_rejects_a_replayed_token(
     """A token already used once can't be used again."""
     client.post(
         "/auth/signup",
-        json={"email": "replay@example.com", "password": "supersecret123"},
+        json={
+            "email": "replay@example.com",
+            "password": "supersecret123",
+            "termsAccepted": True,
+        },
     )
     client.post("/auth/forgot-password", json={"email": "replay@example.com"})
     token = _extract_token(resend_configured)
@@ -568,14 +818,22 @@ def test_reset_password_invalidates_every_existing_session(
     """
     signup = client.post(
         "/auth/signup",
-        json={"email": "kicks-out@example.com", "password": "supersecret123"},
+        json={
+            "email": "kicks-out@example.com",
+            "password": "supersecret123",
+            "termsAccepted": True,
+        },
     )
     session_one = _session_token(signup)
     assert client.get("/auth/me").status_code == 200
 
     login = client.post(
         "/auth/login",
-        json={"email": "kicks-out@example.com", "password": "supersecret123"},
+        json={
+            "email": "kicks-out@example.com",
+            "password": "supersecret123",
+            "termsAccepted": True,
+        },
     )
     assert login.status_code == 200
     session_two = _session_token(login)

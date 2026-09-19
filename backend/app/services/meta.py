@@ -48,6 +48,9 @@ _GRAPH_BASE_URL = f"https://graph.facebook.com/{_GRAPH_VERSION}"
 _AUTH_DIALOG_URL = f"https://www.facebook.com/{_GRAPH_VERSION}/dialog/oauth"
 _SCOPES = "ads_management,ads_read,pages_show_list,business_management"
 
+# Fake-mode-only sentinel — see list_ad_accounts/list_ad_pixels below.
+_FAKE_TERMS_NOT_ACCEPTED_AD_ACCOUNT_ID = "act_fake_terms_not_accepted"
+
 # Maps our Campaign.objective (PRD.md §7) to Meta's Outcome-Driven Ad
 # Experience objective enum.
 CAMPAIGN_OBJECTIVE_MAP = {
@@ -60,7 +63,28 @@ CAMPAIGN_OBJECTIVE_MAP = {
 
 
 class MetaConnectionError(RuntimeError):
-    """Raised when the Meta Ads connection can't be built or used."""
+    """Raised when the Meta Ads connection can't be built or used.
+
+    code/error_subcode carry Meta's own error.code/error.error_subcode
+    when the failure came from a real (or faked) Graph API error response
+    — both None for a non-Graph failure (a network error, or a
+    configuration problem like _require_app_credentials). Callers that
+    need to distinguish specific Graph errors (see
+    is_business_tools_terms_error below) should check these structured
+    fields, not parse the formatted message string.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        code: int | None = None,
+        error_subcode: int | None = None,
+    ) -> None:
+        """Store Meta's error.code/error.error_subcode alongside the message."""
+        super().__init__(message)
+        self.code = code
+        self.error_subcode = error_subcode
 
 
 class CustomLocation(NamedTuple):
@@ -146,8 +170,55 @@ def _raise_for_meta_error(
     if error.get("fbtrace_id"):
         parts.append(f"fbtrace_id={error['fbtrace_id']}")
     raise MetaConnectionError(
-        f"Meta API call to {endpoint} failed: {' | '.join(parts)}"
+        f"Meta API call to {endpoint} failed: {' | '.join(parts)}",
+        code=error.get("code"),
+        error_subcode=error.get("error_subcode"),
     )
+
+
+# Business Tools Terms detection (PRD.md §6's Pixel step, and the future
+# customer-list custom-audience feature — both require the ad account's
+# *owner* to have accepted Meta's Business Tools Terms on Meta's own
+# side before the Marketing API will create or read those objects; this
+# is a per-ad-account agreement between the business and Meta, not
+# something our app can accept on their behalf).
+#
+# Confidence differs by variant, deliberately checked both ways below:
+# - error.code 2655 ("Terms of service has not been accepted") is a
+#   documented, independently-confirmed code for the Custom Audience
+#   Terms case (github.com/facebook/facebook-php-business-sdk#43).
+# - The Pixel-specific wording ("Business has not accepted Pixel Terms
+#   of Service", reported on Meta's own developer community forum) has
+#   no independently-confirmed numeric code as of this writing — matched
+#   on message text instead. If Meta's real API is ever observed
+#   returning a different code for this specific message, add it above
+#   as a second confirmed case rather than relying on text alone.
+_CUSTOM_AUDIENCE_TERMS_CODE = 2655
+_BUSINESS_TOOLS_TERMS_TEXT_MARKERS = ("has not accepted", "terms of service")
+
+
+def is_business_tools_terms_error(exc: MetaConnectionError) -> bool:
+    """Whether this error means the ad account hasn't accepted the terms.
+
+    Meta's Business Tools Terms (or the narrower Custom Audience/Pixel
+    Terms) are a precondition on Meta's own side, not something retrying
+    the same call fixes. Callers should surface this distinctly (a
+    friendly message plus a link to accept the terms) rather than the
+    generic failure path. See the module-level comment above this
+    function for exactly which signals are checked and how confident
+    each one is.
+
+    Args:
+        exc: The error to check.
+
+    Returns:
+        True if this looks like a Business Tools Terms precondition
+        failure.
+    """
+    if exc.code == _CUSTOM_AUDIENCE_TERMS_CODE:
+        return True
+    message = str(exc).lower()
+    return all(marker in message for marker in _BUSINESS_TOOLS_TERMS_TEXT_MARKERS)
 
 
 async def _get_json(url: str, params: dict[str, str]) -> dict[str, Any]:
@@ -313,7 +384,17 @@ async def list_ad_accounts(access_token: str) -> list[MetaAdAccount]:
         MetaConnectionError: If the call fails.
     """
     if get_settings().fake_meta_enabled:
-        return [MetaAdAccount(id="act_fake_account", name="Fake Ad Account")]
+        return [
+            MetaAdAccount(id="act_fake_account", name="Fake Ad Account"),
+            # Selectable in fake mode so the Business Tools Terms error
+            # path (see is_business_tools_terms_error, list_ad_pixels
+            # below) is e2e-testable without a real ad account that's
+            # actually in that state — id checked by list_ad_pixels.
+            MetaAdAccount(
+                id=_FAKE_TERMS_NOT_ACCEPTED_AD_ACCOUNT_ID,
+                name="Fake Ad Account (Terms Not Accepted)",
+            ),
+        ]
     body = await _get_json(
         f"{_GRAPH_BASE_URL}/me/adaccounts",
         {"fields": "id,name", "access_token": access_token},
@@ -361,6 +442,11 @@ async def list_ad_pixels(access_token: str, ad_account_id: str) -> list[MetaPixe
         MetaConnectionError: If the call fails.
     """
     if get_settings().fake_meta_enabled:
+        if ad_account_id == _FAKE_TERMS_NOT_ACCEPTED_AD_ACCOUNT_ID:
+            raise MetaConnectionError(
+                "Meta API call to /adspixels failed: "
+                "Business has not accepted Pixel Terms of Service"
+            )
         return [MetaPixel(id="fake_pixel", name="Fake Pixel")]
     body = await _get_json(
         f"{_GRAPH_BASE_URL}/{ad_account_id}/adspixels",

@@ -61,7 +61,10 @@ def _signed_up_client(
     client: TestClient, email: str = "owner@example.com"
 ) -> TestClient:
     """Sign a fresh user up (and thus in) on the given client."""
-    client.post("/auth/signup", json={"email": email, "password": "supersecret123"})
+    client.post(
+        "/auth/signup",
+        json={"email": email, "password": "supersecret123", "termsAccepted": True},
+    )
     return client
 
 
