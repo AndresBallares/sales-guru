@@ -13,6 +13,7 @@ vi.mock('../lib/api', async (importOriginal) => {
     login: vi.fn<typeof actual.login>(),
     logout: vi.fn<typeof actual.logout>(),
     getMe: vi.fn<typeof actual.getMe>(),
+    acceptTerms: vi.fn<typeof actual.acceptTerms>(),
     createBusiness: vi.fn<typeof actual.createBusiness>(),
     listBusinesses: vi.fn<typeof actual.listBusinesses>(),
   }
@@ -40,7 +41,11 @@ function renderProtected() {
 
 describe('ProtectedRoute', () => {
   it('renders the protected content when authenticated', async () => {
-    mockedApi.getMe.mockResolvedValue({ id: '1', email: 'a@b.com' })
+    mockedApi.getMe.mockResolvedValue({
+      id: '1',
+      email: 'a@b.com',
+      needsTermsAcceptance: false,
+    })
 
     renderProtected()
 
@@ -53,5 +58,20 @@ describe('ProtectedRoute', () => {
     renderProtected()
 
     await waitFor(() => expect(screen.getByText('login page')).toBeInTheDocument())
+  })
+
+  it('shows the terms acceptance prompt instead of protected content when required', async () => {
+    mockedApi.getMe.mockResolvedValue({
+      id: '1',
+      email: 'a@b.com',
+      needsTermsAcceptance: true,
+    })
+
+    renderProtected()
+
+    await waitFor(() =>
+      expect(screen.getByRole('heading', { name: 'Our terms have been updated' })).toBeInTheDocument(),
+    )
+    expect(screen.queryByText('protected content')).not.toBeInTheDocument()
   })
 })

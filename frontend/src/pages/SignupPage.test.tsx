@@ -40,16 +40,21 @@ function renderSignupPage() {
 
 describe('SignupPage', () => {
   it('signs up and navigates to the dashboard on success', async () => {
-    mockedApi.signup.mockResolvedValue({ id: '1', email: 'new@example.com' })
+    mockedApi.signup.mockResolvedValue({
+      id: '1',
+      email: 'new@example.com',
+      needsTermsAcceptance: false,
+    })
     const user = userEvent.setup()
     renderSignupPage()
 
     await user.type(screen.getByLabelText('Email'), 'new@example.com')
     await user.type(screen.getByLabelText('Password'), 'supersecret123')
+    await user.click(screen.getByRole('checkbox'))
     await user.click(screen.getByRole('button', { name: 'Sign up' }))
 
     await waitFor(() => expect(screen.getByText('dashboard')).toBeInTheDocument())
-    expect(mockedApi.signup).toHaveBeenCalledWith('new@example.com', 'supersecret123')
+    expect(mockedApi.signup).toHaveBeenCalledWith('new@example.com', 'supersecret123', true)
   })
 
   it('shows the API error message on failed signup', async () => {
@@ -59,6 +64,7 @@ describe('SignupPage', () => {
 
     await user.type(screen.getByLabelText('Email'), 'dupe@example.com')
     await user.type(screen.getByLabelText('Password'), 'supersecret123')
+    await user.click(screen.getByRole('checkbox'))
     await user.click(screen.getByRole('button', { name: 'Sign up' }))
 
     expect(await screen.findByRole('alert')).toHaveTextContent('Email already registered')
@@ -85,10 +91,40 @@ describe('SignupPage', () => {
 
     await user.type(screen.getByLabelText('Email'), 'new@example.com')
     await user.type(screen.getByLabelText('Password'), 'supersecret123')
+    await user.click(screen.getByRole('checkbox'))
     await user.click(screen.getByRole('button', { name: 'Sign up' }))
 
     expect(await screen.findByRole('alert')).toHaveTextContent(
       'Something went wrong. Please try again.',
     )
+  })
+
+  it('keeps the submit button disabled until the terms checkbox is checked', async () => {
+    const user = userEvent.setup()
+    renderSignupPage()
+
+    await user.type(screen.getByLabelText('Email'), 'new@example.com')
+    await user.type(screen.getByLabelText('Password'), 'supersecret123')
+
+    expect(screen.getByRole('button', { name: 'Sign up' })).toBeDisabled()
+
+    await user.click(screen.getByRole('checkbox'))
+
+    expect(screen.getByRole('button', { name: 'Sign up' })).toBeEnabled()
+    expect(mockedApi.signup).not.toHaveBeenCalled()
+  })
+
+  it('links each terms document, opening in a new tab', () => {
+    renderSignupPage()
+
+    for (const [name, href] of [
+      ['Terms of Service', '/terms'],
+      ['Privacy Policy', '/privacy'],
+      ['Data Deletion Policy', '/data-deletion'],
+    ] as const) {
+      const link = screen.getByRole('link', { name })
+      expect(link).toHaveAttribute('href', href)
+      expect(link).toHaveAttribute('target', '_blank')
+    }
   })
 })

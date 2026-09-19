@@ -1,5 +1,6 @@
 import { useState, type FormEvent } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
+import { TermsAcceptanceCheckbox } from '../components/TermsAcceptanceCheckbox'
 import { useAuth } from '../context/AuthContext'
 import { ApiError } from '../lib/api'
 
@@ -9,15 +10,19 @@ export function SignupPage() {
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [showPassword, setShowPassword] = useState(false)
+  const [termsAccepted, setTermsAccepted] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
+    if (!termsAccepted) {
+      return
+    }
     setError(null)
     setSubmitting(true)
     try {
-      await signup(email, password)
+      await signup(email, password, termsAccepted)
       navigate('/')
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Something went wrong. Please try again.')
@@ -63,12 +68,13 @@ export function SignupPage() {
             </button>
           </div>
         </div>
+        <TermsAcceptanceCheckbox checked={termsAccepted} onChange={setTermsAccepted} />
         {error && (
           <p className="form-error" role="alert">
             {error}
           </p>
         )}
-        <button type="submit" disabled={submitting}>
+        <button type="submit" disabled={submitting || !termsAccepted}>
           {submitting ? 'Creating account…' : 'Sign up'}
         </button>
       </form>

@@ -42,6 +42,7 @@ export async function reachProductStep(page: Page): Promise<void> {
   await page.goto('/signup')
   await page.getByLabel('Email').fill(email)
   await page.getByLabel('Password').fill(password)
+  await page.getByRole('checkbox').check()
   await page.getByRole('button', { name: 'Sign up' }).click()
   await expect(page.getByText(`Signed in as ${email}`)).toBeVisible()
 

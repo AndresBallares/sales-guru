@@ -38,7 +38,7 @@ const INDUSTRY_OPTIONS = [
 
 beforeEach(() => {
   vi.resetAllMocks()
-  mockedApi.getMe.mockResolvedValue({ id: '1', email: 'owner@example.com' })
+  mockedApi.getMe.mockResolvedValue({ id: '1', email: 'owner@example.com', needsTermsAcceptance: false })
   mockedApi.getOptions.mockResolvedValue({
     industries: INDUSTRY_OPTIONS,
     objectives: [],

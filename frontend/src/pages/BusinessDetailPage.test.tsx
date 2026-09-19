@@ -132,7 +132,7 @@ const ALL_OPTIONS: api.OptionsResponse = {
 
 beforeEach(() => {
   vi.resetAllMocks()
-  mockedApi.getMe.mockResolvedValue({ id: '1', email: 'owner@example.com' })
+  mockedApi.getMe.mockResolvedValue({ id: '1', email: 'owner@example.com', needsTermsAcceptance: false })
   mockedApi.getBusiness.mockResolvedValue(business)
   mockedApi.getOptions.mockResolvedValue(ALL_OPTIONS)
   mockedApi.listProducts.mockResolvedValue([])
