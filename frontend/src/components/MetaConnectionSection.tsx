@@ -42,6 +42,14 @@ export function MetaConnectionSection({
   const [selectedPixelId, setSelectedPixelId] = useState('')
   const [settingPixel, setSettingPixel] = useState(false)
   const [pixelError, setPixelError] = useState<string | null>(null)
+  // Separate from pixelError (set/skip actions) — this is for the initial
+  // list load, which needs to distinguish "the ad account hasn't accepted
+  // Meta's Business Tools Terms" (a precondition on Meta's own side; 409,
+  // app/api/meta.py's get_pixels) from any other failure, so it can offer
+  // a link + Retry instead of just failing.
+  const [pixelListError, setPixelListError] = useState<string | null>(null)
+  const [needsBusinessToolsTerms, setNeedsBusinessToolsTerms] = useState(false)
+  const [loadingPixels, setLoadingPixels] = useState(false)
 
   const refresh = useCallback(async () => {
     setLoading(true)
@@ -109,12 +117,30 @@ export function MetaConnectionSection({
   // Pixels belong to the ad account, so this can only run once one's been
   // chosen (finalize done, no longer pending) — separate, optional
   // follow-up step, since not every objective needs one (PRD.md §5 step 8).
+  const loadPixels = useCallback(async () => {
+    setLoadingPixels(true)
+    setPixelListError(null)
+    setNeedsBusinessToolsTerms(false)
+    try {
+      setPixels(await listMetaPixels(businessId))
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 409) {
+        setNeedsBusinessToolsTerms(true)
+      }
+      setPixelListError(
+        err instanceof ApiError ? err.message : 'Could not load Pixels for this ad account.',
+      )
+    } finally {
+      setLoadingPixels(false)
+    }
+  }, [businessId])
+
   useEffect(() => {
     if (pending || connection === null) {
       return
     }
-    listMetaPixels(businessId).then(setPixels).catch(() => undefined)
-  }, [pending, connection, businessId])
+    void loadPixels()
+  }, [pending, connection, loadPixels])
 
   async function handleConnect() {
     setConnecting(true)
@@ -267,21 +293,41 @@ export function MetaConnectionSection({
               <p>
                 Optional — only needed for Sales campaigns, to track conversions.
               </p>
-              <div className="field">
-                <label htmlFor="meta-pixel">Meta Pixel</label>
-                <select
-                  id="meta-pixel"
-                  value={selectedPixelId}
-                  onChange={(event) => setSelectedPixelId(event.target.value)}
-                >
-                  <option value="">Select a Pixel</option>
-                  {pixels.map((pixel) => (
-                    <option key={pixel.id} value={pixel.id}>
-                      {pixel.name}
-                    </option>
-                  ))}
-                </select>
-              </div>
+              {pixelListError ? (
+                <div className="form-warning" role="alert">
+                  <p>{pixelListError}</p>
+                  {needsBusinessToolsTerms && (
+                    <p>
+                      <a
+                        href={`https://business.facebook.com/ads/manage/customaudiences/tos/?act=${connection.adAccountId}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                      >
+                        Accept the Business Tools Terms in Meta Business Settings
+                      </a>
+                    </p>
+                  )}
+                  <button type="button" onClick={() => void loadPixels()} disabled={loadingPixels}>
+                    {loadingPixels ? 'Retrying…' : 'Retry'}
+                  </button>
+                </div>
+              ) : (
+                <div className="field">
+                  <label htmlFor="meta-pixel">Meta Pixel</label>
+                  <select
+                    id="meta-pixel"
+                    value={selectedPixelId}
+                    onChange={(event) => setSelectedPixelId(event.target.value)}
+                  >
+                    <option value="">Select a Pixel</option>
+                    {pixels.map((pixel) => (
+                      <option key={pixel.id} value={pixel.id}>
+                        {pixel.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
               {pixelError && (
                 <p className="form-error" role="alert">
                   {pixelError}
@@ -296,13 +342,15 @@ export function MetaConnectionSection({
             </button>
             {!connection.pixelId && (
               <>
-                <button
-                  type="button"
-                  onClick={handleSetPixel}
-                  disabled={settingPixel || !selectedPixelId}
-                >
-                  {settingPixel ? 'Saving…' : 'Save Pixel'}
-                </button>
+                {!pixelListError && (
+                  <button
+                    type="button"
+                    onClick={handleSetPixel}
+                    disabled={settingPixel || !selectedPixelId}
+                  >
+                    {settingPixel ? 'Saving…' : 'Save Pixel'}
+                  </button>
+                )}
                 <button
                   type="button"
                   className="link-button"

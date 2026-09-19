@@ -363,6 +363,35 @@ def test_get_pixels_surfaces_agent_failures_as_500(
     assert "Invalid OAuth access token" in response.json()["detail"]
 
 
+def test_get_pixels_maps_a_business_tools_terms_error_to_409(
+    client: TestClient, mock_meta_service: dict[str, AsyncMock | Mock]
+) -> None:
+    """The ad account not accepting Business Tools Terms is a distinct,
+    friendly 409 — not the generic 500 every other Graph failure gets —
+    since retrying the same call won't help until the terms are accepted
+    on Meta's own side (app/services/meta.py's
+    is_business_tools_terms_error)."""
+    from app.services.meta import MetaConnectionError
+
+    _signed_up_client(client)
+    business_id = _create_business(client)
+    _connect(client, business_id)
+    client.post(
+        f"/businesses/{business_id}/meta/finalize",
+        json={"adAccountId": "act_1", "pageId": "page_1"},
+    )
+    mock_meta_service["pixels"].side_effect = MetaConnectionError(
+        "Meta API call to /adspixels failed: "
+        "Business has not accepted Pixel Terms of Service"
+    )
+
+    response = client.get(f"/businesses/{business_id}/meta/pixels")
+
+    assert response.status_code == 409
+    assert "Business Tools Terms" in response.json()["detail"]
+    assert "retry" in response.json()["detail"].lower()
+
+
 def test_set_pixel_requires_a_session(client: TestClient) -> None:
     """Setting the Pixel with no session cookie returns 401."""
     response = client.post(
