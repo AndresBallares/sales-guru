@@ -455,10 +455,10 @@ model Ad {
 // imageUrl (the resulting asset) so a variant can be regenerated/tweaked
 // from its prompt.
 model Creative {
-  id                        String   @id @default(cuid())
-  campaign                  Campaign @relation(fields: [campaignId], references: [id])
+  id                        String         @id @default(cuid())
+  campaign                  Campaign       @relation(fields: [campaignId], references: [id])
   campaignId                String
-  ad                        Ad?      @relation(fields: [adId], references: [id])
+  ad                        Ad?            @relation(fields: [adId], references: [id])
   adId                      String?
   headline                  String
   bodyText                  String
@@ -483,7 +483,7 @@ model Creative {
   // image upload (app/services/meta.py's upload_meta_ad_image) — imageUrl
   // alone (our own /product-images/{id} URL) isn't enough for that.
   productImageId            String?
-  status                    String   @default("GENERATED")
+  status                    String         @default("GENERATED")
   metaCreativeId            String?
   // Snapshot of the product this creative was generated from (PRD.md
   // "stale creative detection"). sourceProductId is nullable — a creative
@@ -503,8 +503,55 @@ model Creative {
   // surely as editing the product does, so is_creative_stale checks this
   // independently of whether a product is even attached.
   sourceBusinessDescription String?
-  createdAt                 DateTime @default(now())
-  updatedAt                 DateTime @updatedAt
+  // SINGLE_IMAGE | CAROUSEL (confirmed 2026-09-12). A carousel's cards
+  // live in CreativeCard below, not as extra columns here — headline/
+  // bodyText/description/cta above stay meaningful for both formats:
+  // for CAROUSEL they're the shared primary text/CTA and the (unused)
+  // fallback headline/description, while each card carries its own
+  // headline/description. imageUrl/productImageId stay null for a
+  // CAROUSEL creative — its images live on the cards instead.
+  format                    String         @default("SINGLE_IMAGE")
+  cards                     CreativeCard[]
+  createdAt                 DateTime       @default(now())
+  updatedAt                 DateTime       @updatedAt
+}
+
+// One card of a CAROUSEL-format Creative (Meta's child_attachments, PRD.md
+// build step 6 carousel support, confirmed 2026-09-12). V1 supports only
+// single-product carousels — every card of a given creative shares one
+// linkUrl (the product's URL) and draws its image from the same product's
+// ProductImage rows, never mixing products — so linkUrl is duplicated per
+// row rather than lifted onto Creative, keeping the schema open to a
+// future multi-product carousel (distinct linkUrl per card) without a
+// migration.
+//
+// position is assigned at generation time from the order the images were
+// given to the Creative Agent (ProductImage.position order, capped at
+// Meta's 10-card limit) — 0-indexed, unique and contiguous per creative,
+// enforced at the application layer (app/services/creative.py), not a DB
+// constraint.
+//
+// imageUrl/productImageId mirror Creative's own pair and exist for the
+// same two reasons: imageUrl (our public /product-images/{id} URL) is
+// what the frontend preview renders directly; productImageId is read at
+// publish time (app/services/publish.py) to fetch the actual image bytes
+// for Meta's real ad image upload (app/services/meta.py's
+// upload_meta_ad_image) — imageUrl alone isn't enough for that. Unlike
+// Creative's image, a card's image is set at generation time, not a
+// later select step (see app/services/creative.py's module docstring) —
+// the Creative Agent needs every card's image up front to write
+// angle-specific per-card copy against it.
+model CreativeCard {
+  id             String   @id @default(cuid())
+  creative       Creative @relation(fields: [creativeId], references: [id])
+  creativeId     String
+  position       Int
+  imageUrl       String
+  productImageId String?
+  headline       String
+  description    String?
+  linkUrl        String
+  createdAt      DateTime @default(now())
 }
 
 // impressions/clicks/spend/conversions are the original step-9 fields —

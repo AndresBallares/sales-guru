@@ -5,12 +5,22 @@ import { type Page, expect } from '@playwright/test'
 // select_creative now 428s a product with zero uploaded photos (confirmed
 // 2026-09-09) — every flow here needs one on file before it can reach
 // creative selection/publish, so this fixture gets uploaded right in the
-// shared onboarding helper below, not per-spec.
-const PRODUCT_PHOTO_PATH = path.join(
+// shared onboarding helper below, not per-spec. Exported so a spec
+// needing more than one product photo (e.g. a carousel's cards, which
+// map 1:1 to a product's photos) can build its own path list — reusing
+// one of these twice is fine, since ProductImage rows are distinct per
+// upload regardless of whether the underlying bytes repeat.
+export const PRODUCT_PHOTO_PATH = path.join(
   path.dirname(fileURLToPath(import.meta.url)),
   '..',
   'fixtures',
   'product-photo.jpg',
+)
+export const SECOND_PRODUCT_PHOTO_PATH = path.join(
+  path.dirname(fileURLToPath(import.meta.url)),
+  '..',
+  'fixtures',
+  'product-photo-2.jpg',
 )
 
 export function uniqueEmail(): string {
@@ -77,13 +87,22 @@ export async function reachProductStep(page: Page): Promise<void> {
 // withProductPhoto defaults to true since every normal path needs one to
 // reach creative selection; product-photos.spec.ts passes false to reach
 // the same point deliberately without one, to exercise the 428 block
-// itself.
+// itself. productPhotoPaths overrides withProductPhoto entirely when
+// given — one setInputFiles call per path, each appending a photo
+// (ProductForm's own staging behavior, see product-photos.spec.ts) — for
+// a spec that needs more than one (a carousel's cards map 1:1 to a
+// product's photos).
 export async function reachMetaPixelStep(
   page: Page,
   {
     withProductPhoto = true,
+    productPhotoPaths,
     adAccountLabel = 'Fake Ad Account',
-  }: { withProductPhoto?: boolean; adAccountLabel?: string } = {},
+  }: {
+    withProductPhoto?: boolean
+    productPhotoPaths?: string[]
+    adAccountLabel?: string
+  } = {},
 ): Promise<string> {
   await reachProductStep(page)
 
@@ -92,7 +111,12 @@ export async function reachMetaPixelStep(
   // (app/api/campaign.py's publish_campaign) always needs a destination
   // URL to advertise, whatever the objective — so this still needs one.
   await page.getByLabel(/^URL/).fill('https://acme.example/wallets')
-  if (withProductPhoto) {
+  if (productPhotoPaths) {
+    for (const photoPath of productPhotoPaths) {
+      await page.getByLabel(/Product photos/).setInputFiles(photoPath)
+    }
+    await expect(page.getByRole('img')).toHaveCount(productPhotoPaths.length)
+  } else if (withProductPhoto) {
     await page.getByLabel(/Product photos/).setInputFiles(PRODUCT_PHOTO_PATH)
     await expect(page.getByRole('img')).toBeVisible()
   }

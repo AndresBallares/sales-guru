@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react'
+import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
@@ -18,6 +18,8 @@ vi.mock('../lib/api', async (importOriginal) => {
     selectCreative: vi.fn<typeof actual.selectCreative>(),
     approveCampaign: vi.fn<typeof actual.approveCampaign>(),
     publishCampaign: vi.fn<typeof actual.publishCampaign>(),
+    reorderCreativeCards: vi.fn<typeof actual.reorderCreativeCards>(),
+    removeCreativeCard: vi.fn<typeof actual.removeCreativeCard>(),
   }
 })
 const mockedApi = vi.mocked(api)
@@ -64,6 +66,8 @@ function makeCreative(overrides: Partial<api.Creative> = {}): api.Creative {
     imagePrompt: null,
     videoPrompt: null,
     imageUrl: null,
+    format: 'SINGLE_IMAGE',
+    cards: [],
     status: 'SELECTED',
     createdAt: '2026-09-05T00:00:00Z',
     isStale: false,
@@ -320,5 +324,142 @@ describe('AdPreviewPage', () => {
     await screen.findByText('Handmade wallets, made to last')
 
     expect(screen.queryByRole('button', { name: 'Upload Image' })).not.toBeInTheDocument()
+  })
+
+  describe('a CAROUSEL creative', () => {
+    function makeCarouselCreative(overrides: Partial<api.Creative> = {}): api.Creative {
+      return makeCreative({
+        format: 'CAROUSEL',
+        cards: [
+          { id: 'card-1', position: 0, imageUrl: 'http://x/1', headline: 'Card 1', description: null, linkUrl: 'http://x' },
+          { id: 'card-2', position: 1, imageUrl: 'http://x/2', headline: 'Card 2', description: null, linkUrl: 'http://x' },
+          { id: 'card-3', position: 2, imageUrl: 'http://x/3', headline: 'Card 3', description: null, linkUrl: 'http://x' },
+        ],
+        ...overrides,
+      })
+    }
+
+    it('shows a card manager instead of the single-image picker', async () => {
+      mockedApi.listCreatives.mockResolvedValue([makeCarouselCreative()])
+
+      renderPage()
+
+      const manager = await screen.findByRole('list', { name: 'Carousel cards' })
+      expect(within(manager).getByText('Card 1')).toBeInTheDocument()
+      expect(within(manager).getByText('Card 2')).toBeInTheDocument()
+      expect(within(manager).getByText('Card 3')).toBeInTheDocument()
+      expect(screen.queryByRole('button', { name: 'Upload Image' })).not.toBeInTheDocument()
+    })
+
+    it('reorders a card earlier', async () => {
+      mockedApi.listCreatives.mockResolvedValue([makeCarouselCreative()])
+      mockedApi.reorderCreativeCards.mockResolvedValue(
+        makeCarouselCreative({
+          cards: [
+            { id: 'card-2', position: 0, imageUrl: 'http://x/2', headline: 'Card 2', description: null, linkUrl: 'http://x' },
+            { id: 'card-1', position: 1, imageUrl: 'http://x/1', headline: 'Card 1', description: null, linkUrl: 'http://x' },
+            { id: 'card-3', position: 2, imageUrl: 'http://x/3', headline: 'Card 3', description: null, linkUrl: 'http://x' },
+          ],
+        }),
+      )
+      const user = userEvent.setup()
+
+      renderPage()
+      await screen.findByRole('list', { name: 'Carousel cards' })
+      await user.click(screen.getAllByRole('button', { name: 'Move earlier' })[1])
+
+      await waitFor(() =>
+        expect(mockedApi.reorderCreativeCards).toHaveBeenCalledWith('biz-1', 'camp-1', 'creative-1', [
+          'card-2',
+          'card-1',
+          'card-3',
+        ]),
+      )
+    })
+
+    it('reorders a card later', async () => {
+      mockedApi.listCreatives.mockResolvedValue([makeCarouselCreative()])
+      mockedApi.reorderCreativeCards.mockResolvedValue(makeCarouselCreative())
+      const user = userEvent.setup()
+
+      renderPage()
+      await screen.findByRole('list', { name: 'Carousel cards' })
+      await user.click(screen.getAllByRole('button', { name: 'Move later' })[0])
+
+      await waitFor(() =>
+        expect(mockedApi.reorderCreativeCards).toHaveBeenCalledWith('biz-1', 'camp-1', 'creative-1', [
+          'card-2',
+          'card-1',
+          'card-3',
+        ]),
+      )
+    })
+
+    it('shows an error if reordering fails', async () => {
+      mockedApi.listCreatives.mockResolvedValue([makeCarouselCreative()])
+      mockedApi.reorderCreativeCards.mockRejectedValue(new api.ApiError(400, 'Could not reorder.'))
+      const user = userEvent.setup()
+
+      renderPage()
+      await screen.findByRole('list', { name: 'Carousel cards' })
+      await user.click(screen.getAllByRole('button', { name: 'Move earlier' })[1])
+
+      expect(await screen.findByRole('alert')).toHaveTextContent('Could not reorder.')
+    })
+
+    it('removes a card', async () => {
+      mockedApi.listCreatives.mockResolvedValue([makeCarouselCreative()])
+      mockedApi.removeCreativeCard.mockResolvedValue(
+        makeCarouselCreative({
+          cards: [
+            { id: 'card-1', position: 0, imageUrl: 'http://x/1', headline: 'Card 1', description: null, linkUrl: 'http://x' },
+            { id: 'card-3', position: 1, imageUrl: 'http://x/3', headline: 'Card 3', description: null, linkUrl: 'http://x' },
+          ],
+        }),
+      )
+      const user = userEvent.setup()
+
+      renderPage()
+      await screen.findByRole('list', { name: 'Carousel cards' })
+      await user.click(screen.getAllByRole('button', { name: 'Remove' })[1])
+
+      await waitFor(() =>
+        expect(mockedApi.removeCreativeCard).toHaveBeenCalledWith(
+          'biz-1',
+          'camp-1',
+          'creative-1',
+          'card-2',
+        ),
+      )
+      const manager = await screen.findByRole('list', { name: 'Carousel cards' })
+      expect(within(manager).getByText('Card 3')).toBeInTheDocument()
+      expect(within(manager).queryByText('Card 2')).not.toBeInTheDocument()
+    })
+
+    it('shows an error if removing the last-allowed card fails', async () => {
+      mockedApi.listCreatives.mockResolvedValue([makeCarouselCreative()])
+      mockedApi.removeCreativeCard.mockRejectedValue(
+        new api.ApiError(400, 'A carousel needs at least 2 cards'),
+      )
+      const user = userEvent.setup()
+
+      renderPage()
+      await screen.findByRole('list', { name: 'Carousel cards' })
+      await user.click(screen.getAllByRole('button', { name: 'Remove' })[0])
+
+      expect(await screen.findByRole('alert')).toHaveTextContent('A carousel needs at least 2 cards')
+    })
+
+    it('shows a generic error if removing a card fails for an unexpected reason', async () => {
+      mockedApi.listCreatives.mockResolvedValue([makeCarouselCreative()])
+      mockedApi.removeCreativeCard.mockRejectedValue(new Error('network down'))
+      const user = userEvent.setup()
+
+      renderPage()
+      await screen.findByRole('list', { name: 'Carousel cards' })
+      await user.click(screen.getAllByRole('button', { name: 'Remove' })[0])
+
+      expect(await screen.findByRole('alert')).toHaveTextContent('Could not remove this card.')
+    })
   })
 })

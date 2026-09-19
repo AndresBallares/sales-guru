@@ -29,6 +29,7 @@ same as before.
 
 import logging
 from datetime import UTC, datetime, timedelta
+from typing import Literal
 
 from prisma.models import Campaign, Creative, MetaConnection
 from prisma.types import CampaignUpdateInput
@@ -48,6 +49,15 @@ from app.services.meta import CustomLocation, MetaConnectionError, ResolvedGeoLo
 from app.services.optimizer import resolve_target_cac
 
 logger = logging.getLogger(__name__)
+
+# Campaign.pausedReason sentinel set only by publish_campaign_to_meta's
+# paused=True path — distinguishes "published paused, never yet activated"
+# from every other pausedReason value ("Manually paused", a circuit
+# breaker's own message, etc.), which activate_campaign below refuses to
+# touch. Exact string is also checked, not just displayed, by the
+# frontend's Activate-button gating (CampaignsSection.tsx) — keep the two
+# in sync if this ever changes.
+PUBLISHED_PAUSED_REASON = "Published paused"
 
 # No user input collects this yet, so each objective gets a reasonable
 # Meta optimization_goal default rather than leaving it unset (the AdSet
@@ -165,6 +175,7 @@ async def _publish_single_variant(
     custom_location: CustomLocation | None,
     end_time: datetime | None,
     target_cac_cents: int,
+    meta_status: Literal["ACTIVE", "PAUSED"],
 ) -> None:
     """DATA_DRIVEN_STRATEGY (and pre-"Phase C" TEST_PLAN) path — one AdSet/Ad."""
     audience = primary_audience(strategy)
@@ -174,6 +185,7 @@ async def _publish_single_variant(
         audience=audience,
         custom_location=custom_location,
     )
+    local_status = "PAUSED" if meta_status == "PAUSED" else "LIVE"
 
     meta_ad_set_id = await meta.create_meta_ad_set(
         access_token=connection.accessToken,
@@ -190,6 +202,7 @@ async def _publish_single_variant(
         interests=_resolve_interests(audience),
         end_time=end_time,
         target_cac_cents=target_cac_cents,
+        status=meta_status,
     )
     meta_ad_id = await meta.create_meta_ad(
         access_token=connection.accessToken,
@@ -197,6 +210,7 @@ async def _publish_single_variant(
         name=creative.headline,
         meta_ad_set_id=meta_ad_set_id,
         meta_creative_id=meta_creative_id,
+        status=meta_status,
     )
 
     ad_set = await db.adset.create(
@@ -205,7 +219,7 @@ async def _publish_single_variant(
             "name": object_name,
             "budget": daily_budget_cents / 100,
             "optimizationGoal": optimization_goal,
-            "status": "LIVE",
+            "status": local_status,
             "metaAdSetId": meta_ad_set_id,
         }
     )
@@ -213,7 +227,7 @@ async def _publish_single_variant(
         data={
             "adSetId": ad_set.id,
             "name": creative.headline,
-            "status": "LIVE",
+            "status": local_status,
             "metaAdId": meta_ad_id,
         }
     )
@@ -238,6 +252,7 @@ async def _publish_test_plan_variant(
     custom_location: CustomLocation | None,
     end_time: datetime | None,
     target_cac_cents: int,
+    meta_status: Literal["ACTIVE", "PAUSED"],
 ) -> None:
     """Publish one TEST_PLAN audience variant as its own real AdSet/Ad.
 
@@ -255,6 +270,7 @@ async def _publish_test_plan_variant(
         audience=variant.targeting,
         custom_location=custom_location,
     )
+    local_status = "PAUSED" if meta_status == "PAUSED" else "LIVE"
     meta_ad_set_id = await meta.create_meta_ad_set(
         access_token=connection.accessToken,
         ad_account_id=ad_account_id,
@@ -271,6 +287,7 @@ async def _publish_test_plan_variant(
         advantage_audience=1 if variant.is_baseline else 0,
         end_time=end_time,
         target_cac_cents=target_cac_cents,
+        status=meta_status,
     )
     meta_ad_id = await meta.create_meta_ad(
         access_token=connection.accessToken,
@@ -278,6 +295,7 @@ async def _publish_test_plan_variant(
         name=creative.headline,
         meta_ad_set_id=meta_ad_set_id,
         meta_creative_id=meta_creative_id,
+        status=meta_status,
     )
 
     ad_set = await db.adset.create(
@@ -286,7 +304,7 @@ async def _publish_test_plan_variant(
             "name": name,
             "budget": daily_budget_cents / 100,
             "optimizationGoal": optimization_goal,
-            "status": "LIVE",
+            "status": local_status,
             "metaAdSetId": meta_ad_set_id,
             "variantId": variant.id,
         }
@@ -295,7 +313,7 @@ async def _publish_test_plan_variant(
         data={
             "adSetId": ad_set.id,
             "name": creative.headline,
-            "status": "LIVE",
+            "status": local_status,
             "metaAdId": meta_ad_id,
         }
     )
@@ -310,9 +328,19 @@ async def _publish_test_plan_variant(
             data={"ad": {"connect": {"id": ad.id}}, "metaCreativeId": meta_creative_id},
         )
     else:
-        await db.creative.create(
+        duplicate = await db.creative.create(
             data={
-                "campaignId": campaign.id,
+                # Every scalar field copied straight from the source
+                # creative — including sourceProductId/sourceDescription/
+                # sourceUrl/sourceBusinessDescription (bug, fixed
+                # 2026-09-19: previously omitted here, so every TEST_PLAN
+                # campaign's duplicate Creative had a null source
+                # snapshot and read as permanently stale the instant it
+                # was created — is_creative_stale, app/services/
+                # creative.py, treats a null sourceProductId as "doesn't
+                # match the campaign's real product" — surfacing a false
+                # "these ads are outdated, regenerate?" banner on every
+                # TEST_PLAN campaign right after publish).
                 "headline": creative.headline,
                 "bodyText": creative.bodyText,
                 "description": creative.description,
@@ -322,11 +350,39 @@ async def _publish_test_plan_variant(
                 "videoPrompt": creative.videoPrompt,
                 "imageUrl": creative.imageUrl,
                 "productImageId": creative.productImageId,
+                "format": creative.format,
+                "sourceProductId": creative.sourceProductId,
+                "sourceDescription": creative.sourceDescription,
+                "sourceUrl": creative.sourceUrl,
+                "sourceBusinessDescription": creative.sourceBusinessDescription,
+                # Deliberately different from the source row, not copied:
+                # this is a new local row for a new Ad, tied to this
+                # campaign and this variant's own Meta creative id.
+                "campaignId": campaign.id,
                 "status": "SELECTED",
                 "metaCreativeId": meta_creative_id,
                 "adId": ad.id,
             }
         )
+        # A CAROUSEL creative's cards need cloning too — the duplicate row
+        # above is otherwise a CAROUSEL creative with zero cards, which
+        # would render as an empty carousel anywhere this campaign's
+        # creatives are listed (app/api/creative.py's _list_creatives
+        # returns every Creative row for the campaign, this duplicate
+        # included). New rows, not shared ones — a card belongs to
+        # exactly one Creative (CreativeCard.creativeId is a single FK).
+        for card in creative.cards or []:
+            await db.creativecard.create(
+                data={
+                    "creativeId": duplicate.id,
+                    "position": card.position,
+                    "imageUrl": card.imageUrl,
+                    "productImageId": card.productImageId,
+                    "headline": card.headline,
+                    "description": card.description,
+                    "linkUrl": card.linkUrl,
+                }
+            )
 
 
 async def _resolve_image_hash(
@@ -390,6 +446,73 @@ async def _resolve_image_hash(
     )
 
 
+async def _resolve_carousel_cards(
+    creative: Creative, *, access_token: str, ad_account_id: str
+) -> list[meta.CarouselCard]:
+    """Upload every card's photo to Meta, returning card data ready to publish.
+
+    Same "fail loudly, don't coerce" reasoning as _resolve_image_hash
+    above, applied per card: unlike a SINGLE_IMAGE creative,
+    productImageId is never None for a CreativeCard (its image was fixed
+    at generation time — app/services/creative.py's module docstring —
+    not left to a later, possibly-skipped select step), so a missing one
+    only ever means the photo was deleted after generation, the same
+    "real data problem" _resolve_image_hash already treats as a hard
+    failure rather than silently dropping the card.
+
+    Args:
+        creative: The campaign's SELECTED, CAROUSEL-format creative, with
+            its cards relation already loaded (app/api/campaign.py's
+            publish endpoint includes it) and ordered by position.
+        access_token: The business's Meta access token.
+        ad_account_id: The connected ad account to upload into.
+
+    Returns:
+        One CarouselCard per CreativeCard, in the same (position) order.
+
+    Raises:
+        MetaConnectionError: If any card's productImageId no longer names
+            an existing photo, or an upload call itself fails.
+    """
+    cards: list[meta.CarouselCard] = []
+    for card in creative.cards or []:
+        if card.productImageId is None:
+            # Never expected in practice — a CreativeCard's image is
+            # always set from a real ProductImage at generation time
+            # (app/api/creative.py's create_creatives) — but the column
+            # is nullable at the schema level (matching Creative's own
+            # pair), so this is handled rather than trusted away.
+            raise MetaConnectionError(
+                f"Creative {creative.id}'s card {card.id} has no "
+                "productImageId — cannot resolve its image for Meta"
+            )
+        product_image = await db.productimage.find_unique(
+            where={"id": card.productImageId}
+        )
+        if product_image is None:
+            raise MetaConnectionError(
+                f"Creative {creative.id}'s card {card.id} photo "
+                f"(productImageId={card.productImageId}) no longer exists — "
+                "it was deleted after the carousel was generated. "
+                "Regenerate this ad's creatives before publishing."
+            )
+        image_hash = await meta.upload_meta_ad_image(
+            access_token=access_token,
+            ad_account_id=ad_account_id,
+            image_data=product_image.data.decode(),
+            content_type=product_image.contentType,
+        )
+        cards.append(
+            meta.CarouselCard(
+                image_hash=image_hash,
+                headline=card.headline,
+                description=card.description,
+                link=card.linkUrl,
+            )
+        )
+    return cards
+
+
 async def publish_campaign_to_meta(
     *,
     campaign: Campaign,
@@ -397,8 +520,9 @@ async def publish_campaign_to_meta(
     creative: Creative,
     strategy: StrategyContent,
     destination_url: str,
+    paused: bool = False,
 ) -> Campaign:
-    """Create the campaign live on Meta, then mirror it locally.
+    """Create the campaign on Meta, then mirror it locally.
 
     A TEST_PLAN campaign publishes both audience_variants as real,
     independent AdSets/Ads ("Phase C," confirmed 2026-09-02) — see the
@@ -417,17 +541,27 @@ async def publish_campaign_to_meta(
         destination_url: Where the ad's CTA button links to (already
             resolved by the caller: the product's URL or the business's
             website).
+        paused: "Publish paused" (checkbox on the Approve & Publish step,
+            confirmed 2026-09-18) — when True, the Meta campaign/every
+            AdSet/every Ad are created with status PAUSED instead of
+            ACTIVE, so nothing spends until a human clicks Activate (this
+            app or Ads Manager). Applies identically to CAROUSEL and
+            SINGLE_IMAGE, and to every TEST_PLAN variant.
 
     Returns:
-        The campaign, now LIVE with metaCampaignId set (and endDate, if
-        one was computed and wasn't already set).
+        The campaign, now LIVE (or PAUSED if paused=True, with
+        pausedReason set to PUBLISHED_PAUSED_REASON — see
+        activate_campaign) with metaCampaignId set (and endDate, if one
+        was computed and wasn't already set).
 
     Raises:
         MetaConnectionError: If any Graph API call fails (including the
             selected photo's Meta upload — see _resolve_image_hash), or
             if the creative's selected photo was deleted after selection
             (also _resolve_image_hash — confirmed 2026-09-09, publish
-            fails loudly rather than silently going image-less). The
+            fails loudly rather than silently going image-less). For a
+            CAROUSEL creative, the same failure modes apply per card
+            (see _resolve_carousel_cards, confirmed 2026-09-12). The
             campaign's status is left for the caller to move to FAILED —
             this function doesn't write that, so a caller can distinguish
             "we never even validated" (never called this) from "we tried
@@ -453,28 +587,45 @@ async def publish_campaign_to_meta(
         end_time = datetime.now(UTC) + timedelta(days=strategy.duration_days)
 
     target_cac_cents = round(resolve_target_cac(strategy.unit_economics) * 100)
+    meta_status: Literal["ACTIVE", "PAUSED"] = "PAUSED" if paused else "ACTIVE"
 
     meta_campaign_id = await meta.create_meta_campaign(
         access_token=connection.accessToken,
         ad_account_id=ad_account_id,
         name=object_name,
         objective=campaign.objective,
+        status=meta_status,
     )
-    image_hash = await _resolve_image_hash(
-        creative, access_token=connection.accessToken, ad_account_id=ad_account_id
-    )
-    meta_creative_id = await meta.create_meta_ad_creative(
-        access_token=connection.accessToken,
-        ad_account_id=ad_account_id,
-        page_id=connection.pageId,
-        name=creative.headline,
-        headline=creative.headline,
-        body_text=creative.bodyText,
-        description=creative.description,
-        cta=creative.cta,
-        link=destination_url,
-        image_hash=image_hash,
-    )
+    if creative.format == "CAROUSEL":
+        carousel_cards = await _resolve_carousel_cards(
+            creative, access_token=connection.accessToken, ad_account_id=ad_account_id
+        )
+        meta_creative_id = await meta.create_meta_carousel_ad_creative(
+            access_token=connection.accessToken,
+            ad_account_id=ad_account_id,
+            page_id=connection.pageId,
+            name=creative.headline,
+            body_text=creative.bodyText,
+            cta=creative.cta,
+            link=destination_url,
+            cards=carousel_cards,
+        )
+    else:
+        image_hash = await _resolve_image_hash(
+            creative, access_token=connection.accessToken, ad_account_id=ad_account_id
+        )
+        meta_creative_id = await meta.create_meta_ad_creative(
+            access_token=connection.accessToken,
+            ad_account_id=ad_account_id,
+            page_id=connection.pageId,
+            name=creative.headline,
+            headline=creative.headline,
+            body_text=creative.bodyText,
+            description=creative.description,
+            cta=creative.cta,
+            link=destination_url,
+            image_hash=image_hash,
+        )
 
     if strategy.plan_type == "TEST_PLAN":
         daily_budget_cents = round(daily_budget(strategy) * 100)
@@ -493,6 +644,7 @@ async def publish_campaign_to_meta(
                 custom_location=custom_location,
                 end_time=end_time,
                 target_cac_cents=target_cac_cents,
+                meta_status=meta_status,
             )
     else:
         await _publish_single_variant(
@@ -509,12 +661,15 @@ async def publish_campaign_to_meta(
             custom_location=custom_location,
             end_time=end_time,
             target_cac_cents=target_cac_cents,
+            meta_status=meta_status,
         )
 
     update_data: CampaignUpdateInput = {
-        "status": "LIVE",
+        "status": "PAUSED" if paused else "LIVE",
         "metaCampaignId": meta_campaign_id,
     }
+    if paused:
+        update_data["pausedReason"] = PUBLISHED_PAUSED_REASON
     if end_time is not None:
         update_data["endDate"] = end_time
     updated = await db.campaign.update(where={"id": campaign.id}, data=update_data)
@@ -578,6 +733,62 @@ async def pause_campaign(
     updated = await db.campaign.update(
         where={"id": campaign.id},
         data={"status": "PAUSED", "pausedReason": reason},
+    )
+    assert updated is not None  # just fetched by the caller, can't vanish mid-request
+    return updated
+
+
+async def activate_campaign(
+    *, campaign: Campaign, connection: MetaConnection
+) -> Campaign:
+    """Resume a campaign that was published paused and never yet activated.
+
+    Deliberately narrow — not a general "un-pause anything" action. Only
+    ever reachable (app/api/campaign.py's caller enforces this) for a
+    campaign whose pausedReason is exactly PUBLISHED_PAUSED_REASON, i.e.
+    one published with the "Publish paused" checkbox and never since
+    touched. A campaign paused by a human's manual pause click, the
+    duration-elapsed job, or a circuit breaker was stopped for a specific
+    reason a human should re-evaluate before spending resumes, not
+    silently reverse with the same button — those keep using Meta's own
+    Ads Manager (or a future, deliberately separate "resume" feature) if
+    ever un-paused at all.
+
+    Args:
+        campaign: The campaign to activate. Caller is responsible for
+            confirming its pausedReason is PUBLISHED_PAUSED_REASON.
+        connection: The business's Meta connection (already confirmed to
+            have a usable accessToken by the caller).
+
+    Returns:
+        The campaign, now LIVE, pausedReason cleared.
+
+    Raises:
+        MetaConnectionError: If any Graph API call fails. Ad sets already
+            resumed before the failure stay resumed — same "no rollback"
+            simplification as pause_campaign above.
+    """
+    ad_sets = await db.adset.find_many(where={"campaignId": campaign.id})
+    paused_ad_set_ids: list[str] = []
+    for ad_set in ad_sets:
+        if ad_set.metaAdSetId is None:
+            continue
+        await meta.resume_meta_ad_set(
+            access_token=connection.accessToken, meta_ad_set_id=ad_set.metaAdSetId
+        )
+        paused_ad_set_ids.append(ad_set.id)
+
+    if paused_ad_set_ids:
+        await db.adset.update_many(
+            where={"id": {"in": paused_ad_set_ids}}, data={"status": "LIVE"}
+        )
+        await db.ad.update_many(
+            where={"adSetId": {"in": paused_ad_set_ids}}, data={"status": "LIVE"}
+        )
+
+    updated = await db.campaign.update(
+        where={"id": campaign.id},
+        data={"status": "LIVE", "pausedReason": None},
     )
     assert updated is not None  # just fetched by the caller, can't vanish mid-request
     return updated

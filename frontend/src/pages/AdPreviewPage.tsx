@@ -9,6 +9,8 @@ import {
   listCreatives,
   listProductImages,
   publishCampaign,
+  removeCreativeCard,
+  reorderCreativeCards,
   selectCreative,
   toLabelMap,
   uploadProductImage,
@@ -42,6 +44,9 @@ export function AdPreviewPage() {
 
   const [publishing, setPublishing] = useState(false)
   const [publishError, setPublishError] = useState<string | null>(null)
+
+  const [cardActionId, setCardActionId] = useState<string | null>(null)
+  const [cardError, setCardError] = useState<string | null>(null)
 
   // Fetched once on mount, same as everywhere else that needs a CTA
   // label — the fixed CTA list is static, so there's no reason to
@@ -129,6 +134,45 @@ export function AdPreviewPage() {
     }
   }
 
+  async function handleMoveCard(cardId: string, direction: -1 | 1) {
+    if (!businessId || !campaignId || !creative) return
+    const index = creative.cards.findIndex((card) => card.id === cardId)
+    const swapWith = index + direction
+    if (index === -1 || swapWith < 0 || swapWith >= creative.cards.length) return
+
+    const reordered = [...creative.cards]
+    ;[reordered[index], reordered[swapWith]] = [reordered[swapWith], reordered[index]]
+    setCardActionId(cardId)
+    setCardError(null)
+    try {
+      const updated = await reorderCreativeCards(
+        businessId,
+        campaignId,
+        creative.id,
+        reordered.map((card) => card.id),
+      )
+      setCreative(updated)
+    } catch (err) {
+      setCardError(err instanceof ApiError ? err.message : 'Could not reorder cards.')
+    } finally {
+      setCardActionId(null)
+    }
+  }
+
+  async function handleRemoveCard(cardId: string) {
+    if (!businessId || !campaignId || !creative) return
+    setCardActionId(cardId)
+    setCardError(null)
+    try {
+      const updated = await removeCreativeCard(businessId, campaignId, creative.id, cardId)
+      setCreative(updated)
+    } catch (err) {
+      setCardError(err instanceof ApiError ? err.message : 'Could not remove this card.')
+    } finally {
+      setCardActionId(null)
+    }
+  }
+
   async function handleApproveAndPublish() {
     if (!businessId || !campaignId || !campaign) return
     setPublishing(true)
@@ -175,56 +219,99 @@ export function AdPreviewPage() {
             ctaLabel={ctaLabels[creative.cta] ?? creative.cta}
           />
 
-          {campaign?.productId && (
-            <div className="image-picker">
-              <button type="button" onClick={toggleImageMenu}>
-                {creative.imageUrl ? 'Change image' : 'Upload Image'}
-              </button>
-              {imageMenuOpen && (
-                <div className="image-menu">
-                  <label htmlFor="ad-image-upload">Upload from computer</label>
-                  <input
-                    id="ad-image-upload"
-                    type="file"
-                    accept="image/jpeg,image/png,image/webp"
-                    disabled={uploading}
-                    onChange={(event) => void handleUpload(event)}
-                  />
-                  <button type="button" onClick={() => void handleOpenLibrary()}>
-                    Choose from library
-                  </button>
-                </div>
-              )}
-              {uploading && <p>Uploading…</p>}
-              {libraryOpen && (
-                <div aria-label="Choose a photo from your library">
-                  {loadingLibrary && <p>Loading…</p>}
-                  {!loadingLibrary && productImages.length === 0 && (
-                    <p>No photos uploaded for this product yet.</p>
-                  )}
-                  {productImages.map((image) => (
-                    <button
-                      key={image.id}
-                      type="button"
-                      onClick={() => void handleChooseFromLibrary(image.id)}
-                    >
-                      <img
-                        src={image.url}
-                        alt="Product option"
-                        width={60}
-                        height={60}
-                        style={{ objectFit: 'cover' }}
-                      />
-                    </button>
-                  ))}
-                </div>
-              )}
-              {imageError && (
+          {creative.format === 'CAROUSEL' ? (
+            <>
+              <ul className="photo-manager" aria-label="Carousel cards">
+                {creative.cards.map((card, index) => (
+                  <li key={card.id} className="photo-thumb">
+                    <img src={card.imageUrl} alt={card.headline} width={96} height={96} />
+                    <p>{card.headline}</p>
+                    <div className="photo-thumb-actions">
+                      <button
+                        type="button"
+                        onClick={() => void handleMoveCard(card.id, -1)}
+                        disabled={index === 0 || cardActionId !== null}
+                        aria-label="Move earlier"
+                      >
+                        ←
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => void handleMoveCard(card.id, 1)}
+                        disabled={index === creative.cards.length - 1 || cardActionId !== null}
+                        aria-label="Move later"
+                      >
+                        →
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => void handleRemoveCard(card.id)}
+                        disabled={cardActionId !== null}
+                      >
+                        {cardActionId === card.id ? 'Removing…' : 'Remove'}
+                      </button>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+              {cardError && (
                 <p className="form-error" role="alert">
-                  {imageError}
+                  {cardError}
                 </p>
               )}
-            </div>
+            </>
+          ) : (
+            campaign?.productId && (
+              <div className="image-picker">
+                <button type="button" onClick={toggleImageMenu}>
+                  {creative.imageUrl ? 'Change image' : 'Upload Image'}
+                </button>
+                {imageMenuOpen && (
+                  <div className="image-menu">
+                    <label htmlFor="ad-image-upload">Upload from computer</label>
+                    <input
+                      id="ad-image-upload"
+                      type="file"
+                      accept="image/jpeg,image/png,image/webp"
+                      disabled={uploading}
+                      onChange={(event) => void handleUpload(event)}
+                    />
+                    <button type="button" onClick={() => void handleOpenLibrary()}>
+                      Choose from library
+                    </button>
+                  </div>
+                )}
+                {uploading && <p>Uploading…</p>}
+                {libraryOpen && (
+                  <div aria-label="Choose a photo from your library">
+                    {loadingLibrary && <p>Loading…</p>}
+                    {!loadingLibrary && productImages.length === 0 && (
+                      <p>No photos uploaded for this product yet.</p>
+                    )}
+                    {productImages.map((image) => (
+                      <button
+                        key={image.id}
+                        type="button"
+                        onClick={() => void handleChooseFromLibrary(image.id)}
+                      >
+                        <img
+                          src={image.url}
+                          alt="Product option"
+                          width={60}
+                          height={60}
+                          style={{ objectFit: 'cover' }}
+                        />
+                      </button>
+                    ))}
+                  </div>
+                )}
+                {imageError && (
+                  <p className="form-error" role="alert">
+                    {imageError}
+                  </p>
+                )}
+              </div>
+            )
           )}
 
           {canPublish && (

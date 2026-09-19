@@ -29,17 +29,35 @@ test -f frontend/.env && echo "frontend/.env OK" || echo "MISSING: cp frontend/.
 # 4. Backend deps in sync with the lockfile?
 (cd backend && uv sync --locked) && echo "backend deps OK"
 
-# 5. Backend Prisma client generated + migrations applied?
+# 5. Migration history in sync with dev.db? (catches a dev.db that has a
+#    full schema but no _prisma_migrations tracking table — step 6 would
+#    otherwise fail with a cryptic P3005 instead of explaining what's wrong)
+(cd backend && uv run python -c "
+import pathlib, sqlite3, sys
+p = pathlib.Path('prisma/dev.db')
+if not p.exists() or p.stat().st_size == 0:
+    sys.exit(0)  # fresh clone; step 6's migrate deploy handles this normally
+tables = {r[0] for r in sqlite3.connect(p).execute(
+    \"select name from sqlite_master where type='table'\")}
+if tables and '_prisma_migrations' not in tables:
+    print('BROKEN: backend/prisma/dev.db has tables but no _prisma_migrations')
+    print('history table. Step 6 will fail with P3005. Do NOT run migrate')
+    print('reset or db push to fix this -- see \"Baselining an untracked')
+    print('dev.db\" below.')
+    sys.exit(1)
+") && echo "migration history OK"
+
+# 6. Backend Prisma client generated + migrations applied?
 (cd backend && uv run prisma migrate deploy && uv run prisma generate) && echo "backend DB OK"
 
-# 6. Frontend deps installed?
+# 7. Frontend deps installed?
 test -d frontend/node_modules && echo "frontend/node_modules present" || echo "MISSING: (cd frontend && npm install)"
 
-# 7. Playwright browsers installed? (only needed for e2e)
+# 8. Playwright browsers installed? (only needed for e2e)
 test -d ~/Library/Caches/ms-playwright 2>/dev/null || test -d ~/.cache/ms-playwright 2>/dev/null \
   && echo "Playwright browsers present" || echo "MISSING: (cd frontend && npx playwright install --with-deps chromium)"
 
-# 8. Pre-commit hooks installed in this repo? (both stages — plain
+# 9. Pre-commit hooks installed in this repo? (both stages — plain
 #    `pre-commit install` covers both via default_install_hook_types)
 test -f .git/hooks/pre-commit -a -f .git/hooks/commit-msg && echo "pre-commit hooks installed" || echo "MISSING: pre-commit install"
 ```
@@ -48,9 +66,42 @@ If step 1 fails for any tool, stop and point the user at README.md's
 Prerequisites section (has install commands for uv, Node/npm, gh) rather than
 trying to install them yourself. If step 2 shows not-authenticated, tell the
 user to run `gh auth login` — don't attempt it on their behalf, it's
-interactive. Steps 3–8 are safe to fix directly (they're the commands shown
-in each MISSING message) since they're local, reversible, and don't touch
-GitHub or Render.
+interactive. Steps 3–4 and 7–9 are safe to fix directly (they're the
+commands shown in each MISSING message) since they're local, reversible, and
+don't touch GitHub or Render. Step 5 failing is different: stop and follow
+"Baselining an untracked dev.db" below rather than running anything
+destructive against it.
+
+### Baselining an untracked dev.db
+
+If step 5 reports `BROKEN` (schema present, no `_prisma_migrations` table —
+this happens when the file was created via `db push`, a restore, or a seed
+script instead of `migrate dev`), don't reset it. Confirm first, then
+baseline:
+
+```bash
+# 1. Confirm dev.db's actual schema matches what the migrations would
+#    produce (read-only; --exit-code makes 0 = no diff, 2 = real diff)
+(cd backend && uv run prisma migrate diff \
+  --from-url "file:$(pwd)/prisma/dev.db" \
+  --to-migrations ./prisma/migrations \
+  --shadow-database-url "file:/tmp/sales-guru-shadow-diff.db" \
+  --exit-code)
+
+# 2. If step 1 printed "No difference detected" (exit 0): mark every
+#    migration as applied, in order, without running any SQL
+for m in $(ls backend/prisma/migrations | grep -v migration_lock.toml | sort); do
+  (cd backend && uv run prisma migrate resolve --applied "$m") || break
+done
+
+# 3. Confirm it's clean
+(cd backend && uv run prisma migrate deploy)  # should say "No pending migrations to apply"
+```
+
+If step 1 instead reports real differences (exit code 2), stop — do not
+baseline over a schema that doesn't match. Show the user the diff, run
+`make backup-dev`, and do a proper reset instead (this is the destructive
+path the rule above requires explicit confirmation for).
 
 ## Working conventions
 

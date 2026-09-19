@@ -456,9 +456,14 @@ async def list_ad_pixels(access_token: str, ad_account_id: str) -> list[MetaPixe
 
 
 async def create_meta_campaign(
-    *, access_token: str, ad_account_id: str, name: str, objective: str
+    *,
+    access_token: str,
+    ad_account_id: str,
+    name: str,
+    objective: str,
+    status: Literal["ACTIVE", "PAUSED"] = "ACTIVE",
 ) -> str:
-    """Create a live Campaign object on Meta (PRD.md build step 8).
+    """Create a Campaign object on Meta (PRD.md build step 8).
 
     Args:
         access_token: The business's Meta access token.
@@ -470,6 +475,11 @@ async def create_meta_campaign(
         name: The campaign's display name on Meta.
         objective: Our Campaign.objective value — mapped to Meta's own
             objective enum via CAMPAIGN_OBJECTIVE_MAP.
+        status: "ACTIVE" (default) or "PAUSED" — the "Publish paused"
+            option (app/services/publish.py's publish_campaign_to_meta)
+            sends "PAUSED" here and to create_meta_ad_set/create_meta_ad
+            so nothing spends until a human clicks Activate, in this app
+            or directly in Ads Manager.
 
     Returns:
         The new Meta campaign id.
@@ -485,7 +495,7 @@ async def create_meta_campaign(
             "access_token": access_token,
             "name": name,
             "objective": CAMPAIGN_OBJECTIVE_MAP[objective],
-            "status": "ACTIVE",
+            "status": status,
             "special_ad_categories": "[]",
             # Meta requires this explicitly once a campaign doesn't use a
             # campaign-level budget (real API behavior confirmed
@@ -518,8 +528,9 @@ async def create_meta_ad_set(
     advantage_audience: int = 0,
     end_time: datetime | None = None,
     target_cac_cents: int | None = None,
+    status: Literal["ACTIVE", "PAUSED"] = "ACTIVE",
 ) -> str:
-    """Create a live AdSet object on Meta, under an already-created campaign.
+    """Create an AdSet object on Meta, under an already-created campaign.
 
     Targeting is age range plus geo (either the default single-country
     geo or, when custom_location is given — PRD.md build step 11 — a
@@ -610,6 +621,9 @@ async def create_meta_ad_set(
             LOWEST_COST_WITHOUT_CAP instead (no cap at all). Not yet
             verified against a real live publish, same caution as
             end_time above.
+        status: "ACTIVE" (default) or "PAUSED" — see create_meta_campaign's
+            own status param, sent identically alongside it by the
+            "Publish paused" option.
 
     Returns:
         The new Meta ad set id.
@@ -660,7 +674,7 @@ async def create_meta_ad_set(
         if target_cac_cents is not None
         else "LOWEST_COST_WITHOUT_CAP",
         "targeting": targeting,
-        "status": "ACTIVE",
+        "status": status,
     }
     if target_cac_cents is not None:
         data["bid_amount"] = str(target_cac_cents)
@@ -841,6 +855,98 @@ async def create_meta_ad_creative(
     return creative_id
 
 
+class CarouselCard(NamedTuple):
+    """One card's already-resolved data, ready for a child_attachments entry.
+
+    image_hash is required (unlike create_meta_ad_creative's optional
+    image_hash) — a CreativeCard always has an image (app/schemas/
+    creative.py's CreativeCard.imageUrl is non-nullable), so there's no
+    image-less-card case to handle the way a whole image-less
+    SINGLE_IMAGE creative is handled above.
+    """
+
+    image_hash: str
+    headline: str
+    description: str | None
+    link: str
+
+
+async def create_meta_carousel_ad_creative(
+    *,
+    access_token: str,
+    ad_account_id: str,
+    page_id: str,
+    name: str,
+    body_text: str,
+    cta: str,
+    link: str,
+    cards: list[CarouselCard],
+) -> str:
+    """Create a CAROUSEL ad creative object on Meta (link_data.child_attachments).
+
+    The single-image path (create_meta_ad_creative above) is untouched by
+    this — a distinct function rather than branching inside that one,
+    since the two shapes barely overlap (one image_hash vs. a list of
+    per-card image_hash/name/description/link) and every existing
+    SINGLE_IMAGE caller should see zero behavior change from this
+    existing either way.
+
+    Args:
+        access_token: The business's Meta access token.
+        ad_account_id: The connected ad account.
+        page_id: The connected Page the ad is posted as.
+        name: The creative's display name on Meta.
+        body_text: The shared primary text (Meta's link_data.message) —
+            unlike a card's headline/description, this is one value for
+            the whole carousel, not per-card.
+        cta: A Meta call_to_action type value, shared across every card
+            (V1 has no per-card CTA — see GeneratedCreativeVariant's
+            schema comment).
+        link: The overall post's destination link — Meta requires
+            link_data.link even alongside child_attachments. V1 is
+            single-product, so this is the same URL every card's own
+            link also points to (app/api/creative.py's create_creatives
+            resolves one destination_url and stores it on every
+            CreativeCard.linkUrl).
+        cards: Every card's already-uploaded image_hash plus its own
+            headline/description/link, in display order — Meta renders
+            child_attachments in list order, matching CreativeCard.position.
+
+    Returns:
+        The new Meta ad creative id.
+
+    Raises:
+        MetaConnectionError: If the call fails.
+    """
+    if get_settings().fake_meta_enabled:
+        return f"fake_carousel_creative_{uuid4().hex[:12]}"
+    link_data: dict[str, Any] = {
+        "message": body_text,
+        "link": link,
+        "call_to_action": {"type": cta},
+        "child_attachments": [
+            {
+                "link": card.link,
+                "image_hash": card.image_hash,
+                "name": card.headline,
+                **({"description": card.description} if card.description else {}),
+            }
+            for card in cards
+        ],
+    }
+    object_story_spec = json.dumps({"page_id": page_id, "link_data": link_data})
+    body = await _post_json(
+        f"{_GRAPH_BASE_URL}/{ad_account_id}/adcreatives",
+        {
+            "access_token": access_token,
+            "name": name,
+            "object_story_spec": object_story_spec,
+        },
+    )
+    creative_id: str = body["id"]
+    return creative_id
+
+
 async def create_meta_ad(
     *,
     access_token: str,
@@ -848,8 +954,9 @@ async def create_meta_ad(
     name: str,
     meta_ad_set_id: str,
     meta_creative_id: str,
+    status: Literal["ACTIVE", "PAUSED"] = "ACTIVE",
 ) -> str:
-    """Create a live Ad object on Meta, attaching an ad set + creative.
+    """Create an Ad object on Meta, attaching an ad set + creative.
 
     Args:
         access_token: The business's Meta access token.
@@ -857,6 +964,9 @@ async def create_meta_ad(
         name: The ad's display name on Meta.
         meta_ad_set_id: The parent Meta ad set id.
         meta_creative_id: The Meta ad creative id to attach.
+        status: "ACTIVE" (default) or "PAUSED" — see create_meta_campaign's
+            own status param, sent identically alongside it by the
+            "Publish paused" option.
 
     Returns:
         The new Meta ad id.
@@ -874,7 +984,7 @@ async def create_meta_ad(
             "name": name,
             "adset_id": meta_ad_set_id,
             "creative": creative_ref,
-            "status": "ACTIVE",
+            "status": status,
         },
     )
     ad_id: str = body["id"]
@@ -1219,6 +1329,30 @@ async def pause_meta_ad_set(*, access_token: str, meta_ad_set_id: str) -> None:
     await _post_json(
         f"{_GRAPH_BASE_URL}/{meta_ad_set_id}",
         {"access_token": access_token, "status": "PAUSED"},
+    )
+
+
+async def resume_meta_ad_set(*, access_token: str, meta_ad_set_id: str) -> None:
+    """Resume a paused ad set on Meta — the reverse of pause_meta_ad_set.
+
+    Same shape/level as pause_meta_ad_set. Only ever called by
+    app/services/publish.py's activate_campaign, itself only reachable
+    for a campaign published paused ("Publish paused") and never yet
+    activated — not a general "un-pause anything" action (see
+    activate_campaign's own docstring for why).
+
+    Args:
+        access_token: The business's Meta access token.
+        meta_ad_set_id: The Meta ad set id to resume (AdSet.metaAdSetId).
+
+    Raises:
+        MetaConnectionError: If the call fails.
+    """
+    if get_settings().fake_meta_enabled:
+        return
+    await _post_json(
+        f"{_GRAPH_BASE_URL}/{meta_ad_set_id}",
+        {"access_token": access_token, "status": "ACTIVE"},
     )
 
 

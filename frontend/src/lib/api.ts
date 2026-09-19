@@ -584,14 +584,29 @@ export function approveCampaign(businessId: string, campaignId: string): Promise
   })
 }
 
-export function publishCampaign(businessId: string, campaignId: string): Promise<Campaign> {
+export function publishCampaign(
+  businessId: string,
+  campaignId: string,
+  options?: { paused?: boolean },
+): Promise<Campaign> {
   return request<Campaign>(`/businesses/${businessId}/campaigns/${campaignId}/publish`, {
     method: 'POST',
+    body: JSON.stringify({ paused: options?.paused ?? false }),
   })
 }
 
 export function pauseCampaign(businessId: string, campaignId: string): Promise<Campaign> {
   return request<Campaign>(`/businesses/${businessId}/campaigns/${campaignId}/pause`, {
+    method: 'POST',
+  })
+}
+
+// Only reachable for a campaign published with "Publish paused" and never
+// since touched (Campaign.pausedReason === 'Published paused') — the
+// backend 400s otherwise, deliberately not a general un-pause action (see
+// app/services/publish.py's activate_campaign).
+export function activateCampaign(businessId: string, campaignId: string): Promise<Campaign> {
+  return request<Campaign>(`/businesses/${businessId}/campaigns/${campaignId}/activate`, {
     method: 'POST',
   })
 }
@@ -813,6 +828,17 @@ export type Cta =
 
 export type CreativeStatus = 'GENERATED' | 'SELECTED' | 'REJECTED'
 
+export type CreativeFormat = 'SINGLE_IMAGE' | 'CAROUSEL'
+
+export interface CreativeCard {
+  id: string
+  position: number
+  imageUrl: string
+  headline: string
+  description: string | null
+  linkUrl: string
+}
+
 export interface Creative {
   id: string
   campaignId: string
@@ -825,6 +851,10 @@ export interface Creative {
   imagePrompt: string | null
   videoPrompt: string | null
   imageUrl: string | null
+  format: CreativeFormat
+  // Empty for a SINGLE_IMAGE creative; 2-10 cards, in position order, for
+  // a CAROUSEL one.
+  cards: CreativeCard[]
   status: CreativeStatus
   createdAt: string
   // Computed by the backend (app/services/creative.py's is_creative_stale)
@@ -833,9 +863,14 @@ export interface Creative {
   isStale: boolean
 }
 
-export function createCreatives(businessId: string, campaignId: string): Promise<Creative[]> {
+export function createCreatives(
+  businessId: string,
+  campaignId: string,
+  format?: CreativeFormat,
+): Promise<Creative[]> {
   return request<Creative[]>(`/businesses/${businessId}/campaigns/${campaignId}/creatives`, {
     method: 'POST',
+    ...(format ? { body: JSON.stringify({ format }) } : {}),
   })
 }
 
@@ -855,6 +890,33 @@ export function selectCreative(
       method: 'POST',
       ...(productImageId ? { body: JSON.stringify({ productImageId }) } : {}),
     },
+  )
+}
+
+export function reorderCreativeCards(
+  businessId: string,
+  campaignId: string,
+  creativeId: string,
+  cardIds: string[],
+): Promise<Creative> {
+  return request<Creative>(
+    `/businesses/${businessId}/campaigns/${campaignId}/creatives/${creativeId}/cards/order`,
+    {
+      method: 'PUT',
+      body: JSON.stringify({ cardIds }),
+    },
+  )
+}
+
+export function removeCreativeCard(
+  businessId: string,
+  campaignId: string,
+  creativeId: string,
+  cardId: string,
+): Promise<Creative> {
+  return request<Creative>(
+    `/businesses/${businessId}/campaigns/${campaignId}/creatives/${creativeId}/cards/${cardId}`,
+    { method: 'DELETE' },
   )
 }
 

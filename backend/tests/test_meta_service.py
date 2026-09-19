@@ -4,6 +4,7 @@ httpx.AsyncClient is mocked throughout — no test here makes a real network
 call to Meta's Graph API.
 """
 
+import json
 from collections.abc import Iterator
 from datetime import UTC, datetime
 from typing import Any
@@ -438,6 +439,26 @@ async def test_create_meta_campaign_returns_the_new_id(
 
 
 @pytest.mark.asyncio
+async def test_create_meta_campaign_sends_paused_status_when_given(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The "Publish paused" option sends status=PAUSED instead of the
+    ACTIVE default — nothing spends until a human clicks Activate."""
+    client = _mock_client_returning(monkeypatch, _FakeResponse({"id": "campaign_123"}))
+
+    await meta.create_meta_campaign(
+        access_token="token",
+        ad_account_id="act_1",
+        name="Custom Colombian Emerald Ring",
+        objective="SALES",
+        status="PAUSED",
+    )
+
+    _url, data = client.calls[0]
+    assert data["status"] == "PAUSED"
+
+
+@pytest.mark.asyncio
 async def test_create_meta_ad_set_returns_the_new_id(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -469,6 +490,30 @@ async def test_create_meta_ad_set_returns_the_new_id(
     assert "promoted_object" not in data
     assert "end_time" not in data
     assert "bid_amount" not in data
+
+
+@pytest.mark.asyncio
+async def test_create_meta_ad_set_sends_paused_status_when_given(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The "Publish paused" option sends status=PAUSED instead of the
+    ACTIVE default, same as create_meta_campaign."""
+    client = _mock_client_returning(monkeypatch, _FakeResponse({"id": "adset_123"}))
+
+    await meta.create_meta_ad_set(
+        access_token="token",
+        ad_account_id="act_1",
+        name="Custom Colombian Emerald Ring",
+        meta_campaign_id="campaign_123",
+        daily_budget_cents=2500,
+        optimization_goal="OFFSITE_CONVERSIONS",
+        age_min=30,
+        age_max=55,
+        status="PAUSED",
+    )
+
+    _url, data = client.calls[0]
+    assert data["status"] == "PAUSED"
 
 
 @pytest.mark.asyncio
@@ -807,6 +852,66 @@ async def test_create_meta_ad_creative_omits_description_when_none(
 
 
 @pytest.mark.asyncio
+async def test_create_meta_carousel_ad_creative_builds_child_attachments(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """One creative object for the whole carousel, one child_attachment per
+    card in list order (matching CreativeCard.position), sharing one
+    message/link/call_to_action across every card."""
+    client = _mock_client_returning(
+        monkeypatch, _FakeResponse({"id": "carousel_creative_123"})
+    )
+
+    creative_id = await meta.create_meta_carousel_ad_creative(
+        access_token="token",
+        ad_account_id="act_1",
+        page_id="page_1",
+        name="Carousel A",
+        body_text="Shop the whole collection",
+        cta="SHOP_NOW",
+        link="https://acme.example/rings",
+        cards=[
+            meta.CarouselCard(
+                image_hash="hash_1",
+                headline="Ring one",
+                description="14k gold",
+                link="https://acme.example/rings",
+            ),
+            meta.CarouselCard(
+                image_hash="hash_2",
+                headline="Ring two",
+                description=None,
+                link="https://acme.example/rings",
+            ),
+        ],
+    )
+
+    assert creative_id == "carousel_creative_123"
+    url, data = client.calls[0]
+    assert url == "https://graph.facebook.com/v21.0/act_1/adcreatives"
+    spec = json.loads(data["object_story_spec"])
+    assert spec["page_id"] == "page_1"
+    assert spec["link_data"]["message"] == "Shop the whole collection"
+    assert spec["link_data"]["link"] == "https://acme.example/rings"
+    assert spec["link_data"]["call_to_action"] == {"type": "SHOP_NOW"}
+    attachments = spec["link_data"]["child_attachments"]
+    assert len(attachments) == 2
+    assert attachments[0] == {
+        "link": "https://acme.example/rings",
+        "image_hash": "hash_1",
+        "name": "Ring one",
+        "description": "14k gold",
+    }
+    # No description key at all when the card has none — same
+    # "omit rather than send empty" convention as the single-image path.
+    assert attachments[1] == {
+        "link": "https://acme.example/rings",
+        "image_hash": "hash_2",
+        "name": "Ring two",
+    }
+
+
+@pytest.mark.asyncio
 async def test_create_meta_ad_returns_the_new_id(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -827,6 +932,27 @@ async def test_create_meta_ad_returns_the_new_id(
     assert data["adset_id"] == "adset_123"
     assert '"creative_id": "creative_123"' in data["creative"]
     assert data["status"] == "ACTIVE"
+
+
+@pytest.mark.asyncio
+async def test_create_meta_ad_sends_paused_status_when_given(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The "Publish paused" option sends status=PAUSED instead of the
+    ACTIVE default, same as create_meta_campaign/create_meta_ad_set."""
+    client = _mock_client_returning(monkeypatch, _FakeResponse({"id": "ad_123"}))
+
+    await meta.create_meta_ad(
+        access_token="token",
+        ad_account_id="act_1",
+        name="Creative A",
+        meta_ad_set_id="adset_123",
+        meta_creative_id="creative_123",
+        status="PAUSED",
+    )
+
+    _url, data = client.calls[0]
+    assert data["status"] == "PAUSED"
 
 
 @pytest.mark.asyncio
@@ -1328,6 +1454,34 @@ async def test_pause_meta_ad_set_raises_on_failure(
 
 
 @pytest.mark.asyncio
+async def test_resume_meta_ad_set_sends_the_active_status(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Resuming an ad set POSTs status=ACTIVE to the ad set's own node —
+    the reverse of pause_meta_ad_set, used by activate_campaign."""
+    client = _mock_client_returning(monkeypatch, _FakeResponse({"success": True}))
+
+    await meta.resume_meta_ad_set(access_token="token", meta_ad_set_id="adset_123")
+
+    url, data = client.calls[0]
+    assert url == "https://graph.facebook.com/v21.0/adset_123"
+    assert data["status"] == "ACTIVE"
+    assert data["access_token"] == "token"
+
+
+@pytest.mark.asyncio
+async def test_resume_meta_ad_set_raises_on_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A Graph API failure surfaces as MetaConnectionError."""
+    fake_client = _FakeAsyncClient(error=httpx.ConnectError("boom"))
+    monkeypatch.setattr(httpx, "AsyncClient", lambda: fake_client)
+
+    with pytest.raises(meta.MetaConnectionError, match="Meta API call failed"):
+        await meta.resume_meta_ad_set(access_token="token", meta_ad_set_id="adset_123")
+
+
+@pytest.mark.asyncio
 async def test_update_meta_ad_set_budget_sends_the_new_budget(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1557,6 +1711,32 @@ async def test_create_meta_ad_creative_returns_a_fake_id_in_fake_mode(
 
 
 @pytest.mark.asyncio
+async def test_create_meta_carousel_ad_creative_returns_a_fake_id_in_fake_mode(
+    fake_meta_mode: None,
+) -> None:
+    """Fake mode returns a recognizably-fake carousel creative id, no real call."""
+    creative_id = await meta.create_meta_carousel_ad_creative(
+        access_token="fake-token",
+        ad_account_id="act_fake_account",
+        page_id="fake_page",
+        name="Carousel A",
+        body_text="Shop the collection",
+        cta="SHOP_NOW",
+        link="https://acme.example/rings",
+        cards=[
+            meta.CarouselCard(
+                image_hash="hash_1",
+                headline="Ring one",
+                description=None,
+                link="https://acme.example/rings",
+            )
+        ],
+    )
+
+    assert creative_id.startswith("fake_carousel_creative_")
+
+
+@pytest.mark.asyncio
 async def test_upload_meta_ad_image_returns_the_hash(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1748,6 +1928,14 @@ async def test_pause_meta_ad_is_a_no_op_in_fake_mode(fake_meta_mode: None) -> No
 async def test_pause_meta_ad_set_is_a_no_op_in_fake_mode(fake_meta_mode: None) -> None:
     """Fake mode pauses nothing for real — just returns."""
     await meta.pause_meta_ad_set(
+        access_token="fake-token", meta_ad_set_id="fake_adset_abc"
+    )
+
+
+@pytest.mark.asyncio
+async def test_resume_meta_ad_set_is_a_no_op_in_fake_mode(fake_meta_mode: None) -> None:
+    """Fake mode resumes nothing for real — just returns."""
+    await meta.resume_meta_ad_set(
         access_token="fake-token", meta_ad_set_id="fake_adset_abc"
     )
 

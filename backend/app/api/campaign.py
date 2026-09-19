@@ -20,14 +20,20 @@ from app.schemas.campaign import (
     CampaignResponse,
     CampaignStatus,
     CampaignUpdateRequest,
+    PublishCampaignRequest,
 )
 from app.schemas.strategy import StrategyContentAdapter
 from app.services.campaign_readiness import advance_to_ready_if_complete, is_ready
 from app.services.creative import is_creative_stale
 from app.services.event_venues import EVENT_VENUES, default_event_window
 from app.services.meta import MetaConnectionError
+from app.services.publish import (
+    PUBLISHED_PAUSED_REASON,
+    publish_campaign_to_meta,
+    requires_pixel,
+)
+from app.services.publish import activate_campaign as activate_campaign_on_meta
 from app.services.publish import pause_campaign as pause_campaign_on_meta
-from app.services.publish import publish_campaign_to_meta, requires_pixel
 from app.services.url_validation import requires_destination_url
 
 router = APIRouter(prefix="/businesses/{business_id}/campaigns", tags=["campaigns"])
@@ -43,6 +49,12 @@ _NOT_READY_FOR_APPROVAL = "Select an ad creative before approving this campaign"
 _NOT_READY_FOR_PUBLISH = "Approve this campaign before publishing"
 _CAMPAIGN_NOT_READY = "Add a product and an audience to this campaign before publishing"
 _NOT_LIVE_TO_PAUSE = "Only a live campaign can be paused"
+_NOT_ACTIVATABLE = (
+    "Only a campaign published paused, and not yet activated, can be activated"
+)
+_META_NOT_CONNECTED_TO_ACTIVATE = (
+    "No Meta connection found for this campaign's business"
+)
 _ALREADY_PUBLISHED = (
     "This campaign has already been published and can't be deleted — its "
     "data is used to optimize future campaigns"
@@ -439,9 +451,10 @@ async def approve_campaign(
 
 @router.post("/{campaign_id}/publish", response_model=CampaignResponse)
 async def publish_campaign(
+    payload: PublishCampaignRequest | None = None,
     campaign: Campaign = Depends(get_owned_campaign),
 ) -> CampaignResponse:
-    """Publish an approved campaign live to Meta (PRD.md build step 8).
+    """Publish an approved campaign to Meta (PRD.md build step 8).
 
     This is the "Approve & Publish" checkpoint's actual publish half — the
     frontend calls approve() then this in one user-triggered flow, never
@@ -451,11 +464,17 @@ async def publish_campaign(
     Meta API call becomes a 500.
 
     Args:
+        payload: Optional — payload.paused (the frontend's "Publish
+            paused" checkbox, default checked there) publishes with
+            everything created PAUSED on Meta instead of ACTIVE when
+            True. Omitted/no body defaults to False, unchanged from
+            before this option existed.
         campaign: The campaign, resolved and ownership-checked by
             get_owned_campaign.
 
     Returns:
-        The now-LIVE campaign, with metaCampaignId set.
+        The now-LIVE (or PAUSED, if payload.paused) campaign, with
+        metaCampaignId set.
 
     Raises:
         HTTPException: 400 if the campaign isn't approved yet, Meta isn't
@@ -490,7 +509,8 @@ async def publish_campaign(
     assert connection is not None  # narrowed by connection_incomplete above
 
     creative = await db.creative.find_first(
-        where={"campaignId": campaign.id, "status": "SELECTED"}
+        where={"campaignId": campaign.id, "status": "SELECTED"},
+        include={"cards": {"order_by": {"position": "asc"}}},
     )
     if creative is None:
         raise HTTPException(
@@ -527,6 +547,7 @@ async def publish_campaign(
             creative=creative,
             strategy=StrategyContentAdapter.validate_json(strategy.content),
             destination_url=destination_url,
+            paused=payload.paused if payload is not None else False,
         )
     except MetaConnectionError as exc:
         await db.campaign.update(where={"id": campaign.id}, data={"status": "FAILED"})
@@ -579,6 +600,58 @@ async def pause_campaign(
     try:
         updated = await pause_campaign_on_meta(
             campaign=campaign, connection=connection, reason="Manually paused"
+        )
+    except MetaConnectionError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)
+        ) from exc
+
+    return await _to_response(updated)
+
+
+@router.post("/{campaign_id}/activate", response_model=CampaignResponse)
+async def activate_campaign(
+    campaign: Campaign = Depends(get_owned_campaign),
+) -> CampaignResponse:
+    """Resume a campaign published paused, moving it LIVE.
+
+    Deliberately narrow — not a general "un-pause anything" endpoint.
+    Only works for a campaign whose pausedReason is exactly
+    PUBLISHED_PAUSED_REASON (set by publish_campaign_to_meta's
+    paused=True path, app/services/publish.py). A campaign paused by the
+    manual "Pause campaign" button, the duration-elapsed job, or a
+    circuit breaker 400s here — those were stopped for a reason a human
+    should re-evaluate, not silently reverse with this same button (see
+    activate_campaign's own docstring in app/services/publish.py).
+
+    Args:
+        campaign: The campaign, resolved and ownership-checked by
+            get_owned_campaign.
+
+    Returns:
+        The now-LIVE campaign, pausedReason cleared.
+
+    Raises:
+        HTTPException: 400 if the campaign isn't in the
+            published-paused-and-never-activated state, or Meta isn't
+            connected for its business; 500 if the Meta API call fails
+            (any AdSets already resumed before the failure stay resumed).
+    """
+    if campaign.status != "PAUSED" or campaign.pausedReason != PUBLISHED_PAUSED_REASON:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=_NOT_ACTIVATABLE
+        )
+
+    connection = await get_meta_connection(campaign.businessId)
+    if connection is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=_META_NOT_CONNECTED_TO_ACTIVATE,
+        )
+
+    try:
+        updated = await activate_campaign_on_meta(
+            campaign=campaign, connection=connection
         )
     except MetaConnectionError as exc:
         raise HTTPException(
