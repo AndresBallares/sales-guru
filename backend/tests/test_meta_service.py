@@ -4,6 +4,7 @@ httpx.AsyncClient is mocked throughout — no test here makes a real network
 call to Meta's Graph API.
 """
 
+import json
 from collections.abc import Iterator
 from datetime import UTC, datetime
 from typing import Any
@@ -738,6 +739,66 @@ async def test_create_meta_ad_creative_omits_description_when_none(
 
 
 @pytest.mark.asyncio
+async def test_create_meta_carousel_ad_creative_builds_child_attachments(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """One creative object for the whole carousel, one child_attachment per
+    card in list order (matching CreativeCard.position), sharing one
+    message/link/call_to_action across every card."""
+    client = _mock_client_returning(
+        monkeypatch, _FakeResponse({"id": "carousel_creative_123"})
+    )
+
+    creative_id = await meta.create_meta_carousel_ad_creative(
+        access_token="token",
+        ad_account_id="act_1",
+        page_id="page_1",
+        name="Carousel A",
+        body_text="Shop the whole collection",
+        cta="SHOP_NOW",
+        link="https://acme.example/rings",
+        cards=[
+            meta.CarouselCard(
+                image_hash="hash_1",
+                headline="Ring one",
+                description="14k gold",
+                link="https://acme.example/rings",
+            ),
+            meta.CarouselCard(
+                image_hash="hash_2",
+                headline="Ring two",
+                description=None,
+                link="https://acme.example/rings",
+            ),
+        ],
+    )
+
+    assert creative_id == "carousel_creative_123"
+    url, data = client.calls[0]
+    assert url == "https://graph.facebook.com/v21.0/act_1/adcreatives"
+    spec = json.loads(data["object_story_spec"])
+    assert spec["page_id"] == "page_1"
+    assert spec["link_data"]["message"] == "Shop the whole collection"
+    assert spec["link_data"]["link"] == "https://acme.example/rings"
+    assert spec["link_data"]["call_to_action"] == {"type": "SHOP_NOW"}
+    attachments = spec["link_data"]["child_attachments"]
+    assert len(attachments) == 2
+    assert attachments[0] == {
+        "link": "https://acme.example/rings",
+        "image_hash": "hash_1",
+        "name": "Ring one",
+        "description": "14k gold",
+    }
+    # No description key at all when the card has none — same
+    # "omit rather than send empty" convention as the single-image path.
+    assert attachments[1] == {
+        "link": "https://acme.example/rings",
+        "image_hash": "hash_2",
+        "name": "Ring two",
+    }
+
+
+@pytest.mark.asyncio
 async def test_create_meta_ad_returns_the_new_id(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1464,6 +1525,32 @@ async def test_create_meta_ad_creative_returns_a_fake_id_in_fake_mode(
     )
 
     assert creative_id.startswith("fake_creative_")
+
+
+@pytest.mark.asyncio
+async def test_create_meta_carousel_ad_creative_returns_a_fake_id_in_fake_mode(
+    fake_meta_mode: None,
+) -> None:
+    """Fake mode returns a recognizably-fake carousel creative id, no real call."""
+    creative_id = await meta.create_meta_carousel_ad_creative(
+        access_token="fake-token",
+        ad_account_id="act_fake_account",
+        page_id="fake_page",
+        name="Carousel A",
+        body_text="Shop the collection",
+        cta="SHOP_NOW",
+        link="https://acme.example/rings",
+        cards=[
+            meta.CarouselCard(
+                image_hash="hash_1",
+                headline="Ring one",
+                description=None,
+                link="https://acme.example/rings",
+            )
+        ],
+    )
+
+    assert creative_id.startswith("fake_carousel_creative_")
 
 
 @pytest.mark.asyncio

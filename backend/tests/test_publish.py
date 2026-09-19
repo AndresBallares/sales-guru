@@ -21,7 +21,7 @@ from app.api import meta as meta_api_module
 # directly, so those API modules (not the underlying service modules) are
 # what need patching — mirrors test_strategy.py / test_creative.py exactly.
 from app.api import strategy as strategy_module
-from app.schemas.creative import GeneratedCreativeVariant
+from app.schemas.creative import GeneratedCreativeCard, GeneratedCreativeVariant
 from app.schemas.strategy import (
     BudgetRecommendation,
     DataDrivenStrategyContent,
@@ -64,6 +64,29 @@ _FAKE_VARIANTS = [
         creative_angle=f"Angle {letter}",
         image_prompt=f"Image prompt {letter}",
         video_prompt=f"Video prompt {letter}",
+    )
+    for letter in "ABCD"
+]
+
+# Three cards per variant — matches the three photos _ready_carousel_campaign
+# uploads, since create_creatives zips(variant.cards, card_images,
+# strict=True) and would raise on any length mismatch.
+_FAKE_CAROUSEL_VARIANTS = [
+    GeneratedCreativeVariant(
+        headline=f"Headline {letter}",
+        body_text=f"Primary text {letter}",
+        description=f"Description {letter}",
+        cta="SHOP_NOW",
+        creative_angle=f"Angle {letter}",
+        image_prompt=f"Image prompt {letter}",
+        video_prompt=f"Video prompt {letter}",
+        cards=[
+            GeneratedCreativeCard(
+                headline=f"Card {n} headline {letter}",
+                description=f"Card {n} description {letter}",
+            )
+            for n in range(1, 4)
+        ],
     )
     for letter in "ABCD"
 ]
@@ -165,6 +188,25 @@ def _create_product(client: TestClient, business_id: str, url: str | None) -> st
         f"/businesses/{business_id}/products/{id_}/images",
         files={"file": ("ring.jpg", _valid_jpeg(), "image/jpeg")},
     )
+    return id_
+
+
+def _create_product_with_photos(
+    client: TestClient, business_id: str, url: str | None, *, count: int
+) -> str:
+    """Create a product with `count` photos on file (position 0..count-1,
+    upload order), return its id. A CAROUSEL creative needs at least
+    MIN_CAROUSEL_CARDS photos (app/api/creative.py's create_creatives)."""
+    response = client.post(
+        f"/businesses/{business_id}/products",
+        json={"description": "Custom emerald rings", "url": url},
+    )
+    id_: str = response.json()["id"]
+    for n in range(count):
+        client.post(
+            f"/businesses/{business_id}/products/{id_}/images",
+            files={"file": (f"ring-{n}.jpg", _valid_jpeg(), "image/jpeg")},
+        )
     return id_
 
 
@@ -292,6 +334,58 @@ def _ready_campaign(
     return business_id, campaign_id
 
 
+def _ready_carousel_campaign(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, *, photo_count: int = 3
+) -> tuple[str, str]:
+    """Build a CAROUSEL-format campaign all the way to APPROVED, Meta
+    connected, ready to publish — same end state as _ready_campaign, but
+    with a product carrying `photo_count` photos and creatives generated
+    with the format="CAROUSEL" the frontend's toggle sends.
+
+    Requires overriding generate_creatives to _FAKE_CAROUSEL_VARIANTS
+    (mock_services' default _FAKE_VARIANTS has no cards, and
+    create_creatives' zip(variant.cards, card_images, strict=True) would
+    raise on a None/photo_count length mismatch either way).
+
+    Returns:
+        (business_id, campaign_id).
+    """
+    monkeypatch.setattr(
+        creative_module,
+        "generate_creatives",
+        AsyncMock(return_value=_FAKE_CAROUSEL_VARIANTS),
+    )
+    _signed_up_client(client)
+    business_id = _create_business(client, website="https://acme.example")
+    product_id = _create_product_with_photos(
+        client, business_id, url="https://acme.example/product", count=photo_count
+    )
+    audience_id = _create_audience(client, business_id)
+    campaign_id: str = client.post(
+        f"/businesses/{business_id}/campaigns",
+        json={
+            "objective": "SALES",
+            "productId": product_id,
+            "audienceId": audience_id,
+        },
+    ).json()["id"]
+    client.post(
+        f"/businesses/{business_id}/campaigns/{campaign_id}/strategy",
+        json={"hasPriorAdvertisingExperience": True},
+    )
+    creatives = client.post(
+        f"/businesses/{business_id}/campaigns/{campaign_id}/creatives",
+        json={"format": "CAROUSEL"},
+    ).json()
+    client.post(
+        f"/businesses/{business_id}/campaigns/{campaign_id}"
+        f"/creatives/{creatives[0]['id']}/select"
+    )
+    client.post(f"/businesses/{business_id}/campaigns/{campaign_id}/approve")
+    _connect_meta(client, business_id)
+    return business_id, campaign_id
+
+
 @pytest.fixture(autouse=True)
 def mock_services(monkeypatch: pytest.MonkeyPatch) -> dict[str, AsyncMock]:
     """Mock strategy/creative generation, Meta OAuth, and Meta object creation."""
@@ -328,6 +422,12 @@ def mock_services(monkeypatch: pytest.MonkeyPatch) -> dict[str, AsyncMock]:
     monkeypatch.setattr(
         meta_service_module, "create_meta_ad_creative", create_ad_creative
     )
+    create_carousel_ad_creative = AsyncMock(return_value="meta_carousel_creative_1")
+    monkeypatch.setattr(
+        meta_service_module,
+        "create_meta_carousel_ad_creative",
+        create_carousel_ad_creative,
+    )
     upload_ad_image = AsyncMock(return_value="fake_image_hash_1")
     monkeypatch.setattr(meta_service_module, "upload_meta_ad_image", upload_ad_image)
     create_ad = AsyncMock(return_value="meta_ad_1")
@@ -339,6 +439,7 @@ def mock_services(monkeypatch: pytest.MonkeyPatch) -> dict[str, AsyncMock]:
         "create_campaign": create_campaign,
         "create_ad_set": create_ad_set,
         "create_ad_creative": create_ad_creative,
+        "create_carousel_ad_creative": create_carousel_ad_creative,
         "upload_ad_image": upload_ad_image,
         "create_ad": create_ad,
         "pause_ad_set": pause_ad_set,
@@ -1169,6 +1270,154 @@ def test_publish_400s_once_already_live(client: TestClient) -> None:
     response = client.post(f"/businesses/{business_id}/campaigns/{campaign_id}/publish")
 
     assert response.status_code == 400
+
+
+def test_publish_succeeds_for_a_carousel_campaign_and_builds_child_attachments(
+    client: TestClient,
+    mock_services: dict[str, AsyncMock],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A CAROUSEL creative publishes through create_meta_carousel_ad_creative
+    (never the single-image create_meta_ad_creative), uploading every
+    card's photo and building one child_attachment per card, in
+    CreativeCard.position order — the untested-until-now branch of
+    publish_campaign_to_meta plus _resolve_carousel_cards."""
+    business_id, campaign_id = _ready_carousel_campaign(client, monkeypatch)
+
+    response = client.post(f"/businesses/{business_id}/campaigns/{campaign_id}/publish")
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "LIVE"
+    mock_services["create_campaign"].assert_awaited_once()
+    mock_services["create_ad_set"].assert_awaited_once()
+    mock_services["create_ad"].assert_awaited_once()
+    mock_services["create_ad_creative"].assert_not_awaited()  # single-image path unused
+    mock_services["create_carousel_ad_creative"].assert_awaited_once()
+    assert mock_services["upload_ad_image"].await_count == 3  # one per card
+
+    _, kwargs = mock_services["create_carousel_ad_creative"].call_args
+    cards = kwargs["cards"]
+    assert [c.headline for c in cards] == [
+        "Card 1 headline A",
+        "Card 2 headline A",
+        "Card 3 headline A",
+    ]
+    assert [c.description for c in cards] == [
+        "Card 1 description A",
+        "Card 2 description A",
+        "Card 3 description A",
+    ]
+    assert all(c.image_hash == "fake_image_hash_1" for c in cards)
+    assert all(c.link == "https://acme.example/product" for c in cards)
+
+    creatives = client.get(
+        f"/businesses/{business_id}/campaigns/{campaign_id}/creatives"
+    ).json()
+    selected = next(c for c in creatives if c["status"] == "SELECTED")
+    assert selected["adId"] is not None
+
+
+def test_publish_carousel_respects_reordered_card_positions(
+    client: TestClient,
+    mock_services: dict[str, AsyncMock],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Reordering cards before publish changes what Meta receives —
+    _resolve_carousel_cards reads CreativeCard.position at publish time,
+    not the LLM's original generation order."""
+    business_id, campaign_id = _ready_carousel_campaign(client, monkeypatch)
+    creative = client.get(
+        f"/businesses/{business_id}/campaigns/{campaign_id}/creatives"
+    ).json()[0]
+    card_ids = [c["id"] for c in creative["cards"]]
+    reversed_ids = list(reversed(card_ids))
+
+    reorder_response = client.put(
+        f"/businesses/{business_id}/campaigns/{campaign_id}"
+        f"/creatives/{creative['id']}/cards/order",
+        json={"cardIds": reversed_ids},
+    )
+    assert reorder_response.status_code == 200
+
+    response = client.post(f"/businesses/{business_id}/campaigns/{campaign_id}/publish")
+
+    assert response.status_code == 200
+    _, kwargs = mock_services["create_carousel_ad_creative"].call_args
+    cards = kwargs["cards"]
+    assert [c.headline for c in cards] == [
+        "Card 3 headline A",
+        "Card 2 headline A",
+        "Card 1 headline A",
+    ]
+
+
+def test_publish_carousel_respects_a_removed_card(
+    client: TestClient,
+    mock_services: dict[str, AsyncMock],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Removing a card before publish (down to MIN_CAROUSEL_CARDS) is
+    reflected in what Meta receives — fewer child_attachments, the
+    remaining cards' positions renumbered and contiguous."""
+    business_id, campaign_id = _ready_carousel_campaign(client, monkeypatch)
+    creative = client.get(
+        f"/businesses/{business_id}/campaigns/{campaign_id}/creatives"
+    ).json()[0]
+    card_to_remove = creative["cards"][1]["id"]  # "Card 2 headline A"
+
+    remove_response = client.delete(
+        f"/businesses/{business_id}/campaigns/{campaign_id}"
+        f"/creatives/{creative['id']}/cards/{card_to_remove}"
+    )
+    assert remove_response.status_code == 200
+
+    response = client.post(f"/businesses/{business_id}/campaigns/{campaign_id}/publish")
+
+    assert response.status_code == 200
+    _, kwargs = mock_services["create_carousel_ad_creative"].call_args
+    cards = kwargs["cards"]
+    assert [c.headline for c in cards] == [
+        "Card 1 headline A",
+        "Card 3 headline A",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_publish_fails_loudly_when_a_carousel_cards_photo_was_deleted(
+    client: TestClient,
+    mock_services: dict[str, AsyncMock],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Same "fail loudly, don't coerce" treatment as the single-image path
+    (test_publish_fails_loudly_when_the_selected_photo_was_deleted) applied
+    per card by _resolve_carousel_cards: a card whose photo was deleted
+    after generation fails the publish outright, campaign marked FAILED,
+    the carousel creative call never made."""
+    business_id, campaign_id = _ready_carousel_campaign(client, monkeypatch)
+    creative = client.get(
+        f"/businesses/{business_id}/campaigns/{campaign_id}/creatives"
+    ).json()[0]
+
+    # CreativeCardResponse has no productImageId (app/schemas/creative.py) —
+    # it's an internal Meta-upload detail, not exposed to the frontend — so
+    # look the doomed card up straight from the DB, same as the
+    # single-image test's own Creative.productImageId lookup.
+    seeder = Prisma()
+    await seeder.connect()
+    stored_cards = await seeder.creativecard.find_many(
+        where={"creativeId": creative["id"]}, order={"position": "asc"}
+    )
+    assert stored_cards[0].productImageId is not None
+    await seeder.productimage.delete(where={"id": stored_cards[0].productImageId})
+    await seeder.disconnect()
+
+    response = client.post(f"/businesses/{business_id}/campaigns/{campaign_id}/publish")
+
+    assert response.status_code == 500
+    assert "deleted" in response.json()["detail"].lower()
+    mock_services["create_carousel_ad_creative"].assert_not_awaited()
+    campaigns = client.get(f"/businesses/{business_id}/campaigns").json()
+    assert campaigns[0]["status"] == "FAILED"
 
 
 def test_pause_requires_a_session(client: TestClient) -> None:
