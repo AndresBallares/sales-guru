@@ -1,6 +1,13 @@
 export interface User {
   id: string
   email: string
+  // True when this account has never accepted the current TERMS_VERSION
+  // (a brand-new signup can't reach this — signup itself requires
+  // acceptance — so in practice this only ever fires for an account that
+  // predates the terms-acceptance feature, or a future terms-version
+  // bump). ProtectedRoute gates on this to show the one-time full-page
+  // TermsAcceptancePrompt before rendering anything else.
+  needsTermsAcceptance: boolean
 }
 
 // One (value, label) pair — a single dropdown/display option. Every fixed
@@ -339,10 +346,14 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   return (await response.json()) as T
 }
 
-export function signup(email: string, password: string): Promise<User> {
+export function signup(
+  email: string,
+  password: string,
+  termsAccepted: boolean,
+): Promise<User> {
   return request<User>('/auth/signup', {
     method: 'POST',
-    body: JSON.stringify({ email, password }),
+    body: JSON.stringify({ email, password, termsAccepted }),
   })
 }
 
@@ -377,6 +388,10 @@ export function resetPassword(token: string, newPassword: string): Promise<Messa
 
 export function getMe(): Promise<User> {
   return request<User>('/auth/me')
+}
+
+export function acceptTerms(): Promise<User> {
+  return request<User>('/auth/accept-terms', { method: 'POST' })
 }
 
 export function getOptions(): Promise<OptionsResponse> {

@@ -31,6 +31,7 @@ test('signs up, logs out, and logs back in with the same password', async ({ pag
   await page.goto('/signup')
   await page.getByLabel('Email').fill(email)
   await page.getByLabel('Password').fill(password)
+  await page.getByRole('checkbox').check()
   await page.getByRole('button', { name: 'Sign up' }).click()
   await expect(page.getByText(`Signed in as ${email}`)).toBeVisible()
 
@@ -51,6 +52,7 @@ test('sign up, create a business, log out, log back in', async ({ page }) => {
   await page.goto('/signup')
   await page.getByLabel('Email').fill(email)
   await page.getByLabel('Password').fill(password)
+  await page.getByRole('checkbox').check()
   await page.getByRole('button', { name: 'Sign up' }).click()
 
   await expect(page.getByText(`Signed in as ${email}`)).toBeVisible()
@@ -155,6 +157,7 @@ test('the Brand step blocks on required fields, then is editable later', async (
   await page.goto('/signup')
   await page.getByLabel('Email').fill(email)
   await page.getByLabel('Password').fill(password)
+  await page.getByRole('checkbox').check()
   await page.getByRole('button', { name: 'Sign up' }).click()
   await page.getByLabel('Name').fill('Venzi Jewelry')
   await page.getByLabel('Industry').selectOption({ label: 'Fashion / Jewelry' })
@@ -210,6 +213,7 @@ test('signup rejects a duplicate email', async ({ page }) => {
   await page.goto('/signup')
   await page.getByLabel('Email').fill(email)
   await page.getByLabel('Password').fill(password)
+  await page.getByRole('checkbox').check()
   await page.getByRole('button', { name: 'Sign up' }).click()
   await expect(page.getByText(`Signed in as ${email}`)).toBeVisible()
 
@@ -219,6 +223,7 @@ test('signup rejects a duplicate email', async ({ page }) => {
   await page.goto('/signup')
   await page.getByLabel('Email').fill(email)
   await page.getByLabel('Password').fill(password)
+  await page.getByRole('checkbox').check()
   await page.getByRole('button', { name: 'Sign up' }).click()
 
   await expect(page.getByRole('alert')).toHaveText('Email already registered')

@@ -34,6 +34,14 @@ model User {
   organizations       Organization[]
   sessions            Session[]
   passwordResetTokens PasswordResetToken[]
+  // Null means "hasn't accepted the current terms" — either a brand-new
+  // account that somehow bypassed the signup gate, or (the actual expected
+  // case) an existing account that predates this field entirely. Never
+  // reset to null by a terms version bump — TERMS_VERSION (app/core/
+  // terms.py) changing is what signals re-acceptance is needed, compared
+  // against termsVersion, not this timestamp.
+  termsAcceptedAt     DateTime?
+  termsVersion        String?
   createdAt           DateTime             @default(now())
   updatedAt           DateTime             @updatedAt
 }

@@ -213,6 +213,65 @@ describe('MetaConnectionSection', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent('Server error')
   })
 
+  it('shows a friendly message and an accept-terms link when the ad account has not accepted the Business Tools Terms', async () => {
+    mockedApi.getMetaConnection.mockResolvedValue(COMPLETE_CONNECTION)
+    mockedApi.listMetaPixels.mockRejectedValue(
+      new api.ApiError(
+        409,
+        "Your Meta ad account hasn't accepted the Business Tools Terms yet. Accept them in Meta Business Settings, then retry.",
+      ),
+    )
+
+    renderSection()
+    await screen.findByText(/Connected/)
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Business Tools Terms')
+    const link = screen.getByRole('link', {
+      name: 'Accept the Business Tools Terms in Meta Business Settings',
+    })
+    expect(link).toHaveAttribute(
+      'href',
+      'https://business.facebook.com/ads/manage/customaudiences/tos/?act=act_1',
+    )
+    expect(link).toHaveAttribute('target', '_blank')
+    expect(screen.getByRole('button', { name: 'Retry' })).toBeInTheDocument()
+    expect(screen.queryByLabelText('Meta Pixel')).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Save Pixel' })).not.toBeInTheDocument()
+    // Skip stays available — a Business Tools Terms failure shouldn't
+    // block the whole Meta connection, only the optional Pixel step.
+    expect(screen.getByRole('button', { name: 'Skip for now' })).toBeInTheDocument()
+  })
+
+  it('retries loading Pixels when Retry is clicked', async () => {
+    mockedApi.getMetaConnection.mockResolvedValue(COMPLETE_CONNECTION)
+    mockedApi.listMetaPixels
+      .mockRejectedValueOnce(new api.ApiError(409, 'Business Tools Terms not accepted'))
+      .mockResolvedValueOnce([{ id: 'pixel_1', name: 'Acme Pixel' }])
+    const user = userEvent.setup()
+
+    renderSection()
+    await screen.findByRole('button', { name: 'Retry' })
+
+    await user.click(screen.getByRole('button', { name: 'Retry' }))
+
+    expect(await screen.findByLabelText('Meta Pixel')).toBeInTheDocument()
+    expect(mockedApi.listMetaPixels).toHaveBeenCalledTimes(2)
+  })
+
+  it('shows a generic message with no accept-terms link for any other Pixel-listing failure', async () => {
+    mockedApi.getMetaConnection.mockResolvedValue(COMPLETE_CONNECTION)
+    mockedApi.listMetaPixels.mockRejectedValue(new api.ApiError(500, 'Server error'))
+
+    renderSection()
+    await screen.findByText(/Connected/)
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Server error')
+    expect(
+      screen.queryByRole('link', { name: /Business Tools Terms/ }),
+    ).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Retry' })).toBeInTheDocument()
+  })
+
   it('shows the current Pixel directly once one is already set, without a picker', async () => {
     mockedApi.getMetaConnection.mockResolvedValue({ ...COMPLETE_CONNECTION, pixelId: 'pixel_1' })
 
@@ -236,6 +295,32 @@ describe('MetaConnectionSection', () => {
 
     await waitFor(() => expect(mockedApi.disconnectMeta).toHaveBeenCalledWith('biz-1'))
     expect(await screen.findByText('Not connected yet.')).toBeInTheDocument()
+  })
+
+  it('shows the API error message if disconnecting fails', async () => {
+    mockedApi.getMetaConnection.mockResolvedValue(COMPLETE_CONNECTION)
+    mockedApi.disconnectMeta.mockRejectedValue(new api.ApiError(500, 'Server error'))
+    const user = userEvent.setup()
+
+    renderSection()
+    await screen.findByRole('button', { name: 'Disconnect' })
+
+    await user.click(screen.getByRole('button', { name: 'Disconnect' }))
+
+    expect(await screen.findByText('Server error')).toBeInTheDocument()
+  })
+
+  it('shows a generic message if disconnecting fails for a non-API reason', async () => {
+    mockedApi.getMetaConnection.mockResolvedValue(COMPLETE_CONNECTION)
+    mockedApi.disconnectMeta.mockRejectedValue(new TypeError('Failed to fetch'))
+    const user = userEvent.setup()
+
+    renderSection()
+    await screen.findByRole('button', { name: 'Disconnect' })
+
+    await user.click(screen.getByRole('button', { name: 'Disconnect' }))
+
+    expect(await screen.findByText('Could not disconnect Meta Ads.')).toBeInTheDocument()
   })
 
   it('shows a success banner when returning from a completed OAuth flow', async () => {

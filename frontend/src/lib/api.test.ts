@@ -53,12 +53,16 @@ afterEach(() => {
 
 describe('signup', () => {
   it('returns the created user on success', async () => {
-    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(jsonResponse({ id: '1', email: 'a@b.com' }, 201))
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(
+        jsonResponse({ id: '1', email: 'a@b.com', needsTermsAcceptance: false }, 201),
+      )
     vi.stubGlobal('fetch', fetchMock)
 
-    const user = await signup('a@b.com', 'password123')
+    const user = await signup('a@b.com', 'password123', true)
 
-    expect(user).toEqual({ id: '1', email: 'a@b.com' })
+    expect(user).toEqual({ id: '1', email: 'a@b.com', needsTermsAcceptance: false })
     const [url, options] = fetchMock.mock.calls[0]
     expect(url).toContain('/auth/signup')
     expect(options).toBeDefined()
@@ -66,6 +70,7 @@ describe('signup', () => {
     expect(JSON.parse(options?.body as string)).toEqual({
       email: 'a@b.com',
       password: 'password123',
+      termsAccepted: true,
     })
   })
 
@@ -75,7 +80,7 @@ describe('signup', () => {
       vi.fn<typeof fetch>().mockResolvedValue(jsonResponse({ detail: 'Email already registered' }, 409)),
     )
 
-    await expect(signup('a@b.com', 'password123')).rejects.toMatchObject({
+    await expect(signup('a@b.com', 'password123', true)).rejects.toMatchObject({
       status: 409,
       message: 'Email already registered',
     })
@@ -97,7 +102,7 @@ describe('signup', () => {
       ),
     )
 
-    await expect(signup('bad', 'short')).rejects.toMatchObject({
+    await expect(signup('bad', 'short', true)).rejects.toMatchObject({
       status: 422,
       message: 'value is not a valid email address\nString should have at least 8 characters',
     })
@@ -121,7 +126,7 @@ describe('signup', () => {
       ),
     )
 
-    await expect(signup('a@b.com', 'password123')).rejects.toMatchObject({
+    await expect(signup('a@b.com', 'password123', true)).rejects.toMatchObject({
       status: 422,
       message: 'Ideal customer: String should have at most 1000 characters',
     })
@@ -157,7 +162,7 @@ describe('signup', () => {
       ),
     )
 
-    await expect(signup('a@b.com', 'password123')).rejects.toMatchObject({
+    await expect(signup('a@b.com', 'password123', true)).rejects.toMatchObject({
       status: 422,
       message: [
         'Ideal customer: String should have at most 1000 characters',
@@ -174,7 +179,7 @@ describe('signup', () => {
       vi.fn<typeof fetch>().mockResolvedValue(new Response('not json', { status: 500, statusText: 'Server Error' })),
     )
 
-    await expect(signup('a@b.com', 'password123')).rejects.toMatchObject({
+    await expect(signup('a@b.com', 'password123', true)).rejects.toMatchObject({
       status: 500,
       message: 'Server Error',
     })
@@ -186,7 +191,7 @@ describe('signup', () => {
       vi.fn<typeof fetch>().mockResolvedValue(jsonResponse({ unrelated: 'field' }, 500)),
     )
 
-    await expect(signup('a@b.com', 'password123')).rejects.toMatchObject({
+    await expect(signup('a@b.com', 'password123', true)).rejects.toMatchObject({
       status: 500,
     })
   })
@@ -194,7 +199,7 @@ describe('signup', () => {
   it('falls back to statusText when detail is neither a string nor an array', async () => {
     vi.stubGlobal('fetch', vi.fn<typeof fetch>().mockResolvedValue(jsonResponse({ detail: 42 }, 500)))
 
-    await expect(signup('a@b.com', 'password123')).rejects.toMatchObject({
+    await expect(signup('a@b.com', 'password123', true)).rejects.toMatchObject({
       status: 500,
     })
   })

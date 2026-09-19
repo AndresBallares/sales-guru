@@ -40,7 +40,7 @@ function renderLoginPage() {
 
 describe('LoginPage', () => {
   it('logs in and navigates to the dashboard on success', async () => {
-    mockedApi.login.mockResolvedValue({ id: '1', email: 'a@b.com' })
+    mockedApi.login.mockResolvedValue({ id: '1', email: 'a@b.com', needsTermsAcceptance: false })
     const user = userEvent.setup()
     renderLoginPage()
 

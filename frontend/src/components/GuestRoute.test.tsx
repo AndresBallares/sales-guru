@@ -48,7 +48,7 @@ describe('GuestRoute', () => {
   })
 
   it('redirects to / when already authenticated', async () => {
-    mockedApi.getMe.mockResolvedValue({ id: '1', email: 'a@b.com' })
+    mockedApi.getMe.mockResolvedValue({ id: '1', email: 'a@b.com', needsTermsAcceptance: false })
 
     renderGuest()
 
