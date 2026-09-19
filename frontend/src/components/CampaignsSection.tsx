@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState, type ChangeEvent, type FormEvent } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
+  activateCampaign,
   ApiError,
   approveCampaign,
   approveRecommendation,
@@ -181,8 +182,14 @@ export function CampaignsSection({
 
   const [approvingId, setApprovingId] = useState<string | null>(null)
   const [approveErrors, setApproveErrors] = useState<Record<string, string>>({})
+  // "Publish paused" checkbox on the Approve & Publish step, default
+  // checked (a campaign not yet in this map defaults to true below) —
+  // publishing then creates everything PAUSED on Meta instead of ACTIVE.
+  const [publishPaused, setPublishPaused] = useState<Record<string, boolean>>({})
   const [pausingId, setPausingId] = useState<string | null>(null)
   const [pauseErrors, setPauseErrors] = useState<Record<string, string>>({})
+  const [activatingId, setActivatingId] = useState<string | null>(null)
+  const [activateErrors, setActivateErrors] = useState<Record<string, string>>({})
   const [deletingId, setDeletingId] = useState<string | null>(null)
   const [deleteErrors, setDeleteErrors] = useState<Record<string, string>>({})
 
@@ -595,7 +602,10 @@ export function CampaignsSection({
       if (currentStatus === 'PENDING_APPROVAL') {
         await approveCampaign(businessId, campaignId)
       }
-      await publishCampaign(businessId, campaignId)
+      // publishPaused defaults to checked (true) — a campaign not yet in
+      // the map hasn't had its checkbox touched.
+      const paused = publishPaused[campaignId] ?? true
+      await publishCampaign(businessId, campaignId, { paused })
       await refresh()
     } catch (err) {
       setApproveErrors((prev) => ({
@@ -611,8 +621,10 @@ export function CampaignsSection({
   // campaign, not just one Ad (distinct from an Optimizer PAUSE_AD
   // recommendation, which only ever pauses one). No confirmation dialog
   // here on purpose: this is itself the explicit, deliberate action, and
-  // it's always reversible on Meta's side (a paused AdSet can be
-  // resumed there) even though this app doesn't yet offer a resume button.
+  // it's always reversible on Meta's side (a paused AdSet can be resumed
+  // there) — this app's own Activate button (handleActivate below) only
+  // ever applies to a campaign published paused and never yet activated,
+  // deliberately not a general resume for a campaign paused this way.
   async function handlePause(campaignId: string) {
     setPausingId(campaignId)
     setPauseErrors((prev) => ({ ...prev, [campaignId]: '' }))
@@ -626,6 +638,27 @@ export function CampaignsSection({
       }))
     } finally {
       setPausingId(null)
+    }
+  }
+
+  // Only ever enabled for a campaign published with "Publish paused" and
+  // never since touched (pausedReason === 'Published paused') — the
+  // backend 400s otherwise. Distinct from handlePause's reasoning above:
+  // this campaign was never actually live, so there's no "re-evaluate
+  // why it stopped" concern to gate on.
+  async function handleActivate(campaignId: string) {
+    setActivatingId(campaignId)
+    setActivateErrors((prev) => ({ ...prev, [campaignId]: '' }))
+    try {
+      await activateCampaign(businessId, campaignId)
+      await refresh()
+    } catch (err) {
+      setActivateErrors((prev) => ({
+        ...prev,
+        [campaignId]: err instanceof ApiError ? err.message : 'Could not activate campaign.',
+      }))
+    } finally {
+      setActivatingId(null)
     }
   }
 
@@ -797,11 +830,17 @@ export function CampaignsSection({
             const creativeError = creativeErrors[campaign.id]
             const approveError = approveErrors[campaign.id]
             const pauseError = pauseErrors[campaign.id]
+            const activateError = activateErrors[campaign.id]
             const canPublish = ['PENDING_APPROVAL', 'APPROVED', 'FAILED'].includes(
               campaign.status,
             )
             const isLive = campaign.status === 'LIVE'
             const isPaused = campaign.status === 'PAUSED'
+            // Exact match with the backend's PUBLISHED_PAUSED_REASON
+            // (app/services/publish.py) — a campaign paused any other way
+            // (manual pause, duration-elapsed, a circuit breaker) can't be
+            // activated from here; only Meta's own Ads Manager can.
+            const isActivatable = isPaused && campaign.pausedReason === 'Published paused'
             const campaignMetrics = metrics[campaign.id] ?? []
             const metricError = metricErrors[campaign.id]
             const latestMetric = campaignMetrics[0]
@@ -1641,6 +1680,20 @@ export function CampaignsSection({
                     className="campaign-block"
                     aria-label={`Publish ${campaign.name ?? campaign.id}`}
                   >
+                    <label htmlFor={`publish-paused-${campaign.id}`}>
+                      <input
+                        id={`publish-paused-${campaign.id}`}
+                        type="checkbox"
+                        checked={publishPaused[campaign.id] ?? true}
+                        onChange={(event) =>
+                          setPublishPaused((prev) => ({
+                            ...prev,
+                            [campaign.id]: event.target.checked,
+                          }))
+                        }
+                      />
+                      Publish paused (nothing spends until you click Activate)
+                    </label>
                     <button
                       type="button"
                       onClick={() => handleApproveAndPublish(campaign.id, campaign.status)}
@@ -1851,10 +1904,32 @@ export function CampaignsSection({
                   </div>
                 )}
                 {isPaused && (
-                  <p>
-                    Paused
-                    {campaign.pausedReason ? ` — ${campaign.pausedReason}` : ''}
-                  </p>
+                  <div
+                    className="campaign-block"
+                    aria-label={`Paused status for ${campaign.name ?? campaign.id}`}
+                  >
+                    <p>
+                      {isActivatable
+                        ? 'Paused — activate in Sales Guru or Ads Manager'
+                        : `Paused${campaign.pausedReason ? ` — ${campaign.pausedReason}` : ''}`}
+                    </p>
+                    {isActivatable && (
+                      <>
+                        <button
+                          type="button"
+                          onClick={() => handleActivate(campaign.id)}
+                          disabled={activatingId === campaign.id}
+                        >
+                          {activatingId === campaign.id ? 'Activating…' : 'Activate'}
+                        </button>
+                        {activateError && (
+                          <p className="form-error" role="alert">
+                            {activateError}
+                          </p>
+                        )}
+                      </>
+                    )}
+                  </div>
                 )}
               </li>
             )

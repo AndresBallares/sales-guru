@@ -40,6 +40,7 @@ vi.mock('../lib/api', async (importOriginal) => {
     approveCampaign: vi.fn<typeof actual.approveCampaign>(),
     publishCampaign: vi.fn<typeof actual.publishCampaign>(),
     pauseCampaign: vi.fn<typeof actual.pauseCampaign>(),
+    activateCampaign: vi.fn<typeof actual.activateCampaign>(),
     deleteCampaign: vi.fn<typeof actual.deleteCampaign>(),
     listMetrics: vi.fn<typeof actual.listMetrics>(),
     refreshMetrics: vi.fn<typeof actual.refreshMetrics>(),
@@ -2542,7 +2543,9 @@ describe('CampaignsSection', () => {
 
     expect(mockedApi.approveCampaign).toHaveBeenCalledWith('biz-1', 'camp-1')
     await waitFor(() =>
-      expect(mockedApi.publishCampaign).toHaveBeenCalledWith('biz-1', 'camp-1'),
+      expect(mockedApi.publishCampaign).toHaveBeenCalledWith('biz-1', 'camp-1', {
+        paused: true,
+      }),
     )
     expect(await screen.findByText(/Live on Meta/)).toBeInTheDocument()
     expect(screen.getByText(/meta_campaign_1/)).toBeInTheDocument()
@@ -2692,6 +2695,196 @@ describe('CampaignsSection', () => {
     renderCampaigns(<CampaignsSection businessId="biz-1" />)
 
     expect(await screen.findByText('Paused')).toBeInTheDocument()
+  })
+
+  it('publishes with paused=false when the "Publish paused" checkbox is unchecked', async () => {
+    mockedApi.listCampaigns.mockResolvedValueOnce([
+      {
+        id: 'camp-1',
+        name: null,
+        objective: 'SALES',
+        status: 'APPROVED',
+        productId: null,
+        audienceId: null,
+        metaCampaignId: null,
+        eventVenueKey: null,
+        startDate: null,
+        endDate: null,
+        pausedReason: null,
+        dailySpendFlag: null,
+        needsDestinationUrl: false,
+      },
+    ])
+    mockedApi.listCampaigns.mockResolvedValueOnce([
+      {
+        id: 'camp-1',
+        name: null,
+        objective: 'SALES',
+        status: 'LIVE',
+        productId: null,
+        audienceId: null,
+        metaCampaignId: 'meta_campaign_1',
+        eventVenueKey: null,
+        startDate: null,
+        endDate: null,
+        pausedReason: null,
+        dailySpendFlag: null,
+        needsDestinationUrl: false,
+      },
+    ])
+    mockedApi.publishCampaign.mockResolvedValue({
+      id: 'camp-1',
+      name: null,
+      objective: 'SALES',
+      status: 'LIVE',
+      productId: null,
+      audienceId: null,
+      metaCampaignId: 'meta_campaign_1',
+      eventVenueKey: null,
+      startDate: null,
+      endDate: null,
+      pausedReason: null,
+      dailySpendFlag: null,
+      needsDestinationUrl: false,
+    })
+    const user = userEvent.setup()
+
+    renderCampaigns(<CampaignsSection businessId="biz-1" />)
+    const checkbox = await screen.findByRole('checkbox', {
+      name: /Publish paused/,
+    })
+    expect(checkbox).toBeChecked()
+
+    await user.click(checkbox)
+    await user.click(screen.getByRole('button', { name: 'Approve & Publish' }))
+
+    await waitFor(() =>
+      expect(mockedApi.publishCampaign).toHaveBeenCalledWith('biz-1', 'camp-1', {
+        paused: false,
+      }),
+    )
+  })
+
+  it('activates a published-paused campaign and shows it live', async () => {
+    mockedApi.listCampaigns.mockResolvedValueOnce([
+      {
+        id: 'camp-1',
+        name: null,
+        objective: 'SALES',
+        status: 'PAUSED',
+        productId: null,
+        audienceId: null,
+        metaCampaignId: 'meta_campaign_1',
+        eventVenueKey: null,
+        startDate: null,
+        endDate: null,
+        pausedReason: 'Published paused',
+        dailySpendFlag: null,
+        needsDestinationUrl: false,
+      },
+    ])
+    mockedApi.listCampaigns.mockResolvedValueOnce([
+      {
+        id: 'camp-1',
+        name: null,
+        objective: 'SALES',
+        status: 'LIVE',
+        productId: null,
+        audienceId: null,
+        metaCampaignId: 'meta_campaign_1',
+        eventVenueKey: null,
+        startDate: null,
+        endDate: null,
+        pausedReason: null,
+        dailySpendFlag: null,
+        needsDestinationUrl: false,
+      },
+    ])
+    mockedApi.activateCampaign.mockResolvedValue({
+      id: 'camp-1',
+      name: null,
+      objective: 'SALES',
+      status: 'LIVE',
+      productId: null,
+      audienceId: null,
+      metaCampaignId: 'meta_campaign_1',
+      eventVenueKey: null,
+      startDate: null,
+      endDate: null,
+      pausedReason: null,
+      dailySpendFlag: null,
+      needsDestinationUrl: false,
+    })
+    const user = userEvent.setup()
+
+    renderCampaigns(<CampaignsSection businessId="biz-1" />)
+    expect(
+      await screen.findByText('Paused — activate in Sales Guru or Ads Manager'),
+    ).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'Activate' }))
+
+    expect(mockedApi.activateCampaign).toHaveBeenCalledWith('biz-1', 'camp-1')
+    expect(await screen.findByText(/Live on Meta/)).toBeInTheDocument()
+    expect(
+      screen.queryByText('Paused — activate in Sales Guru or Ads Manager'),
+    ).not.toBeInTheDocument()
+  })
+
+  it('does not show an Activate button for a manually paused campaign', async () => {
+    mockedApi.listCampaigns.mockResolvedValue([
+      {
+        id: 'camp-1',
+        name: null,
+        objective: 'SALES',
+        status: 'PAUSED',
+        productId: null,
+        audienceId: null,
+        metaCampaignId: 'meta_campaign_1',
+        eventVenueKey: null,
+        startDate: null,
+        endDate: null,
+        pausedReason: 'Manually paused',
+        dailySpendFlag: null,
+        needsDestinationUrl: false,
+      },
+    ])
+
+    renderCampaigns(<CampaignsSection businessId="biz-1" />)
+
+    expect(await screen.findByText('Paused — Manually paused')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Activate' })).not.toBeInTheDocument()
+  })
+
+  it('shows an error if activating fails', async () => {
+    mockedApi.listCampaigns.mockResolvedValue([
+      {
+        id: 'camp-1',
+        name: null,
+        objective: 'SALES',
+        status: 'PAUSED',
+        productId: null,
+        audienceId: null,
+        metaCampaignId: 'meta_campaign_1',
+        eventVenueKey: null,
+        startDate: null,
+        endDate: null,
+        pausedReason: 'Published paused',
+        dailySpendFlag: null,
+        needsDestinationUrl: false,
+      },
+    ])
+    mockedApi.activateCampaign.mockRejectedValue(
+      new api.ApiError(500, 'Meta API call failed'),
+    )
+    const user = userEvent.setup()
+
+    renderCampaigns(<CampaignsSection businessId="biz-1" />)
+    await screen.findByRole('button', { name: 'Activate' })
+
+    await user.click(screen.getByRole('button', { name: 'Activate' }))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Meta API call failed')
   })
 
   it('shows a daily-spend warning on a live campaign without pausing anything', async () => {
@@ -2855,7 +3048,9 @@ describe('CampaignsSection', () => {
 
     expect(mockedApi.approveCampaign).not.toHaveBeenCalled()
     await waitFor(() =>
-      expect(mockedApi.publishCampaign).toHaveBeenCalledWith('biz-1', 'camp-1'),
+      expect(mockedApi.publishCampaign).toHaveBeenCalledWith('biz-1', 'camp-1', {
+        paused: true,
+      }),
     )
   })
 

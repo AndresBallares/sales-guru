@@ -370,6 +370,26 @@ async def test_create_meta_campaign_returns_the_new_id(
 
 
 @pytest.mark.asyncio
+async def test_create_meta_campaign_sends_paused_status_when_given(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The "Publish paused" option sends status=PAUSED instead of the
+    ACTIVE default — nothing spends until a human clicks Activate."""
+    client = _mock_client_returning(monkeypatch, _FakeResponse({"id": "campaign_123"}))
+
+    await meta.create_meta_campaign(
+        access_token="token",
+        ad_account_id="act_1",
+        name="Custom Colombian Emerald Ring",
+        objective="SALES",
+        status="PAUSED",
+    )
+
+    _url, data = client.calls[0]
+    assert data["status"] == "PAUSED"
+
+
+@pytest.mark.asyncio
 async def test_create_meta_ad_set_returns_the_new_id(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -401,6 +421,30 @@ async def test_create_meta_ad_set_returns_the_new_id(
     assert "promoted_object" not in data
     assert "end_time" not in data
     assert "bid_amount" not in data
+
+
+@pytest.mark.asyncio
+async def test_create_meta_ad_set_sends_paused_status_when_given(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The "Publish paused" option sends status=PAUSED instead of the
+    ACTIVE default, same as create_meta_campaign."""
+    client = _mock_client_returning(monkeypatch, _FakeResponse({"id": "adset_123"}))
+
+    await meta.create_meta_ad_set(
+        access_token="token",
+        ad_account_id="act_1",
+        name="Custom Colombian Emerald Ring",
+        meta_campaign_id="campaign_123",
+        daily_budget_cents=2500,
+        optimization_goal="OFFSITE_CONVERSIONS",
+        age_min=30,
+        age_max=55,
+        status="PAUSED",
+    )
+
+    _url, data = client.calls[0]
+    assert data["status"] == "PAUSED"
 
 
 @pytest.mark.asyncio
@@ -819,6 +863,27 @@ async def test_create_meta_ad_returns_the_new_id(
     assert data["adset_id"] == "adset_123"
     assert '"creative_id": "creative_123"' in data["creative"]
     assert data["status"] == "ACTIVE"
+
+
+@pytest.mark.asyncio
+async def test_create_meta_ad_sends_paused_status_when_given(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The "Publish paused" option sends status=PAUSED instead of the
+    ACTIVE default, same as create_meta_campaign/create_meta_ad_set."""
+    client = _mock_client_returning(monkeypatch, _FakeResponse({"id": "ad_123"}))
+
+    await meta.create_meta_ad(
+        access_token="token",
+        ad_account_id="act_1",
+        name="Creative A",
+        meta_ad_set_id="adset_123",
+        meta_creative_id="creative_123",
+        status="PAUSED",
+    )
+
+    _url, data = client.calls[0]
+    assert data["status"] == "PAUSED"
 
 
 @pytest.mark.asyncio
@@ -1320,6 +1385,34 @@ async def test_pause_meta_ad_set_raises_on_failure(
 
 
 @pytest.mark.asyncio
+async def test_resume_meta_ad_set_sends_the_active_status(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Resuming an ad set POSTs status=ACTIVE to the ad set's own node —
+    the reverse of pause_meta_ad_set, used by activate_campaign."""
+    client = _mock_client_returning(monkeypatch, _FakeResponse({"success": True}))
+
+    await meta.resume_meta_ad_set(access_token="token", meta_ad_set_id="adset_123")
+
+    url, data = client.calls[0]
+    assert url == "https://graph.facebook.com/v21.0/adset_123"
+    assert data["status"] == "ACTIVE"
+    assert data["access_token"] == "token"
+
+
+@pytest.mark.asyncio
+async def test_resume_meta_ad_set_raises_on_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A Graph API failure surfaces as MetaConnectionError."""
+    fake_client = _FakeAsyncClient(error=httpx.ConnectError("boom"))
+    monkeypatch.setattr(httpx, "AsyncClient", lambda: fake_client)
+
+    with pytest.raises(meta.MetaConnectionError, match="Meta API call failed"):
+        await meta.resume_meta_ad_set(access_token="token", meta_ad_set_id="adset_123")
+
+
+@pytest.mark.asyncio
 async def test_update_meta_ad_set_budget_sends_the_new_budget(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1745,6 +1838,14 @@ async def test_pause_meta_ad_is_a_no_op_in_fake_mode(fake_meta_mode: None) -> No
 async def test_pause_meta_ad_set_is_a_no_op_in_fake_mode(fake_meta_mode: None) -> None:
     """Fake mode pauses nothing for real — just returns."""
     await meta.pause_meta_ad_set(
+        access_token="fake-token", meta_ad_set_id="fake_adset_abc"
+    )
+
+
+@pytest.mark.asyncio
+async def test_resume_meta_ad_set_is_a_no_op_in_fake_mode(fake_meta_mode: None) -> None:
+    """Fake mode resumes nothing for real — just returns."""
+    await meta.resume_meta_ad_set(
         access_token="fake-token", meta_ad_set_id="fake_adset_abc"
     )
 

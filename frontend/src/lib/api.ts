@@ -569,14 +569,29 @@ export function approveCampaign(businessId: string, campaignId: string): Promise
   })
 }
 
-export function publishCampaign(businessId: string, campaignId: string): Promise<Campaign> {
+export function publishCampaign(
+  businessId: string,
+  campaignId: string,
+  options?: { paused?: boolean },
+): Promise<Campaign> {
   return request<Campaign>(`/businesses/${businessId}/campaigns/${campaignId}/publish`, {
     method: 'POST',
+    body: JSON.stringify({ paused: options?.paused ?? false }),
   })
 }
 
 export function pauseCampaign(businessId: string, campaignId: string): Promise<Campaign> {
   return request<Campaign>(`/businesses/${businessId}/campaigns/${campaignId}/pause`, {
+    method: 'POST',
+  })
+}
+
+// Only reachable for a campaign published with "Publish paused" and never
+// since touched (Campaign.pausedReason === 'Published paused') — the
+// backend 400s otherwise, deliberately not a general un-pause action (see
+// app/services/publish.py's activate_campaign).
+export function activateCampaign(businessId: string, campaignId: string): Promise<Campaign> {
+  return request<Campaign>(`/businesses/${businessId}/campaigns/${campaignId}/activate`, {
     method: 'POST',
   })
 }

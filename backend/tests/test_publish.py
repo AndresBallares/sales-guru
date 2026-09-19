@@ -434,6 +434,8 @@ def mock_services(monkeypatch: pytest.MonkeyPatch) -> dict[str, AsyncMock]:
     monkeypatch.setattr(meta_service_module, "create_meta_ad", create_ad)
     pause_ad_set = AsyncMock(return_value=None)
     monkeypatch.setattr(meta_service_module, "pause_meta_ad_set", pause_ad_set)
+    resume_ad_set = AsyncMock(return_value=None)
+    monkeypatch.setattr(meta_service_module, "resume_meta_ad_set", resume_ad_set)
 
     return {
         "create_campaign": create_campaign,
@@ -443,6 +445,7 @@ def mock_services(monkeypatch: pytest.MonkeyPatch) -> dict[str, AsyncMock]:
         "upload_ad_image": upload_ad_image,
         "create_ad": create_ad,
         "pause_ad_set": pause_ad_set,
+        "resume_ad_set": resume_ad_set,
     }
 
 
@@ -1418,6 +1421,216 @@ async def test_publish_fails_loudly_when_a_carousel_cards_photo_was_deleted(
     mock_services["create_carousel_ad_creative"].assert_not_awaited()
     campaigns = client.get(f"/businesses/{business_id}/campaigns").json()
     assert campaigns[0]["status"] == "FAILED"
+
+
+@pytest.mark.asyncio
+async def test_publish_paused_creates_everything_paused_on_meta(
+    client: TestClient, mock_services: dict[str, AsyncMock]
+) -> None:
+    """paused=true (the frontend's "Publish paused" checkbox) creates the
+    Meta campaign/ad set/ad all PAUSED, marks the local campaign/AdSet/Ad
+    PAUSED too, and records PUBLISHED_PAUSED_REASON — the sentinel
+    activate_campaign later checks for."""
+    business_id, campaign_id = _ready_campaign(client)
+
+    response = client.post(
+        f"/businesses/{business_id}/campaigns/{campaign_id}/publish",
+        json={"paused": True},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "PAUSED"
+    assert body["pausedReason"] == "Published paused"
+    assert body["metaCampaignId"] == "meta_campaign_1"
+
+    _, campaign_kwargs = mock_services["create_campaign"].call_args
+    assert campaign_kwargs["status"] == "PAUSED"
+    _, ad_set_kwargs = mock_services["create_ad_set"].call_args
+    assert ad_set_kwargs["status"] == "PAUSED"
+    _, ad_kwargs = mock_services["create_ad"].call_args
+    assert ad_kwargs["status"] == "PAUSED"
+
+    seeder = Prisma()
+    await seeder.connect()
+    ad_sets = await seeder.adset.find_many(where={"campaignId": campaign_id})
+    ads = await seeder.ad.find_many(where={"adSetId": {"in": [a.id for a in ad_sets]}})
+    await seeder.disconnect()
+    assert all(a.status == "PAUSED" for a in ad_sets)
+    assert all(a.status == "PAUSED" for a in ads)
+
+
+def test_publish_without_paused_still_defaults_to_live(
+    client: TestClient, mock_services: dict[str, AsyncMock]
+) -> None:
+    """Omitting paused (or a bare POST with no body, every existing
+    caller/test) is unaffected by this option — still publishes ACTIVE,
+    same as before it existed."""
+    business_id, campaign_id = _ready_campaign(client)
+
+    response = client.post(f"/businesses/{business_id}/campaigns/{campaign_id}/publish")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "LIVE"
+    assert body["pausedReason"] is None
+    _, campaign_kwargs = mock_services["create_campaign"].call_args
+    assert campaign_kwargs["status"] == "ACTIVE"
+
+
+def test_publish_paused_works_for_a_carousel_campaign_too(
+    client: TestClient,
+    mock_services: dict[str, AsyncMock],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """ "Publish paused" applies identically to CAROUSEL, not just
+    SINGLE_IMAGE — the carousel creative call is unaffected (it has no
+    status of its own; only the campaign/ad set/ad do), but everything
+    downstream still ends up PAUSED."""
+    business_id, campaign_id = _ready_carousel_campaign(client, monkeypatch)
+
+    response = client.post(
+        f"/businesses/{business_id}/campaigns/{campaign_id}/publish",
+        json={"paused": True},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "PAUSED"
+    assert body["pausedReason"] == "Published paused"
+    mock_services["create_carousel_ad_creative"].assert_awaited_once()
+    _, ad_set_kwargs = mock_services["create_ad_set"].call_args
+    assert ad_set_kwargs["status"] == "PAUSED"
+
+
+def test_activate_requires_a_session(client: TestClient) -> None:
+    """Activating with no session cookie returns 401."""
+    response = client.post("/businesses/some-id/campaigns/some-id/activate")
+
+    assert response.status_code == 401
+
+
+def test_activate_404s_for_a_nonexistent_campaign(client: TestClient) -> None:
+    """Activating a nonexistent campaign returns 404."""
+    _signed_up_client(client)
+    business_id = _create_business(client)
+
+    response = client.post(
+        f"/businesses/{business_id}/campaigns/does-not-exist/activate"
+    )
+
+    assert response.status_code == 404
+
+
+def test_activate_400s_for_a_campaign_thats_never_been_published(
+    client: TestClient,
+) -> None:
+    """A DRAFT campaign (never published, so never PAUSED at all) can't
+    be activated."""
+    _signed_up_client(client)
+    business_id = _create_business(client)
+    campaign_id = _create_campaign(client, business_id)
+
+    response = client.post(
+        f"/businesses/{business_id}/campaigns/{campaign_id}/activate"
+    )
+
+    assert response.status_code == 400
+
+
+def test_activate_400s_for_a_live_campaign(
+    client: TestClient, mock_services: dict[str, AsyncMock]
+) -> None:
+    """A LIVE campaign (published unpaused) has nothing to activate."""
+    business_id, campaign_id = _ready_campaign(client)
+    client.post(f"/businesses/{business_id}/campaigns/{campaign_id}/publish")
+
+    response = client.post(
+        f"/businesses/{business_id}/campaigns/{campaign_id}/activate"
+    )
+
+    assert response.status_code == 400
+
+
+def test_activate_400s_for_a_manually_paused_campaign(
+    client: TestClient, mock_services: dict[str, AsyncMock]
+) -> None:
+    """A campaign paused by the manual "Pause campaign" button (LIVE ->
+    PAUSED, pausedReason "Manually paused") is a different PAUSED than
+    "published paused" — activate refuses it, deliberately not a general
+    un-pause action (app/services/publish.py's activate_campaign)."""
+    business_id, campaign_id = _ready_campaign(client)
+    client.post(f"/businesses/{business_id}/campaigns/{campaign_id}/publish")
+    client.post(f"/businesses/{business_id}/campaigns/{campaign_id}/pause")
+
+    response = client.post(
+        f"/businesses/{business_id}/campaigns/{campaign_id}/activate"
+    )
+
+    assert response.status_code == 400
+
+
+def test_activate_succeeds_and_resumes_every_adset(
+    client: TestClient, mock_services: dict[str, AsyncMock]
+) -> None:
+    """Activating a published-paused campaign resumes every AdSet on
+    Meta, moves the campaign (and its local AdSet/Ad rows) back to LIVE,
+    and clears pausedReason."""
+    business_id, campaign_id = _ready_campaign(client)
+    client.post(
+        f"/businesses/{business_id}/campaigns/{campaign_id}/publish",
+        json={"paused": True},
+    )
+
+    response = client.post(
+        f"/businesses/{business_id}/campaigns/{campaign_id}/activate"
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "LIVE"
+    assert body["pausedReason"] is None
+    mock_services["resume_ad_set"].assert_awaited_once()
+
+
+def test_activate_500s_when_the_meta_call_fails(
+    client: TestClient, mock_services: dict[str, AsyncMock]
+) -> None:
+    """A Graph API failure surfaces as 500, not a silent no-op."""
+    from app.services.meta import MetaConnectionError
+
+    business_id, campaign_id = _ready_campaign(client)
+    client.post(
+        f"/businesses/{business_id}/campaigns/{campaign_id}/publish",
+        json={"paused": True},
+    )
+    mock_services["resume_ad_set"].side_effect = MetaConnectionError("boom")
+
+    response = client.post(
+        f"/businesses/{business_id}/campaigns/{campaign_id}/activate"
+    )
+
+    assert response.status_code == 500
+
+
+def test_activate_400s_if_meta_was_disconnected_since_publishing(
+    client: TestClient, mock_services: dict[str, AsyncMock]
+) -> None:
+    """A published-paused campaign whose Meta connection was later
+    removed (DELETE .../meta) 400s on activate instead of crashing."""
+    business_id, campaign_id = _ready_campaign(client)
+    client.post(
+        f"/businesses/{business_id}/campaigns/{campaign_id}/publish",
+        json={"paused": True},
+    )
+    client.delete(f"/businesses/{business_id}/meta")
+
+    response = client.post(
+        f"/businesses/{business_id}/campaigns/{campaign_id}/activate"
+    )
+
+    assert response.status_code == 400
+    assert "meta connection" in response.json()["detail"].lower()
 
 
 def test_pause_requires_a_session(client: TestClient) -> None:

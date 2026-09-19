@@ -96,6 +96,19 @@ class CampaignUpdateRequest(CamelCaseModel):
     audience_id: str | None = None
 
 
+class PublishCampaignRequest(CamelCaseModel):
+    """Optional payload for publish (PRD.md build step 8).
+
+    paused defaults to False here (an omitted/empty body still publishes
+    live, same as before this field existed) — the frontend's own
+    "Publish paused" checkbox defaults to checked, but that's a UI
+    default, not this API's; every existing direct caller (scripts,
+    tests) that posts no body is unaffected.
+    """
+
+    paused: bool = False
+
+
 class CampaignResponse(CamelCaseModel):
     """Public-facing representation of a Campaign."""
 
