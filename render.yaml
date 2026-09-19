@@ -42,6 +42,21 @@
 # encrypts MetaConnection.accessToken at rest (app/core/crypto.py).
 # Generate one with:
 #   python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+#
+# ANTHROPIC_API_KEY / META_APP_ID / META_APP_SECRET / META_REDIRECT_URI
+# (all sync: false): declared here as of 2026-09-19 so the Blueprint UI
+# actually prompts for them — previously only referenced in this comment
+# block, never declared as real envVars entries below, so a fresh
+# Blueprint deploy silently left the Strategist/Creative Agents and the
+# Meta OAuth connection broken (no error at deploy time, just a runtime
+# "not configured" failure the first time a business tried to use them).
+# META_REDIRECT_URI must match app/api/meta.py's callback_router route
+# exactly (GET /meta/callback) plus BACKEND_URL — i.e.
+# https://sales-guru-backend.onrender.com/meta/callback on a default
+# Render hostname — and that same URL must also be added to the Meta
+# app's own OAuth redirect URI allowlist (developers.facebook.com's Meta
+# Login product settings), or the OAuth round-trip 400s on Meta's side
+# before ever reaching this backend.
 
 services:
   - type: web
@@ -70,6 +85,14 @@ services:
       - key: PRISMA_BINARY_CACHE_DIR
         value: .prisma-cache
       - key: META_TOKEN_ENCRYPTION_KEY
+        sync: false
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: META_APP_ID
+        sync: false
+      - key: META_APP_SECRET
+        sync: false
+      - key: META_REDIRECT_URI
         sync: false
 
   - type: web
