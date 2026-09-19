@@ -703,6 +703,20 @@ button:disabled {
   padding: max(1rem, env(safe-area-inset-top)) max(1.5rem, env(safe-area-inset-right)) 0;
 }
 
+.site-footer {
+  display: flex;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 0.5rem 1.5rem;
+  padding: 1.5rem max(1.5rem, env(safe-area-inset-right))
+    max(1.5rem, env(safe-area-inset-bottom)) max(1.5rem, env(safe-area-inset-left));
+  font-size: 0.85rem;
+}
+
+.site-footer a {
+  color: var(--text-tertiary);
+}
+
 .theme-toggle {
   align-self: center;
   background: var(--surface);
@@ -989,4 +1003,21 @@ code {
   font-weight: 400;
   color: var(--text);
   cursor: pointer;
+}
+
+/* ---------- Legal pages (Privacy/Terms/Data Deletion) ---------- */
+
+.legal-page {
+  max-width: 720px;
+  gap: 1rem;
+}
+
+.legal-page h2 {
+  margin-top: 1.5rem;
+}
+
+.legal-page p,
+.legal-page li {
+  color: var(--text-secondary);
+  line-height: 1.6;
 }
