@@ -1119,3 +1119,110 @@ def test_is_creative_stale_true_for_business_description_even_with_no_product() 
     )
 
     assert creative.is_creative_stale(stale, campaign, None, business) is True
+
+
+# ── Ad-quality rules (PRD.md §5 step 6: what makes a Facebook post work) ──
+
+
+def test_build_prompt_requires_a_scroll_stopping_hook_in_the_first_line() -> None:
+    """Meta truncates primary text after ~125 characters with "See more", so
+    the opening line has to work on its own."""
+    prompt = creative._build_prompt(_fake_business(), _fake_product(), _FAKE_STRATEGY)
+
+    assert "Ad quality rules" in prompt
+    assert "first line" in prompt
+    assert "question, a bold claim, a specific benefit, or social proof" in prompt
+    assert "125" in prompt
+
+
+def test_build_prompt_never_lets_the_model_invent_social_proof() -> None:
+    """The hook may use social proof, but only proof that's actually on file —
+    an invented review count is false advertising."""
+    prompt = creative._build_prompt(_fake_business(), _fake_product(), _FAKE_STRATEGY)
+
+    assert "Never invent reviews, ratings, counts, guarantees" in prompt
+
+
+def test_build_prompt_points_at_listed_proof_points_when_they_exist() -> None:
+    brand_profile = _fake_brand_profile(proofPoints=json.dumps(["4,000+ reviews"]))
+
+    prompt = creative._build_prompt(
+        _fake_business(), _fake_product(), _FAKE_STRATEGY, brand_profile=brand_profile
+    )
+
+    assert "Use one of the proof points listed above" in prompt
+
+
+def test_build_prompt_falls_back_to_product_facts_with_no_proof_points() -> None:
+    prompt = creative._build_prompt(_fake_business(), _fake_product(), _FAKE_STRATEGY)
+
+    assert "No proof points are on file" in prompt
+
+
+def test_build_prompt_asks_for_the_product_in_use_not_a_flat_product_shot() -> None:
+    prompt = creative._build_prompt(_fake_business(), _fake_product(), _FAKE_STRATEGY)
+
+    assert "product in use" in prompt
+    assert "flat white-background" in prompt
+
+
+def test_build_prompt_gives_jewelry_specific_visual_guidance() -> None:
+    business = _fake_business(industry="FASHION_JEWELRY")
+
+    prompt = creative._build_prompt(business, _fake_product(), _FAKE_STRATEGY)
+
+    assert "on skin, in motion" in prompt
+    assert "sparkle" in prompt
+
+
+def test_build_prompt_omits_jewelry_visual_guidance_for_other_industries() -> None:
+    business = _fake_business(industry="SAAS")
+
+    prompt = creative._build_prompt(business, _fake_product(), _FAKE_STRATEGY)
+
+    assert "sparkle" not in prompt
+
+
+def test_build_prompt_requires_one_clear_message_per_variant() -> None:
+    prompt = creative._build_prompt(_fake_business(), _fake_product(), _FAKE_STRATEGY)
+
+    assert "one product, one benefit, one reason to act" in prompt
+
+
+def test_build_prompt_matches_the_copy_to_the_cta_action() -> None:
+    prompt = creative._build_prompt(_fake_business(), _fake_product(), _FAKE_STRATEGY)
+
+    assert "Shop the collection" in prompt
+    assert "never a vague" in prompt
+
+
+def test_build_prompt_keeps_the_copy_consistent_with_the_brand() -> None:
+    prompt = creative._build_prompt(_fake_business(), _fake_product(), _FAKE_STRATEGY)
+
+    assert "same tone, colors, and photo style" in prompt
+
+
+def test_build_prompt_asks_for_short_scannable_copy_without_hashtags() -> None:
+    prompt = creative._build_prompt(_fake_business(), _fake_product(), _FAKE_STRATEGY)
+
+    assert "line breaks" in prompt
+    assert "at most one emoji" in prompt
+    assert "no hashtags" in prompt
+
+
+def test_build_prompt_ties_carousel_cards_back_to_the_single_message() -> None:
+    prompt = creative._build_prompt(
+        _fake_business(),
+        _fake_product(),
+        _FAKE_STRATEGY,
+        format="CAROUSEL",
+        card_count=3,
+    )
+
+    assert "every card reinforces that same single message" in prompt
+
+
+def test_build_prompt_omits_the_carousel_message_rule_for_single_image() -> None:
+    prompt = creative._build_prompt(_fake_business(), _fake_product(), _FAKE_STRATEGY)
+
+    assert "every card reinforces that same single message" not in prompt
