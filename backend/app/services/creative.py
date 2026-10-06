@@ -130,6 +130,97 @@ _ANGLE_TEMPLATES_BY_INDUSTRY: dict[str, tuple[str, ...]] = {
     ),
 }
 
+# Visual guidance for image_prompt/video_prompt (confirmed 2026-10-06): a
+# post that shows the product in use outperforms a flat product shot. The
+# generic line applies to every industry; an industry listed in
+# _VISUAL_GUIDANCE_BY_INDUSTRY gets a more specific line added on top, the
+# same extension pattern as _ANGLE_TEMPLATES_BY_INDUSTRY above.
+_VISUAL_GUIDANCE_BY_INDUSTRY: dict[str, str] = {
+    "FASHION_JEWELRY": (
+        "For jewelry, show it on skin, in motion, and close enough that the "
+        "sparkle is visible."
+    ),
+}
+
+
+def _quality_rule_lines(
+    industry: str | None,
+    *,
+    has_proof_points: bool,
+    format: CreativeFormat,
+) -> list[str]:
+    """Build the "Ad quality rules" block of the Creative Agent's prompt.
+
+    Seven rules for what makes a Facebook post work (confirmed with the user
+    2026-10-06; PRD.md §5 step 6): a hook in the first line, a product-in-use
+    visual, one clear message, proof, a CTA-matched action, brand
+    consistency, and short scannable copy. Prompt-level guidance only — the
+    hard limits (CTA set, slot lengths) stay enforced by the batch validators.
+
+    Args:
+        industry: Business.industry, for the industry-specific visual line.
+        has_proof_points: Whether the brand profile lists proof points —
+            switches rule 4 between "use a listed one" and "lean on the
+            product facts given", never "make one up".
+        format: SINGLE_IMAGE or CAROUSEL — CAROUSEL adds a line tying every
+            card back to the variant's single message.
+
+    Returns:
+        The prompt lines, starting with a blank separator line.
+    """
+    visual = (
+        "Visual: image_prompt and video_prompt must show the product in use, "
+        "not a flat white-background product shot. Video and carousels "
+        "usually outperform a static product photo."
+    )
+    industry_visual = _VISUAL_GUIDANCE_BY_INDUSTRY.get(industry or "")
+    if industry_visual:
+        visual += " " + industry_visual
+
+    if has_proof_points:
+        proof = (
+            "Proof: build trust into each variant. Use one of the proof "
+            "points listed above, or a material or fact from the product "
+            "details."
+        )
+    else:
+        proof = (
+            "Proof: build trust into each variant using the product's own "
+            "materials and facts from the details above. No proof points are "
+            "on file for this business."
+        )
+
+    lines = [
+        "",
+        "Ad quality rules (apply to every variant):",
+        "1. Hook: Facebook cuts primary text off after about "
+        f'{MAX_BODY_TEXT_LENGTH} characters with "See more", so the '
+        "first line of body_text has to stop the scroll on its own: open "
+        "with a question, a bold claim, a specific benefit, or social "
+        "proof. Don't open with the brand name or a greeting.",
+        f"2. {visual}",
+        "3. One message: one product, one benefit, one reason to act per "
+        "variant. Don't try to say everything.",
+        f"4. {proof} Never invent reviews, ratings, counts, guarantees, "
+        "shipping or return terms, or materials that aren't given above.",
+        "5. Call to action: write the copy so it leads into the CTA with a "
+        'specific action, such as "Shop the collection" for a purchase '
+        'goal, never a vague "Learn more" when the goal is a sale.',
+        "6. Brand consistency: keep the same tone, colors, and photo style "
+        "as the brand voice and logo above; people click through to the "
+        "business's page before buying.",
+        "7. Short, scannable copy: use line breaks, at most one emoji and "
+        "only if it fits the brand, and no hashtags (they don't help on "
+        "Facebook ads and look spammy).",
+    ]
+    if format == "CAROUSEL":
+        lines.append(
+            "For a carousel, every card reinforces that same single message "
+            "from a different angle of the product in use."
+        )
+    return lines
+
+
 # Fake mode canned batch — built from the real GeneratedCreativeVariant
 # model (not a hand-written dict), so a schema change breaks this loudly
 # rather than drifting out of sync silently. Deliberately four different
@@ -374,6 +465,10 @@ def _build_prompt(
         if template == "offer + urgency" and not standing_offer:
             continue
         lines.append(f"- {template}")
+
+    lines += _quality_rule_lines(
+        business.industry, has_proof_points=bool(proof_points), format=format
+    )
 
     lines += [
         "",
