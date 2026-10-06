@@ -795,10 +795,12 @@ def _build_creative_test_plan_prompt(
         "describe interests or demographics as if they would be selected "
         "in the ad set.",
         "- creative_angles: 3 or 4 distinct angles to test (for example "
-        "product worn on skin, social proof, gifting, a collection "
-        "carousel). Each must differ in what it says or shows, not just "
-        "in wording, and each must be something this product's real "
-        "details support.",
+        "product worn on skin, social proof, gifting, craftsmanship). Each "
+        "must differ in what it says or shows, not just in wording, and "
+        "each must be something this product's real details support. "
+        "Every ad in this test is a single static image, so each angle "
+        "must work as one image with its copy — don't propose carousels, "
+        "video, or multi-image angles.",
         "- hypothesis_statement: a falsifiable statement naming which "
         "angle you expect to win on cost per add-to-cart and why — not a "
         'vague claim like "this should perform well."',

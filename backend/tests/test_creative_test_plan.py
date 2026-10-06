@@ -522,3 +522,29 @@ def test_cost_cap_may_be_too_tight_when_spend_is_under_half_the_budget() -> None
 def test_cost_cap_is_fine_at_or_above_half_the_expected_spend() -> None:
     assert optimizer.cost_cap_may_be_too_tight(spend=75.0, daily_budget=50.0) is False
     assert optimizer.cost_cap_may_be_too_tight(spend=140.0, daily_budget=50.0) is False
+
+
+# ── V1 is single-image only: no carousel angles ──
+
+
+@pytest.mark.asyncio
+async def test_creative_test_plan_prompt_does_not_suggest_a_carousel_angle(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Every ad in the test is a single image, so the strategist must not be
+    nudged toward a carousel angle (it once produced "collection carousel",
+    and the Creative Agent then returned a mixed batch)."""
+    mock = _mock_agent(monkeypatch, _VALID_INPUT)
+
+    await strategist.generate_strategy(
+        business=_business(),
+        product=_product(),
+        audience=None,
+        objective="SALES",
+        plan_type="CREATIVE_TEST_PLAN",
+    )
+
+    prompt = mock.call_args.kwargs["prompt"]
+    assert "a collection carousel" not in prompt
+    assert "single static image" in prompt
+    assert "don't propose carousels" in prompt

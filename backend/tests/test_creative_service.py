@@ -1226,3 +1226,87 @@ def test_build_prompt_omits_the_carousel_message_rule_for_single_image() -> None
     prompt = creative._build_prompt(_fake_business(), _fake_product(), _FAKE_STRATEGY)
 
     assert "every card reinforces that same single message" not in prompt
+
+
+# ── CREATIVE_TEST_PLAN: persona + competing-ads framing ──
+
+
+def _creative_plan() -> Any:
+    from app.schemas.strategy import (
+        AudienceConstraints,
+        CreativePersona,
+        CreativeTestPlanContent,
+        NormalizedMetrics,
+    )
+    from app.services import strategist
+
+    benchmark_context = strategist._build_benchmark_context()
+    return CreativeTestPlanContent(
+        objective="SALES",
+        audience_constraints=AudienceConstraints(),
+        creative_persona=CreativePersona(
+            name="Milestone gift buyers",
+            description="Women 30-55 marking a moment with a meaningful piece.",
+            problem="Hard to find a ring that feels personal",
+            desire="Own something unique",
+        ),
+        hypotheses=[strategist._build_creative_hypothesis("On-skin wins.")],
+        offer="Custom emerald rings",
+        positioning="Premium and personal",
+        creative_angles=["Product on skin", "Social proof", "Gifting"],
+        copy_strategy="Lead with the story behind each piece",
+        daily_budget=50.0,
+        duration_days=10,
+        total_budget=500.0,
+        optimization_event="PURCHASE",
+        success_criteria=strategist._build_creative_success_criteria(
+            benchmark_context, None, None
+        ),
+        baseline_metrics=NormalizedMetrics(),
+        benchmark_context=benchmark_context,
+    )
+
+
+def test_build_prompt_gives_a_creative_plan_its_persona_as_context_only() -> None:
+    prompt = creative._build_prompt(_fake_business(), _fake_product(), _creative_plan())
+
+    assert "Milestone gift buyers" in prompt
+    assert "Women 30-55 marking a moment" in prompt
+    assert "not used for targeting" in prompt
+    assert "Hard to find a ring that feels personal" in prompt
+
+
+def test_build_prompt_frames_a_creative_plans_ads_as_competing_angles() -> None:
+    prompt = creative._build_prompt(_fake_business(), _fake_product(), _creative_plan())
+
+    assert "compete against each other in one ad set" in prompt
+    assert "Product on skin" in prompt
+
+
+def test_build_prompt_has_no_persona_text_for_other_plan_types() -> None:
+    prompt = creative._build_prompt(_fake_business(), _fake_product(), _FAKE_STRATEGY)
+
+    assert "Creative persona" not in prompt
+    assert "compete against each other" not in prompt
+
+
+def test_build_prompt_adapts_a_carousel_angle_to_a_single_image() -> None:
+    """A creative plan's angle may still read like a carousel (the plan was
+    generated earlier); every SINGLE_IMAGE variant must stay one image with
+    no cards list, never a mix."""
+    prompt = creative._build_prompt(_fake_business(), _fake_product(), _creative_plan())
+
+    assert "Every variant is a single image" in prompt
+    assert "never return a cards list" in prompt
+
+
+def test_build_prompt_does_not_say_single_image_for_a_carousel_batch() -> None:
+    prompt = creative._build_prompt(
+        _fake_business(),
+        _fake_product(),
+        _creative_plan(),
+        format="CAROUSEL",
+        card_count=3,
+    )
+
+    assert "never return a cards list" not in prompt

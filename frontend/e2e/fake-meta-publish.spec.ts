@@ -8,11 +8,7 @@ import { signUpAndReachFakeMetaConnectedBusiness } from './support/fakeMetaFlow'
 // local-only counterpart that exercises the real Strategist/Creative
 // Agents through this same fake-Meta path.
 
-// TODO(creative-first Stage 2): skipped because this flow answers "No" on a
-// SALES campaign, which now generates a CREATIVE_TEST_PLAN, and publishing one
-// is blocked (400) until the multi-creative, one-ad-set publish lands in
-// Stage 2 of feat/creative-first-test-plan. Stage 2 un-skips this spec.
-test.skip('a fake Meta connection carries a campaign from creation to a live publish with canned results', async ({
+test('a fake Meta connection carries a campaign from creation to a live publish with canned results', async ({
   page,
 }) => {
   await signUpAndReachFakeMetaConnectedBusiness(page)
@@ -31,13 +27,15 @@ test.skip('a fake Meta connection carries a campaign from creation to a live pub
   await page.getByRole('button', { name: 'Select this ad' }).first().click()
 
   // Selecting an ad navigates to the dedicated ad preview/publish page.
+  // The ad page publishes paused by default; this spec needs a LIVE campaign.
+  await page.getByLabel(/Publish paused/).uncheck()
   await page.getByRole('button', { name: 'Approve & Publish' }).click()
-  // The button's own accessible name flips to "Publishing…" the instant
-  // the click registers — asserting the *original* name's absence would
-  // pass on that transient relabel alone, racing ahead of the actual
-  // approve+publish call this is meant to wait for.
-  await expect(page.getByRole('button', { name: 'Publishing…' })).toBeVisible()
-  await expect(page.getByRole('button', { name: 'Publishing…' })).not.toBeVisible()
+  // Wait for the publish to finish: once the campaign is live the publish
+  // button is gone entirely. (Asserting on the transient "Publishing…"
+  // label raced the instant fake publish.)
+  await expect(
+    page.getByRole('button', { name: /Approve & Publish|Publishing…/ }),
+  ).toHaveCount(0)
   await expect(page.getByRole('alert')).not.toBeVisible()
 
   await page.getByRole('link', { name: '← Back to dashboard' }).click()

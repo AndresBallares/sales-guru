@@ -1967,3 +1967,150 @@ async def test_search_ad_geolocations_returns_a_resolvable_fake_match_in_fake_mo
     assert len(results) == 1
     assert results[0]["country_code"] == "US"
     assert results[0]["key"]
+
+
+# ── Locales lookup + Advantage+ ad set payload (creative-first Stage 2) ──
+
+
+@pytest.mark.asyncio
+async def test_search_ad_locales_returns_the_raw_result_list(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Targeting Search with type=adlocale (confirmed against the real API
+    2026-10-06: English returns US 6, UK 24, All 1001)."""
+    client = _mock_client_returning(
+        monkeypatch,
+        _FakeResponse(
+            {
+                "data": [
+                    {"name": "English (US)", "key": 6},
+                    {"name": "English (All)", "key": 1001},
+                ]
+            }
+        ),
+    )
+
+    results = await meta.search_ad_locales(access_token="token", query="English")
+
+    assert results == [
+        {"name": "English (US)", "key": 6},
+        {"name": "English (All)", "key": 1001},
+    ]
+    url, params = client.calls[0]
+    assert url == "https://graph.facebook.com/v21.0/search"
+    assert params["type"] == "adlocale"
+    assert params["q"] == "English"
+    assert params["access_token"] == "token"
+
+
+@pytest.mark.asyncio
+async def test_search_ad_locales_returns_a_resolvable_fake_match_in_fake_mode(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("FAKE_META", "true")
+    get_settings.cache_clear()
+    try:
+        results = await meta.search_ad_locales(access_token="token", query="English")
+    finally:
+        get_settings.cache_clear()
+
+    assert results == [{"name": "English (All)", "key": 1001}]
+
+
+@pytest.mark.asyncio
+async def test_create_meta_ad_set_sends_locales_when_given(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = _mock_client_returning(monkeypatch, _FakeResponse({"id": "adset_123"}))
+
+    await meta.create_meta_ad_set(
+        access_token="token",
+        ad_account_id="act_1",
+        name="Creative test",
+        meta_campaign_id="campaign_123",
+        daily_budget_cents=5000,
+        optimization_goal="OFFSITE_CONVERSIONS",
+        age_min=18,
+        age_max=None,
+        advantage_audience=1,
+        locales=[1001, 1002],
+    )
+
+    _url, data = client.calls[0]
+    targeting = json.loads(data["targeting"])
+    assert targeting["locales"] == [1001, 1002]
+    assert targeting["targeting_automation"] == {"advantage_audience": 1}
+
+
+@pytest.mark.asyncio
+async def test_create_meta_ad_set_omits_age_max_and_locales_when_not_given(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Meta rejects an age_max when Advantage+ audience is on (it is fixed
+    at 65), so a caller can leave it out entirely."""
+    client = _mock_client_returning(monkeypatch, _FakeResponse({"id": "adset_123"}))
+
+    await meta.create_meta_ad_set(
+        access_token="token",
+        ad_account_id="act_1",
+        name="Creative test",
+        meta_campaign_id="campaign_123",
+        daily_budget_cents=5000,
+        optimization_goal="OFFSITE_CONVERSIONS",
+        age_min=18,
+        age_max=None,
+        advantage_audience=1,
+    )
+
+    _url, data = client.calls[0]
+    targeting = json.loads(data["targeting"])
+    assert "age_max" not in targeting
+    assert "locales" not in targeting
+
+
+@pytest.mark.asyncio
+async def test_create_meta_ad_set_uses_the_given_custom_event_type(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = _mock_client_returning(monkeypatch, _FakeResponse({"id": "adset_123"}))
+
+    await meta.create_meta_ad_set(
+        access_token="token",
+        ad_account_id="act_1",
+        name="Creative test",
+        meta_campaign_id="campaign_123",
+        daily_budget_cents=5000,
+        optimization_goal="OFFSITE_CONVERSIONS",
+        age_min=18,
+        age_max=None,
+        pixel_id="pixel_1",
+        custom_event_type="ADD_TO_CART",
+    )
+
+    _url, data = client.calls[0]
+    assert json.loads(data["promoted_object"]) == {
+        "pixel_id": "pixel_1",
+        "custom_event_type": "ADD_TO_CART",
+    }
+
+
+@pytest.mark.asyncio
+async def test_create_meta_ad_set_defaults_the_event_type_to_purchase(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = _mock_client_returning(monkeypatch, _FakeResponse({"id": "adset_123"}))
+
+    await meta.create_meta_ad_set(
+        access_token="token",
+        ad_account_id="act_1",
+        name="Anything",
+        meta_campaign_id="campaign_123",
+        daily_budget_cents=5000,
+        optimization_goal="OFFSITE_CONVERSIONS",
+        age_min=30,
+        age_max=55,
+        pixel_id="pixel_1",
+    )
+
+    _url, data = client.calls[0]
+    assert json.loads(data["promoted_object"])["custom_event_type"] == "PURCHASE"

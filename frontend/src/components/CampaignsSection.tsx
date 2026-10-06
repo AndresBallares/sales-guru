@@ -30,6 +30,7 @@ import {
   removeCreativeCard,
   reorderCreativeCards,
   selectCreative,
+  deselectCreative,
   toLabelMap,
   updateCampaign,
   uploadProductImage,
@@ -59,6 +60,11 @@ function formatLocations(locations: TargetLocation[]): string {
     .map((loc) => [loc.city, loc.region].filter(Boolean).join(', '))
     .join('; ')
 }
+
+// A creative test (CREATIVE_TEST_PLAN) publishes 3-4 ads in one ad set — kept
+// in step with the backend's MIN/MAX_CREATIVE_ANGLES (app/schemas/strategy.py).
+const MIN_TEST_ADS = 3
+const MAX_TEST_ADS = 4
 
 const VARIANT_LETTERS = ['A', 'B', 'C', 'D']
 
@@ -490,6 +496,42 @@ export function CampaignsSection({
     }
   }
 
+  // Creative test: ads are added to / removed from the test one at a time,
+  // nothing is rejected and nothing navigates away — the user builds up 3-4
+  // ads, then chooses "Review & publish".
+  async function handleToggleTestAd(
+    campaignId: string,
+    creativeId: string,
+    isSelected: boolean,
+  ) {
+    setSelectingId(creativeId)
+    setCreativeErrors((prev) => ({ ...prev, [campaignId]: '' }))
+    try {
+      const updated = isSelected
+        ? await deselectCreative(businessId, campaignId, creativeId)
+        : await selectCreative(businessId, campaignId, creativeId)
+      setCreatives((prev) => ({
+        ...prev,
+        [campaignId]: (prev[campaignId] ?? []).map((c) => (c.id === updated.id ? updated : c)),
+      }))
+      // The backend moves the campaign to/from PENDING_APPROVAL as the
+      // selected count crosses the minimum — refresh to pick that up.
+      await refresh()
+    } catch (err) {
+      setCreativeErrors((prev) => ({
+        ...prev,
+        [campaignId]:
+          err instanceof ApiError
+            ? err.message
+            : isSelected
+              ? 'Could not remove ad.'
+              : 'Could not add ad.',
+      }))
+    } finally {
+      setSelectingId(null)
+    }
+  }
+
   async function handleSelectCreative(campaignId: string, creativeId: string) {
     setSelectingId(creativeId)
     try {
@@ -849,6 +891,8 @@ export function CampaignsSection({
             const campaignTestEvaluations = testEvaluations[campaign.id] ?? []
             const evaluateError = evaluateErrors[campaign.id]
             const selectedCreative = campaignCreatives.find((c) => c.status === 'SELECTED')
+            const isCreativeTest = strategy?.planType === 'CREATIVE_TEST_PLAN'
+            const testAdCount = campaignCreatives.filter((c) => c.status === 'SELECTED').length
             // Own name (not just campaign.productId inline below) so its
             // narrowed non-null type survives into the JSX callbacks that
             // close over it — a plain property access re-widens to
@@ -1479,7 +1523,7 @@ export function CampaignsSection({
                       </p>
                     )}
                     {campaignCreatives.length > 0 &&
-                      (selectedCreative && !showAllCreatives[campaign.id] ? (
+                      (selectedCreative && !showAllCreatives[campaign.id] && !isCreativeTest ? (
                         <div aria-label={`Selected ad for ${campaign.name ?? campaign.id}`}>
                           <button type="button" disabled>
                             Selected
@@ -1665,6 +1709,30 @@ export function CampaignsSection({
                           </button>
                         </div>
                       ) : (
+                        <>
+                        {isCreativeTest && (
+                          <div>
+                            <p>
+                              {testAdCount} of {MIN_TEST_ADS}–{MAX_TEST_ADS} ads selected
+                            </p>
+                            <p>
+                              These ads run together in one ad set, so the test shows which
+                              angle earns the cheapest result.
+                            </p>
+                            {testAdCount >= MIN_TEST_ADS && (
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  navigate(
+                                    `/businesses/${businessId}/campaigns/${campaign.id}/ad`,
+                                  )
+                                }
+                              >
+                                Review &amp; publish
+                              </button>
+                            )}
+                          </div>
+                        )}
                         <ul aria-label={`Ad creatives for ${campaign.name ?? campaign.id}`}>
                           {campaignCreatives.map((c, index) => (
                             <li key={c.id}>
@@ -1710,20 +1778,43 @@ export function CampaignsSection({
                                   <strong>Video prompt:</strong> {c.videoPrompt}
                                 </p>
                               )}
-                              <button
-                                type="button"
-                                onClick={() => handleSelectCreative(campaign.id, c.id)}
-                                disabled={c.status === 'SELECTED' || selectingId === c.id}
-                              >
-                                {c.status === 'SELECTED'
-                                  ? 'Selected'
-                                  : selectingId === c.id
-                                    ? 'Selecting…'
-                                    : 'Select this ad'}
-                              </button>
+                              {isCreativeTest ? (
+                                (c.status === 'SELECTED' || testAdCount < MAX_TEST_ADS) && (
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      handleToggleTestAd(
+                                        campaign.id,
+                                        c.id,
+                                        c.status === 'SELECTED',
+                                      )
+                                    }
+                                    disabled={selectingId === c.id}
+                                  >
+                                    {selectingId === c.id
+                                      ? 'Updating…'
+                                      : c.status === 'SELECTED'
+                                        ? 'Remove from test'
+                                        : 'Add to test'}
+                                  </button>
+                                )
+                              ) : (
+                                <button
+                                  type="button"
+                                  onClick={() => handleSelectCreative(campaign.id, c.id)}
+                                  disabled={c.status === 'SELECTED' || selectingId === c.id}
+                                >
+                                  {c.status === 'SELECTED'
+                                    ? 'Selected'
+                                    : selectingId === c.id
+                                      ? 'Selecting…'
+                                      : 'Select this ad'}
+                                </button>
+                              )}
                             </li>
                           ))}
                         </ul>
+                        </>
                       ))}
                   </div>
                 )}

@@ -32,6 +32,9 @@ export function AdPreviewPage() {
   const [business, setBusiness] = useState<Business | null>(null)
   const [campaign, setCampaign] = useState<Campaign | null>(null)
   const [creative, setCreative] = useState<Creative | null>(null)
+  // Every selected ad. One for the original single-ad flow; 3-4 for a
+  // creative test (CREATIVE_TEST_PLAN), where they all publish together.
+  const [selectedCreatives, setSelectedCreatives] = useState<Creative[]>([])
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState<string | null>(null)
 
@@ -42,6 +45,9 @@ export function AdPreviewPage() {
   const [uploading, setUploading] = useState(false)
   const [imageError, setImageError] = useState<string | null>(null)
 
+  // Default on, same as the campaigns list's own "Publish paused" checkbox:
+  // nothing spends until the user activates it.
+  const [publishPaused, setPublishPaused] = useState(true)
   const [publishing, setPublishing] = useState(false)
   const [publishError, setPublishError] = useState<string | null>(null)
 
@@ -64,7 +70,9 @@ export function AdPreviewPage() {
       ])
       setBusiness(loadedBusiness)
       setCampaign(campaigns.find((c) => c.id === campaignId) ?? null)
-      setCreative(creatives.find((c) => c.status === 'SELECTED') ?? null)
+      const selected = creatives.filter((c) => c.status === 'SELECTED')
+      setSelectedCreatives(selected)
+      setCreative(selected[0] ?? null)
       setLoadError(null)
     } catch (err) {
       setLoadError(err instanceof ApiError ? err.message : 'Could not load this ad.')
@@ -181,7 +189,7 @@ export function AdPreviewPage() {
       if (campaign.status !== 'APPROVED' && campaign.status !== 'FAILED') {
         await approveCampaign(businessId, campaignId)
       }
-      await publishCampaign(businessId, campaignId)
+      await publishCampaign(businessId, campaignId, { paused: publishPaused })
       await refresh()
     } catch (err) {
       setPublishError(err instanceof ApiError ? err.message : 'Could not publish this ad.')
@@ -213,13 +221,27 @@ export function AdPreviewPage() {
       {creative && (
         <section>
           <h2>Preview</h2>
-          <SocialPostPreview
-            business={business}
-            creative={creative}
-            ctaLabel={ctaLabels[creative.cta] ?? creative.cta}
-          />
+          {selectedCreatives.length > 1 ? (
+            <>
+              <p>{selectedCreatives.length} ads in this test</p>
+              {selectedCreatives.map((selected) => (
+                <SocialPostPreview
+                  key={selected.id}
+                  business={business}
+                  creative={selected}
+                  ctaLabel={ctaLabels[selected.cta] ?? selected.cta}
+                />
+              ))}
+            </>
+          ) : (
+            <SocialPostPreview
+              business={business}
+              creative={creative}
+              ctaLabel={ctaLabels[creative.cta] ?? creative.cta}
+            />
+          )}
 
-          {creative.format === 'CAROUSEL' ? (
+          {selectedCreatives.length > 1 ? null : creative.format === 'CAROUSEL' ? (
             <>
               <ul className="photo-manager" aria-label="Carousel cards">
                 {creative.cards.map((card, index) => (
@@ -316,6 +338,15 @@ export function AdPreviewPage() {
 
           {canPublish && (
             <div>
+              <label htmlFor="publish-paused">
+                <input
+                  id="publish-paused"
+                  type="checkbox"
+                  checked={publishPaused}
+                  onChange={(event) => setPublishPaused(event.target.checked)}
+                />
+                Publish paused (nothing spends until you click Activate)
+              </label>
               <button
                 type="button"
                 onClick={() => void handleApproveAndPublish()}

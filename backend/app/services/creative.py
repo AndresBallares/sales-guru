@@ -450,6 +450,25 @@ def _build_prompt(
         f"Copy strategy: {strategy.copy_strategy}",
         f"Creative angles to draw from: {', '.join(strategy.creative_angles)}",
     ]
+    if strategy.plan_type == "CREATIVE_TEST_PLAN":
+        persona = strategy.creative_persona
+        lines += [
+            quarantine(
+                "Creative persona (who these ads speak to; this is not used "
+                "for targeting — delivery is broad and the creative does the "
+                "audience selection)",
+                f"{persona.name} — {persona.description}",
+            ),
+            "These ads compete against each other in one ad set, so each "
+            "variant must take a clearly different one of the creative "
+            "angles above — the test is which angle wins.",
+        ]
+        if format == "SINGLE_IMAGE":
+            lines.append(
+                "Every variant is a single image: if a creative angle above "
+                "mentions a carousel, video or several images, adapt it to "
+                "work as one image — never return a cards list."
+            )
     audience = primary_audience(strategy)
     if audience.problem:
         lines.append(f"Target audience problem: {audience.problem}")

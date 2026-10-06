@@ -37,12 +37,13 @@ from prisma.types import CampaignUpdateInput
 from app.core.db import db
 from app.schemas.strategy import (
     AudienceVariant,
+    CreativeTestPlanContent,
     StrategyContent,
     TargetAudience,
     daily_budget,
     primary_audience,
 )
-from app.services import geo, meta
+from app.services import geo, locales, meta
 from app.services.event_venues import EVENT_VENUES
 from app.services.interests import INTERESTS
 from app.services.meta import CustomLocation, MetaConnectionError, ResolvedGeoLocation
@@ -521,8 +522,13 @@ async def publish_campaign_to_meta(
     strategy: StrategyContent,
     destination_url: str,
     paused: bool = False,
+    creatives: list[Creative] | None = None,
 ) -> Campaign:
     """Create the campaign on Meta, then mirror it locally.
+
+    A CREATIVE_TEST_PLAN campaign publishes ONE ad set (broad Advantage+
+    audience, hard constraints only) holding one ad per selected creative —
+    see _publish_creative_test_plan; `creatives` carries them.
 
     A TEST_PLAN campaign publishes both audience_variants as real,
     independent AdSets/Ads ("Phase C," confirmed 2026-09-02) — see the
@@ -541,6 +547,9 @@ async def publish_campaign_to_meta(
         destination_url: Where the ad's CTA button links to (already
             resolved by the caller: the product's URL or the business's
             website).
+        creatives: Every SELECTED creative, for a CREATIVE_TEST_PLAN only
+            (3-4 single-image ads, already validated by the caller). Ignored
+            for any other plan type, which publishes `creative` alone.
         paused: "Publish paused" (checkbox on the Approve & Publish step,
             confirmed 2026-09-18) — when True, the Meta campaign/every
             AdSet/every Ad are created with status PAUSED instead of
@@ -570,6 +579,17 @@ async def publish_campaign_to_meta(
     assert connection.adAccountId is not None
     assert connection.pageId is not None
     ad_account_id = connection.adAccountId
+
+    if strategy.plan_type == "CREATIVE_TEST_PLAN":
+        assert creatives, "a creative test plan publishes its selected creatives"
+        return await _publish_creative_test_plan(
+            campaign=campaign,
+            connection=connection,
+            creatives=creatives,
+            strategy=strategy,
+            destination_url=destination_url,
+            paused=paused,
+        )
 
     optimization_goal = _OPTIMIZATION_GOAL_BY_OBJECTIVE[campaign.objective]
     object_name = campaign.name or f"Sales Guru campaign {campaign.id}"
@@ -672,6 +692,157 @@ async def publish_campaign_to_meta(
         update_data["pausedReason"] = PUBLISHED_PAUSED_REASON
     if end_time is not None:
         update_data["endDate"] = end_time
+    updated = await db.campaign.update(where={"id": campaign.id}, data=update_data)
+    assert updated is not None  # just fetched by the caller, can't vanish mid-request
+    return updated
+
+
+async def _publish_creative_test_plan(
+    *,
+    campaign: Campaign,
+    connection: MetaConnection,
+    creatives: list[Creative],
+    strategy: CreativeTestPlanContent,
+    destination_url: str,
+    paused: bool,
+) -> Campaign:
+    """Publish a CREATIVE_TEST_PLAN: one ad set, one ad per selected creative.
+
+    The ad set is a broad Advantage+ audience with hard constraints only:
+    country, age_min and language (`locales`); no interests, no age_max (Meta
+    rejects one when Advantage+ is on), no generated audience. The full daily
+    budget sits on that one ad set. It optimizes for the plan's optimization
+    event (Purchase, or AddToCart for a high-ticket product), and its cost cap
+    is the target cost per add-to-cart for an AddToCart plan, else the target
+    CAC. Languages are resolved to Meta locale ids BEFORE anything is created
+    on Meta, so an unresolvable language never leaves a half-published
+    campaign behind.
+
+    Args:
+        campaign: The campaign being published.
+        connection: The business's Meta connection (account and Page set).
+        creatives: The SELECTED single-image creatives, 3-4 of them.
+        strategy: The campaign's CREATIVE_TEST_PLAN.
+        destination_url: Where each ad's CTA links to.
+        paused: Create everything PAUSED instead of ACTIVE.
+
+    Returns:
+        The campaign, LIVE (or PAUSED), with metaCampaignId and endDate set.
+
+    Raises:
+        MetaConnectionError: If a language has no Meta locale or any Graph
+            API call fails (the caller moves the campaign to FAILED).
+    """
+    assert connection.adAccountId is not None
+    assert connection.pageId is not None
+    ad_account_id = connection.adAccountId
+    access_token = connection.accessToken
+    constraints = strategy.audience_constraints
+    meta_status: Literal["ACTIVE", "PAUSED"] = "PAUSED" if paused else "ACTIVE"
+    local_status = "PAUSED" if paused else "LIVE"
+
+    locale_ids = await locales.resolve_languages(
+        access_token=access_token, languages=constraints.languages
+    )
+
+    if strategy.optimization_event == "ADD_TO_CART":
+        assert strategy.target_cost_per_add_to_cart is not None
+        bid_cents = round(strategy.target_cost_per_add_to_cart * 100)
+    else:
+        bid_cents = round(resolve_target_cac(strategy.unit_economics) * 100)
+
+    end_time = campaign.endDate or (
+        datetime.now(UTC) + timedelta(days=strategy.duration_days)
+    )
+    object_name = campaign.name or f"Sales Guru campaign {campaign.id}"
+    pixel_id = connection.pixelId if requires_pixel(campaign.objective) else None
+
+    meta_campaign_id = await meta.create_meta_campaign(
+        access_token=access_token,
+        ad_account_id=ad_account_id,
+        name=object_name,
+        objective=campaign.objective,
+        status=meta_status,
+    )
+    meta_ad_set_id = await meta.create_meta_ad_set(
+        access_token=access_token,
+        ad_account_id=ad_account_id,
+        name=f"{object_name} — Creative test",
+        meta_campaign_id=meta_campaign_id,
+        daily_budget_cents=round(strategy.daily_budget * 100),
+        optimization_goal=_OPTIMIZATION_GOAL_BY_OBJECTIVE[campaign.objective],
+        age_min=constraints.age_min,
+        age_max=None,
+        pixel_id=pixel_id,
+        custom_location=None,
+        resolved_locations=None,
+        interests=None,
+        advantage_audience=1,
+        end_time=end_time,
+        target_cac_cents=bid_cents,
+        status=meta_status,
+        locales=locale_ids,
+        custom_event_type=(
+            "ADD_TO_CART"
+            if strategy.optimization_event == "ADD_TO_CART"
+            else "PURCHASE"
+        ),
+    )
+    ad_set = await db.adset.create(
+        data={
+            "campaignId": campaign.id,
+            "name": f"{object_name} — Creative test",
+            "budget": strategy.daily_budget,
+            "optimizationGoal": _OPTIMIZATION_GOAL_BY_OBJECTIVE[campaign.objective],
+            "status": local_status,
+            "metaAdSetId": meta_ad_set_id,
+        }
+    )
+
+    for creative in creatives:
+        image_hash = await _resolve_image_hash(
+            creative, access_token=access_token, ad_account_id=ad_account_id
+        )
+        meta_creative_id = await meta.create_meta_ad_creative(
+            access_token=access_token,
+            ad_account_id=ad_account_id,
+            page_id=connection.pageId,
+            name=creative.headline,
+            headline=creative.headline,
+            body_text=creative.bodyText,
+            description=creative.description,
+            cta=creative.cta,
+            link=destination_url,
+            image_hash=image_hash,
+        )
+        meta_ad_id = await meta.create_meta_ad(
+            access_token=access_token,
+            ad_account_id=ad_account_id,
+            name=creative.headline,
+            meta_ad_set_id=meta_ad_set_id,
+            meta_creative_id=meta_creative_id,
+            status=meta_status,
+        )
+        ad = await db.ad.create(
+            data={
+                "adSetId": ad_set.id,
+                "name": creative.headline,
+                "status": local_status,
+                "metaAdId": meta_ad_id,
+            }
+        )
+        await db.creative.update(
+            where={"id": creative.id},
+            data={"ad": {"connect": {"id": ad.id}}, "metaCreativeId": meta_creative_id},
+        )
+
+    update_data: CampaignUpdateInput = {
+        "status": local_status,
+        "metaCampaignId": meta_campaign_id,
+        "endDate": end_time,
+    }
+    if paused:
+        update_data["pausedReason"] = PUBLISHED_PAUSED_REASON
     updated = await db.campaign.update(where={"id": campaign.id}, data=update_data)
     assert updated is not None  # just fetched by the caller, can't vanish mid-request
     return updated

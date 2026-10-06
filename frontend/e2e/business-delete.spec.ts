@@ -5,12 +5,7 @@ import { signUpAndReachFakeMetaConnectedBusiness } from './support/fakeMetaFlow'
 // FAKE_LLM, see playwright.config.ts) — no real Meta or Anthropic call
 // anywhere here, so this runs in CI on every PR.
 
-// TODO(creative-first Stage 2): skipped for the same reason as
-// fake-meta-publish.spec.ts. This flow answers "No" on a SALES campaign, which
-// now generates a CREATIVE_TEST_PLAN, and publishing one is blocked until the
-// multi-creative publish lands in Stage 2. It failed intermittently here.
-// Stage 2 un-skips this spec.
-test.skip('deleting a business is blocked while a campaign is live, and succeeds once it is paused', async ({
+test('deleting a business is blocked while a campaign is live, and succeeds once it is paused', async ({
   page,
 }) => {
   await signUpAndReachFakeMetaConnectedBusiness(page)
@@ -24,9 +19,15 @@ test.skip('deleting a business is blocked while a campaign is live, and succeeds
 
   await page.getByRole('button', { name: 'Generate ads' }).click()
   await page.getByRole('button', { name: 'Select this ad' }).first().click()
+  // The ad page publishes paused by default; this spec needs a LIVE campaign.
+  await page.getByLabel(/Publish paused/).uncheck()
   await page.getByRole('button', { name: 'Approve & Publish' }).click()
-  await expect(page.getByRole('button', { name: 'Publishing…' })).toBeVisible()
-  await expect(page.getByRole('button', { name: 'Publishing…' })).not.toBeVisible()
+  // Wait for the publish to finish: once the campaign is live the publish
+  // button is gone entirely. (The transient "Publishing…" label raced the
+  // instant fake publish.)
+  await expect(
+    page.getByRole('button', { name: /Approve & Publish|Publishing…/ }),
+  ).toHaveCount(0)
   await expect(page.getByRole('alert')).not.toBeVisible()
 
   await page.getByRole('link', { name: '← Back to dashboard' }).click()

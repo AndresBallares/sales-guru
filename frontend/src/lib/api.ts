@@ -940,6 +940,18 @@ export function selectCreative(
   )
 }
 
+// Removes one ad from a creative test (a CREATIVE_TEST_PLAN campaign only).
+export function deselectCreative(
+  businessId: string,
+  campaignId: string,
+  creativeId: string,
+): Promise<Creative> {
+  return request<Creative>(
+    `/businesses/${businessId}/campaigns/${campaignId}/creatives/${creativeId}/deselect`,
+    { method: 'POST' },
+  )
+}
+
 export function reorderCreativeCards(
   businessId: string,
   campaignId: string,

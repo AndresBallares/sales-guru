@@ -520,7 +520,7 @@ async def create_meta_ad_set(
     daily_budget_cents: int,
     optimization_goal: str,
     age_min: int,
-    age_max: int,
+    age_max: int | None,
     pixel_id: str | None = None,
     custom_location: CustomLocation | None = None,
     resolved_locations: list[ResolvedGeoLocation] | None = None,
@@ -529,6 +529,8 @@ async def create_meta_ad_set(
     end_time: datetime | None = None,
     target_cac_cents: int | None = None,
     status: Literal["ACTIVE", "PAUSED"] = "ACTIVE",
+    locales: list[int] | None = None,
+    custom_event_type: str = "PURCHASE",
 ) -> str:
     """Create an AdSet object on Meta, under an already-created campaign.
 
@@ -568,7 +570,9 @@ async def create_meta_ad_set(
             currency unit (cents for USD).
         optimization_goal: A Meta optimization_goal value.
         age_min: Minimum target age.
-        age_max: Maximum target age.
+        age_max: Maximum target age, or None to omit it. Meta rejects an
+            age_max when Advantage+ audience is on (it is fixed at 65), so
+            the creative test plan passes None.
         pixel_id: The MetaConnection's configured Pixel, if any. Required
             by Meta (as a promoted_object) for conversion-tracking
             optimization_goal values — currently just OFFSITE_CONVERSIONS
@@ -624,6 +628,12 @@ async def create_meta_ad_set(
         status: "ACTIVE" (default) or "PAUSED" — see create_meta_campaign's
             own status param, sent identically alongside it by the
             "Publish paused" option.
+        locales: Meta locale ids (language targeting, from
+            app/services/locales.py), if the ad set is restricted to
+            certain languages. A hard limit even with Advantage+ audience
+            on (confirmed against the real API 2026-10-06).
+        custom_event_type: The Pixel event the ad set optimizes for in
+            promoted_object — PURCHASE (default) or ADD_TO_CART.
 
     Returns:
         The new Meta ad set id.
@@ -656,10 +666,13 @@ async def create_meta_ad_set(
         geo_locations = {"countries": ["US"]}
     targeting_spec: dict[str, object] = {
         "age_min": age_min,
-        "age_max": age_max,
         "geo_locations": geo_locations,
         "targeting_automation": {"advantage_audience": advantage_audience},
     }
+    if age_max is not None:
+        targeting_spec["age_max"] = age_max
+    if locales:
+        targeting_spec["locales"] = locales
     if interests:
         targeting_spec["interests"] = interests
     targeting = json.dumps(targeting_spec)
@@ -680,7 +693,7 @@ async def create_meta_ad_set(
         data["bid_amount"] = str(target_cac_cents)
     if pixel_id is not None:
         data["promoted_object"] = json.dumps(
-            {"pixel_id": pixel_id, "custom_event_type": "PURCHASE"}
+            {"pixel_id": pixel_id, "custom_event_type": custom_event_type}
         )
     if end_time is not None:
         data["end_time"] = end_time.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%S+0000")
@@ -1497,6 +1510,35 @@ async def search_ad_geolocations(
             "q": query,
             "access_token": access_token,
         },
+    )
+    data: list[dict[str, Any]] = body.get("data", [])
+    return data
+
+
+async def search_ad_locales(*, access_token: str, query: str) -> list[dict[str, Any]]:
+    """Search Meta's language ("locale") taxonomy by name.
+
+    GET /search?type=adlocale&q=... (Targeting Search), confirmed against the
+    real API 2026-10-06: "English" returns "English (US)" (6), "English (UK)"
+    (24) and "English (All)" (1001); "Spanish" returns "Spanish" (23),
+    "Spanish (Spain)" (7) and "Spanish (All)" (1002). The `locales` targeting
+    field takes these numeric keys. Not ad-account-scoped.
+
+    Args:
+        access_token: A Meta access token with ads permissions.
+        query: A language name, e.g. "English".
+
+    Returns:
+        Meta's raw result list, each item {"name": ..., "key": <int>}.
+
+    Raises:
+        MetaConnectionError: If the call fails.
+    """
+    if get_settings().fake_meta_enabled:
+        return [{"name": f"{query} (All)", "key": 1001}]
+    body = await _get_json(
+        f"{_GRAPH_BASE_URL}/search",
+        {"type": "adlocale", "q": query, "access_token": access_token},
     )
     data: list[dict[str, Any]] = body.get("data", [])
     return data
