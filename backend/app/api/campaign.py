@@ -409,6 +409,11 @@ async def delete_campaign(
             status_code=status.HTTP_400_BAD_REQUEST, detail=_ALREADY_PUBLISHED
         )
 
+    # A carousel Creative's CreativeCard rows reference it with no cascade,
+    # so they have to go first or the Creative delete fails on the foreign key.
+    await db.creativecard.delete_many(
+        where={"creative": {"is": {"campaignId": campaign.id}}}
+    )
     await db.creative.delete_many(where={"campaignId": campaign.id})
     await db.strategy.delete_many(where={"campaignId": campaign.id})
     await db.campaign.delete(where={"id": campaign.id})
