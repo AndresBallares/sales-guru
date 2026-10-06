@@ -40,6 +40,7 @@ METRIC_DIRECTIONS: dict[str, Direction] = {
     "conversion_rate": "higher_is_better",
     "add_to_cart_rate": "higher_is_better",
     "roas": "higher_is_better",
+    "cost_per_add_to_cart": "lower_is_better",
     "cac": "lower_is_better",
     "cpc": "lower_is_better",
     "cpm": "lower_is_better",

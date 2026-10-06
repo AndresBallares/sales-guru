@@ -466,6 +466,50 @@ async def _enforce_daily_spend_flag(campaign: Campaign) -> None:
         )
 
 
+COST_CAP_MAY_BE_TOO_TIGHT = "COST_CAP_MAY_BE_TOO_TIGHT"
+
+
+async def _check_add_to_cart_delivery(campaign: Campaign) -> None:
+    """Record whether an AddToCart ad set looks starved by its cost cap.
+
+    Only a CREATIVE_TEST_PLAN optimizing for AddToCart has this check. Once
+    the campaign has three days of metric history, spend over those three
+    days under half of daily budget x 3 sets Campaign.deliverySignal to
+    COST_CAP_MAY_BE_TOO_TIGHT; otherwise the signal is cleared, so it always
+    reflects the current state. The Optimizer (Stage 4) can act on it; this
+    never changes the ad set itself.
+
+    Args:
+        campaign: The live campaign to check.
+    """
+    strategy = await db.strategy.find_unique(where={"campaignId": campaign.id})
+    if strategy is None:
+        return
+    content = StrategyContentAdapter.validate_json(strategy.content)
+    if (
+        content.plan_type != "CREATIVE_TEST_PLAN"
+        or content.optimization_event != "ADD_TO_CART"
+    ):
+        return
+    window = await _rolling_spend_and_purchases(
+        campaign.id, timedelta(days=optimizer.DELIVERY_CHECK_DAYS)
+    )
+    if window is None:
+        return  # not enough history yet — leave any existing signal alone
+    spend, _ = window
+    signal = (
+        COST_CAP_MAY_BE_TOO_TIGHT
+        if optimizer.cost_cap_may_be_too_tight(
+            spend=spend, daily_budget=content.daily_budget
+        )
+        else None
+    )
+    if signal != campaign.deliverySignal:
+        await db.campaign.update(
+            where={"id": campaign.id}, data={"deliverySignal": signal}
+        )
+
+
 async def collect_metrics_for_all_live_campaigns() -> None:
     """Collect fresh metrics, then run the deterministic spend guardrails.
 
@@ -505,6 +549,7 @@ async def collect_metrics_for_all_live_campaigns() -> None:
             if current is not None and current.status == "LIVE":
                 await _enforce_cac_circuit_breaker(current, connection)
                 await _enforce_daily_spend_flag(current)
+                await _check_add_to_cart_delivery(current)
         except MetaConnectionError:
             logger.warning("Circuit breaker pause failed for campaign %s", campaign.id)
 

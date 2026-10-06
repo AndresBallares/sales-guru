@@ -23,7 +23,10 @@ from app.api import meta as meta_api_module
 from app.api import strategy as strategy_module
 from app.schemas.creative import GeneratedCreativeCard, GeneratedCreativeVariant
 from app.schemas.strategy import (
+    AudienceConstraints,
     BudgetRecommendation,
+    CreativePersona,
+    CreativeTestPlanContent,
     DataDrivenStrategyContent,
     GeneratedTestPlanFields,
     NormalizedMetrics,
@@ -683,6 +686,50 @@ def test_publish_succeeds_and_marks_the_campaign_live(
     ).json()
     selected = next(c for c in creatives if c["status"] == "SELECTED")
     assert selected["adId"] is not None
+
+
+@pytest.mark.asyncio
+async def test_publish_400s_for_a_creative_test_plan_until_it_is_supported(
+    client: TestClient, mock_services: dict[str, AsyncMock]
+) -> None:
+    """A CREATIVE_TEST_PLAN needs a multi-ad, one-ad-set publish (Stage 2 of
+    the creative-first rework). Until that exists, publishing one must be
+    refused outright — never silently published as a single ad."""
+    business_id, campaign_id = _ready_campaign(client)
+    plan = CreativeTestPlanContent(
+        objective="SALES",
+        audience_constraints=AudienceConstraints(),
+        creative_persona=CreativePersona(name="Gift buyers", description="Women"),
+        hypotheses=[strategist_module._build_creative_hypothesis("A wins.")],
+        offer="Offer",
+        positioning="Positioning",
+        creative_angles=["a", "b", "c"],
+        copy_strategy="Copy",
+        daily_budget=50.0,
+        duration_days=10,
+        total_budget=500.0,
+        optimization_event="PURCHASE",
+        success_criteria=strategist_module._build_creative_success_criteria(
+            strategist_module._build_benchmark_context(), None, None
+        ),
+        baseline_metrics=NormalizedMetrics(),
+        benchmark_context=strategist_module._build_benchmark_context(),
+    )
+    seeder = Prisma()
+    await seeder.connect()
+    try:
+        await seeder.strategy.update(
+            where={"campaignId": campaign_id},
+            data={"content": plan.model_dump_json(by_alias=True)},
+        )
+    finally:
+        await seeder.disconnect()
+
+    response = client.post(f"/businesses/{business_id}/campaigns/{campaign_id}/publish")
+
+    assert response.status_code == 400
+    assert "not supported yet" in response.json()["detail"]
+    mock_services["create_campaign"].assert_not_awaited()
 
 
 def test_publish_400s_when_the_selected_creative_is_stale(client: TestClient) -> None:

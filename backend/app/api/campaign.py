@@ -55,6 +55,10 @@ _NOT_ACTIVATABLE = (
 _META_NOT_CONNECTED_TO_ACTIVATE = (
     "No Meta connection found for this campaign's business"
 )
+_CREATIVE_PLAN_NOT_PUBLISHABLE = (
+    "Publishing a creative test plan is not supported yet — it needs the "
+    "multi-ad publish, which is still being built"
+)
 _ALREADY_PUBLISHED = (
     "This campaign has already been published and can't be deleted — its "
     "data is used to optimize future campaigns"
@@ -524,6 +528,14 @@ async def publish_campaign(
 
     strategy = await db.strategy.find_unique(where={"campaignId": campaign.id})
     assert strategy is not None  # guaranteed by the status flow (PENDING_APPROVAL+)
+    strategy_content = StrategyContentAdapter.validate_json(strategy.content)
+    if strategy_content.plan_type == "CREATIVE_TEST_PLAN":
+        # Needs the multi-ad, one-ad-set publish (not built yet) — refuse
+        # rather than publish it as a single ad.
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=_CREATIVE_PLAN_NOT_PUBLISHABLE,
+        )
 
     product = (
         await db.product.find_unique(where={"id": campaign.productId})
@@ -550,7 +562,7 @@ async def publish_campaign(
             campaign=campaign,
             connection=connection,
             creative=creative,
-            strategy=StrategyContentAdapter.validate_json(strategy.content),
+            strategy=strategy_content,
             destination_url=destination_url,
             paused=payload.paused if payload is not None else False,
         )

@@ -141,7 +141,14 @@ async def create_strategy(
                 data={"hasPriorAdvertisingExperience": prior_experience},
             )
             assert business is not None  # just fetched above, can't vanish mid-request
-        plan_type = "DATA_DRIVEN_STRATEGY" if prior_experience else "TEST_PLAN"
+        if prior_experience:
+            plan_type = "DATA_DRIVEN_STRATEGY"
+        elif campaign.objective == "SALES":
+            # Cold-start SALES campaigns test creative angles in one broad
+            # ad set; every other objective keeps the audience TEST_PLAN.
+            plan_type = "CREATIVE_TEST_PLAN"
+        else:
+            plan_type = "TEST_PLAN"
 
     try:
         content = await generate_strategy(

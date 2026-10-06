@@ -1288,6 +1288,58 @@ export function CampaignsSection({
                           ))}
                         </ul>
                       </>
+                    ) : strategy.planType === 'CREATIVE_TEST_PLAN' ? (
+                      <>
+                        <p>
+                          <strong>Creative test</strong> — this business has no
+                          meaningful advertising history yet. One broad ad set
+                          runs {strategy.creativeAngles.length} creative angles
+                          against each other to find which earns the cheapest{' '}
+                          {strategy.optimizationEvent === 'ADD_TO_CART'
+                            ? 'add-to-cart'
+                            : 'purchase'}
+                          .
+                        </p>
+                        <p>
+                          <strong>Audience:</strong> broad (Meta Advantage+),{' '}
+                          {strategy.audienceConstraints.country}, age{' '}
+                          {strategy.audienceConstraints.ageMin}+,{' '}
+                          {strategy.audienceConstraints.languages.join(', ')}
+                        </p>
+                        <p>
+                          <strong>Creative persona:</strong>{' '}
+                          {strategy.creativePersona.name} —{' '}
+                          {strategy.creativePersona.description}
+                        </p>
+                        <p>
+                          <strong>Creative angles:</strong>
+                        </p>
+                        <ul>
+                          {strategy.creativeAngles.map((angle) => (
+                            <li key={angle}>{angle}</li>
+                          ))}
+                        </ul>
+                        <p>
+                          <strong>Copy strategy:</strong> {strategy.copyStrategy}
+                        </p>
+                        <p>
+                          <strong>Primary hypothesis:</strong>
+                        </p>
+                        <ul>
+                          {strategy.hypotheses.map((hypothesis) => (
+                            <li key={hypothesis.id}>
+                              {hypothesis.statement} (measured by{' '}
+                              {hypothesis.primaryMetric}, also tracking{' '}
+                              {hypothesis.secondaryMetrics.join(', ')})
+                            </li>
+                          ))}
+                        </ul>
+                        <p>
+                          <strong>Test budget:</strong> ${strategy.dailyBudget}/day on one
+                          ad set for {strategy.durationDays} days (${strategy.totalBudget}{' '}
+                          total)
+                        </p>
+                      </>
                     ) : (
                       <>
                         <p>

@@ -237,6 +237,7 @@ class NormalizedMetrics(CamelCaseModel):
     landing_page_views: int | None = None
     add_to_cart: int | None = None
     add_to_cart_rate: float | None = None
+    cost_per_add_to_cart: float | None = None
     conversions: int | None = None
     conversion_rate: float | None = None
     cac: float | None = None
@@ -473,6 +474,192 @@ class TestPlanContent(CamelCaseModel):
     unit_economics: UnitEconomicsFields | None = None
 
 
+# --- CREATIVE_TEST_PLAN -----------------------------------------------------
+#
+# The cold-start plan for a SALES campaign (confirmed with the user
+# 2026-10-06): one prospecting ad set on a broad Advantage+ audience with
+# hard constraints only, and the CREATIVE ANGLE as the test variable — 3-4
+# ads in that one ad set, each built on a distinct angle by the Creative
+# Agent. The AI-designed audience no longer targets anyone: it becomes a
+# `creative_persona` handed to the Creative Agent as context. The older
+# audience-vs-audience TEST_PLAN above is untouched and keeps working for
+# existing campaigns (and for non-SALES objectives).
+
+MIN_CREATIVE_ANGLES = 3
+MAX_CREATIVE_ANGLES = 4
+
+OptimizationEvent = Literal["PURCHASE", "ADD_TO_CART"]
+
+CREATIVE_TEST_HYPOTHESIS_ID = "creative_angle"
+CREATIVE_TEST_PRIMARY_METRIC = "cost_per_add_to_cart"
+CREATIVE_TEST_SECONDARY_METRICS: list[str] = [
+    "cac",
+    "ctr",
+    "cpc",
+    "add_to_cart_rate",
+    "conversion_rate",
+    "roas",
+]
+
+
+class AudienceConstraints(CamelCaseModel):
+    """The only targeting a CREATIVE_TEST_PLAN applies: hard constraints.
+
+    Backend-fixed, never LLM-generated. With Advantage+ audience on, Meta
+    treats location, minimum age, language and exclusions as hard limits
+    and everything else (max age, gender, interests) as suggestions it may
+    ignore. Meta also only accepts an age_min of 18-25 in that mode and
+    fixes age_max at 65, so there is deliberately no age_max here (checked
+    against Meta's Advantage+ audience docs, 2026-10-06).
+
+    languages are human-readable names, resolved to Meta locale ids at
+    publish time (Targeting Search, type=adlocale).
+    """
+
+    country: str = "US"
+    age_min: int = Field(default=18, ge=18, le=25)
+    languages: list[str] = Field(default_factory=lambda: ["English"])
+
+
+class CreativePersona(CamelCaseModel):
+    """Who the creatives should speak to — context for the Creative Agent only.
+
+    LLM-generated. Never used as ad set targeting (that's the whole point of
+    this plan: delivery is broad and the creative does the audience
+    selection).
+    """
+
+    name: str
+    description: str
+    problem: str | None = None
+    desire: str | None = None
+
+
+class CreativeTestHypothesis(CamelCaseModel):
+    """The question: which creative angle has the lowest cost per add-to-cart?
+
+    id/primary_metric/secondary_metrics are backend-fixed; only `statement`
+    is LLM-generated, so it can name the actual angles under test.
+    """
+
+    id: str
+    statement: str
+    primary_metric: str
+    secondary_metrics: list[str]
+
+
+# Written playbook the Optimizer follows for this plan. Stage 4 of the
+# creative-first rework enforces these in code; they live here so the plan
+# itself says how it will be judged. Pause-only: with one ad set, budget
+# can't move between ads (Meta splits spend inside an ad set itself).
+CREATIVE_TEST_PLAN_DECISION_RULES: list[DecisionRule] = [
+    DecisionRule(
+        condition=(
+            "an ad has spent at least 2x the target cost per add-to-cart "
+            "(2x target CAC when optimizing for purchases) with no "
+            "add-to-carts (no purchases)"
+        ),
+        action="pause_ad",
+    ),
+    DecisionRule(
+        condition=(
+            "one angle has a materially lower cost per add-to-cart with "
+            "enough add-to-carts to compare"
+        ),
+        action="prefer_angle",
+    ),
+    DecisionRule(
+        condition="angles are close on cost per add-to-cart",
+        action="continue_testing",
+    ),
+    DecisionRule(
+        condition="every angle has a weak CTR",
+        action="test_new_creative",
+    ),
+    DecisionRule(
+        condition="strong traffic but weak add_to_cart_rate",
+        action="investigate_offer_or_landing_page",
+    ),
+    DecisionRule(
+        condition="strong add_to_cart but weak purchase conversion",
+        action="investigate_checkout_or_purchase_friction",
+    ),
+]
+
+CREATIVE_TEST_PLAN_DATA_SOURCE = DataSourceTag(
+    business_facts=[
+        "business profile",
+        "product description/price/margin",
+        "campaign objective",
+    ],
+    historical_meta_data=[],
+    industry_benchmarks=["ctr", "cpm", "cvr", "cac (Meta, jewelry & accessories)"],
+    ai_generated_hypotheses=[
+        "creative persona",
+        "primary hypothesis statement",
+        "offer",
+        "positioning",
+        "creative angles",
+        "copy strategy",
+    ],
+)
+
+
+class GeneratedCreativeTestPlanFields(CamelCaseModel):
+    """The fields the LLM generates for a CREATIVE_TEST_PLAN.
+
+    Everything else on CreativeTestPlanContent (constraints, budget,
+    optimization event, success criteria, decision rules) is backend-fixed.
+    """
+
+    creative_persona: CreativePersona
+    hypothesis_statement: str
+    offer: str
+    positioning: str
+    creative_angles: Annotated[
+        list[str],
+        Field(min_length=MIN_CREATIVE_ANGLES, max_length=MAX_CREATIVE_ANGLES),
+    ]
+    copy_strategy: str
+
+
+class CreativeTestPlanContent(CamelCaseModel):
+    """The full structured CREATIVE_TEST_PLAN — what gets stored and returned.
+
+    One ad set, so total_budget is daily_budget x duration_days (not x 2 like
+    TEST_PLAN). optimization_event is decided once at creation (ADD_TO_CART
+    for a high-ticket product, else PURCHASE) and never switched mid-flight;
+    target_cost_per_add_to_cart is the cost-cap target for ADD_TO_CART ad
+    sets and None otherwise.
+    """
+
+    __test__ = False
+
+    plan_type: Literal["CREATIVE_TEST_PLAN"] = "CREATIVE_TEST_PLAN"
+    objective: Literal["SALES"]
+    audience_constraints: AudienceConstraints
+    creative_persona: CreativePersona
+    hypotheses: list[CreativeTestHypothesis]
+    offer: str
+    positioning: str
+    creative_angles: Annotated[
+        list[str],
+        Field(min_length=MIN_CREATIVE_ANGLES, max_length=MAX_CREATIVE_ANGLES),
+    ]
+    copy_strategy: str
+    daily_budget: float
+    duration_days: int
+    total_budget: float
+    optimization_event: OptimizationEvent
+    target_cost_per_add_to_cart: float | None = None
+    success_criteria: SuccessCriteria
+    decision_rules: list[DecisionRule] = CREATIVE_TEST_PLAN_DECISION_RULES
+    baseline_metrics: NormalizedMetrics
+    benchmark_context: BenchmarkContext
+    data_source: DataSourceTag = CREATIVE_TEST_PLAN_DATA_SOURCE
+    unit_economics: UnitEconomicsFields | None = None
+
+
 # --- DATA_DRIVEN_STRATEGY ---------------------------------------------------
 
 
@@ -498,23 +685,21 @@ class DataDrivenStrategyContent(GeneratedDataDrivenStrategyFields):
     unit_economics: UnitEconomicsFields | None = None
 
 
-StrategyContent = Annotated[
-    TestPlanContent | DataDrivenStrategyContent, Field(discriminator="plan_type")
-]
+AnyStrategyContent = (
+    TestPlanContent | CreativeTestPlanContent | DataDrivenStrategyContent
+)
+
+StrategyContent = Annotated[AnyStrategyContent, Field(discriminator="plan_type")]
 
 # StrategyContent is a type alias (a discriminated union), not a class, so
 # there's no `.model_validate_json`/`.model_dump_json` to call on it
 # directly when round-tripping Strategy.content (stored as a JSON string —
 # see app/api/strategy.py). TypeAdapter is Pydantic's mechanism for
 # validating/serializing a bare type like this one.
-StrategyContentAdapter: TypeAdapter[TestPlanContent | DataDrivenStrategyContent] = (
-    TypeAdapter(StrategyContent)
-)
+StrategyContentAdapter: TypeAdapter[AnyStrategyContent] = TypeAdapter(StrategyContent)
 
 
-def primary_audience(
-    content: TestPlanContent | DataDrivenStrategyContent,
-) -> TargetAudience:
+def primary_audience(content: AnyStrategyContent) -> TargetAudience:
     """The one audience to actually target at publish time, regardless of plan type.
 
     DATA_DRIVEN_STRATEGY has a single refined `targetAudience`.
@@ -531,14 +716,21 @@ def primary_audience(
     """
     if content.plan_type == "TEST_PLAN":
         return content.audience_variants[0].targeting
+    if content.plan_type == "CREATIVE_TEST_PLAN":
+        # The persona is creative context, never targeting: only its
+        # problem/desire carry over (the Creative Agent reads just those).
+        return TargetAudience(
+            problem=content.creative_persona.problem,
+            desire=content.creative_persona.desire,
+        )
     return content.target_audience
 
 
-def daily_budget(content: TestPlanContent | DataDrivenStrategyContent) -> float:
+def daily_budget(content: AnyStrategyContent) -> float:
     """The daily budget to actually use, regardless of plan type."""
-    if content.plan_type == "TEST_PLAN":
-        return content.daily_budget
-    return content.budget_recommendation.daily
+    if content.plan_type == "DATA_DRIVEN_STRATEGY":
+        return content.budget_recommendation.daily
+    return content.daily_budget
 
 
 class StrategyResponse(CamelCaseModel):

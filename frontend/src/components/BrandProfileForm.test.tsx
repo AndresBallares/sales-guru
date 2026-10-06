@@ -47,6 +47,7 @@ const profile: api.BrandProfile = {
   exampleCopy: null,
   proofPoints: [],
   offer: null,
+  adLanguages: ['English'],
   logoUrl: null,
 }
 
@@ -89,6 +90,7 @@ describe('BrandProfileForm — create mode', () => {
         exampleCopy: undefined,
         proofPoints: [],
         offer: undefined,
+        adLanguages: ['English'],
       }),
     )
     expect(onSaved).toHaveBeenCalledWith(profile)
@@ -275,6 +277,50 @@ describe('BrandProfileForm — edit mode', () => {
     expect(screen.getByLabelText('Bold')).not.toBeChecked()
     expect(screen.getByLabelText('Price positioning')).toHaveValue('PREMIUM')
     expect(screen.getByRole('button', { name: 'Save' })).toBeInTheDocument()
+  })
+
+  it('defaults ad languages to English and sends the edited list', async () => {
+    mockedApi.createBrandProfile.mockResolvedValue(profile)
+    const user = userEvent.setup()
+    render(
+      <BrandProfileForm
+        businessId="biz-1"
+        onSaved={vi.fn<(profile: api.BrandProfile) => void>()}
+      />,
+    )
+    await screen.findByLabelText('Warm')
+    expect(screen.getByLabelText(/Ad languages/)).toHaveValue('English')
+
+    await user.type(
+      screen.getByLabelText(/Brand overview/),
+      'Family-run studio making handcrafted gold jewelry.',
+    )
+    await user.type(screen.getByLabelText('Ideal customer'), 'Women 30-55.')
+    await user.click(screen.getByLabelText('Warm'))
+    await user.selectOptions(screen.getByLabelText('Price positioning'), 'PREMIUM')
+    await user.clear(screen.getByLabelText(/Ad languages/))
+    await user.type(screen.getByLabelText(/Ad languages/), 'English,  Spanish ,')
+    await user.click(screen.getByRole('button', { name: 'Save brand profile' }))
+
+    await waitFor(() =>
+      expect(mockedApi.createBrandProfile).toHaveBeenCalledWith(
+        'biz-1',
+        expect.objectContaining({ adLanguages: ['English', 'Spanish'] }),
+      ),
+    )
+  })
+
+  it('pre-fills ad languages from the existing profile', async () => {
+    render(
+      <BrandProfileForm
+        businessId="biz-1"
+        profile={{ ...profile, adLanguages: ['Spanish', 'English'] }}
+        onSaved={vi.fn<(profile: api.BrandProfile) => void>()}
+      />,
+    )
+    await screen.findByLabelText('Warm')
+
+    expect(screen.getByLabelText(/Ad languages/)).toHaveValue('Spanish, English')
   })
 
   it('pre-fills proof points (one per line) and the current offer', async () => {

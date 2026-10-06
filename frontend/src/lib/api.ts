@@ -95,6 +95,9 @@ export interface BrandProfile {
   // actually gates the GET_OFFER CTA.
   proofPoints: string[]
   offer: string | null
+  // Languages this business's ads target (a hard constraint on a creative
+  // test plan's ad set); the backend defaults to ["English"].
+  adLanguages: string[]
   // Rides along from the parent business (app/api/brand_profile.py) so
   // the brand-profile view can show the whole identity together, without
   // a second business fetch.
@@ -113,6 +116,7 @@ export interface BrandProfileCreateInput {
   exampleCopy?: string
   proofPoints?: string[]
   offer?: string
+  adLanguages?: string[]
 }
 
 // Partial update — only fields explicitly provided change (same
@@ -129,6 +133,7 @@ export interface BrandProfileUpdateInput {
   exampleCopy?: string | null
   proofPoints?: string[]
   offer?: string | null
+  adLanguages?: string[]
 }
 
 export interface Product {
@@ -765,6 +770,45 @@ export interface TestPlanContent {
   unitEconomics: UnitEconomics | null
 }
 
+// A business with no advertising history running a SALES campaign: one broad
+// ad set, with the creative angle as the test variable.
+export interface CreativePersona {
+  name: string
+  description: string
+  problem: string | null
+  desire: string | null
+}
+
+export interface CreativeTestHypothesis {
+  id: string
+  statement: string
+  primaryMetric: string
+  secondaryMetrics: string[]
+}
+
+export interface CreativeTestPlanContent {
+  planType: 'CREATIVE_TEST_PLAN'
+  objective: 'SALES'
+  audienceConstraints: { country: string; ageMin: number; languages: string[] }
+  creativePersona: CreativePersona
+  hypotheses: CreativeTestHypothesis[]
+  offer: string
+  positioning: string
+  creativeAngles: string[]
+  copyStrategy: string
+  dailyBudget: number
+  durationDays: number
+  totalBudget: number
+  optimizationEvent: 'PURCHASE' | 'ADD_TO_CART'
+  targetCostPerAddToCart: number | null
+  successCriteria: SuccessCriteria
+  decisionRules: DecisionRule[]
+  baselineMetrics: NormalizedMetrics
+  benchmarkContext: BenchmarkContext
+  dataSource: DataSourceTag
+  unitEconomics: UnitEconomics | null
+}
+
 // A business with real historical performance data — a full strategy plus
 // forward-looking guidance grounded in what already worked.
 export interface DataDrivenStrategyContent {
@@ -782,7 +826,10 @@ export interface DataDrivenStrategyContent {
   unitEconomics: UnitEconomics | null
 }
 
-export type StrategyContent = TestPlanContent | DataDrivenStrategyContent
+export type StrategyContent =
+  | TestPlanContent
+  | CreativeTestPlanContent
+  | DataDrivenStrategyContent
 
 export interface Strategy {
   id: string

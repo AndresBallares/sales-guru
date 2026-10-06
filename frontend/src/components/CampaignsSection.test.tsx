@@ -1529,6 +1529,80 @@ describe('CampaignsSection', () => {
     expect(screen.getByText(/breakeven ROAS 2.50x/)).toBeInTheDocument()
   })
 
+  it('displays a CREATIVE_TEST_PLAN with its own fields', async () => {
+    mockedApi.listCampaigns.mockResolvedValue([
+      {
+        id: 'camp-1',
+        name: null,
+        objective: 'SALES',
+        status: 'READY',
+        productId: 'prod-1',
+        audienceId: 'aud-1',
+        metaCampaignId: null,
+        eventVenueKey: null,
+        startDate: null,
+        endDate: null,
+        pausedReason: null,
+        dailySpendFlag: null,
+        needsDestinationUrl: false,
+      },
+    ])
+    const base = fakeTestPlanContent()
+    mockedApi.createStrategy.mockResolvedValue({
+      id: 'strat-1',
+      campaignId: 'camp-1',
+      createdAt: '2026-10-06T00:00:00Z',
+      content: {
+        planType: 'CREATIVE_TEST_PLAN',
+        objective: 'SALES',
+        audienceConstraints: { country: 'US', ageMin: 18, languages: ['English'] },
+        creativePersona: {
+          name: 'Milestone gift buyers',
+          description: 'Women 30-55 buying a meaningful piece.',
+          problem: null,
+          desire: null,
+        },
+        hypotheses: [
+          {
+            id: 'creative_angle',
+            statement: 'The on-skin angle will win on cost per add-to-cart.',
+            primaryMetric: 'cost_per_add_to_cart',
+            secondaryMetrics: ['cac', 'ctr'],
+          },
+        ],
+        offer: 'Custom emerald rings',
+        positioning: 'Premium and personal',
+        creativeAngles: ['Product on skin', 'Social proof', 'Gifting'],
+        copyStrategy: 'Lead with the story behind each piece',
+        dailyBudget: 50,
+        durationDays: 10,
+        totalBudget: 500,
+        optimizationEvent: 'ADD_TO_CART',
+        targetCostPerAddToCart: 30,
+        successCriteria: base.successCriteria,
+        decisionRules: base.decisionRules,
+        baselineMetrics: base.baselineMetrics,
+        benchmarkContext: base.benchmarkContext,
+        dataSource: base.dataSource,
+        unitEconomics: null,
+      },
+    })
+    const user = userEvent.setup()
+
+    renderCampaigns(<CampaignsSection businessId="biz-1" />)
+    await screen.findByText('Sales — Ready')
+
+    await user.click(screen.getByRole('button', { name: 'Generate strategy' }))
+
+    expect(await screen.findByText(/Creative test/)).toBeInTheDocument()
+    expect(screen.getByText(/runs 3 creative angles/)).toBeInTheDocument()
+    expect(screen.getByText(/cheapest add-to-cart\./)).toBeInTheDocument()
+    expect(screen.getByText(/broad \(Meta Advantage\+\)/)).toBeInTheDocument()
+    expect(screen.getByText(/Milestone gift buyers/)).toBeInTheDocument()
+    expect(screen.getByText('Product on skin')).toBeInTheDocument()
+    expect(screen.getByText(/\$50\/day on one ad set for 10 days/)).toBeInTheDocument()
+  })
+
   it('loads and displays a previously generated strategy for a non-draft campaign', async () => {
     mockedApi.listCampaigns.mockResolvedValue([
       {
@@ -1711,6 +1785,7 @@ describe('CampaignsSection', () => {
       exampleCopy: null,
       proofPoints: [],
       offer: null,
+      adLanguages: ['English'],
       logoUrl: null,
     })
     mockedApi.listCampaigns.mockResolvedValue([

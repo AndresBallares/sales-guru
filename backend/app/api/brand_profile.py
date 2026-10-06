@@ -19,6 +19,7 @@ from app.api.business import business_logo_url
 from app.core.authz import get_owned_business
 from app.core.db import db
 from app.schemas.brand_profile import (
+    DEFAULT_AD_LANGUAGES,
     BrandProfileCreateRequest,
     BrandProfileResponse,
     BrandProfileUpdateRequest,
@@ -59,6 +60,9 @@ def _to_response(profile: BrandProfile, business: Business) -> BrandProfileRespo
         example_copy=profile.exampleCopy,
         proof_points=json.loads(profile.proofPoints) if profile.proofPoints else [],
         offer=profile.offer,
+        ad_languages=json.loads(profile.adLanguages)
+        if profile.adLanguages
+        else list(DEFAULT_AD_LANGUAGES),
         logo_url=business_logo_url(business.id)
         if business.logoData is not None
         else None,
@@ -110,6 +114,9 @@ async def create_brand_profile(
             if payload.proof_points
             else None,
             "offer": payload.offer,
+            "adLanguages": json.dumps(payload.ad_languages)
+            if payload.ad_languages
+            else None,
         }
     )
     return _to_response(profile, business)
@@ -171,6 +178,9 @@ async def update_brand_profile(
     if "proofPoints" in update_data:
         proof_points = update_data["proofPoints"]
         update_data["proofPoints"] = json.dumps(proof_points) if proof_points else None
+    if "adLanguages" in update_data:
+        ad_languages = update_data["adLanguages"]
+        update_data["adLanguages"] = json.dumps(ad_languages) if ad_languages else None
 
     if not update_data:
         return _to_response(profile, business)

@@ -651,6 +651,31 @@ def resolve_target_cac(unit_economics: UnitEconomicsFields | None) -> float:
     )
 
 
+# An AddToCart ad set that spends well under its budget after a few days is
+# usually being held back by its own cost cap (the cap is below what Meta
+# needs to win auctions), not by a lack of demand. The check looks at the
+# last DELIVERY_CHECK_DAYS days and flags under DELIVERY_MIN_SPEND_FRACTION of
+# the expected spend (daily budget x days). A signal for the Optimizer, never
+# an action by itself.
+DELIVERY_CHECK_DAYS = 3
+DELIVERY_MIN_SPEND_FRACTION = 0.5
+
+
+def cost_cap_may_be_too_tight(*, spend: float, daily_budget: float) -> bool:
+    """Whether recent spend is low enough to suggest the cost cap is too tight.
+
+    Args:
+        spend: Spend over the last DELIVERY_CHECK_DAYS days.
+        daily_budget: The ad set's daily budget.
+
+    Returns:
+        True when spend is under DELIVERY_MIN_SPEND_FRACTION of
+        daily_budget x DELIVERY_CHECK_DAYS.
+    """
+    expected = daily_budget * DELIVERY_CHECK_DAYS
+    return spend < expected * DELIVERY_MIN_SPEND_FRACTION
+
+
 # A confident CAC comparison needs real volume on both sides — 10x the
 # bare minimum used to call a result SUPPORTED/REJECTED at all
 # (MIN_CONVERSIONS_TO_COMPARE_VARIANTS), same "directional vs. confident"

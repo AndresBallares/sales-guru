@@ -26,6 +26,7 @@ already established for test_metric.py / test_publish.py.
 import struct
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime, timedelta
+from typing import Any, cast
 from unittest.mock import AsyncMock
 
 import pytest
@@ -35,7 +36,10 @@ from app.api import strategy as strategy_module
 from app.schemas.creative import GeneratedCreativeVariant
 from app.schemas.optimization import GeneratedRecommendation
 from app.schemas.strategy import (
+    AudienceConstraints,
     BudgetRecommendation,
+    CreativePersona,
+    CreativeTestPlanContent,
     DataDrivenStrategyContent,
     GeneratedTestPlanFields,
     NormalizedMetrics,
@@ -1915,3 +1919,178 @@ async def _fetch_campaign(campaign_id: str) -> object:
     await seeder.disconnect()
     assert campaign is not None
     return campaign
+
+
+# --- _check_add_to_cart_delivery (CREATIVE_TEST_PLAN cost-cap signal) --------
+
+
+async def _make_creative_plan_campaign(
+    client: TestClient, *, optimization_event: str, daily_budget: float = 50.0
+) -> str:
+    """A LIVE campaign whose stored strategy is a CREATIVE_TEST_PLAN."""
+    _, campaign_id = _live_campaign(client)
+    benchmark_context = strategist_module._build_benchmark_context()
+    plan = CreativeTestPlanContent(
+        objective="SALES",
+        audience_constraints=AudienceConstraints(),
+        creative_persona=CreativePersona(name="Gift buyers", description="Women"),
+        hypotheses=[strategist_module._build_creative_hypothesis("A wins.")],
+        offer="Offer",
+        positioning="Positioning",
+        creative_angles=["a", "b", "c"],
+        copy_strategy="Copy",
+        daily_budget=daily_budget,
+        duration_days=10,
+        total_budget=daily_budget * 10,
+        optimization_event=cast(Any, optimization_event),
+        success_criteria=strategist_module._build_creative_success_criteria(
+            benchmark_context, None, None
+        ),
+        baseline_metrics=NormalizedMetrics(),
+        benchmark_context=benchmark_context,
+    )
+    seeder = Prisma()
+    await seeder.connect()
+    try:
+        await seeder.strategy.update(
+            where={"campaignId": campaign_id},
+            data={"content": plan.model_dump_json(by_alias=True)},
+        )
+    finally:
+        await seeder.disconnect()
+    return campaign_id
+
+
+async def _delivery_signal(campaign_id: str) -> str | None:
+    seeder = Prisma()
+    await seeder.connect()
+    try:
+        campaign = await seeder.campaign.find_unique(where={"id": campaign_id})
+        assert campaign is not None
+        return campaign.deliverySignal
+    finally:
+        await seeder.disconnect()
+
+
+async def _run_delivery_check(client: TestClient, campaign_id: str) -> None:
+    seeder = Prisma()
+    await seeder.connect()
+    try:
+        campaign = await seeder.campaign.find_unique(where={"id": campaign_id})
+        assert campaign is not None
+    finally:
+        await seeder.disconnect()
+    # Via _run: the check uses the app's own db client, which is bound to the
+    # TestClient's event loop (see this module's docstring).
+    _run(client, optimization_jobs._check_add_to_cart_delivery, campaign)
+
+
+@pytest.mark.asyncio
+async def test_delivery_check_flags_an_add_to_cart_ad_set_that_underspends(
+    client: TestClient, mock_services: dict[str, AsyncMock]
+) -> None:
+    campaign_id = await _make_creative_plan_campaign(
+        client, optimization_event="ADD_TO_CART"
+    )
+    now = datetime.now(UTC)
+    await _seed_metric(
+        campaign_id, fetched_at=now - timedelta(days=3, hours=1), spend=0.0
+    )
+    await _seed_metric(campaign_id, fetched_at=now, spend=60.0)  # < 50% of $150
+
+    await _run_delivery_check(client, campaign_id)
+
+    assert await _delivery_signal(campaign_id) == "COST_CAP_MAY_BE_TOO_TIGHT"
+
+
+@pytest.mark.asyncio
+async def test_delivery_check_stays_clear_when_spend_is_healthy(
+    client: TestClient, mock_services: dict[str, AsyncMock]
+) -> None:
+    campaign_id = await _make_creative_plan_campaign(
+        client, optimization_event="ADD_TO_CART"
+    )
+    now = datetime.now(UTC)
+    await _seed_metric(
+        campaign_id, fetched_at=now - timedelta(days=3, hours=1), spend=0.0
+    )
+    await _seed_metric(campaign_id, fetched_at=now, spend=120.0)
+
+    await _run_delivery_check(client, campaign_id)
+
+    assert await _delivery_signal(campaign_id) is None
+
+
+@pytest.mark.asyncio
+async def test_delivery_check_clears_a_stale_signal_once_spend_recovers(
+    client: TestClient, mock_services: dict[str, AsyncMock]
+) -> None:
+    campaign_id = await _make_creative_plan_campaign(
+        client, optimization_event="ADD_TO_CART"
+    )
+    seeder = Prisma()
+    await seeder.connect()
+    await seeder.campaign.update(
+        where={"id": campaign_id}, data={"deliverySignal": "COST_CAP_MAY_BE_TOO_TIGHT"}
+    )
+    await seeder.disconnect()
+    now = datetime.now(UTC)
+    await _seed_metric(
+        campaign_id, fetched_at=now - timedelta(days=3, hours=1), spend=0.0
+    )
+    await _seed_metric(campaign_id, fetched_at=now, spend=130.0)
+
+    await _run_delivery_check(client, campaign_id)
+
+    assert await _delivery_signal(campaign_id) is None
+
+
+@pytest.mark.asyncio
+async def test_delivery_check_waits_for_three_days_of_history(
+    client: TestClient, mock_services: dict[str, AsyncMock]
+) -> None:
+    """With no snapshot three days old, there is nothing to judge yet."""
+    campaign_id = await _make_creative_plan_campaign(
+        client, optimization_event="ADD_TO_CART"
+    )
+    now = datetime.now(UTC)
+    await _seed_metric(campaign_id, fetched_at=now - timedelta(days=1), spend=0.0)
+    await _seed_metric(campaign_id, fetched_at=now, spend=5.0)
+
+    await _run_delivery_check(client, campaign_id)
+
+    assert await _delivery_signal(campaign_id) is None
+
+
+@pytest.mark.asyncio
+async def test_delivery_check_ignores_a_purchase_optimized_plan(
+    client: TestClient, mock_services: dict[str, AsyncMock]
+) -> None:
+    campaign_id = await _make_creative_plan_campaign(
+        client, optimization_event="PURCHASE"
+    )
+    now = datetime.now(UTC)
+    await _seed_metric(
+        campaign_id, fetched_at=now - timedelta(days=3, hours=1), spend=0.0
+    )
+    await _seed_metric(campaign_id, fetched_at=now, spend=1.0)
+
+    await _run_delivery_check(client, campaign_id)
+
+    assert await _delivery_signal(campaign_id) is None
+
+
+@pytest.mark.asyncio
+async def test_delivery_check_ignores_other_plan_types(
+    client: TestClient, mock_services: dict[str, AsyncMock]
+) -> None:
+    _, campaign_id = _live_campaign(client)  # DATA_DRIVEN_STRATEGY
+    now = datetime.now(UTC)
+    await _seed_metric(
+        campaign_id, fetched_at=now - timedelta(days=3, hours=1), spend=0.0
+    )
+    await _seed_metric(campaign_id, fetched_at=now, spend=1.0)
+
+    await _run_delivery_check(client, campaign_id)
+
+    assert await _delivery_signal(campaign_id) is None

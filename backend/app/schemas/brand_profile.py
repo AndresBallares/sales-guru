@@ -24,6 +24,9 @@ _MAX_EXAMPLE_COPY_LENGTH = 2000
 _MAX_PROOF_POINT_LENGTH = 200
 _MAX_PROOF_POINTS = 10
 _MAX_OFFER_LENGTH = 200
+_MAX_AD_LANGUAGES = 5
+_MAX_AD_LANGUAGE_LENGTH = 40
+DEFAULT_AD_LANGUAGES = ["English"]
 
 # Fixed list, confirmed 2026-09-11 — same Literal-type-alias + *_LABELS
 # pattern as Objective/Industry (app/schemas/campaign.py, business.py):
@@ -67,6 +70,18 @@ PRICE_POSITIONING_LABELS: dict[PricePositioning, str] = {
 assert set(get_args(PricePositioning)) == set(PRICE_POSITIONING_LABELS)
 
 
+def _clean_languages(value: list[str]) -> list[str]:
+    """Trim, drop blanks, and cap each language name's length."""
+    cleaned = [item.strip() for item in value if item.strip()]
+    for item in cleaned:
+        if len(item) > _MAX_AD_LANGUAGE_LENGTH:
+            raise ValueError(
+                f"Each language must be at most {_MAX_AD_LANGUAGE_LENGTH} "
+                f"characters (got {len(item)}): {item!r}"
+            )
+    return cleaned
+
+
 class BrandProfileCreateRequest(CamelCaseModel):
     """Payload for creating a business's brand profile (PRD.md §5 step 3.5).
 
@@ -94,6 +109,14 @@ class BrandProfileCreateRequest(CamelCaseModel):
     # (app/schemas/creative.py's ALLOWED_CTAS_BY_OBJECTIVE validator).
     proof_points: list[str] = Field(default_factory=list, max_length=_MAX_PROOF_POINTS)
     offer: str | None = Field(default=None, max_length=_MAX_OFFER_LENGTH)
+    # Languages the business's ads target (a hard constraint on the
+    # CREATIVE_TEST_PLAN ad set); empty/omitted means the English default.
+    ad_languages: list[str] = Field(default_factory=list, max_length=_MAX_AD_LANGUAGES)
+
+    @field_validator("ad_languages")
+    @classmethod
+    def _validate_ad_languages(cls, value: list[str]) -> list[str]:
+        return _clean_languages(value)
 
     @field_validator("proof_points")
     @classmethod
@@ -133,6 +156,13 @@ class BrandProfileUpdateRequest(CamelCaseModel):
     # other field here — pass an empty list to actually clear proof_points.
     proof_points: list[str] | None = Field(default=None, max_length=_MAX_PROOF_POINTS)
     offer: str | None = Field(default=None, max_length=_MAX_OFFER_LENGTH)
+    # An explicit empty list clears the override (back to English).
+    ad_languages: list[str] | None = Field(default=None, max_length=_MAX_AD_LANGUAGES)
+
+    @field_validator("ad_languages")
+    @classmethod
+    def _validate_ad_languages(cls, value: list[str] | None) -> list[str] | None:
+        return None if value is None else _clean_languages(value)
 
     @field_validator("proof_points")
     @classmethod
@@ -171,4 +201,5 @@ class BrandProfileResponse(CamelCaseModel):
     example_copy: str | None
     proof_points: list[str]
     offer: str | None
+    ad_languages: list[str]
     logo_url: str | None
