@@ -830,6 +830,52 @@ async def test_delete_campaign_also_removes_its_strategy_and_creatives(
 
 
 @pytest.mark.asyncio
+async def test_delete_campaign_also_removes_carousel_creative_cards(
+    client: TestClient,
+) -> None:
+    """A carousel creative's CreativeCard rows reference the Creative with
+    no cascade, so deleting the campaign must remove them before the
+    creatives — otherwise the foreign key fails and the delete 500s."""
+    _signed_up_client(client)
+    business_id = _create_business(client)
+    campaign_id = client.post(
+        f"/businesses/{business_id}/campaigns", json={"objective": "SALES"}
+    ).json()["id"]
+
+    seeder = Prisma()
+    await seeder.connect()
+    try:
+        creative = await seeder.creative.create(
+            data={
+                "campaignId": campaign_id,
+                "headline": "Headline",
+                "bodyText": "Body",
+                "description": "Description",
+                "cta": "SHOP_NOW",
+                "creativeAngle": "angle",
+            }
+        )
+        for position in range(2):
+            await seeder.creativecard.create(
+                data={
+                    "creativeId": creative.id,
+                    "position": position,
+                    "imageUrl": f"https://example.com/{position}.jpg",
+                    "headline": f"Card {position}",
+                    "linkUrl": "https://example.com",
+                }
+            )
+
+        response = client.delete(f"/businesses/{business_id}/campaigns/{campaign_id}")
+
+        assert response.status_code == 204
+        assert await seeder.creativecard.count() == 0
+        assert await seeder.creative.count(where={"campaignId": campaign_id}) == 0
+    finally:
+        await seeder.disconnect()
+
+
+@pytest.mark.asyncio
 async def test_campaign_response_round_trips_every_campaign_status(
     client: TestClient,
 ) -> None:
