@@ -38,6 +38,11 @@ class GeneratedRecommendation(CamelCaseModel):
     confidence: float = Field(ge=0, le=1)
     risk: RiskLevel
     suggested_budget: float | None = None
+    # PAUSE_AD only, and only when the ad set holds several ads (a creative
+    # test): the id of the one ad to pause, exactly as listed in the prompt.
+    # Validated against that list in app/services/optimizer.py; cleared for
+    # every other action.
+    target_ad_id: str | None = None
 
 
 class RecommendationResponse(CamelCaseModel):

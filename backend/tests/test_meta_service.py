@@ -2114,3 +2114,108 @@ async def test_create_meta_ad_set_defaults_the_event_type_to_purchase(
 
     _url, data = client.calls[0]
     assert json.loads(data["promoted_object"])["custom_event_type"] == "PURCHASE"
+
+
+# ── Ad-level insights + cost per add-to-cart (creative-first Stage 3) ──
+
+
+@pytest.mark.asyncio
+async def test_fetch_ad_insights_hits_the_ad_object_and_parses_the_row(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = _mock_client_returning(
+        monkeypatch,
+        _FakeResponse(
+            {
+                "data": [
+                    {
+                        "impressions": "300",
+                        "clicks": "12",
+                        "spend": "4.00",
+                        "actions": [],
+                    }
+                ]
+            }
+        ),
+    )
+
+    insights = await meta.fetch_ad_insights(access_token="token", meta_ad_id="ad_123")
+
+    assert insights.impressions == 300
+    assert insights.spend == 4.0
+    url, _params = client.calls[0]
+    assert url == "https://graph.facebook.com/v21.0/ad_123/insights"
+
+
+@pytest.mark.asyncio
+async def test_fetch_ad_insights_returns_canned_zeros_in_fake_mode(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("FAKE_META", "true")
+    get_settings.cache_clear()
+    try:
+        insights = await meta.fetch_ad_insights(access_token="t", meta_ad_id="ad_1")
+    finally:
+        get_settings.cache_clear()
+
+    assert insights.spend == 0.0
+    assert insights.cost_per_add_to_cart is None
+
+
+@pytest.mark.asyncio
+async def test_fetch_insights_computes_cost_per_add_to_cart(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """cost_per_add_to_cart = spend / add-to-carts: the creative test's
+    primary metric."""
+    _mock_client_returning(
+        monkeypatch,
+        _FakeResponse(
+            {
+                "data": [
+                    {
+                        "impressions": "1000",
+                        "clicks": "100",
+                        "spend": "60.00",
+                        "actions": [{"action_type": "add_to_cart", "value": "5"}],
+                    }
+                ]
+            }
+        ),
+    )
+
+    insights = await meta.fetch_campaign_insights(
+        access_token="token", meta_campaign_id="campaign_123"
+    )
+
+    assert insights.cost_per_add_to_cart == 12.0
+
+
+@pytest.mark.asyncio
+async def test_fetch_insights_cost_per_add_to_cart_is_none_without_add_to_carts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """No add-to-carts means the metric is unavailable, never zero or infinite."""
+    _mock_client_returning(
+        monkeypatch,
+        _FakeResponse(
+            {
+                "data": [
+                    {
+                        "impressions": "1000",
+                        "clicks": "100",
+                        "spend": "60.00",
+                        "actions": [
+                            {"action_type": "landing_page_view", "value": "40"}
+                        ],
+                    }
+                ]
+            }
+        ),
+    )
+
+    insights = await meta.fetch_campaign_insights(
+        access_token="token", meta_campaign_id="campaign_123"
+    )
+
+    assert insights.cost_per_add_to_cart is None

@@ -1310,3 +1310,107 @@ def test_build_prompt_does_not_say_single_image_for_a_carousel_batch() -> None:
     )
 
     assert "never return a cards list" not in prompt
+
+
+# ── Never cut copy mid-phrase (the live "Shop the" bug) ──
+
+# The real over-length copy from the VENZI live run: 3 sentences with line
+# breaks (the line breaks count toward the 125-character limit).
+_SHOP_THE_COPY = (
+    "18K gold, natural gemstones, and ceramic — hand-shaped into bold form.\n\n"
+    "Handcrafted in small batches in New York.\n\nShop the collection."
+)
+
+
+def test_trim_body_text_ends_on_the_last_complete_sentence() -> None:
+    """A plain word-boundary cut left "…New York. Shop the"; trim back to the
+    last sentence end that fits instead."""
+    result = creative._trim_body_text(_SHOP_THE_COPY, 125)
+
+    assert result.endswith("New York.")
+    assert "Shop the" not in result
+    assert len(result) <= 125
+
+
+def test_trim_body_text_never_ends_mid_phrase() -> None:
+    result = creative._trim_body_text(_SHOP_THE_COPY, 125)
+
+    assert result[-1] in ".!?"
+
+
+def test_trim_body_text_leaves_copy_that_already_fits_alone() -> None:
+    text = "Short and sweet. Shop now."
+
+    assert creative._trim_body_text(text, 125) == text
+
+
+def test_trim_body_text_drops_line_breaks_when_the_sentence_trim_is_too_short() -> None:
+    """Trimming to the last sentence would leave under ~60 characters, so the
+    line breaks (which count toward the limit) are dropped and the copy is
+    tried again: flattened, it fits and keeps both sentences."""
+    first = "Hand-shaped in 18K gold."
+    second = "Natural gemstones and ceramic set by hand in New York, every piece."
+    text = f"{first}\n\n{second}"
+    max_length = len(first) + 1 + len(second)
+    assert len(text) > max_length
+
+    result = creative._trim_body_text(text, max_length)
+
+    assert result == f"{first} {second}"
+
+
+def test_trim_body_text_falls_back_to_a_word_boundary_as_a_last_resort() -> None:
+    """One long run-on sentence has no earlier sentence end: only then is a
+    word-boundary cut acceptable."""
+    text = "word " * 40  # 200 chars, no punctuation
+
+    result = creative._trim_body_text(text, 50)
+
+    assert len(result) <= 50
+    assert not result.endswith(" ")
+
+
+def test_trim_body_text_flattened_copy_is_trimmed_to_a_sentence_too() -> None:
+    text = (
+        "Sentence number one is quite a long one indeed, really it is.\n\n"
+        "Sentence number two is also fairly long, to be honest here.\n\n"
+        "Sentence number three keeps going on and on and on."
+    )
+
+    result = creative._trim_body_text(text, 130)
+
+    assert result[-1] in ".!?"
+    assert "three" not in result
+    assert len(result) <= 130
+
+
+def test_coerce_batch_never_cuts_primary_text_mid_phrase() -> None:
+    raw: dict[str, object] = {
+        "variants": [
+            {
+                "headline": f"Headline {letter}",
+                "bodyText": _SHOP_THE_COPY,
+                "description": "Desc",
+                "cta": "SHOP_NOW",
+                "creativeAngle": f"Angle {letter}",
+                "imagePrompt": "x",
+                "videoPrompt": "y",
+            }
+            for letter in "ABCD"
+        ]
+    }
+
+    variants = creative._coerce_batch(raw, "SALES", Exception("over length"))
+
+    for variant in variants:
+        assert variant.body_text.endswith("New York.")
+        assert "Shop the" not in variant.body_text
+
+
+def test_the_retry_prompt_states_the_character_rule_explicitly() -> None:
+    retry = creative._retry_prompt("BASE", "primary text is 128 characters")
+
+    assert "BASE" in retry
+    assert "primary text is 128 characters" in retry
+    assert "line breaks count toward the 125-character limit" in retry
+    assert "complete sentence" in retry

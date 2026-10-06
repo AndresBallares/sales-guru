@@ -726,6 +726,31 @@ def primary_audience(content: AnyStrategyContent) -> TargetAudience:
     return content.target_audience
 
 
+def planned_total_budget(
+    content: TestPlanContent | CreativeTestPlanContent, ad_set_count: int
+) -> float:
+    """The most a test plan should spend: its daily budget over every ad set.
+
+    Each ad set runs at the plan's daily rate, so the ceiling is
+    daily_budget x the number of ad sets actually published x duration_days.
+    That is $50 x 2 x 10 = $1,000 for a two-variant TEST_PLAN and
+    $50 x 1 x 10 = $500 for a one-ad-set CREATIVE_TEST_PLAN, and it is right
+    for a TEST_PLAN that only ever published one ad set (the stored
+    total_budget wrongly assumes two). The plan's own daily rate is used, not
+    an ad set's current budget, so an Optimizer budget increase can't raise
+    its own ceiling.
+
+    Args:
+        content: A TEST_PLAN or CREATIVE_TEST_PLAN.
+        ad_set_count: How many real ad sets the campaign has on Meta (at
+            least one is assumed).
+
+    Returns:
+        The planned total budget in dollars.
+    """
+    return content.daily_budget * max(ad_set_count, 1) * content.duration_days
+
+
 def daily_budget(content: AnyStrategyContent) -> float:
     """The daily budget to actually use, regardless of plan type."""
     if content.plan_type == "DATA_DRIVEN_STRATEGY":

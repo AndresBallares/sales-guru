@@ -79,12 +79,17 @@ from prisma.types import MetricCreateInput
 
 from app.core.db import db
 from app.core.meta_connection import get_meta_connection
-from app.schemas.strategy import StrategyContentAdapter, TestPlanContent
+from app.schemas.strategy import (
+    StrategyContentAdapter,
+    TestPlanContent,
+    planned_total_budget,
+)
 from app.schemas.test_evaluation import StopReason
 from app.services import optimizer
 from app.services.meta import (
     CampaignInsights,
     MetaConnectionError,
+    fetch_ad_insights,
     fetch_ad_set_insights,
     fetch_campaign_insights,
     pause_meta_ad,
@@ -96,17 +101,25 @@ logger = logging.getLogger(__name__)
 
 
 def _metric_create_data(
-    *, campaign_id: str, insights: CampaignInsights, ad_set_id: str | None = None
+    *,
+    campaign_id: str,
+    insights: CampaignInsights,
+    ad_set_id: str | None = None,
+    ad_id: str | None = None,
 ) -> MetricCreateInput:
     """Build a db.metric.create data dict from one insights fetch.
 
     ad_set_id is set only for a TEST_PLAN variant's own snapshot
     (PRD.md build step 10, per-AdSet metric collection) — None for the
-    pre-existing campaign-level aggregate collection.
+    pre-existing campaign-level aggregate collection. ad_id is set only for
+    an ad-level snapshot (a creative test's per-ad numbers); every reader of
+    campaign totals filters those rows out (adId None).
     """
     return {
         "campaignId": campaign_id,
         "adSetId": ad_set_id,
+        "adId": ad_id,
+        "costPerAddToCart": insights.cost_per_add_to_cart,
         "impressions": insights.impressions,
         "clicks": insights.clicks,
         "spend": insights.spend,
@@ -124,6 +137,50 @@ def _metric_create_data(
         "roas": insights.roas,
         "purchases": insights.purchases,
     }
+
+
+async def _collect_ad_level_metrics(campaign: Campaign, access_token: str) -> None:
+    """Store one ad-level snapshot per ad of a creative test (CREATIVE_TEST_PLAN).
+
+    The ads in its one ad set compete, so each ad's own numbers (above all
+    cost per add-to-cart) decide the winner — the campaign-level row can't
+    say which ad earned what. Any other plan type has nothing to compare at
+    ad level and is skipped. Each ad's Meta call is independent: one failing
+    never blocks the rest.
+
+    Args:
+        campaign: The live campaign.
+        access_token: The business's Meta access token.
+    """
+    strategy = await db.strategy.find_unique(where={"campaignId": campaign.id})
+    if strategy is None:
+        return
+    content = StrategyContentAdapter.validate_json(strategy.content)
+    if content.plan_type != "CREATIVE_TEST_PLAN":
+        return
+    for ad_set in await db.adset.find_many(where={"campaignId": campaign.id}):
+        for ad in await db.ad.find_many(where={"adSetId": ad_set.id}):
+            if ad.metaAdId is None:
+                continue
+            try:
+                insights = await fetch_ad_insights(
+                    access_token=access_token, meta_ad_id=ad.metaAdId
+                )
+            except MetaConnectionError:
+                logger.warning(
+                    "Ad-level metrics collection failed for campaign %s ad %s",
+                    campaign.id,
+                    ad.id,
+                )
+                continue
+            await db.metric.create(
+                data=_metric_create_data(
+                    campaign_id=campaign.id,
+                    insights=insights,
+                    ad_set_id=ad_set.id,
+                    ad_id=ad.id,
+                )
+            )
 
 
 async def _collect_metrics_for_campaign(campaign: Campaign, access_token: str) -> None:
@@ -202,7 +259,7 @@ async def _latest_total_spend(campaign_id: str) -> float:
         nothing has been collected yet).
     """
     metrics = await db.metric.find_many(
-        where={"campaignId": campaign_id}, order={"fetchedAt": "desc"}
+        where={"campaignId": campaign_id, "adId": None}, order={"fetchedAt": "desc"}
     )
     latest_by_group: dict[str | None, Metric] = {}
     for metric in metrics:
@@ -240,15 +297,18 @@ async def _auto_evaluate_after_pause(
 async def _enforce_spend_circuit_breaker(
     campaign: Campaign, connection: MetaConnection
 ) -> None:
-    """Deterministic, non-LLM guardrail: auto-pause a TEST_PLAN that overspent its plan.
+    """Deterministic, non-LLM guardrail: auto-pause a test plan that overspent its plan.
 
-    Only TEST_PLAN campaigns have a fixed total_budget to check against
-    — a DATA_DRIVEN_STRATEGY has no such ceiling (open-ended by design,
-    scaled up/down by its own scaling_trigger instead) and is skipped
-    entirely. Never an LLM judgment call, same "backend rules apply
-    before/instead of the LLM" principle as apply_budget_guardrail
-    (app/services/optimizer.py) — this doesn't even involve the
-    Optimizer Agent.
+    TEST_PLAN and CREATIVE_TEST_PLAN campaigns have a planned ceiling — the
+    plan's daily budget over every ad set it actually published, for its
+    duration (schemas/strategy.py's planned_total_budget), so the formula is
+    right for a two-variant TEST_PLAN ($1,000 at $50/day) and a one-ad-set
+    creative test ($500). A DATA_DRIVEN_STRATEGY has no such ceiling
+    (open-ended by design, scaled up/down by its own scaling_trigger
+    instead) and is skipped entirely. Never an LLM judgment call, same
+    "backend rules apply before/instead of the LLM" principle as
+    apply_budget_guardrail (app/services/optimizer.py) — this doesn't even
+    involve the Optimizer Agent.
 
     Args:
         campaign: The live campaign to check. Caller has already
@@ -265,28 +325,32 @@ async def _enforce_spend_circuit_breaker(
     if strategy is None:
         return
     content = StrategyContentAdapter.validate_json(strategy.content)
-    if content.plan_type != "TEST_PLAN":
+    if content.plan_type == "DATA_DRIVEN_STRATEGY":
         return
 
+    ad_sets = await db.adset.find_many(where={"campaignId": campaign.id})
+    real_ad_set_count = sum(1 for a in ad_sets if a.metaAdSetId is not None)
+    planned_budget = planned_total_budget(content, real_ad_set_count)
     total_spend = await _latest_total_spend(campaign.id)
-    if total_spend <= content.total_budget:
+    if total_spend <= planned_budget:
         return
 
     logger.warning(
         "Circuit breaker: campaign %s spent $%.2f, exceeding its $%.2f planned budget",
         campaign.id,
         total_spend,
-        content.total_budget,
+        planned_budget,
     )
     paused = await pause_campaign(
         campaign=campaign,
         connection=connection,
         reason=(
             f"Total spend ${total_spend:,.2f} exceeded the "
-            f"${content.total_budget:,.2f} planned budget"
+            f"${planned_budget:,.2f} planned budget"
         ),
     )
-    await _auto_evaluate_after_pause(paused, content, "TOTAL_SPEND_CIRCUIT_BREAKER")
+    if content.plan_type == "TEST_PLAN":
+        await _auto_evaluate_after_pause(paused, content, "TOTAL_SPEND_CIRCUIT_BREAKER")
 
 
 async def _grouped_metrics(campaign_id: str) -> dict[str | None, list[Metric]]:
@@ -294,7 +358,7 @@ async def _grouped_metrics(campaign_id: str) -> dict[str | None, list[Metric]]:
 
     None is the group key for the campaign-level aggregate stream.
     """
-    metrics = await db.metric.find_many(where={"campaignId": campaign_id})
+    metrics = await db.metric.find_many(where={"campaignId": campaign_id, "adId": None})
     groups: dict[str | None, list[Metric]] = {}
     for metric in metrics:
         groups.setdefault(metric.adSetId, []).append(metric)
@@ -537,6 +601,7 @@ async def collect_metrics_for_all_live_campaigns() -> None:
         if connection is None:
             continue
         await _collect_metrics_for_campaign(campaign, connection.accessToken)
+        await _collect_ad_level_metrics(campaign, connection.accessToken)
         try:
             await _enforce_spend_circuit_breaker(campaign, connection)
             # Re-fetch: the total-spend breaker above may have just paused
@@ -583,8 +648,12 @@ async def apply_recommendation(
 
     if recommendation.actionType == "PAUSE_AD":
         assert recommendation.targetAdId is not None
-        ad = await db.ad.find_unique(where={"id": recommendation.targetAdId})
+        ad = await db.ad.find_unique(
+            where={"id": recommendation.targetAdId}, include={"adSet": True}
+        )
         assert ad is not None and ad.metaAdId is not None
+        if ad.adSet is None or ad.adSet.campaignId != recommendation.campaignId:
+            raise ValueError("The ad to pause belongs to another campaign")
         await pause_meta_ad(access_token=connection.accessToken, meta_ad_id=ad.metaAdId)
         await db.ad.update(where={"id": ad.id}, data={"status": "PAUSED"})
     else:
@@ -606,6 +675,45 @@ async def apply_recommendation(
     )
     assert updated is not None  # just fetched by the caller, can't vanish mid-request
     return updated
+
+
+async def _ads_for_pause_choice(
+    ad_set: AdSet,
+) -> list[optimizer.AdPerformance] | None:
+    """This ad set's ads with their own latest numbers, if it holds several.
+
+    Only the Optimizer's working ad set is considered, so a TEST_PLAN (whose
+    first ad set holds one ad) is unchanged. Returns None for a single ad —
+    there is nothing to choose between.
+
+    Args:
+        ad_set: The ad set the Optimizer is evaluating.
+
+    Returns:
+        One entry per ad, from its latest ad-level Metric (zeros/None when
+        none exists yet), or None when the ad set has at most one ad.
+    """
+    ads = await db.ad.find_many(where={"adSetId": ad_set.id})
+    if len(ads) < 2:
+        return None
+    performances: list[optimizer.AdPerformance] = []
+    for ad in ads:
+        latest = await db.metric.find_first(
+            where={"adId": ad.id}, order={"fetchedAt": "desc"}
+        )
+        performances.append(
+            optimizer.AdPerformance(
+                ad_id=ad.id,
+                name=ad.name,
+                spend=latest.spend if latest else 0.0,
+                clicks=latest.clicks if latest else 0,
+                add_to_cart=latest.addToCart if latest else None,
+                cost_per_add_to_cart=latest.costPerAddToCart if latest else None,
+                purchases=latest.purchases if latest else None,
+                cac=latest.cac if latest else None,
+            )
+        )
+    return performances
 
 
 async def generate_and_store_recommendation(
@@ -643,15 +751,20 @@ async def generate_and_store_recommendation(
         else None
     )
 
-    metrics = await db.metric.find_many(where={"campaignId": campaign.id})
+    metrics = await db.metric.find_many(where={"campaignId": campaign.id, "adId": None})
     windows = optimizer.compute_trend_windows(
         metrics, product.price if product else None
     )
     if not windows:
         return None
 
+    ads = await _ads_for_pause_choice(ad_set)
     result = await optimizer.generate_recommendation(
-        business=business, campaign=campaign, ad_set=ad_set, windows=windows
+        business=business,
+        campaign=campaign,
+        ad_set=ad_set,
+        windows=windows,
+        ads=ads,
     )
     generated = result.recommendation
 
@@ -662,9 +775,13 @@ async def generate_and_store_recommendation(
 
     target_ad_id = None
     if generated.action_type == "PAUSE_AD":
-        ad = await db.ad.find_first(where={"adSetId": ad_set.id})
-        assert ad is not None  # guaranteed by LIVE status (publish creates it)
-        target_ad_id = ad.id
+        # The agent names the ad when the ad set holds several (a creative
+        # test); otherwise it's the ad set's only ad, as it always was.
+        target_ad_id = generated.target_ad_id
+        if target_ad_id is None:
+            ad = await db.ad.find_first(where={"adSetId": ad_set.id})
+            assert ad is not None  # guaranteed by LIVE status (publish creates it)
+            target_ad_id = ad.id
 
     requires_approval = optimizer.compute_requires_approval(
         action_type=generated.action_type,
@@ -724,7 +841,7 @@ async def _evaluate_campaign(campaign: Campaign) -> None:
     if StrategyContentAdapter.validate_json(strategy.content).plan_type == "TEST_PLAN":
         return
 
-    metrics = await db.metric.find_many(where={"campaignId": campaign.id})
+    metrics = await db.metric.find_many(where={"campaignId": campaign.id, "adId": None})
     if not metrics:
         return
 
@@ -924,7 +1041,7 @@ async def generate_and_store_test_evaluation(
     business = await db.business.find_unique(where={"id": campaign.businessId})
     assert business is not None  # guaranteed by the FK, not user input
 
-    metrics = await db.metric.find_many(where={"campaignId": campaign.id})
+    metrics = await db.metric.find_many(where={"campaignId": campaign.id, "adId": None})
     # Campaign has no dedicated "went live at" column — the earliest
     # Metric snapshot is a reasonable proxy, since collection starts
     # shortly after publish (see collect_metrics_for_all_live_campaigns).

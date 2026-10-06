@@ -56,6 +56,7 @@ from app.services.benchmarks import JEWELRY_META_BENCHMARKS
 from app.services.meta import CampaignInsights, MetaConnectionError
 from fastapi.testclient import TestClient
 from prisma import Prisma
+from prisma.models import Campaign
 
 
 def _valid_jpeg(width: int = 800, height: int = 800) -> bytes:
@@ -1911,7 +1912,7 @@ async def test_generate_and_store_test_evaluation_insufficient_with_lopsided_var
     evaluate.assert_not_awaited()
 
 
-async def _fetch_campaign(campaign_id: str) -> object:
+async def _fetch_campaign(campaign_id: str) -> Campaign:
     """Fetch a real Campaign row by id via a fresh connection."""
     seeder = Prisma()
     await seeder.connect()
@@ -2094,3 +2095,400 @@ async def test_delivery_check_ignores_other_plan_types(
     await _run_delivery_check(client, campaign_id)
 
     assert await _delivery_signal(campaign_id) is None
+
+
+# --- Spend circuit breaker: correct for every plan type (creative-first Stage 3) ---
+
+
+def test_planned_total_budget_sums_the_daily_budget_over_the_ad_sets() -> None:
+    from app.schemas.strategy import planned_total_budget
+
+    plan = _fake_test_plan()  # $50/day for 10 days
+
+    assert planned_total_budget(plan, ad_set_count=2) == 1000.0
+    assert planned_total_budget(plan, ad_set_count=1) == 500.0
+    # A plan always has at least one ad set, even before any are recorded.
+    assert planned_total_budget(plan, ad_set_count=0) == 500.0
+
+
+@pytest.mark.asyncio
+async def test_circuit_breaker_pauses_a_creative_test_that_overspent_its_one_ad_set(
+    client: TestClient, mock_services: dict[str, AsyncMock]
+) -> None:
+    """One ad set at $50/day for 10 days is a $500 ceiling (not the $1,000 a
+    two-variant TEST_PLAN gets). $600 spent pauses the campaign."""
+    campaign_id = await _make_creative_plan_campaign(
+        client, optimization_event="PURCHASE", daily_budget=50.0
+    )
+    mock_services["insights"].return_value = CampaignInsights(
+        impressions=1000, clicks=100, spend=600.0, conversions=2
+    )
+
+    _run(client, optimization_jobs.collect_metrics_for_all_live_campaigns)
+
+    campaign = await _fetch_campaign(campaign_id)
+    assert campaign.status == "PAUSED"
+    assert "600.00" in str(campaign.pausedReason)
+    assert "500.00" in str(campaign.pausedReason)
+    mock_services["pause_ad_set"].assert_awaited()
+
+
+@pytest.mark.asyncio
+async def test_circuit_breaker_leaves_a_creative_test_under_its_ceiling_live(
+    client: TestClient, mock_services: dict[str, AsyncMock]
+) -> None:
+    campaign_id = await _make_creative_plan_campaign(
+        client, optimization_event="PURCHASE", daily_budget=50.0
+    )
+    mock_services["insights"].return_value = CampaignInsights(
+        impressions=1000, clicks=100, spend=450.0, conversions=2
+    )
+
+    _run(client, optimization_jobs.collect_metrics_for_all_live_campaigns)
+
+    campaign = await _fetch_campaign(campaign_id)
+    assert campaign.status == "LIVE"
+    mock_services["pause_ad_set"].assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_circuit_breaker_uses_the_real_ad_set_count_for_a_one_ad_set_test_plan(
+    client: TestClient,
+    mock_services: dict[str, AsyncMock],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A TEST_PLAN with only one real ad set (published before two-variant
+    publishing existed) can spend at most $50/day x 10, not the $1,000 its
+    stored total_budget assumes — so $600 now trips the breaker."""
+    _, campaign_id = _live_campaign(client)  # one ad set, DATA_DRIVEN
+    plan = _fake_test_plan()
+    seeder = Prisma()
+    await seeder.connect()
+    try:
+        await seeder.strategy.update(
+            where={"campaignId": campaign_id},
+            data={"content": plan.model_dump_json(by_alias=True)},
+        )
+    finally:
+        await seeder.disconnect()
+    # Tripping the breaker auto-evaluates a TEST_PLAN; stub the LLM call.
+    monkeypatch.setattr(
+        optimizer_module,
+        "evaluate_test_plan",
+        AsyncMock(return_value=_VALID_TEST_EVALUATION),
+    )
+    mock_services["insights"].return_value = CampaignInsights(
+        impressions=1000, clicks=100, spend=600.0, conversions=2
+    )
+
+    _run(client, optimization_jobs.collect_metrics_for_all_live_campaigns)
+
+    campaign = await _fetch_campaign(campaign_id)
+    assert campaign.status == "PAUSED"
+    assert "500.00" in str(campaign.pausedReason)
+
+
+# --- Ad-level metrics (creative-first Stage 3) -------------------------------
+
+
+async def _creative_plan_campaign_with_ads(
+    client: TestClient, ad_count: int = 3
+) -> tuple[str, list[str]]:
+    """A LIVE creative-plan campaign with `ad_count` local Ads (each with a
+    Meta ad id) under its one ad set. Returns (campaign_id, ad ids)."""
+    campaign_id = await _make_creative_plan_campaign(
+        client, optimization_event="PURCHASE", daily_budget=50.0
+    )
+    seeder = Prisma()
+    await seeder.connect()
+    try:
+        ad_set = await seeder.adset.find_first(where={"campaignId": campaign_id})
+        assert ad_set is not None
+        existing = await seeder.ad.find_many(where={"adSetId": ad_set.id})
+        for ad in existing:
+            await seeder.ad.delete(where={"id": ad.id})
+        ad_ids = []
+        for n in range(ad_count):
+            ad = await seeder.ad.create(
+                data={
+                    "adSetId": ad_set.id,
+                    "name": f"Ad {n}",
+                    "status": "LIVE",
+                    "metaAdId": f"meta_ad_{n}",
+                }
+            )
+            ad_ids.append(ad.id)
+    finally:
+        await seeder.disconnect()
+    return campaign_id, ad_ids
+
+
+async def _metric_rows(campaign_id: str) -> list[Any]:
+    seeder = Prisma()
+    await seeder.connect()
+    try:
+        return list(await seeder.metric.find_many(where={"campaignId": campaign_id}))
+    finally:
+        await seeder.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_collection_stores_one_ad_level_metric_per_ad_for_a_creative_test(
+    client: TestClient,
+    mock_services: dict[str, AsyncMock],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    campaign_id, ad_ids = await _creative_plan_campaign_with_ads(client)
+    mock_services["insights"].return_value = CampaignInsights(
+        impressions=900, clicks=30, spend=90.0, conversions=3
+    )
+    ad_insights = AsyncMock(
+        side_effect=[
+            CampaignInsights(
+                impressions=300,
+                clicks=10,
+                spend=30.0,
+                conversions=1,
+                add_to_cart=3,
+                cost_per_add_to_cart=10.0,
+            )
+            for _ in range(3)
+        ]
+    )
+    monkeypatch.setattr(optimization_jobs, "fetch_ad_insights", ad_insights)
+
+    _run(client, optimization_jobs.collect_metrics_for_all_live_campaigns)
+
+    rows = await _metric_rows(campaign_id)
+    ad_rows = [r for r in rows if r.adId is not None]
+    campaign_rows = [r for r in rows if r.adId is None]
+    assert sorted(r.adId for r in ad_rows) == sorted(ad_ids)
+    assert len(campaign_rows) == 1
+    assert ad_rows[0].costPerAddToCart == 10.0
+    assert ad_rows[0].spend == 30.0
+    assert ad_insights.await_count == 3
+
+
+@pytest.mark.asyncio
+async def test_ad_level_rows_never_count_toward_the_campaigns_total_spend(
+    client: TestClient,
+    mock_services: dict[str, AsyncMock],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The campaign-level row ($450) is under the $500 ceiling; the ad rows
+    ($300 each) must not be added on top of it (that would be $1,350)."""
+    campaign_id, _ = await _creative_plan_campaign_with_ads(client)
+    mock_services["insights"].return_value = CampaignInsights(
+        impressions=900, clicks=30, spend=450.0, conversions=3
+    )
+    monkeypatch.setattr(
+        optimization_jobs,
+        "fetch_ad_insights",
+        AsyncMock(
+            return_value=CampaignInsights(
+                impressions=300, clicks=10, spend=300.0, conversions=1
+            )
+        ),
+    )
+
+    _run(client, optimization_jobs.collect_metrics_for_all_live_campaigns)
+
+    campaign = await _fetch_campaign(campaign_id)
+    assert campaign.status == "LIVE"
+    mock_services["pause_ad_set"].assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_one_ad_failing_does_not_block_the_others(
+    client: TestClient,
+    mock_services: dict[str, AsyncMock],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    campaign_id, _ = await _creative_plan_campaign_with_ads(client)
+    monkeypatch.setattr(
+        optimization_jobs,
+        "fetch_ad_insights",
+        AsyncMock(
+            side_effect=[
+                MetaConnectionError("boom"),
+                CampaignInsights(impressions=1, clicks=1, spend=1.0, conversions=0),
+                CampaignInsights(impressions=1, clicks=1, spend=1.0, conversions=0),
+            ]
+        ),
+    )
+
+    _run(client, optimization_jobs.collect_metrics_for_all_live_campaigns)
+
+    rows = await _metric_rows(campaign_id)
+    assert len([r for r in rows if r.adId is not None]) == 2
+
+
+@pytest.mark.asyncio
+async def test_other_plan_types_do_not_fetch_ad_level_metrics(
+    client: TestClient,
+    mock_services: dict[str, AsyncMock],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ad_insights = AsyncMock()
+    monkeypatch.setattr(optimization_jobs, "fetch_ad_insights", ad_insights)
+    _, campaign_id = _live_campaign(client)  # DATA_DRIVEN_STRATEGY
+
+    _run(client, optimization_jobs.collect_metrics_for_all_live_campaigns)
+
+    ad_insights.assert_not_awaited()
+    rows = await _metric_rows(campaign_id)
+    assert all(r.adId is None for r in rows)
+
+
+def test_the_metrics_api_lists_only_campaign_level_rows(client: TestClient) -> None:
+    """Ad-level rows are internal; the dashboard's results list stays as it was."""
+    business_id, campaign_id = _live_campaign(client)
+    seeder_rows = _run(client, _seed_ad_level_row, campaign_id)
+    assert seeder_rows is None
+
+    response = client.get(f"/businesses/{business_id}/campaigns/{campaign_id}/metrics")
+
+    assert response.status_code == 200
+    assert all(m["adSetId"] is None for m in response.json())
+    assert len(response.json()) == 0
+
+
+async def _seed_ad_level_row(campaign_id: str) -> None:
+    """Insert one ad-level Metric (adId set) straight into the database."""
+    from app.core.db import db as app_db
+
+    ad_set = await app_db.adset.find_first(where={"campaignId": campaign_id})
+    assert ad_set is not None
+    ad = await app_db.ad.find_first(where={"adSetId": ad_set.id})
+    assert ad is not None
+    await app_db.metric.create(
+        data={
+            "campaignId": campaign_id,
+            "adSetId": ad_set.id,
+            "adId": ad.id,
+            "impressions": 1,
+            "clicks": 1,
+            "spend": 1.0,
+            "conversions": 0,
+        }
+    )
+
+
+# --- PAUSE_AD targets a specific ad (creative-first Stage 3) -----------------
+
+
+@pytest.mark.asyncio
+async def test_pause_recommendation_records_the_ad_the_model_chose(
+    client: TestClient,
+    mock_services: dict[str, AsyncMock],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """With several ads in the one ad set, the recommendation targets the ad
+    the agent named, not just the first one."""
+    campaign_id, ad_ids = await _creative_plan_campaign_with_ads(client)
+    now = datetime.now(UTC)
+    await _seed_metric(campaign_id, fetched_at=now - timedelta(hours=25), spend=10.0)
+    await _seed_metric(campaign_id, fetched_at=now, spend=25.0)
+    chosen = ad_ids[2]
+    generate = AsyncMock(
+        return_value=_fake_result(
+            _FAKE_RECOMMENDATION.model_copy(
+                update={
+                    "action_type": "PAUSE_AD",
+                    "suggested_budget": None,
+                    "target_ad_id": chosen,
+                }
+            )
+        )
+    )
+    monkeypatch.setattr(optimizer_module, "generate_recommendation", generate)
+    campaign = await _fetch_campaign(campaign_id)
+
+    result = _run(client, optimization_jobs.generate_and_store_recommendation, campaign)
+
+    assert result is not None
+    assert result.targetAdId == chosen
+    assert generate.await_args is not None
+    passed_ads = generate.await_args.kwargs["ads"]
+    assert sorted(a.ad_id for a in passed_ads) == sorted(ad_ids)
+
+
+@pytest.mark.asyncio
+async def test_applying_a_pause_pauses_the_named_ad_on_meta(
+    client: TestClient,
+    mock_services: dict[str, AsyncMock],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pause = AsyncMock(return_value=None)
+    monkeypatch.setattr(optimization_jobs, "pause_meta_ad", pause)
+    campaign_id, ad_ids = await _creative_plan_campaign_with_ads(client)
+    seeder = Prisma()
+    await seeder.connect()
+    try:
+        rec = await seeder.optimizationrecommendation.create(
+            data={
+                "campaignId": campaign_id,
+                "actionType": "PAUSE_AD",
+                "targetAdId": ad_ids[1],
+                "reasoning": "weakest ad",
+                "confidence": 0.9,
+                "risk": "LOW",
+                "requiresApproval": True,
+            }
+        )
+    finally:
+        await seeder.disconnect()
+
+    _run(client, optimization_jobs.apply_recommendation, rec)
+
+    pause.assert_awaited_once()
+    assert pause.await_args is not None
+    assert pause.await_args.kwargs["meta_ad_id"] == "meta_ad_1"
+    seeder = Prisma()
+    await seeder.connect()
+    try:
+        ads = {
+            a.id: a.status
+            for a in await seeder.ad.find_many(where={"id": {"in": ad_ids}})
+        }
+    finally:
+        await seeder.disconnect()
+    assert ads[ad_ids[1]] == "PAUSED"
+    assert ads[ad_ids[0]] == "LIVE"
+    assert ads[ad_ids[2]] == "LIVE"
+
+
+@pytest.mark.asyncio
+async def test_applying_a_pause_refuses_an_ad_from_another_campaign(
+    client: TestClient,
+    mock_services: dict[str, AsyncMock],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pause = AsyncMock(return_value=None)
+    monkeypatch.setattr(optimization_jobs, "pause_meta_ad", pause)
+    campaign_id, _ = await _creative_plan_campaign_with_ads(client)
+    other_client_campaign, other_ad_ids = await _creative_plan_campaign_with_ads(
+        client, ad_count=1
+    )
+    assert other_client_campaign != campaign_id
+    seeder = Prisma()
+    await seeder.connect()
+    try:
+        rec = await seeder.optimizationrecommendation.create(
+            data={
+                "campaignId": campaign_id,
+                "actionType": "PAUSE_AD",
+                "targetAdId": other_ad_ids[0],
+                "reasoning": "wrong ad",
+                "confidence": 0.9,
+                "risk": "LOW",
+                "requiresApproval": True,
+            }
+        )
+    finally:
+        await seeder.disconnect()
+
+    with pytest.raises(ValueError, match="another campaign"):
+        _run(client, optimization_jobs.apply_recommendation, rec)
+
+    pause.assert_not_awaited()

@@ -1038,6 +1038,9 @@ class CampaignInsights(NamedTuple):
     # not something deltas can be taken of directly (app/services/
     # optimization_jobs.py's CAC circuit breaker).
     purchases: int | None = None
+    # spend / add_to_cart: the creative test's primary metric. None when
+    # there are no add-to-carts to divide by (unavailable, never zero).
+    cost_per_add_to_cart: float | None = None
 
 
 # Meta's own action_type values for the funnel steps the extended metric
@@ -1078,7 +1081,7 @@ async def _fetch_insights(
 ) -> CampaignInsights:
     """Fetch lifetime performance numbers for any Meta object with an /insights edge.
 
-    Works for a Campaign or an AdSet — the endpoint shape and fields are
+    Works for a Campaign, an AdSet or an Ad — the endpoint shape and fields are
     identical either way, Meta's Insights API is symmetric across object
     levels.
 
@@ -1151,6 +1154,7 @@ async def _fetch_insights(
             (add_to_cart / landing_page_views) if landing_page_views else None
         ),
         conversion_rate=(conversions / clicks) if clicks else None,
+        cost_per_add_to_cart=(spend / add_to_cart) if add_to_cart else None,
         cac=(spend / purchases) if purchases else None,
         purchase_value=purchase_value if action_values else None,
         roas=(purchase_value / spend) if spend and action_values else None,
@@ -1214,6 +1218,29 @@ async def fetch_ad_set_insights(
     return await _fetch_insights(
         access_token=access_token, meta_object_id=meta_ad_set_id
     )
+
+
+async def fetch_ad_insights(*, access_token: str, meta_ad_id: str) -> CampaignInsights:
+    """Fetch lifetime performance numbers for one Meta Ad.
+
+    Used for ad-level metric collection on a creative test (CREATIVE_TEST_PLAN):
+    the ads in its one ad set compete, so each ad's own numbers (above all its
+    cost per add-to-cart) are what decide a winner. Same shape and parsing as
+    fetch_ad_set_insights, scoped to one ad's own /insights edge.
+
+    Args:
+        access_token: The business's Meta access token.
+        meta_ad_id: The Meta ad id (Ad.metaAdId).
+
+    Returns:
+        That one ad's lifetime-to-date insights — canned empty in fake mode.
+
+    Raises:
+        MetaConnectionError: If the call fails.
+    """
+    if get_settings().fake_meta_enabled:
+        return CampaignInsights(impressions=0, clicks=0, spend=0.0, conversions=0)
+    return await _fetch_insights(access_token=access_token, meta_object_id=meta_ad_id)
 
 
 class AccountCampaignInsights(NamedTuple):

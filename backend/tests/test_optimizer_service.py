@@ -1110,3 +1110,162 @@ async def test_evaluate_test_plan_raises_on_malformed_tool_input(
             test_plan=_fake_test_plan(),
             latest_metric=_fake_metric(),
         )
+
+
+# --- PAUSE_AD targets a specific ad by id (creative-first Stage 3) ----------
+
+
+def _ads() -> list[optimizer.AdPerformance]:
+    return [
+        optimizer.AdPerformance(
+            ad_id="ad-1",
+            name="Sculptural material story",
+            spend=80.0,
+            clicks=40,
+            add_to_cart=0,
+            cost_per_add_to_cart=None,
+            purchases=0,
+            cac=None,
+        ),
+        optimizer.AdPerformance(
+            ad_id="ad-2",
+            name="Worn on skin",
+            spend=60.0,
+            clicks=55,
+            add_to_cart=6,
+            cost_per_add_to_cart=10.0,
+            purchases=1,
+            cac=60.0,
+        ),
+    ]
+
+
+def _pause_input(target: str | None) -> list[SimpleNamespace]:
+    return [
+        SimpleNamespace(
+            type="tool_use",
+            input={
+                **_VALID_TOOL_INPUT,
+                "actionType": "PAUSE_AD",
+                "suggestedBudget": None,
+                "targetAdId": target,
+            },
+        )
+    ]
+
+
+def test_build_prompt_lists_each_ad_with_its_id_and_numbers() -> None:
+    prompt = optimizer._build_prompt(
+        _fake_business(), _fake_campaign(), _fake_ad_set(), [], ads=_ads()
+    )
+
+    assert "ad-1" in prompt
+    assert "Sculptural material story" in prompt
+    assert "ad-2" in prompt
+    assert "exactly one of these ad ids" in prompt
+    assert "Cost per add-to-cart: $10.00" in prompt
+    assert "Cost per add-to-cart: n/a" in prompt
+
+
+def test_build_prompt_has_no_ad_list_for_a_single_ad() -> None:
+    prompt = optimizer._build_prompt(
+        _fake_business(), _fake_campaign(), _fake_ad_set(), [], ads=_ads()[:1]
+    )
+
+    assert "exactly one of these ad ids" not in prompt
+
+
+@pytest.mark.asyncio
+async def test_pause_ad_keeps_the_model_chosen_ad_id(
+    anthropic_api_key: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _mock_client_returning(monkeypatch, _pause_input("ad-1"))
+
+    result = await optimizer.generate_recommendation(
+        business=_fake_business(),
+        campaign=_fake_campaign(),
+        ad_set=_fake_ad_set(budget=50.0),
+        windows=[],
+        ads=_ads(),
+    )
+
+    assert result.recommendation.target_ad_id == "ad-1"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("target", [None, "ad-999", ""])
+async def test_pause_ad_must_name_one_of_the_listed_ads(
+    anthropic_api_key: None, monkeypatch: pytest.MonkeyPatch, target: str | None
+) -> None:
+    """Pausing the wrong ad is worse than pausing none, so a missing or
+    unknown id is rejected rather than guessed at."""
+    _mock_client_returning(monkeypatch, _pause_input(target))
+
+    with pytest.raises(optimizer.OptimizerError, match="ad"):
+        await optimizer.generate_recommendation(
+            business=_fake_business(),
+            campaign=_fake_campaign(),
+            ad_set=_fake_ad_set(budget=50.0),
+            windows=[],
+            ads=_ads(),
+        )
+
+
+@pytest.mark.asyncio
+async def test_pause_ad_defaults_to_the_only_ad(
+    anthropic_api_key: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A campaign with one ad needs no id from the model: it's that ad."""
+    _mock_client_returning(monkeypatch, _pause_input(None))
+
+    result = await optimizer.generate_recommendation(
+        business=_fake_business(),
+        campaign=_fake_campaign(),
+        ad_set=_fake_ad_set(budget=50.0),
+        windows=[],
+        ads=_ads()[:1],
+    )
+
+    assert result.recommendation.target_ad_id == "ad-1"
+
+
+@pytest.mark.asyncio
+async def test_a_budget_action_never_carries_an_ad_id(
+    anthropic_api_key: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _mock_client_returning(
+        monkeypatch,
+        [
+            SimpleNamespace(
+                type="tool_use", input={**_VALID_TOOL_INPUT, "targetAdId": "ad-1"}
+            )
+        ],
+    )
+
+    result = await optimizer.generate_recommendation(
+        business=_fake_business(),
+        campaign=_fake_campaign(),
+        ad_set=_fake_ad_set(budget=50.0),
+        windows=[],
+        ads=_ads(),
+    )
+
+    assert result.recommendation.target_ad_id is None
+
+
+@pytest.mark.asyncio
+async def test_pause_ad_without_an_ad_list_behaves_as_before(
+    anthropic_api_key: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Callers that pass no ads (every non-creative-test campaign) are unchanged."""
+    _mock_client_returning(monkeypatch, _pause_input(None))
+
+    result = await optimizer.generate_recommendation(
+        business=_fake_business(),
+        campaign=_fake_campaign(),
+        ad_set=_fake_ad_set(budget=50.0),
+        windows=[],
+    )
+
+    assert result.recommendation.action_type == "PAUSE_AD"
+    assert result.recommendation.target_ad_id is None

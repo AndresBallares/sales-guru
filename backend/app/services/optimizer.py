@@ -347,11 +347,45 @@ def _format_window(window: TrendWindow) -> str:
     )
 
 
+class AdPerformance(NamedTuple):
+    """One ad's own lifetime numbers, for choosing which ad to pause.
+
+    Built from the ad's latest ad-level Metric row (all zeros/None when none
+    has been collected yet). cost_per_add_to_cart and cac are None when there
+    is nothing to divide by — unavailable, never zero.
+    """
+
+    ad_id: str
+    name: str
+    spend: float
+    clicks: int
+    add_to_cart: int | None
+    cost_per_add_to_cart: float | None
+    purchases: int | None
+    cac: float | None
+
+
+def _format_ad(ad: AdPerformance) -> str:
+    def money(value: float | None) -> str:
+        return f"${value:,.2f}" if value is not None else "n/a"
+
+    def count(value: int | None) -> str:
+        return str(value) if value is not None else "n/a"
+
+    return (
+        f"- ad id {ad.ad_id} — {ad.name}: spend ${ad.spend:,.2f}, "
+        f"clicks {ad.clicks}, add-to-carts {count(ad.add_to_cart)}, "
+        f"Cost per add-to-cart: {money(ad.cost_per_add_to_cart)}, "
+        f"purchases {count(ad.purchases)}, CAC: {money(ad.cac)}"
+    )
+
+
 def _build_prompt(
     business: Business,
     campaign: Campaign,
     ad_set: AdSet,
     windows: list[TrendWindow],
+    ads: list[AdPerformance] | None = None,
 ) -> str:
     """Build the grounding prompt from the campaign's real trend data.
 
@@ -361,6 +395,10 @@ def _build_prompt(
         ad_set: The campaign's ad set — current daily budget lives here.
         windows: 24h/3d/7d trend windows from compute_trend_windows —
             whichever ones have enough history to exist yet.
+        ads: The ads in the ad set with their own numbers, when there is
+            more than one (a creative test). Adds a list of them and the
+            instruction to name exactly one by id if the action is to pause
+            an ad. None or a single ad adds nothing.
 
     Returns:
         The prompt text.
@@ -381,6 +419,17 @@ def _build_prompt(
         "Performance trend (most recent window first):",
     ]
     lines += [_format_window(w) for w in windows]
+    if ads is not None and len(ads) > 1:
+        lines += [
+            "",
+            "This ad set runs several ads that compete with each other. Each "
+            "ad's own lifetime numbers:",
+            *[_format_ad(ad) for ad in ads],
+            "If you recommend pausing an ad, set target_ad_id to exactly one "
+            "of these ad ids — the one that is clearly worst on cost per "
+            "add-to-cart or CAC with enough spend to judge. Never pause an "
+            "ad on a hunch.",
+        ]
     lines += [
         "",
         "Submit your recommendation using the provided tool, including "
@@ -390,12 +439,41 @@ def _build_prompt(
     return "\n".join(lines)
 
 
+def _resolve_target_ad(
+    generated: GeneratedRecommendation, ads: list[AdPerformance] | None
+) -> str | None:
+    """The one ad a PAUSE_AD recommendation targets, validated.
+
+    Pausing the wrong ad is worse than pausing none, so with several ads the
+    model must name one of the listed ids; a missing or unknown id raises
+    instead of being guessed at. With exactly one ad it is that ad. With no
+    ad list (every non-creative-test campaign) nothing is named. Any other
+    action targets no ad.
+
+    Raises:
+        OptimizerError: If several ads were listed and the model named none
+            of them.
+    """
+    if generated.action_type != "PAUSE_AD" or not ads:
+        return None
+    if len(ads) == 1:
+        return ads[0].ad_id
+    listed = {ad.ad_id for ad in ads}
+    if generated.target_ad_id not in listed:
+        raise OptimizerError(
+            "The model recommended pausing an ad but didn't name one of this "
+            f"ad set's ads (got {generated.target_ad_id!r}) — try again."
+        )
+    return generated.target_ad_id
+
+
 async def generate_recommendation(
     *,
     business: Business,
     campaign: Campaign,
     ad_set: AdSet,
     windows: list[TrendWindow],
+    ads: list[AdPerformance] | None = None,
 ) -> RecommendationResult:
     """Call the Optimization Agent and return one guardrail-capped recommendation.
 
@@ -405,6 +483,11 @@ async def generate_recommendation(
         ad_set: The campaign's ad set.
         windows: Trend windows from compute_trend_windows (at least one,
             checked by the caller).
+        ads: The ad set's ads with their own numbers, so a PAUSE_AD names the
+            specific ad to pause. With several ads the model must name one
+            of them; with exactly one it is that ad; with None (every
+            non-creative-test campaign) no ad is named and behavior is
+            unchanged.
 
     Returns:
         The generated recommendation (suggested_budget already passed
@@ -420,7 +503,7 @@ async def generate_recommendation(
         raise OptimizerError("ANTHROPIC_API_KEY is not configured")
 
     client = AsyncAnthropic(api_key=settings.anthropic_api_key)
-    prompt = _build_prompt(business, campaign, ad_set, windows)
+    prompt = _build_prompt(business, campaign, ad_set, windows, ads)
 
     try:
         response = await client.messages.create(
@@ -446,6 +529,9 @@ async def generate_recommendation(
         raise OptimizerError("Model did not return a tool call")
 
     generated = GeneratedRecommendation.model_validate(tool_use.input)
+    generated = generated.model_copy(
+        update={"target_ad_id": _resolve_target_ad(generated, ads)}
+    )
     capped_by_guardrail = False
     if generated.suggested_budget is not None:
         capped = apply_budget_guardrail(
