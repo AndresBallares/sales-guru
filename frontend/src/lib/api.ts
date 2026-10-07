@@ -942,6 +942,34 @@ export function selectCreative(
   )
 }
 
+// Uses a different product photo for one ad without selecting it.
+export function setCreativeImage(
+  businessId: string,
+  campaignId: string,
+  creativeId: string,
+  productImageId: string,
+): Promise<Creative> {
+  return request<Creative>(
+    `/businesses/${businessId}/campaigns/${campaignId}/creatives/${creativeId}/image`,
+    { method: 'PUT', body: JSON.stringify({ productImageId }) },
+  )
+}
+
+export type RegenerableCopyField = 'headline' | 'bodyText' | 'description'
+
+// Rewrites just the named copy slots of one ad; everything else is kept.
+export function regenerateCreativeCopy(
+  businessId: string,
+  campaignId: string,
+  creativeId: string,
+  fields: RegenerableCopyField[],
+): Promise<Creative> {
+  return request<Creative>(
+    `/businesses/${businessId}/campaigns/${campaignId}/creatives/${creativeId}/regenerate`,
+    { method: 'POST', body: JSON.stringify({ fields }) },
+  )
+}
+
 // Removes one ad from a creative test (a CREATIVE_TEST_PLAN campaign only).
 export function deselectCreative(
   businessId: string,

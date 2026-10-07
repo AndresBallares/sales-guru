@@ -385,6 +385,25 @@ class CreateCreativesRequest(CamelCaseModel):
     format: CreativeFormat = "SINGLE_IMAGE"
 
 
+class SetCreativeImageRequest(CamelCaseModel):
+    """Body for PUT .../creatives/{id}/image: which product photo to use."""
+
+    product_image_id: str
+
+
+RegenerableField = Literal["headline", "bodyText", "description"]
+
+
+class RegenerateCreativeRequest(CamelCaseModel):
+    """Body for POST .../creatives/{id}/regenerate.
+
+    fields names the copy slots to rewrite (at least one); every other slot
+    on the ad is left exactly as it is, and so is its creative angle.
+    """
+
+    fields: list[RegenerableField] = Field(min_length=1)
+
+
 class ReorderCreativeCardsRequest(CamelCaseModel):
     """A CAROUSEL creative's cards, in the new display order.
 

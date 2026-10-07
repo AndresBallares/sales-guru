@@ -12,8 +12,10 @@ from app.schemas.creative import (
     MIN_CAROUSEL_CARDS,
     CreateCreativesRequest,
     CreativeResponse,
+    RegenerateCreativeRequest,
     ReorderCreativeCardsRequest,
     SelectCreativeRequest,
+    SetCreativeImageRequest,
 )
 from app.schemas.strategy import (
     MAX_CREATIVE_ANGLES,
@@ -60,6 +62,10 @@ _NOT_A_CREATIVE_TEST_PLAN = (
 _TEST_FULL = "A creative test runs at most {max} ads — remove one before adding another"
 _TEST_ALREADY_PUBLISHED = "This campaign is already published, so its ads can't change"
 _CARD_NOT_FOUND = "Card not found"
+_CAROUSEL_EDIT_UNSUPPORTED = (
+    "A carousel's images and copy are set per card — regenerate the carousel "
+    "to change them"
+)
 _CARD_REORDER_MISMATCH = (
     "cardIds must name exactly this creative's current cards, once each"
 )
@@ -561,6 +567,171 @@ async def deselect_creative(
 
     product = await _current_product(campaign)
     business = await _current_business(campaign)
+    return _to_response(updated, campaign, product, business)
+
+
+async def _reopen_approval_if_selected(campaign: Campaign, creative: Creative) -> None:
+    """An approved campaign's selected ad changed — it needs approving again."""
+    if creative.status != "SELECTED":
+        return
+    current = await db.campaign.find_unique(where={"id": campaign.id})
+    if current is not None and current.status == "APPROVED":
+        await db.campaign.update(
+            where={"id": campaign.id}, data={"status": "PENDING_APPROVAL"}
+        )
+
+
+async def _find_editable_creative(creative_id: str, campaign: Campaign) -> Creative:
+    """Fetch a single-image creative the user may still edit.
+
+    Raises:
+        HTTPException: 404 if no such creative exists on this campaign; 400 if
+            the campaign is already published or the creative is a carousel.
+    """
+    creative = await db.creative.find_first(
+        where={"id": creative_id, "campaignId": campaign.id}
+    )
+    if creative is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=_CREATIVE_NOT_FOUND
+        )
+    await _check_creative_test_can_change(campaign)
+    if creative.format == "CAROUSEL":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=_CAROUSEL_EDIT_UNSUPPORTED
+        )
+    return creative
+
+
+@router.put("/{creative_id}/image", response_model=CreativeResponse)
+async def set_creative_image(
+    creative_id: str,
+    payload: SetCreativeImageRequest,
+    campaign: Campaign = Depends(get_owned_campaign),
+) -> CreativeResponse:
+    """Use a different product photo for one ad, without selecting it.
+
+    Unlike select_creative's product_image_id, this never changes whether the
+    ad is in the test, so the user can pick each ad's image while reviewing.
+
+    Args:
+        creative_id: The creative to change.
+        payload: The product photo to use.
+        campaign: The campaign, resolved and ownership-checked by
+            get_owned_campaign.
+
+    Returns:
+        The updated creative.
+
+    Raises:
+        HTTPException: 404 if the creative, or a photo of this campaign's
+            product with that id, doesn't exist; 400 if the campaign is already
+            published or the creative is a carousel.
+    """
+    creative = await _find_editable_creative(creative_id, campaign)
+    product_image = (
+        await db.productimage.find_first(
+            where={"id": payload.product_image_id, "productId": campaign.productId}
+        )
+        if campaign.productId is not None
+        else None
+    )
+    if product_image is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=_PRODUCT_IMAGE_NOT_FOUND
+        )
+    updated = await db.creative.update(
+        where={"id": creative.id},
+        data={
+            "imageUrl": product_image_url(product_image.id),
+            "productImageId": product_image.id,
+        },
+        include={"cards": {"order_by": {"position": "asc"}}},
+    )
+    assert updated is not None  # just fetched above, can't vanish mid-request
+    await _reopen_approval_if_selected(campaign, updated)
+
+    product = await _current_product(campaign)
+    business = await _current_business(campaign)
+    return _to_response(updated, campaign, product, business)
+
+
+@router.post("/{creative_id}/regenerate", response_model=CreativeResponse)
+async def regenerate_creative_copy(
+    creative_id: str,
+    payload: RegenerateCreativeRequest,
+    campaign: Campaign = Depends(get_owned_campaign),
+) -> CreativeResponse:
+    """Rewrite some of one ad's copy (headline, primary text, description).
+
+    Runs the Creative Agent again against the same strategy and takes the
+    variant on this ad's creative angle (the first variant when the model
+    wandered off it), then copies over only the requested slots — the angle,
+    image, CTA and every other slot are untouched.
+
+    Args:
+        creative_id: The creative to rewrite.
+        payload: Which copy slots to regenerate.
+        campaign: The campaign, resolved and ownership-checked by
+            get_owned_campaign.
+
+    Returns:
+        The updated creative.
+
+    Raises:
+        HTTPException: 404 if no such creative exists on this campaign; 400 if
+            the campaign has no strategy, is already published, or the
+            creative is a carousel; 500 if the Creative Agent fails.
+    """
+    creative = await _find_editable_creative(creative_id, campaign)
+    strategy = await db.strategy.find_unique(where={"campaignId": campaign.id})
+    if strategy is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=_STRATEGY_REQUIRED
+        )
+    business = await _current_business(campaign)
+    product = await _current_product(campaign)
+    brand_profile = await db.brandprofile.find_unique(where={"businessId": business.id})
+    primary_image = await get_primary_image(product.id) if product is not None else None
+
+    try:
+        variants = await generate_creatives(
+            business=business,
+            product=product,
+            strategy=StrategyContentAdapter.validate_json(strategy.content),
+            primary_image=primary_image,
+            brand_profile=brand_profile,
+        )
+    except CreativeAgentError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)
+        ) from exc
+
+    on_angle = next(
+        (
+            v
+            for v in variants
+            if creative.creativeAngle is not None
+            and v.creative_angle.strip().lower() == creative.creativeAngle.lower()
+        ),
+        variants[0],
+    )
+    data: CreativeUpdateInput = {}
+    for field in dict.fromkeys(payload.fields):
+        if field == "headline":
+            data["headline"] = on_angle.headline
+        elif field == "bodyText":
+            data["bodyText"] = on_angle.body_text
+        else:
+            data["description"] = on_angle.description
+    updated = await db.creative.update(
+        where={"id": creative.id},
+        data=data,
+        include={"cards": {"order_by": {"position": "asc"}}},
+    )
+    assert updated is not None  # just fetched above, can't vanish mid-request
+    await _reopen_approval_if_selected(campaign, updated)
+
     return _to_response(updated, campaign, product, business)
 
 
