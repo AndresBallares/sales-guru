@@ -135,6 +135,7 @@ async def _to_response(campaign: Campaign) -> CampaignResponse:
         end_date=campaign.endDate,
         paused_reason=campaign.pausedReason,
         daily_spend_flag=campaign.dailySpendFlag,
+        pixel_warning=campaign.pixelWarning,
         needs_destination_url=await _needs_destination_url(campaign),
     )
 

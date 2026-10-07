@@ -3472,6 +3472,76 @@ describe('CampaignsSection', () => {
     expect(screen.getByRole('button', { name: 'Approve' })).toBeInTheDocument()
   })
 
+  it('warns when the Pixel looks like its Purchase event is not firing', async () => {
+    mockedApi.listCampaigns.mockResolvedValue([
+      {
+        id: 'camp-1',
+        name: null,
+        objective: 'SALES',
+        status: 'LIVE',
+        productId: null,
+        audienceId: null,
+        metaCampaignId: 'meta_campaign_1',
+        eventVenueKey: null,
+        startDate: null,
+        endDate: null,
+        pausedReason: null,
+        dailySpendFlag: null,
+        pixelWarning: 'Purchase event may not be firing: 0 Purchase events but 41 InitiateCheckout.',
+        needsDestinationUrl: false,
+      },
+    ])
+
+    renderCampaigns(<CampaignsSection businessId="biz-1" />)
+
+    expect(await screen.findByText(/Purchase event may not be firing/)).toBeInTheDocument()
+  })
+
+  it('shows a retargeting proposal and surfaces the refusal when it cannot be created yet', async () => {
+    mockedApi.getOptions.mockResolvedValue({
+      ...ALL_OPTIONS,
+      actionTypes: [{ value: 'START_RETARGETING', label: 'Start retargeting' }],
+    })
+    mockedApi.listCampaigns.mockResolvedValue([
+      {
+        id: 'camp-1',
+        name: null,
+        objective: 'SALES',
+        status: 'LIVE',
+        productId: null,
+        audienceId: null,
+        metaCampaignId: 'meta_campaign_1',
+        eventVenueKey: null,
+        startDate: null,
+        endDate: null,
+        pausedReason: null,
+        dailySpendFlag: null,
+        needsDestinationUrl: false,
+      },
+    ])
+    mockedApi.listRecommendations.mockResolvedValue([
+      fakeRecommendation({
+        actionType: 'START_RETARGETING',
+        suggestedBudget: 15,
+        reasoning: 'Pixel recorded 1,923 PageView events (events, not people).',
+      }),
+    ])
+    mockedApi.approveRecommendation.mockRejectedValue(
+      new api.ApiError(409, 'Creating a retargeting campaign is not built yet'),
+    )
+    const user = userEvent.setup()
+
+    renderCampaigns(<CampaignsSection businessId="biz-1" />)
+
+    expect(await screen.findByText('Start retargeting')).toBeInTheDocument()
+    expect(screen.getByText(/events, not people/)).toBeInTheDocument()
+    expect(screen.getByText(/Suggested budget:/)).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'Approve' }))
+
+    expect(await screen.findByText(/not built yet/)).toBeInTheDocument()
+  })
+
   it('analyzes a live campaign and shows the new recommendation', async () => {
     mockedApi.listCampaigns.mockResolvedValue([
       {

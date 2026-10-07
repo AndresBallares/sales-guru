@@ -124,6 +124,8 @@ class CampaignResponse(CamelCaseModel):
     end_date: datetime | None
     paused_reason: str | None
     daily_spend_flag: str | None
+    # A Pixel-health warning (e.g. the Purchase event may not be firing).
+    pixel_warning: str | None = None
     # Computed at read time (app/api/campaign.py's _to_response), never
     # stored: true when a product is attached but lacks a destination URL
     # that this campaign's SALES/TRAFFIC objective requires. Swapping a

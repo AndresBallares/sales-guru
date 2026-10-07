@@ -1864,6 +1864,9 @@ export function CampaignsSection({
                       Live on Meta
                       {campaign.metaCampaignId ? ` (id: ${campaign.metaCampaignId})` : ''}
                     </p>
+                    {campaign.pixelWarning && (
+                      <p role="alert">⚠ {campaign.pixelWarning}</p>
+                    )}
                     {campaign.dailySpendFlag && (
                       <p role="alert">⚠ {campaign.dailySpendFlag}</p>
                     )}

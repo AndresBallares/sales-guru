@@ -55,6 +55,7 @@ from app.services import optimizer as optimizer_module
 from app.services import strategist as strategist_module
 from app.services.benchmarks import JEWELRY_META_BENCHMARKS
 from app.services.meta import CampaignInsights, MetaConnectionError
+from app.services.retargeting import RetargetingNotBuiltError
 from fastapi.testclient import TestClient
 from prisma import Prisma
 from prisma.models import Campaign
@@ -2983,3 +2984,285 @@ async def test_a_raise_is_capped_at_twice_the_plans_target(
 
     assert update_bid_mock.await_args is not None
     assert update_bid_mock.await_args.kwargs["bid_amount_cents"] == 4000  # 2 x $20
+
+
+# --- Retargeting proposal and Pixel health (creative-first Stage 5) ---------
+
+_HEALTHY_PIXEL = {
+    "PageView": 1923,
+    "ViewContent": 1486,
+    "InitiateCheckout": 41,
+    "Purchase": 12,
+}
+
+
+@pytest.fixture
+def pixel_counts(monkeypatch: pytest.MonkeyPatch) -> AsyncMock:
+    mock = AsyncMock(return_value=dict(_HEALTHY_PIXEL))
+    monkeypatch.setattr(optimization_jobs, "fetch_pixel_event_counts", mock)
+    return mock
+
+
+async def _run_pixel_check(client: TestClient, campaign_id: str) -> None:
+    seeder = Prisma()
+    await seeder.connect()
+    try:
+        campaign = await seeder.campaign.find_unique(where={"id": campaign_id})
+        assert campaign is not None
+    finally:
+        await seeder.disconnect()
+    connection = _run(client, get_meta_connection, campaign.businessId)
+    _run(client, optimization_jobs._check_pixel_signals, campaign, connection)
+
+
+async def _pixel_warning(campaign_id: str) -> str | None:
+    campaign = await _fetch_campaign(campaign_id)
+    return campaign.pixelWarning
+
+
+async def _retargeting_recs(campaign_id: str) -> list[Any]:
+    return [
+        r
+        for r in await _recommendations(campaign_id)
+        if r.actionType == "START_RETARGETING"
+    ]
+
+
+@pytest.mark.asyncio
+async def test_enough_pixel_activity_creates_a_pending_retargeting_proposal(
+    client: TestClient,
+    mock_services: dict[str, AsyncMock],
+    pixel_counts: AsyncMock,
+) -> None:
+    campaign_id = await _make_creative_plan_campaign(
+        client, optimization_event="PURCHASE", daily_budget=75.0
+    )
+    seeder = Prisma()
+    await seeder.connect()
+    try:
+        # What the campaign actually spends: its ad set's daily budget.
+        await seeder.adset.update_many(
+            where={"campaignId": campaign_id}, data={"budget": 75.0}
+        )
+    finally:
+        await seeder.disconnect()
+
+    await _run_pixel_check(client, campaign_id)
+
+    recs = await _retargeting_recs(campaign_id)
+    assert len(recs) == 1
+    rec = recs[0]
+    assert (rec.status, rec.requiresApproval) == ("PENDING", True)
+    assert rec.suggestedBudget == pytest.approx(15.0)  # 20% of the $75 ad set
+    assert "1,923 PageView" in rec.reasoning
+    assert "1,486 ViewContent" in rec.reasoning
+    assert "events, not people" in rec.reasoning
+    assert "excluding purchasers" in rec.reasoning
+    # Nothing was created on Meta: there is no Meta call in this path at all.
+    mock_services["pause_ad_set"].assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_too_little_pixel_activity_proposes_nothing(
+    client: TestClient,
+    mock_services: AsyncMock,
+    pixel_counts: AsyncMock,
+) -> None:
+    campaign_id = await _make_creative_plan_campaign(
+        client, optimization_event="PURCHASE"
+    )
+    pixel_counts.return_value = {"PageView": 999, "ViewContent": 900}
+
+    await _run_pixel_check(client, campaign_id)
+
+    assert await _retargeting_recs(campaign_id) == []
+
+
+@pytest.mark.asyncio
+async def test_the_proposal_is_not_repeated_or_revived_after_a_decision(
+    client: TestClient,
+    mock_services: dict[str, AsyncMock],
+    pixel_counts: AsyncMock,
+) -> None:
+    campaign_id = await _make_creative_plan_campaign(
+        client, optimization_event="PURCHASE"
+    )
+    await _run_pixel_check(client, campaign_id)
+    await _run_pixel_check(client, campaign_id)
+    assert len(await _retargeting_recs(campaign_id)) == 1
+
+    rec = (await _retargeting_recs(campaign_id))[0]
+    seeder = Prisma()
+    await seeder.connect()
+    try:
+        await seeder.optimizationrecommendation.update(
+            where={"id": rec.id}, data={"status": "REJECTED"}
+        )
+    finally:
+        await seeder.disconnect()
+
+    await _run_pixel_check(client, campaign_id)
+
+    assert len(await _retargeting_recs(campaign_id)) == 1  # rejected stays rejected
+
+
+@pytest.mark.asyncio
+async def test_the_proposal_is_withdrawn_when_activity_drops_below_the_threshold(
+    client: TestClient,
+    mock_services: dict[str, AsyncMock],
+    pixel_counts: AsyncMock,
+) -> None:
+    campaign_id = await _make_creative_plan_campaign(
+        client, optimization_event="PURCHASE"
+    )
+    await _run_pixel_check(client, campaign_id)
+    pixel_counts.return_value = {"PageView": 10, "ViewContent": 5}
+
+    await _run_pixel_check(client, campaign_id)
+
+    assert [r.status for r in await _retargeting_recs(campaign_id)] == ["SUPERSEDED"]
+
+
+@pytest.mark.asyncio
+async def test_approving_the_proposal_cannot_create_anything_yet(
+    client: TestClient,
+    mock_services: dict[str, AsyncMock],
+    pixel_counts: AsyncMock,
+) -> None:
+    """The creation interface is documented but unbuilt: approval raises, and
+    the proposal stays pending."""
+    campaign_id = await _make_creative_plan_campaign(
+        client, optimization_event="PURCHASE"
+    )
+    await _run_pixel_check(client, campaign_id)
+    rec = (await _retargeting_recs(campaign_id))[0]
+
+    with pytest.raises(RetargetingNotBuiltError, match="not built"):
+        _run(client, optimization_jobs.apply_recommendation, rec)
+
+    assert (await _retargeting_recs(campaign_id))[0].status == "PENDING"
+
+
+@pytest.mark.asyncio
+async def test_a_purchase_campaign_whose_pixel_never_fires_purchase_gets_a_warning(
+    client: TestClient,
+    mock_services: dict[str, AsyncMock],
+    pixel_counts: AsyncMock,
+) -> None:
+    campaign_id = await _make_creative_plan_campaign(
+        client, optimization_event="PURCHASE"
+    )
+    pixel_counts.return_value = {
+        "PageView": 1923,
+        "ViewContent": 1486,
+        "InitiateCheckout": 41,
+        "AddToCart": 32,
+    }
+
+    await _run_pixel_check(client, campaign_id)
+
+    warning = await _pixel_warning(campaign_id)
+    assert warning is not None
+    assert warning.startswith("Purchase event may not be firing")
+    assert "41 InitiateCheckout" in warning
+    # The proposal repeats the caveat: purchasers can't be excluded reliably.
+    assert (
+        "Purchase event may not be firing"
+        in (await _retargeting_recs(campaign_id))[0].reasoning
+    )
+
+
+@pytest.mark.asyncio
+async def test_the_pixel_warning_clears_once_purchases_fire(
+    client: TestClient,
+    mock_services: dict[str, AsyncMock],
+    pixel_counts: AsyncMock,
+) -> None:
+    campaign_id = await _make_creative_plan_campaign(
+        client, optimization_event="PURCHASE"
+    )
+    pixel_counts.return_value = {"InitiateCheckout": 41}
+    await _run_pixel_check(client, campaign_id)
+    assert await _pixel_warning(campaign_id) is not None
+    pixel_counts.return_value = {"InitiateCheckout": 41, "Purchase": 3}
+
+    await _run_pixel_check(client, campaign_id)
+
+    assert await _pixel_warning(campaign_id) is None
+
+
+@pytest.mark.asyncio
+async def test_an_add_to_cart_campaign_gets_no_purchase_warning(
+    client: TestClient,
+    mock_services: dict[str, AsyncMock],
+    pixel_counts: AsyncMock,
+) -> None:
+    """It doesn't optimize for Purchase, so a silent Purchase event doesn't hurt."""
+    campaign_id = await _make_creative_plan_campaign(
+        client,
+        optimization_event="ADD_TO_CART",
+        target_cost_per_add_to_cart=20.0,
+    )
+    pixel_counts.return_value = {"InitiateCheckout": 41}
+
+    await _run_pixel_check(client, campaign_id)
+
+    assert await _pixel_warning(campaign_id) is None
+
+
+@pytest.mark.asyncio
+async def test_a_pixel_stats_failure_changes_nothing(
+    client: TestClient,
+    mock_services: dict[str, AsyncMock],
+    pixel_counts: AsyncMock,
+) -> None:
+    campaign_id = await _make_creative_plan_campaign(
+        client, optimization_event="PURCHASE"
+    )
+    pixel_counts.side_effect = MetaConnectionError("Meta is down")
+
+    await _run_pixel_check(client, campaign_id)
+
+    assert await _retargeting_recs(campaign_id) == []
+    assert await _pixel_warning(campaign_id) is None
+
+
+@pytest.mark.asyncio
+async def test_a_non_sales_campaign_never_reads_the_pixel(
+    client: TestClient,
+    mock_services: dict[str, AsyncMock],
+    pixel_counts: AsyncMock,
+) -> None:
+    campaign_id = await _make_creative_plan_campaign(
+        client, optimization_event="PURCHASE"
+    )
+    seeder = Prisma()
+    await seeder.connect()
+    try:
+        await seeder.campaign.update(
+            where={"id": campaign_id}, data={"objective": "TRAFFIC"}
+        )
+    finally:
+        await seeder.disconnect()
+
+    await _run_pixel_check(client, campaign_id)
+
+    pixel_counts.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_the_hourly_job_runs_the_pixel_check(
+    client: TestClient,
+    mock_services: dict[str, AsyncMock],
+    pixel_counts: AsyncMock,
+) -> None:
+    campaign_id = await _make_creative_plan_campaign(
+        client, optimization_event="PURCHASE"
+    )
+    mock_services["insights"].return_value = CampaignInsights(
+        impressions=1, clicks=1, spend=1.0, conversions=0
+    )
+
+    _run(client, optimization_jobs.collect_metrics_for_all_live_campaigns)
+
+    assert len(await _retargeting_recs(campaign_id)) == 1

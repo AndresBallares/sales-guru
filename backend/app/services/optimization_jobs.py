@@ -86,13 +86,14 @@ from app.schemas.strategy import (
     planned_total_budget,
 )
 from app.schemas.test_evaluation import StopReason
-from app.services import creative_test_rules, optimizer
+from app.services import creative_test_rules, optimizer, retargeting
 from app.services.meta import (
     CampaignInsights,
     MetaConnectionError,
     fetch_ad_insights,
     fetch_ad_set_insights,
     fetch_campaign_insights,
+    fetch_pixel_event_counts,
     pause_meta_ad,
     update_meta_ad_set_bid,
     update_meta_ad_set_budget,
@@ -793,6 +794,96 @@ async def _enforce_creative_test_rules(
             )
 
 
+async def _check_pixel_signals(campaign: Campaign, connection: MetaConnection) -> None:
+    """Read the Pixel's 30-day event counts: health warning plus retargeting proposal.
+
+    Two outputs, neither an action on Meta:
+
+    - Pixel health: for a Purchase-optimized campaign (a creative test
+      optimizing for AddToCart isn't one), Campaign.pixelWarning says the
+      Purchase event may not be firing when the Pixel shows people starting
+      checkout but zero purchases in 30 days. It clears when that stops being
+      true.
+    - Retargeting: once PageView and ViewContent events reach their thresholds
+      (events, not people — Meta has no unique-visitor count), exactly one
+      PENDING START_RETARGETING proposal exists (a second campaign at about
+      20% of the budget, excluding purchasers). It is never repeated or
+      revived after the user decides, and is withdrawn if activity falls
+      back under the threshold. Approving it today raises
+      RetargetingNotBuiltError: creating the campaign isn't built.
+
+    Only SALES campaigns with a Pixel are checked. A failed stats call leaves
+    everything as it was.
+
+    Args:
+        campaign: The live campaign to check.
+        connection: The business's Meta connection (token and Pixel id).
+    """
+    if campaign.objective != "SALES" or connection.pixelId is None:
+        return
+    try:
+        counts = await fetch_pixel_event_counts(
+            access_token=connection.accessToken,
+            pixel_id=connection.pixelId,
+            days=retargeting.WINDOW_DAYS,
+        )
+    except MetaConnectionError:
+        logger.warning("Pixel stats failed for campaign %s", campaign.id)
+        return
+
+    strategy = await db.strategy.find_unique(where={"campaignId": campaign.id})
+    optimizes_for_add_to_cart = False
+    if strategy is not None:
+        plan = StrategyContentAdapter.validate_json(strategy.content)
+        optimizes_for_add_to_cart = (
+            plan.plan_type == "CREATIVE_TEST_PLAN"
+            and plan.optimization_event == "ADD_TO_CART"
+        )
+    warning = (
+        None
+        if optimizes_for_add_to_cart
+        else retargeting.purchase_event_warning(counts)
+    )
+    fresh = await db.campaign.find_unique(where={"id": campaign.id})
+    if fresh is not None and fresh.pixelWarning != warning:
+        await db.campaign.update(
+            where={"id": campaign.id}, data={"pixelWarning": warning}
+        )
+
+    existing = await db.optimizationrecommendation.find_many(
+        where={"campaignId": campaign.id, "actionType": "START_RETARGETING"}
+    )
+    pending = next((r for r in existing if r.status == "PENDING"), None)
+    if not retargeting.retargeting_ready(counts):
+        if pending is not None:
+            await db.optimizationrecommendation.update(
+                where={"id": pending.id}, data={"status": "SUPERSEDED"}
+            )
+        return
+    if any(r.status in ("PENDING", "APPLIED", "REJECTED") for r in existing):
+        return  # one proposal per campaign; never repeated or revived
+
+    ad_sets = await db.adset.find_many(where={"campaignId": campaign.id})
+    daily_budget = sum(a.budget for a in ad_sets)
+    await db.optimizationrecommendation.create(
+        data={
+            "campaignId": campaign.id,
+            "actionType": "START_RETARGETING",
+            "currentBudget": daily_budget,
+            "suggestedBudget": retargeting.retargeting_daily_budget(daily_budget),
+            "reasoning": retargeting.proposal_reasoning(
+                counts,
+                daily_budget=daily_budget,
+                purchase_event_firing=retargeting.purchase_event_warning(counts)
+                is None,
+            ),
+            "confidence": 1.0,
+            "risk": "MEDIUM",
+            "requiresApproval": True,
+        }
+    )
+
+
 async def collect_metrics_for_all_live_campaigns() -> None:
     """Collect fresh metrics, then run the deterministic spend guardrails.
 
@@ -835,6 +926,7 @@ async def collect_metrics_for_all_live_campaigns() -> None:
                 await _enforce_daily_spend_flag(current)
                 await _check_add_to_cart_delivery(current)
                 await _enforce_creative_test_rules(current, connection)
+                await _check_pixel_signals(current, connection)
         except MetaConnectionError:
             logger.warning("Circuit breaker pause failed for campaign %s", campaign.id)
 
@@ -876,6 +968,21 @@ async def apply_recommendation(
             raise ValueError("The ad to pause belongs to another campaign")
         await pause_meta_ad(access_token=connection.accessToken, meta_ad_id=ad.metaAdId)
         await db.ad.update(where={"id": ad.id}, data={"status": "PAUSED"})
+    elif recommendation.actionType == "START_RETARGETING":
+        assert recommendation.suggestedBudget is not None
+        assert connection.pixelId is not None
+        assert campaign.metaCampaignId is not None
+        # Documented but unbuilt: raises RetargetingNotBuiltError today, so
+        # the proposal stays pending and nothing is created on Meta.
+        await retargeting.create_retargeting_campaign(
+            retargeting.RetargetingCampaignSpec(
+                source_campaign_id=campaign.metaCampaignId,
+                daily_budget=recommendation.suggestedBudget,
+                pixel_id=connection.pixelId,
+            ),
+            access_token=connection.accessToken,
+            ad_account_id=connection.adAccountId or "",
+        )
     elif recommendation.actionType == "RAISE_COST_CAP":
         assert recommendation.suggestedBid is not None
         assert ad_set.metaAdSetId is not None

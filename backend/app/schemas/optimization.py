@@ -11,7 +11,13 @@ from app.schemas.base import CamelCaseModel
 # deterministic creative-test rules also raise RAISE_COST_CAP (a proposal for
 # the user to approve), which the model never picks.
 GeneratedActionType = Literal["PAUSE_AD", "INCREASE_BUDGET", "DECREASE_BUDGET"]
-ActionType = Literal["PAUSE_AD", "INCREASE_BUDGET", "DECREASE_BUDGET", "RAISE_COST_CAP"]
+ActionType = Literal[
+    "PAUSE_AD",
+    "INCREASE_BUDGET",
+    "DECREASE_BUDGET",
+    "RAISE_COST_CAP",
+    "START_RETARGETING",
+]
 RiskLevel = Literal["LOW", "MEDIUM", "HIGH"]
 RecommendationStatus = Literal["PENDING", "APPLIED", "REJECTED", "SUPERSEDED"]
 
@@ -24,6 +30,7 @@ ACTION_TYPE_LABELS: dict[ActionType, str] = {
     "INCREASE_BUDGET": "Increase budget",
     "DECREASE_BUDGET": "Decrease budget",
     "RAISE_COST_CAP": "Raise cost cap",
+    "START_RETARGETING": "Start retargeting",
 }
 
 

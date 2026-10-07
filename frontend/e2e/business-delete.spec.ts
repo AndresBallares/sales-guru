@@ -20,8 +20,19 @@ test('deleting a business is blocked while a campaign is live, and succeeds once
   await page.getByRole('button', { name: 'Generate ads' }).click()
   await page.getByRole('button', { name: 'Select this ad' }).first().click()
   // The ad page publishes paused by default; this spec needs a LIVE campaign.
-  await page.getByLabel(/Publish paused/).uncheck()
+  // Let the page finish loading before touching the checkbox: its state is
+  // local, so a re-render after the uncheck would silently put it back to
+  // "paused" (that was the intermittent failure), then confirm it stuck.
+  await expect(page.getByRole('heading', { name: 'Ad preview' })).toBeVisible()
+  await page.waitForLoadState('networkidle')
+  const publishPaused = page.getByLabel(/Publish paused/)
+  await publishPaused.uncheck()
+  await expect(publishPaused).not.toBeChecked()
+  const publishRequest = page.waitForRequest(
+    (request) => request.method() === 'POST' && request.url().endsWith('/publish'),
+  )
   await page.getByRole('button', { name: 'Approve & Publish' }).click()
+  expect((await publishRequest).postDataJSON()).toEqual({ paused: false })
   // Wait for the publish to finish: once the campaign is live the publish
   // button is gone entirely. (The transient "Publishing…" label raced the
   // instant fake publish.)
@@ -30,7 +41,16 @@ test('deleting a business is blocked while a campaign is live, and succeeds once
   ).toHaveCount(0)
   await expect(page.getByRole('alert')).not.toBeVisible()
 
+  // Wait for the dashboard's campaign list to actually load (an explicit
+  // state, not a longer timeout), then for the LIVE state it reports.
+  const campaignsLoaded = page.waitForResponse(
+    (response) =>
+      response.request().method() === 'GET' &&
+      new URL(response.url()).pathname.endsWith('/campaigns') &&
+      response.ok(),
+  )
   await page.getByRole('link', { name: '← Back to dashboard' }).click()
+  await campaignsLoaded
   await expect(page.getByRole('heading', { name: 'Acme Widgets' })).toBeVisible()
   await expect(page.getByText(/Live on Meta/)).toBeVisible()
 
@@ -47,7 +67,17 @@ test('deleting a business is blocked while a campaign is live, and succeeds once
   await expect(page.getByRole('heading', { name: 'Acme Widgets' })).toBeVisible()
 
   // End the campaign, then the same confirmed delete goes through.
+  // Wait for the pause itself to succeed and the LIVE state to go away
+  // (the Pause button is gone) before trying the delete again.
+  const paused = page.waitForResponse(
+    (response) =>
+      response.request().method() === 'POST' &&
+      new URL(response.url()).pathname.endsWith('/pause') &&
+      response.ok(),
+  )
   await page.getByRole('button', { name: 'Pause campaign' }).click()
+  await paused
+  await expect(page.getByRole('button', { name: 'Pause campaign' })).toHaveCount(0)
   await expect(page.getByText(/Live on Meta/)).not.toBeVisible()
 
   await deleteButton.click()

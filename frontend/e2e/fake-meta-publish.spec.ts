@@ -28,8 +28,18 @@ test('a fake Meta connection carries a campaign from creation to a live publish 
 
   // Selecting an ad navigates to the dedicated ad preview/publish page.
   // The ad page publishes paused by default; this spec needs a LIVE campaign.
-  await page.getByLabel(/Publish paused/).uncheck()
+  // Let the page finish loading first (its checkbox state is local, so a
+  // re-render after the uncheck would silently put it back), then confirm.
+  await expect(page.getByRole('heading', { name: 'Ad preview' })).toBeVisible()
+  await page.waitForLoadState('networkidle')
+  const publishPaused = page.getByLabel(/Publish paused/)
+  await publishPaused.uncheck()
+  await expect(publishPaused).not.toBeChecked()
+  const publishRequest = page.waitForRequest(
+    (request) => request.method() === 'POST' && request.url().endsWith('/publish'),
+  )
   await page.getByRole('button', { name: 'Approve & Publish' }).click()
+  expect((await publishRequest).postDataJSON()).toEqual({ paused: false })
   // Wait for the publish to finish: once the campaign is live the publish
   // button is gone entirely. (Asserting on the transient "Publishing…"
   // label raced the instant fake publish.)

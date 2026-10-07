@@ -1441,6 +1441,51 @@ async def update_meta_ad_set_bid(
     )
 
 
+async def fetch_pixel_event_counts(
+    *, access_token: str, pixel_id: str, days: int = 30
+) -> dict[str, int]:
+    """Count a Pixel's events by name over the last `days` days.
+
+    GET /{pixel_id}/stats?aggregation=event returns hourly buckets of
+    {"value": <event name>, "count": N}; this sums them per event. These are
+    EVENT counts, not people: Meta offers no unique-visitor count for a Pixel
+    (a unique count needs a custom audience), so PageView is an upper bound on
+    visitors. Checked against a real Pixel 2026-10-06 (PageView, ViewContent,
+    AddToCart, InitiateCheckout came back; Purchase is absent when it has
+    never fired).
+
+    Args:
+        access_token: A Meta access token with ads permissions.
+        pixel_id: The MetaConnection's Pixel id.
+        days: How far back to count.
+
+    Returns:
+        Event name -> total count (empty when the Pixel has no data). Canned
+        empty in fake mode.
+
+    Raises:
+        MetaConnectionError: If the call fails.
+    """
+    if get_settings().fake_meta_enabled:
+        return {}
+    now = int(datetime.now(UTC).timestamp())
+    body = await _get_json(
+        f"{_GRAPH_BASE_URL}/{pixel_id}/stats",
+        {
+            "aggregation": "event",
+            "start_time": str(now - days * 86400),
+            "end_time": str(now),
+            "access_token": access_token,
+        },
+    )
+    totals: dict[str, int] = {}
+    for bucket in body.get("data", []):
+        for entry in bucket.get("data", []):
+            name = str(entry["value"])
+            totals[name] = totals.get(name, 0) + int(entry["count"])
+    return totals
+
+
 async def search_ad_interests(*, access_token: str, query: str) -> list[dict[str, Any]]:
     """Search Meta's ad-interest targeting taxonomy for a free-text term.
 

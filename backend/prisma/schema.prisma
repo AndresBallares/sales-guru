@@ -372,6 +372,8 @@ model Campaign {
   dailySpendFlag          String?
   // Machine-readable monitoring signal for the Optimizer (e.g. COST_CAP_MAY_BE_TOO_TIGHT); null = none.
   deliverySignal          String?
+  // A Pixel-health warning shown on the campaign (e.g. the Purchase event may not be firing); null = none.
+  pixelWarning            String?
   createdAt               DateTime                     @default(now())
   updatedAt               DateTime                     @updatedAt
 }
