@@ -648,6 +648,8 @@ model OptimizationRecommendation {
   targetAdId       String?
   currentBudget    Float?
   suggestedBudget  Float?
+  // A proposed cost cap per result, in dollars (RAISE_COST_CAP only).
+  suggestedBid     Float?
   reasoning        String
   confidence       Float
   risk             String

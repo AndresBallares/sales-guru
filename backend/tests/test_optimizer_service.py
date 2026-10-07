@@ -1269,3 +1269,17 @@ async def test_pause_ad_without_an_ad_list_behaves_as_before(
 
     assert result.recommendation.action_type == "PAUSE_AD"
     assert result.recommendation.target_ad_id is None
+
+
+def test_the_model_cannot_choose_the_cost_cap_proposal() -> None:
+    """RAISE_COST_CAP is raised only by the deterministic rules (a proposal
+    for the user), so it is not among the actions the LLM may pick."""
+    from app.schemas.optimization import GeneratedRecommendation
+
+    schema = GeneratedRecommendation.model_json_schema()
+
+    assert set(schema["properties"]["actionType"]["enum"]) == {
+        "PAUSE_AD",
+        "INCREASE_BUDGET",
+        "DECREASE_BUDGET",
+    }

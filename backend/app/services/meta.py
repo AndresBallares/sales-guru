@@ -1418,6 +1418,29 @@ async def update_meta_ad_set_budget(
     )
 
 
+async def update_meta_ad_set_bid(
+    *, access_token: str, meta_ad_set_id: str, bid_amount_cents: int
+) -> None:
+    """Update a live ad set's cost cap (bid_amount) on Meta (RAISE_COST_CAP).
+
+    Args:
+        access_token: The business's Meta access token.
+        meta_ad_set_id: The Meta ad set id to update (AdSet.metaAdSetId).
+        bid_amount_cents: The new cost cap per result, in the ad account's
+            minor currency unit (cents for USD) — same unit as
+            create_meta_ad_set's target_cac_cents.
+
+    Raises:
+        MetaConnectionError: If the call fails.
+    """
+    if get_settings().fake_meta_enabled:
+        return
+    await _post_json(
+        f"{_GRAPH_BASE_URL}/{meta_ad_set_id}",
+        {"access_token": access_token, "bid_amount": str(bid_amount_cents)},
+    )
+
+
 async def search_ad_interests(*, access_token: str, query: str) -> list[dict[str, Any]]:
     """Search Meta's ad-interest targeting taxonomy for a free-text term.
 

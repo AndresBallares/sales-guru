@@ -55,6 +55,7 @@ def _to_response(rec: OptimizationRecommendation) -> RecommendationResponse:
             "targetAdId": rec.targetAdId,
             "currentBudget": rec.currentBudget,
             "suggestedBudget": rec.suggestedBudget,
+            "suggestedBid": rec.suggestedBid,
             "reasoning": rec.reasoning,
             "confidence": rec.confidence,
             "risk": rec.risk,

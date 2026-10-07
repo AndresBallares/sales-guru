@@ -3432,6 +3432,46 @@ describe('CampaignsSection', () => {
     expect(screen.getByText(/Suggested budget:/)).toBeInTheDocument()
   })
 
+  it('shows a proposed cost cap raise with its number, waiting for approval', async () => {
+    mockedApi.getOptions.mockResolvedValue({
+      ...ALL_OPTIONS,
+      actionTypes: [{ value: 'RAISE_COST_CAP', label: 'Raise cost cap' }],
+    })
+    mockedApi.listCampaigns.mockResolvedValue([
+      {
+        id: 'camp-1',
+        name: null,
+        objective: 'SALES',
+        status: 'LIVE',
+        productId: null,
+        audienceId: null,
+        metaCampaignId: 'meta_campaign_1',
+        eventVenueKey: null,
+        startDate: null,
+        endDate: null,
+        pausedReason: null,
+        dailySpendFlag: null,
+        needsDestinationUrl: false,
+      },
+    ])
+    mockedApi.listRecommendations.mockResolvedValue([
+      fakeRecommendation({
+        actionType: 'RAISE_COST_CAP',
+        suggestedBudget: null,
+        suggestedBid: 25,
+        reasoning: 'The $20.00 cost cap per add-to-cart may be too tight.',
+      }),
+    ])
+
+    renderCampaigns(<CampaignsSection businessId="biz-1" />)
+
+    expect(await screen.findByText('Raise cost cap')).toBeInTheDocument()
+    expect(screen.getByText(/Suggested cost cap:/)).toBeInTheDocument()
+    expect(screen.getByText(/\$25\.00 per result/)).toBeInTheDocument()
+    expect(screen.queryByText(/Suggested budget:/)).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Approve' })).toBeInTheDocument()
+  })
+
   it('analyzes a live campaign and shows the new recommendation', async () => {
     mockedApi.listCampaigns.mockResolvedValue([
       {

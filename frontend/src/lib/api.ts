@@ -1106,7 +1106,11 @@ export function listMetrics(businessId: string, campaignId: string): Promise<Met
   return request<Metric[]>(`/businesses/${businessId}/campaigns/${campaignId}/metrics`)
 }
 
-export type ActionType = 'PAUSE_AD' | 'INCREASE_BUDGET' | 'DECREASE_BUDGET'
+export type ActionType =
+  | 'PAUSE_AD'
+  | 'INCREASE_BUDGET'
+  | 'DECREASE_BUDGET'
+  | 'RAISE_COST_CAP'
 export type RiskLevel = 'LOW' | 'MEDIUM' | 'HIGH'
 export type RecommendationStatus = 'PENDING' | 'APPLIED' | 'REJECTED' | 'SUPERSEDED'
 
@@ -1117,6 +1121,8 @@ export interface Recommendation {
   targetAdId: string | null
   currentBudget: number | null
   suggestedBudget: number | null
+  // A proposed cost cap per result, in dollars (RAISE_COST_CAP only).
+  suggestedBid?: number | null
   reasoning: string
   confidence: number
   risk: RiskLevel

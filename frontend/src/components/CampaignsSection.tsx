@@ -1968,6 +1968,12 @@ export function CampaignsSection({
                                   {recommendation.suggestedBudget}/day
                                 </p>
                               )}
+                              {recommendation.suggestedBid != null && (
+                                <p>
+                                  <strong>Suggested cost cap:</strong> $
+                                  {recommendation.suggestedBid.toFixed(2)} per result
+                                </p>
+                              )}
                               {recommendation.status === 'PENDING' && (
                                 <>
                                   <button

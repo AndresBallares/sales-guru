@@ -80,12 +80,13 @@ from prisma.types import MetricCreateInput
 from app.core.db import db
 from app.core.meta_connection import get_meta_connection
 from app.schemas.strategy import (
+    CreativeTestPlanContent,
     StrategyContentAdapter,
     TestPlanContent,
     planned_total_budget,
 )
 from app.schemas.test_evaluation import StopReason
-from app.services import optimizer
+from app.services import creative_test_rules, optimizer
 from app.services.meta import (
     CampaignInsights,
     MetaConnectionError,
@@ -93,6 +94,7 @@ from app.services.meta import (
     fetch_ad_set_insights,
     fetch_campaign_insights,
     pause_meta_ad,
+    update_meta_ad_set_bid,
     update_meta_ad_set_budget,
 )
 from app.services.publish import pause_campaign
@@ -574,6 +576,223 @@ async def _check_add_to_cart_delivery(campaign: Campaign) -> None:
         )
 
 
+async def _creative_test_ads(
+    campaign: Campaign,
+) -> tuple[list[creative_test_rules.AdSnapshot], datetime | None]:
+    """Every ad of a creative test with its latest ad-level numbers.
+
+    Returns:
+        (snapshots, first_collected_at): one snapshot per ad (zeros when it has
+        no ad-level row yet) and when the first ad-level snapshot was
+        collected, or None if none has been yet.
+    """
+    first = await db.metric.find_first(
+        where={"campaignId": campaign.id, "NOT": [{"adId": None}]},
+        order={"fetchedAt": "asc"},
+    )
+    snapshots: list[creative_test_rules.AdSnapshot] = []
+    for ad_set in await db.adset.find_many(where={"campaignId": campaign.id}):
+        for ad in await db.ad.find_many(where={"adSetId": ad_set.id}):
+            latest = await db.metric.find_first(
+                where={"adId": ad.id}, order={"fetchedAt": "desc"}
+            )
+            snapshots.append(
+                creative_test_rules.AdSnapshot(
+                    ad_id=ad.id,
+                    name=ad.name,
+                    live=ad.status == "LIVE",
+                    spend=latest.spend if latest else 0.0,
+                    add_to_cart=latest.addToCart if latest else None,
+                    cost_per_add_to_cart=latest.costPerAddToCart if latest else None,
+                    purchases=latest.purchases if latest else None,
+                    cac=latest.cac if latest else None,
+                )
+            )
+    return snapshots, first.fetchedAt if first else None
+
+
+async def _record_ad_pause(
+    campaign: Campaign,
+    candidate: creative_test_rules.PauseCandidate,
+    *,
+    applied: bool,
+) -> None:
+    """Write a pause to the recommendation log: applied, or pending approval."""
+    await db.optimizationrecommendation.create(
+        data={
+            "campaignId": campaign.id,
+            "actionType": "PAUSE_AD",
+            "targetAdId": candidate.ad_id,
+            "reasoning": (
+                f"Automatic pause (rule {candidate.rule}): {candidate.reasoning}"
+                if applied
+                else f"Proposed pause (rule {candidate.rule}): {candidate.reasoning} "
+                "Needs your approval."
+            ),
+            "confidence": 1.0,
+            "risk": "LOW",
+            "requiresApproval": not applied,
+            "status": "APPLIED" if applied else "PENDING",
+        }
+    )
+
+
+async def _sync_cost_cap_proposal(
+    campaign: Campaign, content: CreativeTestPlanContent
+) -> None:
+    """Turn the "cost cap may be too tight" signal into a proposal, never an action.
+
+    While Campaign.deliverySignal says the cap may be too tight, exactly one
+    PENDING RAISE_COST_CAP recommendation exists (proposing a 25% higher cap,
+    with the spend numbers behind it); it changes nothing on Meta until the
+    user approves it. When the signal clears, a still-pending proposal is
+    withdrawn (SUPERSEDED).
+    """
+    fresh = await db.campaign.find_unique(where={"id": campaign.id})
+    signalled = fresh is not None and fresh.deliverySignal == COST_CAP_MAY_BE_TOO_TIGHT
+    pending = await db.optimizationrecommendation.find_first(
+        where={
+            "campaignId": campaign.id,
+            "actionType": "RAISE_COST_CAP",
+            "status": "PENDING",
+        }
+    )
+    if not signalled:
+        if pending is not None:
+            await db.optimizationrecommendation.update(
+                where={"id": pending.id}, data={"status": "SUPERSEDED"}
+            )
+        return
+    if pending is not None or content.target_cost_per_add_to_cart is None:
+        return
+
+    cap = content.target_cost_per_add_to_cart
+    window = await _rolling_spend_and_purchases(
+        campaign.id, timedelta(days=optimizer.DELIVERY_CHECK_DAYS)
+    )
+    spent = window[0] if window is not None else await _latest_total_spend(campaign.id)
+    expected = content.daily_budget * optimizer.DELIVERY_CHECK_DAYS
+    suggested = cap * creative_test_rules.COST_CAP_RAISE_FACTOR
+    await db.optimizationrecommendation.create(
+        data={
+            "campaignId": campaign.id,
+            "actionType": "RAISE_COST_CAP",
+            "suggestedBid": suggested,
+            "reasoning": (
+                f"Spend over the last {optimizer.DELIVERY_CHECK_DAYS} days was "
+                f"${spent:,.2f} against ${expected:,.2f} expected "
+                f"(${content.daily_budget:,.2f}/day x "
+                f"{optimizer.DELIVERY_CHECK_DAYS}), "
+                f"under {optimizer.DELIVERY_MIN_SPEND_FRACTION:.0%} of it — the "
+                f"${cap:,.2f} cost cap per add-to-cart may be too tight for Meta "
+                f"to win auctions. Proposed: raise the cap "
+                f"{creative_test_rules.COST_CAP_RAISE_FACTOR - 1:.0%} to "
+                f"${suggested:,.2f}. Nothing changes until you approve."
+            ),
+            "confidence": 1.0,
+            "risk": "MEDIUM",
+            "requiresApproval": True,
+        }
+    )
+
+
+async def _enforce_creative_test_rules(
+    campaign: Campaign, connection: MetaConnection
+) -> None:
+    """Enforce a creative test's written pause rules (creative-first Stage 4).
+
+    Only a CREATIVE_TEST_PLAN campaign is touched. The rules themselves
+    (app/services/creative_test_rules.py) wait for 48 hours of ad-level data
+    and enough spend and add-to-carts before judging anything. What happens
+    next is deliberately narrow:
+
+    - at most ONE pause per campaign is automatic: the worst ad is paused on
+      Meta right away, and logged (both in the log and as an APPLIED
+      recommendation) with the numbers that triggered it;
+    - every other pause is only a PENDING proposal the user must approve;
+    - "cost cap may be too tight" is likewise a proposal, never an action.
+
+    A failed Meta pause leaves the ad live and records nothing, so the next
+    cycle simply tries again.
+
+    Args:
+        campaign: The live campaign to check.
+        connection: The business's Meta connection, for the pause call.
+    """
+    strategy = await db.strategy.find_unique(where={"campaignId": campaign.id})
+    if strategy is None:
+        return
+    content = StrategyContentAdapter.validate_json(strategy.content)
+    if content.plan_type != "CREATIVE_TEST_PLAN":
+        return
+
+    await _sync_cost_cap_proposal(campaign, content)
+
+    snapshots, first_collected_at = await _creative_test_ads(campaign)
+    if first_collected_at is None:
+        return
+    hours_running = (datetime.now(UTC) - first_collected_at).total_seconds() / 3600
+    candidates = creative_test_rules.evaluate_creative_test(
+        content, snapshots, hours_running=hours_running
+    )
+    if not candidates:
+        return
+
+    automatic = await db.optimizationrecommendation.count(
+        where={
+            "campaignId": campaign.id,
+            "actionType": "PAUSE_AD",
+            "status": "APPLIED",
+            "requiresApproval": False,
+        }
+    )
+    for candidate in candidates:
+        if automatic < creative_test_rules.AUTO_PAUSE_LIMIT:
+            ad = await db.ad.find_unique(where={"id": candidate.ad_id})
+            if ad is None or ad.metaAdId is None:
+                continue
+            try:
+                await pause_meta_ad(
+                    access_token=connection.accessToken, meta_ad_id=ad.metaAdId
+                )
+            except MetaConnectionError:
+                logger.warning(
+                    "Creative test auto-pause failed for campaign %s ad %s",
+                    campaign.id,
+                    ad.id,
+                )
+                return
+            await db.ad.update(where={"id": ad.id}, data={"status": "PAUSED"})
+            await _record_ad_pause(campaign, candidate, applied=True)
+            automatic += 1
+            logger.info(
+                "Creative test auto-pause: campaign %s ad %s (%s) — %s",
+                campaign.id,
+                ad.id,
+                candidate.rule,
+                candidate.reasoning,
+            )
+            continue
+        already = await db.optimizationrecommendation.find_first(
+            where={
+                "campaignId": campaign.id,
+                "actionType": "PAUSE_AD",
+                "targetAdId": candidate.ad_id,
+                "status": "PENDING",
+            }
+        )
+        if already is None:
+            await _record_ad_pause(campaign, candidate, applied=False)
+            logger.info(
+                "Creative test pause proposed (needs approval): campaign %s "
+                "ad %s (%s) — %s",
+                campaign.id,
+                candidate.ad_id,
+                candidate.rule,
+                candidate.reasoning,
+            )
+
+
 async def collect_metrics_for_all_live_campaigns() -> None:
     """Collect fresh metrics, then run the deterministic spend guardrails.
 
@@ -615,6 +834,7 @@ async def collect_metrics_for_all_live_campaigns() -> None:
                 await _enforce_cac_circuit_breaker(current, connection)
                 await _enforce_daily_spend_flag(current)
                 await _check_add_to_cart_delivery(current)
+                await _enforce_creative_test_rules(current, connection)
         except MetaConnectionError:
             logger.warning("Circuit breaker pause failed for campaign %s", campaign.id)
 
@@ -656,6 +876,22 @@ async def apply_recommendation(
             raise ValueError("The ad to pause belongs to another campaign")
         await pause_meta_ad(access_token=connection.accessToken, meta_ad_id=ad.metaAdId)
         await db.ad.update(where={"id": ad.id}, data={"status": "PAUSED"})
+    elif recommendation.actionType == "RAISE_COST_CAP":
+        assert recommendation.suggestedBid is not None
+        assert ad_set.metaAdSetId is not None
+        strategy = await db.strategy.find_unique(where={"campaignId": campaign.id})
+        assert strategy is not None
+        plan = StrategyContentAdapter.validate_json(strategy.content)
+        assert plan.plan_type == "CREATIVE_TEST_PLAN"
+        ceiling = (
+            creative_test_rules.COST_CAP_CEILING_MULTIPLE
+            * creative_test_rules.target_for_plan(plan)
+        )
+        await update_meta_ad_set_bid(
+            access_token=connection.accessToken,
+            meta_ad_set_id=ad_set.metaAdSetId,
+            bid_amount_cents=round(min(recommendation.suggestedBid, ceiling) * 100),
+        )
     else:
         assert (
             recommendation.suggestedBudget is not None

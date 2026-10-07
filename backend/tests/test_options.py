@@ -177,6 +177,7 @@ def test_get_options_action_types(client: TestClient) -> None:
         {"value": "PAUSE_AD", "label": "Pause ad"},
         {"value": "INCREASE_BUDGET", "label": "Increase budget"},
         {"value": "DECREASE_BUDGET", "label": "Decrease budget"},
+        {"value": "RAISE_COST_CAP", "label": "Raise cost cap"},
     ]
 
 

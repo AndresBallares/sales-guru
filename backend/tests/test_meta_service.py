@@ -2219,3 +2219,33 @@ async def test_fetch_insights_cost_per_add_to_cart_is_none_without_add_to_carts(
     )
 
     assert insights.cost_per_add_to_cart is None
+
+
+@pytest.mark.asyncio
+async def test_update_meta_ad_set_bid_posts_the_new_bid_amount(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = _mock_client_returning(monkeypatch, _FakeResponse({"success": True}))
+
+    await meta.update_meta_ad_set_bid(
+        access_token="token", meta_ad_set_id="adset_1", bid_amount_cents=2500
+    )
+
+    url, data = client.calls[0]
+    assert url == "https://graph.facebook.com/v21.0/adset_1"
+    assert data["bid_amount"] == "2500"
+    assert data["access_token"] == "token"
+
+
+@pytest.mark.asyncio
+async def test_update_meta_ad_set_bid_does_nothing_in_fake_mode(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("FAKE_META", "true")
+    get_settings.cache_clear()
+    try:
+        await meta.update_meta_ad_set_bid(
+            access_token="t", meta_ad_set_id="adset_1", bid_amount_cents=100
+        )
+    finally:
+        get_settings.cache_clear()
