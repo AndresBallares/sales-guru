@@ -108,6 +108,9 @@ path the rule above requires explicit confirmation for).
 - **TDD**: write the failing test first, then implement. Both packages gate
   on ≥90% coverage (`pytest` / `vitest --coverage` enforce this directly —
   see README.md).
+- **Run only one test suite at a time; all pytest runs share ./test.db.** Two
+  concurrent runs (or a run during a pre-commit hook) collide on that SQLite file
+  and stall; stop dev servers and wait for hooks before starting another run.
 - **Backend**: PEP-8 via ruff, Google-style docstrings (ruff's `D` rules,
   convention set to `google` in `backend/pyproject.toml`), strict mypy + ty.
   Run `uv run ruff check . && uv run ruff format . && uv run mypy . && uv run ty check && uv run pytest`
