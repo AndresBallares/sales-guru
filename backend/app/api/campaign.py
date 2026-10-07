@@ -28,7 +28,7 @@ from app.schemas.strategy import (
     StrategyContentAdapter,
 )
 from app.services.campaign_readiness import advance_to_ready_if_complete, is_ready
-from app.services.creative import is_creative_stale
+from app.services.creative import copy_problems, is_creative_stale
 from app.services.event_venues import EVENT_VENUES, default_event_window
 from app.services.meta import MetaConnectionError
 from app.services.publish import (
@@ -61,6 +61,10 @@ _META_NOT_CONNECTED_TO_ACTIVATE = (
 )
 _CREATIVE_TEST_AD_COUNT = (
     "A creative test needs {min} to {max} selected ads before it can be published"
+)
+_COPY_NOT_PUBLISHABLE = (
+    "Can't publish yet — fix the ad copy first: {failures}. Regenerate the ads "
+    "or edit them, then try again."
 )
 _CREATIVE_TEST_SINGLE_IMAGE = "A creative test uses single-image ads only for now"
 _ALREADY_PUBLISHED = (
@@ -561,6 +565,18 @@ async def publish_campaign(
     if any(is_creative_stale(c, campaign, product, business) for c in creatives):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST, detail=_CREATIVE_STALE
+        )
+    # Last gate before anything goes live: no cut-off or over-length copy,
+    # whatever produced it. Names every ad that fails.
+    copy_failures = [
+        f"Ad '{c.headline}' — {'; '.join(problems)}"
+        for c in creatives
+        if (problems := copy_problems(c))
+    ]
+    if copy_failures:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=_COPY_NOT_PUBLISHABLE.format(failures=" | ".join(copy_failures)),
         )
     destination_url = (product.url if product else None) or business.website
     if not destination_url:

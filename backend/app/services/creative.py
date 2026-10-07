@@ -309,6 +309,68 @@ _SENTENCE_END = ".!?"
 _MIN_TRIMMED_BODY_LENGTH = 60
 
 
+# Characters that may follow a sentence's final punctuation (a closing quote or
+# bracket) and still leave the sentence complete.
+_CLOSERS = "\"'”’)]»"
+
+
+def copy_problems(creative: Creative) -> list[str]:
+    """Why this creative's copy shouldn't go live, or an empty list if it's fine.
+
+    The last gate before publish, independent of how the copy was generated:
+    primary text must fit Facebook's 125-character preview, end on a complete
+    sentence (. ! or ?, optionally followed by a closing quote or bracket) and
+    not be cut off mid-phrase ("...Shop the", seen in the first live run);
+    the headline, description and every carousel card must fit their limits.
+
+    Args:
+        creative: The creative about to be published.
+
+    Returns:
+        One human-readable problem per issue found, in the order checked.
+    """
+    problems: list[str] = []
+    body = (creative.bodyText or "").strip()
+    if len(body) > MAX_BODY_TEXT_LENGTH:
+        problems.append(
+            f"primary text is {len(body)} characters (max {MAX_BODY_TEXT_LENGTH})"
+        )
+    if not body.rstrip(_CLOSERS).endswith(tuple(_SENTENCE_END)):
+        # The unfinished tail: everything after the last sentence end or line break.
+        cut = max(body.rfind(char) for char in (*_SENTENCE_END, "\n"))
+        ending = body[cut + 1 :].strip() or body[-20:].strip()
+        problems.append(
+            "primary text must end with a complete sentence (. ! or ?) but ends "
+            f"with '{ending}'"
+        )
+    if len(creative.headline) > MAX_HEADLINE_LENGTH:
+        problems.append(
+            f"headline is {len(creative.headline)} characters "
+            f"(max {MAX_HEADLINE_LENGTH})"
+        )
+    description = creative.description
+    if description is not None and len(description) > MAX_DESCRIPTION_LENGTH:
+        problems.append(
+            f"description is {len(description)} characters "
+            f"(max {MAX_DESCRIPTION_LENGTH})"
+        )
+    for position, card in enumerate(creative.cards or [], start=1):
+        if len(card.headline) > MAX_HEADLINE_LENGTH:
+            problems.append(
+                f"card {position} headline is {len(card.headline)} characters "
+                f"(max {MAX_HEADLINE_LENGTH})"
+            )
+        if (
+            card.description is not None
+            and len(card.description) > MAX_DESCRIPTION_LENGTH
+        ):
+            problems.append(
+                f"card {position} description is {len(card.description)} "
+                f"characters (max {MAX_DESCRIPTION_LENGTH})"
+            )
+    return problems
+
+
 def _trim_to_last_sentence(text: str, max_length: int) -> str | None:
     """Trim text back to the last sentence end within max_length, or None."""
     window = text[:max_length]

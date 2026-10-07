@@ -1414,3 +1414,81 @@ def test_the_retry_prompt_states_the_character_rule_explicitly() -> None:
     assert "primary text is 128 characters" in retry
     assert "line breaks count toward the 125-character limit" in retry
     assert "complete sentence" in retry
+
+
+# ── Pre-publish copy guard: no cut-off or over-length copy goes live ──
+
+
+def _copy_creative(**overrides: object) -> Any:
+    defaults: dict[str, object] = {
+        "headline": "Hand-Shaped. Bold by Design.",
+        "bodyText": "Handcrafted in small batches in New York. Shop the collection.",
+        "description": "18K gold + ceramic",
+        "format": "SINGLE_IMAGE",
+        "cards": [],
+    }
+    defaults.update(overrides)
+    return SimpleNamespace(**defaults)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Made by hand.",
+        "Made by hand!",
+        "Ever seen a ring like this?",
+        'Hand-shaped, never mass-made. "Shop the collection."',
+        "Hand-shaped in New York.  ",
+    ],
+)
+def test_copy_problems_accepts_copy_that_ends_on_a_sentence(text: str) -> None:
+    assert creative.copy_problems(_copy_creative(bodyText=text)) == []
+
+
+def test_copy_problems_catches_the_shop_the_cut_off() -> None:
+    """The first live VENZI run published ads ending "...Shop the"."""
+    copy = (
+        "18K gold, natural gemstones, and ceramic — hand-shaped into bold form.\n"
+        "Handcrafted in small batches in New York.\nShop the"
+    )
+
+    problems = creative.copy_problems(_copy_creative(bodyText=copy))
+
+    assert len(problems) == 1
+    assert "must end with a complete sentence" in problems[0]
+    assert "'Shop the'" in problems[0]
+
+
+def test_copy_problems_rejects_primary_text_over_the_limit() -> None:
+    problems = creative.copy_problems(_copy_creative(bodyText="a" * 125 + "b."))
+
+    assert any("127 characters" in p and "max 125" in p for p in problems)
+
+
+def test_copy_problems_rejects_an_over_long_headline_and_description() -> None:
+    problems = creative.copy_problems(
+        _copy_creative(headline="h" * 41, description="d" * 31)
+    )
+
+    assert any("headline is 41 characters (max 40)" in p for p in problems)
+    assert any("description is 31 characters (max 30)" in p for p in problems)
+
+
+def test_copy_problems_checks_every_carousel_card() -> None:
+    cards = [
+        SimpleNamespace(headline="ok", description=None),
+        SimpleNamespace(headline="h" * 41, description="d" * 31),
+    ]
+
+    problems = creative.copy_problems(_copy_creative(format="CAROUSEL", cards=cards))
+
+    assert any("card 2 headline is 41 characters" in p for p in problems)
+    assert any("card 2 description is 31 characters" in p for p in problems)
+
+
+def test_copy_problems_reports_every_problem_at_once() -> None:
+    problems = creative.copy_problems(
+        _copy_creative(bodyText="x" * 130, headline="h" * 41)
+    )
+
+    assert len(problems) >= 3  # over length, no sentence end, long headline

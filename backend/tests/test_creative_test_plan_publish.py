@@ -469,3 +469,63 @@ def test_publish_400s_when_a_selected_creative_is_stale(
     response = client.post(f"/businesses/{business_id}/campaigns/{campaign_id}/publish")
 
     assert response.status_code == 400
+
+
+# ── Pre-publish copy guard ───────────────────────────────────
+
+_SHOP_THE_COPY = (
+    "18K gold, natural gemstones, and ceramic — hand-shaped into bold form.\n"
+    "Handcrafted in small batches in New York.\nShop the"
+)
+
+
+async def _set_body_text(creative_id: str, text: str) -> None:
+    seeder = Prisma()
+    await seeder.connect()
+    try:
+        await seeder.creative.update(where={"id": creative_id}, data={"bodyText": text})
+    finally:
+        await seeder.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_publish_refuses_a_creative_whose_copy_is_cut_off(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    mock_services: dict[str, AsyncMock],  # noqa: F811
+) -> None:
+    """One cut-off ad among three blocks the whole publish, and the error
+    names that ad so it can be fixed."""
+    business_id, campaign_id, selected = _creative_plan_campaign(client, monkeypatch)
+    await _set_body_text(selected[1], _SHOP_THE_COPY)
+    bad = next(
+        c
+        for c in _creatives(client, business_id, campaign_id)
+        if c["id"] == selected[1]
+    )
+
+    response = client.post(f"/businesses/{business_id}/campaigns/{campaign_id}/publish")
+
+    assert response.status_code == 400
+    detail = response.json()["detail"]
+    assert f"'{bad['headline']}'" in detail
+    assert "must end with a complete sentence" in detail
+    assert "'Shop the'" in detail
+    mock_services["create_campaign"].assert_not_awaited()
+    mock_services["create_ad_set"].assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_publish_refuses_primary_text_over_the_limit(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    mock_services: dict[str, AsyncMock],  # noqa: F811
+) -> None:
+    business_id, campaign_id, selected = _creative_plan_campaign(client, monkeypatch)
+    await _set_body_text(selected[0], "a" * 130 + ".")
+
+    response = client.post(f"/businesses/{business_id}/campaigns/{campaign_id}/publish")
+
+    assert response.status_code == 400
+    assert "max 125" in response.json()["detail"]
+    mock_services["create_campaign"].assert_not_awaited()
