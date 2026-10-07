@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState, type ChangeEvent, type FormEvent } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { CreativeEditor } from './CreativeEditor'
 import {
   activateCampaign,
   ApiError,
@@ -1784,6 +1785,27 @@ export function CampaignsSection({
                                   <strong>Video prompt:</strong> {c.videoPrompt}
                                 </p>
                               )}
+                              {c.format === 'SINGLE_IMAGE' &&
+                                campaign.status !== 'LIVE' &&
+                                campaign.status !== 'PAUSED' && (
+                                  <CreativeEditor
+                                    businessId={businessId}
+                                    campaignId={campaign.id}
+                                    productId={campaignProductId ?? null}
+                                    creative={c}
+                                    onUpdated={(updated) => {
+                                      setCreatives((prev) => ({
+                                        ...prev,
+                                        [campaign.id]: (prev[campaign.id] ?? []).map((x) =>
+                                          x.id === updated.id ? updated : x,
+                                        ),
+                                      }))
+                                      // An approved campaign drops back to
+                                      // PENDING_APPROVAL when a selected ad changes.
+                                      void refresh()
+                                    }}
+                                  />
+                                )}
                               {isCreativeTest ? (
                                 (c.status === 'SELECTED' || testAdCount < MAX_TEST_ADS) && (
                                   <button

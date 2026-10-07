@@ -19,6 +19,7 @@ vi.mock('../lib/api', async (importOriginal) => {
     ...actual,
     createCampaign: vi.fn<typeof actual.createCampaign>(),
     updateCampaign: vi.fn<typeof actual.updateCampaign>(),
+    regenerateCreativeCopy: vi.fn<typeof actual.regenerateCreativeCopy>(),
     listCampaigns: vi.fn<typeof actual.listCampaigns>(),
     getBusiness: vi.fn<typeof actual.getBusiness>(),
     getBrandProfile: vi.fn<typeof actual.getBrandProfile>(),
@@ -4100,6 +4101,49 @@ describe('CampaignsSection creative test (CREATIVE_TEST_PLAN)', () => {
     await user.click(screen.getByRole('button', { name: 'Review & publish' }))
 
     expect(await screen.findByText('AD PAGE REACHED')).toBeInTheDocument()
+  })
+
+  it('lets the user regenerate one ad\'s headline right from the list', async () => {
+    mockedApi.listCampaigns.mockResolvedValue([CAMPAIGN])
+    const regenerated = fakeCreative({
+      id: 'creative-2',
+      headline: 'Brand new headline',
+      status: 'GENERATED',
+    })
+    mockedApi.listCreatives.mockResolvedValueOnce(fourCreatives([]))
+    // The list is re-fetched after the edit (the campaign status may change).
+    mockedApi.listCreatives.mockResolvedValue(
+      fourCreatives([]).map((c) => (c.id === 'creative-2' ? regenerated : c)),
+    )
+    mockedApi.regenerateCreativeCopy.mockResolvedValue(regenerated)
+    const user = userEvent.setup()
+
+    renderCampaigns(<CampaignsSection businessId="biz-1" />)
+    await screen.findByText('Headline B')
+    expect(screen.getAllByRole('button', { name: 'Regenerate headline' })).toHaveLength(4)
+
+    await user.click(screen.getAllByRole('button', { name: 'Regenerate headline' })[1])
+
+    expect(mockedApi.regenerateCreativeCopy).toHaveBeenCalledWith(
+      'biz-1',
+      'camp-1',
+      'creative-2',
+      ['headline'],
+    )
+    expect(await screen.findByText('Brand new headline')).toBeInTheDocument()
+    expect(screen.getByText('Headline A')).toBeInTheDocument()
+  })
+
+  it('does not offer ad editing once the test is published', async () => {
+    mockedApi.listCampaigns.mockResolvedValue([{ ...CAMPAIGN, status: 'PAUSED' }])
+    mockedApi.listCreatives.mockResolvedValue(
+      fourCreatives(['creative-1', 'creative-2', 'creative-3']),
+    )
+
+    renderCampaigns(<CampaignsSection businessId="biz-1" />)
+    await screen.findByText('Headline A')
+
+    expect(screen.queryByRole('button', { name: 'Regenerate headline' })).not.toBeInTheDocument()
   })
 
   it('stops offering Add to test at four selected ads', async () => {
