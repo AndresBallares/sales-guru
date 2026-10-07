@@ -20,6 +20,7 @@ import {
   type ProductImage,
 } from '../lib/api'
 import { SocialPostPreview } from '../components/SocialPostPreview'
+import { clearPublishPaused, getPublishPaused, setPublishPaused } from '../lib/publishPaused'
 
 const _PUBLISHABLE_STATUSES = ['PENDING_APPROVAL', 'APPROVED', 'FAILED']
 
@@ -47,7 +48,15 @@ export function AdPreviewPage() {
 
   // Default on, same as the campaigns list's own "Publish paused" checkbox:
   // nothing spends until the user activates it.
-  const [publishPaused, setPublishPaused] = useState(true)
+  // Remembered per campaign (src/lib/publishPaused.ts), not just in this
+  // component, so a remount or a choice made on the dashboard isn't lost.
+  const [publishPaused, setPublishPausedState] = useState(() =>
+    campaignId ? getPublishPaused(campaignId) : true,
+  )
+  function handlePublishPausedChange(paused: boolean) {
+    setPublishPausedState(paused)
+    if (campaignId) setPublishPaused(campaignId, paused)
+  }
   const [publishing, setPublishing] = useState(false)
   const [publishError, setPublishError] = useState<string | null>(null)
 
@@ -190,6 +199,7 @@ export function AdPreviewPage() {
         await approveCampaign(businessId, campaignId)
       }
       await publishCampaign(businessId, campaignId, { paused: publishPaused })
+      clearPublishPaused(campaignId)
       await refresh()
     } catch (err) {
       setPublishError(err instanceof ApiError ? err.message : 'Could not publish this ad.')
@@ -343,7 +353,7 @@ export function AdPreviewPage() {
                   id="publish-paused"
                   type="checkbox"
                   checked={publishPaused}
-                  onChange={(event) => setPublishPaused(event.target.checked)}
+                  onChange={(event) => handlePublishPausedChange(event.target.checked)}
                 />
                 Publish paused (nothing spends until you click Activate)
               </label>

@@ -49,6 +49,7 @@ import {
   type TargetLocation,
   type TestEvaluation,
 } from '../lib/api'
+import { clearPublishPaused, getPublishPaused, setPublishPaused } from '../lib/publishPaused'
 import { requiresDestinationUrl } from '../lib/urlValidation'
 import { AudienceForm } from './AudienceForm'
 import { NewCampaignFlow } from './NewCampaignFlow'
@@ -191,7 +192,7 @@ export function CampaignsSection({
   // "Publish paused" checkbox on the Approve & Publish step, default
   // checked (a campaign not yet in this map defaults to true below) —
   // publishing then creates everything PAUSED on Meta instead of ACTIVE.
-  const [publishPaused, setPublishPaused] = useState<Record<string, boolean>>({})
+  const [publishPaused, setPublishPausedState] = useState<Record<string, boolean>>({})
   const [pausingId, setPausingId] = useState<string | null>(null)
   const [pauseErrors, setPauseErrors] = useState<Record<string, string>>({})
   const [activatingId, setActivatingId] = useState<string | null>(null)
@@ -646,8 +647,13 @@ export function CampaignsSection({
       }
       // publishPaused defaults to checked (true) — a campaign not yet in
       // the map hasn't had its checkbox touched.
-      const paused = publishPaused[campaignId] ?? true
+      const paused = publishPaused[campaignId] ?? getPublishPaused(campaignId)
       await publishCampaign(businessId, campaignId, { paused })
+      clearPublishPaused(campaignId)
+      setPublishPausedState((prev) => {
+        const { [campaignId]: _published, ...rest } = prev
+        return rest
+      })
       await refresh()
     } catch (err) {
       setApproveErrors((prev) => ({
@@ -1827,13 +1833,14 @@ export function CampaignsSection({
                       <input
                         id={`publish-paused-${campaign.id}`}
                         type="checkbox"
-                        checked={publishPaused[campaign.id] ?? true}
-                        onChange={(event) =>
-                          setPublishPaused((prev) => ({
+                        checked={publishPaused[campaign.id] ?? getPublishPaused(campaign.id)}
+                        onChange={(event) => {
+                          setPublishPausedState((prev) => ({
                             ...prev,
                             [campaign.id]: event.target.checked,
                           }))
-                        }
+                          setPublishPaused(campaign.id, event.target.checked)
+                        }}
                       />
                       Publish paused (nothing spends until you click Activate)
                     </label>

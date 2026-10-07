@@ -369,6 +369,7 @@ const ALL_OPTIONS: api.OptionsResponse = {
 }
 
 beforeEach(() => {
+  window.sessionStorage.clear()
   vi.resetAllMocks()
   mockedApi.getOptions.mockResolvedValue(ALL_OPTIONS)
   mockedApi.getBusiness.mockResolvedValue({
@@ -3430,6 +3431,38 @@ describe('CampaignsSection', () => {
     ).toBeInTheDocument()
     expect(screen.getByText(/confidence 91%/)).toBeInTheDocument()
     expect(screen.getByText(/Suggested budget:/)).toBeInTheDocument()
+  })
+
+  it('remembers the Publish paused choice for the ad page, and starts from a stored one', async () => {
+    mockedApi.listCampaigns.mockResolvedValue([
+      {
+        id: 'camp-1',
+        name: null,
+        objective: 'SALES',
+        status: 'PENDING_APPROVAL',
+        productId: null,
+        audienceId: null,
+        metaCampaignId: null,
+        eventVenueKey: null,
+        startDate: null,
+        endDate: null,
+        pausedReason: null,
+        dailySpendFlag: null,
+        needsDestinationUrl: false,
+      },
+    ])
+    const user = userEvent.setup()
+
+    const first = renderCampaigns(<CampaignsSection businessId="biz-1" />)
+    const checkbox = await screen.findByLabelText(/Publish paused/)
+    expect(checkbox).toBeChecked()
+    await user.click(checkbox)
+    expect(window.sessionStorage.getItem('publishPaused:camp-1')).toBe('false')
+
+    // Back on the dashboard later (or after the ad page): the choice is still there.
+    first.unmount()
+    renderCampaigns(<CampaignsSection businessId="biz-1" />)
+    expect(await screen.findByLabelText(/Publish paused/)).not.toBeChecked()
   })
 
   it('shows a proposed cost cap raise with its number, waiting for approval', async () => {
