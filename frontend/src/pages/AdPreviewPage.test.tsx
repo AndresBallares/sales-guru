@@ -282,7 +282,89 @@ describe('AdPreviewPage', () => {
     await user.click(await screen.findByRole('button', { name: 'Approve & Publish' }))
 
     await waitFor(() => expect(mockedApi.approveCampaign).toHaveBeenCalledWith('biz-1', 'camp-1'))
-    expect(mockedApi.publishCampaign).toHaveBeenCalledWith('biz-1', 'camp-1')
+    expect(mockedApi.publishCampaign).toHaveBeenCalledWith('biz-1', 'camp-1', {
+      paused: true,
+    })
+  })
+
+  it('publishes paused by default, with a checkbox that says so', async () => {
+    mockedApi.approveCampaign.mockResolvedValue(makeCampaign({ status: 'APPROVED' }))
+    mockedApi.publishCampaign.mockResolvedValue(makeCampaign({ status: 'PAUSED' }))
+    const user = userEvent.setup()
+
+    renderPage()
+    const checkbox = await screen.findByLabelText(/Publish paused/)
+    expect(checkbox).toBeChecked()
+
+    await user.click(screen.getByRole('button', { name: 'Approve & Publish' }))
+
+    await waitFor(() =>
+      expect(mockedApi.publishCampaign).toHaveBeenCalledWith('biz-1', 'camp-1', {
+        paused: true,
+      }),
+    )
+  })
+
+  it('publishes live only when Publish paused is unchecked', async () => {
+    mockedApi.approveCampaign.mockResolvedValue(makeCampaign({ status: 'APPROVED' }))
+    mockedApi.publishCampaign.mockResolvedValue(makeCampaign({ status: 'LIVE' }))
+    const user = userEvent.setup()
+
+    renderPage()
+    await user.click(await screen.findByLabelText(/Publish paused/))
+    await user.click(screen.getByRole('button', { name: 'Approve & Publish' }))
+
+    await waitFor(() =>
+      expect(mockedApi.publishCampaign).toHaveBeenCalledWith('biz-1', 'camp-1', {
+        paused: false,
+      }),
+    )
+  })
+
+  describe('a creative test with several selected ads', () => {
+    const three = [
+      makeCreative({ id: 'creative-1', headline: 'Angle one headline' }),
+      makeCreative({ id: 'creative-2', headline: 'Angle two headline' }),
+      makeCreative({ id: 'creative-3', headline: 'Angle three headline' }),
+      makeCreative({ id: 'creative-4', headline: 'Not in the test', status: 'GENERATED' }),
+    ]
+
+    it('previews every selected ad and none of the unselected ones', async () => {
+      mockedApi.listCreatives.mockResolvedValue(three)
+
+      renderPage()
+
+      expect(await screen.findByText('Angle one headline')).toBeInTheDocument()
+      expect(screen.getByText('Angle two headline')).toBeInTheDocument()
+      expect(screen.getByText('Angle three headline')).toBeInTheDocument()
+      expect(screen.queryByText('Not in the test')).not.toBeInTheDocument()
+      expect(screen.getByText('3 ads in this test')).toBeInTheDocument()
+    })
+
+    it('has no single-image picker, since each ad keeps its own image', async () => {
+      mockedApi.listCreatives.mockResolvedValue(three)
+
+      renderPage()
+      await screen.findByText('Angle one headline')
+
+      expect(screen.queryByRole('button', { name: /Upload Image|Change image/ })).not.toBeInTheDocument()
+    })
+
+    it('approves and publishes the whole test paused', async () => {
+      mockedApi.listCreatives.mockResolvedValue(three)
+      mockedApi.approveCampaign.mockResolvedValue(makeCampaign({ status: 'APPROVED' }))
+      mockedApi.publishCampaign.mockResolvedValue(makeCampaign({ status: 'PAUSED' }))
+      const user = userEvent.setup()
+
+      renderPage()
+      await user.click(await screen.findByRole('button', { name: 'Approve & Publish' }))
+
+      await waitFor(() =>
+        expect(mockedApi.publishCampaign).toHaveBeenCalledWith('biz-1', 'camp-1', {
+          paused: true,
+        }),
+      )
+    })
   })
 
   it('retries publishing a failed campaign without re-approving', async () => {
@@ -293,7 +375,9 @@ describe('AdPreviewPage', () => {
     renderPage()
     await user.click(await screen.findByRole('button', { name: 'Retry publish' }))
 
-    await waitFor(() => expect(mockedApi.publishCampaign).toHaveBeenCalledWith('biz-1', 'camp-1'))
+    await waitFor(() =>
+      expect(mockedApi.publishCampaign).toHaveBeenCalledWith('biz-1', 'camp-1', { paused: true }),
+    )
     expect(mockedApi.approveCampaign).not.toHaveBeenCalled()
   })
 

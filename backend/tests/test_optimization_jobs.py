@@ -26,16 +26,21 @@ already established for test_metric.py / test_publish.py.
 import struct
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime, timedelta
+from typing import Any, cast
 from unittest.mock import AsyncMock
 
 import pytest
 from app.api import creative as creative_module
 from app.api import meta as meta_api_module
 from app.api import strategy as strategy_module
+from app.core.meta_connection import get_meta_connection
 from app.schemas.creative import GeneratedCreativeVariant
 from app.schemas.optimization import GeneratedRecommendation
 from app.schemas.strategy import (
+    AudienceConstraints,
     BudgetRecommendation,
+    CreativePersona,
+    CreativeTestPlanContent,
     DataDrivenStrategyContent,
     GeneratedTestPlanFields,
     NormalizedMetrics,
@@ -50,8 +55,10 @@ from app.services import optimizer as optimizer_module
 from app.services import strategist as strategist_module
 from app.services.benchmarks import JEWELRY_META_BENCHMARKS
 from app.services.meta import CampaignInsights, MetaConnectionError
+from app.services.retargeting import RetargetingNotBuiltError
 from fastapi.testclient import TestClient
 from prisma import Prisma
+from prisma.models import Campaign
 
 
 def _valid_jpeg(width: int = 800, height: int = 800) -> bytes:
@@ -142,7 +149,7 @@ _FAKE_TEST_PLAN = _fake_test_plan()
 _FAKE_VARIANTS = [
     GeneratedCreativeVariant(
         headline=f"Headline {letter}",
-        body_text=f"Primary text {letter}",
+        body_text=f"Primary text {letter}.",
         description=f"Description {letter}",
         cta="SHOP_NOW",
         creative_angle=f"Angle {letter}",
@@ -1907,7 +1914,7 @@ async def test_generate_and_store_test_evaluation_insufficient_with_lopsided_var
     evaluate.assert_not_awaited()
 
 
-async def _fetch_campaign(campaign_id: str) -> object:
+async def _fetch_campaign(campaign_id: str) -> Campaign:
     """Fetch a real Campaign row by id via a fresh connection."""
     seeder = Prisma()
     await seeder.connect()
@@ -1915,3 +1922,1347 @@ async def _fetch_campaign(campaign_id: str) -> object:
     await seeder.disconnect()
     assert campaign is not None
     return campaign
+
+
+# --- _check_add_to_cart_delivery (CREATIVE_TEST_PLAN cost-cap signal) --------
+
+
+async def _make_creative_plan_campaign(
+    client: TestClient,
+    *,
+    optimization_event: str,
+    daily_budget: float = 50.0,
+    target_cost_per_add_to_cart: float | None = None,
+) -> str:
+    """A LIVE campaign whose stored strategy is a CREATIVE_TEST_PLAN."""
+    _, campaign_id = _live_campaign(client)
+    benchmark_context = strategist_module._build_benchmark_context()
+    plan = CreativeTestPlanContent(
+        objective="SALES",
+        audience_constraints=AudienceConstraints(),
+        creative_persona=CreativePersona(name="Gift buyers", description="Women"),
+        hypotheses=[strategist_module._build_creative_hypothesis("A wins.")],
+        offer="Offer",
+        positioning="Positioning",
+        creative_angles=["a", "b", "c"],
+        copy_strategy="Copy",
+        daily_budget=daily_budget,
+        duration_days=10,
+        total_budget=daily_budget * 10,
+        optimization_event=cast(Any, optimization_event),
+        target_cost_per_add_to_cart=target_cost_per_add_to_cart,
+        success_criteria=strategist_module._build_creative_success_criteria(
+            benchmark_context, None, target_cost_per_add_to_cart
+        ),
+        baseline_metrics=NormalizedMetrics(),
+        benchmark_context=benchmark_context,
+    )
+    seeder = Prisma()
+    await seeder.connect()
+    try:
+        await seeder.strategy.update(
+            where={"campaignId": campaign_id},
+            data={"content": plan.model_dump_json(by_alias=True)},
+        )
+    finally:
+        await seeder.disconnect()
+    return campaign_id
+
+
+async def _delivery_signal(campaign_id: str) -> str | None:
+    seeder = Prisma()
+    await seeder.connect()
+    try:
+        campaign = await seeder.campaign.find_unique(where={"id": campaign_id})
+        assert campaign is not None
+        return campaign.deliverySignal
+    finally:
+        await seeder.disconnect()
+
+
+async def _run_delivery_check(client: TestClient, campaign_id: str) -> None:
+    seeder = Prisma()
+    await seeder.connect()
+    try:
+        campaign = await seeder.campaign.find_unique(where={"id": campaign_id})
+        assert campaign is not None
+    finally:
+        await seeder.disconnect()
+    # Via _run: the check uses the app's own db client, which is bound to the
+    # TestClient's event loop (see this module's docstring).
+    _run(client, optimization_jobs._check_add_to_cart_delivery, campaign)
+
+
+@pytest.mark.asyncio
+async def test_delivery_check_flags_an_add_to_cart_ad_set_that_underspends(
+    client: TestClient, mock_services: dict[str, AsyncMock]
+) -> None:
+    campaign_id = await _make_creative_plan_campaign(
+        client, optimization_event="ADD_TO_CART"
+    )
+    now = datetime.now(UTC)
+    await _seed_metric(
+        campaign_id, fetched_at=now - timedelta(days=3, hours=1), spend=0.0
+    )
+    await _seed_metric(campaign_id, fetched_at=now, spend=60.0)  # < 50% of $150
+
+    await _run_delivery_check(client, campaign_id)
+
+    assert await _delivery_signal(campaign_id) == "COST_CAP_MAY_BE_TOO_TIGHT"
+
+
+@pytest.mark.asyncio
+async def test_delivery_check_stays_clear_when_spend_is_healthy(
+    client: TestClient, mock_services: dict[str, AsyncMock]
+) -> None:
+    campaign_id = await _make_creative_plan_campaign(
+        client, optimization_event="ADD_TO_CART"
+    )
+    now = datetime.now(UTC)
+    await _seed_metric(
+        campaign_id, fetched_at=now - timedelta(days=3, hours=1), spend=0.0
+    )
+    await _seed_metric(campaign_id, fetched_at=now, spend=120.0)
+
+    await _run_delivery_check(client, campaign_id)
+
+    assert await _delivery_signal(campaign_id) is None
+
+
+@pytest.mark.asyncio
+async def test_delivery_check_clears_a_stale_signal_once_spend_recovers(
+    client: TestClient, mock_services: dict[str, AsyncMock]
+) -> None:
+    campaign_id = await _make_creative_plan_campaign(
+        client, optimization_event="ADD_TO_CART"
+    )
+    seeder = Prisma()
+    await seeder.connect()
+    await seeder.campaign.update(
+        where={"id": campaign_id}, data={"deliverySignal": "COST_CAP_MAY_BE_TOO_TIGHT"}
+    )
+    await seeder.disconnect()
+    now = datetime.now(UTC)
+    await _seed_metric(
+        campaign_id, fetched_at=now - timedelta(days=3, hours=1), spend=0.0
+    )
+    await _seed_metric(campaign_id, fetched_at=now, spend=130.0)
+
+    await _run_delivery_check(client, campaign_id)
+
+    assert await _delivery_signal(campaign_id) is None
+
+
+@pytest.mark.asyncio
+async def test_delivery_check_waits_for_three_days_of_history(
+    client: TestClient, mock_services: dict[str, AsyncMock]
+) -> None:
+    """With no snapshot three days old, there is nothing to judge yet."""
+    campaign_id = await _make_creative_plan_campaign(
+        client, optimization_event="ADD_TO_CART"
+    )
+    now = datetime.now(UTC)
+    await _seed_metric(campaign_id, fetched_at=now - timedelta(days=1), spend=0.0)
+    await _seed_metric(campaign_id, fetched_at=now, spend=5.0)
+
+    await _run_delivery_check(client, campaign_id)
+
+    assert await _delivery_signal(campaign_id) is None
+
+
+@pytest.mark.asyncio
+async def test_delivery_check_ignores_a_purchase_optimized_plan(
+    client: TestClient, mock_services: dict[str, AsyncMock]
+) -> None:
+    campaign_id = await _make_creative_plan_campaign(
+        client, optimization_event="PURCHASE"
+    )
+    now = datetime.now(UTC)
+    await _seed_metric(
+        campaign_id, fetched_at=now - timedelta(days=3, hours=1), spend=0.0
+    )
+    await _seed_metric(campaign_id, fetched_at=now, spend=1.0)
+
+    await _run_delivery_check(client, campaign_id)
+
+    assert await _delivery_signal(campaign_id) is None
+
+
+@pytest.mark.asyncio
+async def test_delivery_check_ignores_other_plan_types(
+    client: TestClient, mock_services: dict[str, AsyncMock]
+) -> None:
+    _, campaign_id = _live_campaign(client)  # DATA_DRIVEN_STRATEGY
+    now = datetime.now(UTC)
+    await _seed_metric(
+        campaign_id, fetched_at=now - timedelta(days=3, hours=1), spend=0.0
+    )
+    await _seed_metric(campaign_id, fetched_at=now, spend=1.0)
+
+    await _run_delivery_check(client, campaign_id)
+
+    assert await _delivery_signal(campaign_id) is None
+
+
+# --- Spend circuit breaker: correct for every plan type (creative-first Stage 3) ---
+
+
+def test_planned_total_budget_sums_the_daily_budget_over_the_ad_sets() -> None:
+    from app.schemas.strategy import planned_total_budget
+
+    plan = _fake_test_plan()  # $50/day for 10 days
+
+    assert planned_total_budget(plan, ad_set_count=2) == 1000.0
+    assert planned_total_budget(plan, ad_set_count=1) == 500.0
+    # A plan always has at least one ad set, even before any are recorded.
+    assert planned_total_budget(plan, ad_set_count=0) == 500.0
+
+
+@pytest.mark.asyncio
+async def test_circuit_breaker_pauses_a_creative_test_that_overspent_its_one_ad_set(
+    client: TestClient, mock_services: dict[str, AsyncMock]
+) -> None:
+    """One ad set at $50/day for 10 days is a $500 ceiling (not the $1,000 a
+    two-variant TEST_PLAN gets). $600 spent pauses the campaign."""
+    campaign_id = await _make_creative_plan_campaign(
+        client, optimization_event="PURCHASE", daily_budget=50.0
+    )
+    mock_services["insights"].return_value = CampaignInsights(
+        impressions=1000, clicks=100, spend=600.0, conversions=2
+    )
+
+    _run(client, optimization_jobs.collect_metrics_for_all_live_campaigns)
+
+    campaign = await _fetch_campaign(campaign_id)
+    assert campaign.status == "PAUSED"
+    assert "600.00" in str(campaign.pausedReason)
+    assert "500.00" in str(campaign.pausedReason)
+    mock_services["pause_ad_set"].assert_awaited()
+
+
+@pytest.mark.asyncio
+async def test_circuit_breaker_leaves_a_creative_test_under_its_ceiling_live(
+    client: TestClient, mock_services: dict[str, AsyncMock]
+) -> None:
+    campaign_id = await _make_creative_plan_campaign(
+        client, optimization_event="PURCHASE", daily_budget=50.0
+    )
+    mock_services["insights"].return_value = CampaignInsights(
+        impressions=1000, clicks=100, spend=450.0, conversions=2
+    )
+
+    _run(client, optimization_jobs.collect_metrics_for_all_live_campaigns)
+
+    campaign = await _fetch_campaign(campaign_id)
+    assert campaign.status == "LIVE"
+    mock_services["pause_ad_set"].assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_circuit_breaker_uses_the_real_ad_set_count_for_a_one_ad_set_test_plan(
+    client: TestClient,
+    mock_services: dict[str, AsyncMock],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A TEST_PLAN with only one real ad set (published before two-variant
+    publishing existed) can spend at most $50/day x 10, not the $1,000 its
+    stored total_budget assumes — so $600 now trips the breaker."""
+    _, campaign_id = _live_campaign(client)  # one ad set, DATA_DRIVEN
+    plan = _fake_test_plan()
+    seeder = Prisma()
+    await seeder.connect()
+    try:
+        await seeder.strategy.update(
+            where={"campaignId": campaign_id},
+            data={"content": plan.model_dump_json(by_alias=True)},
+        )
+    finally:
+        await seeder.disconnect()
+    # Tripping the breaker auto-evaluates a TEST_PLAN; stub the LLM call.
+    monkeypatch.setattr(
+        optimizer_module,
+        "evaluate_test_plan",
+        AsyncMock(return_value=_VALID_TEST_EVALUATION),
+    )
+    mock_services["insights"].return_value = CampaignInsights(
+        impressions=1000, clicks=100, spend=600.0, conversions=2
+    )
+
+    _run(client, optimization_jobs.collect_metrics_for_all_live_campaigns)
+
+    campaign = await _fetch_campaign(campaign_id)
+    assert campaign.status == "PAUSED"
+    assert "500.00" in str(campaign.pausedReason)
+
+
+# --- Ad-level metrics (creative-first Stage 3) -------------------------------
+
+
+async def _creative_plan_campaign_with_ads(
+    client: TestClient, ad_count: int = 3
+) -> tuple[str, list[str]]:
+    """A LIVE creative-plan campaign with `ad_count` local Ads (each with a
+    Meta ad id) under its one ad set. Returns (campaign_id, ad ids)."""
+    campaign_id = await _make_creative_plan_campaign(
+        client, optimization_event="PURCHASE", daily_budget=50.0
+    )
+    seeder = Prisma()
+    await seeder.connect()
+    try:
+        ad_set = await seeder.adset.find_first(where={"campaignId": campaign_id})
+        assert ad_set is not None
+        existing = await seeder.ad.find_many(where={"adSetId": ad_set.id})
+        for ad in existing:
+            await seeder.ad.delete(where={"id": ad.id})
+        ad_ids = []
+        for n in range(ad_count):
+            ad = await seeder.ad.create(
+                data={
+                    "adSetId": ad_set.id,
+                    "name": f"Ad {n}",
+                    "status": "LIVE",
+                    "metaAdId": f"meta_ad_{n}",
+                }
+            )
+            ad_ids.append(ad.id)
+    finally:
+        await seeder.disconnect()
+    return campaign_id, ad_ids
+
+
+async def _metric_rows(campaign_id: str) -> list[Any]:
+    seeder = Prisma()
+    await seeder.connect()
+    try:
+        return list(await seeder.metric.find_many(where={"campaignId": campaign_id}))
+    finally:
+        await seeder.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_collection_stores_one_ad_level_metric_per_ad_for_a_creative_test(
+    client: TestClient,
+    mock_services: dict[str, AsyncMock],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    campaign_id, ad_ids = await _creative_plan_campaign_with_ads(client)
+    mock_services["insights"].return_value = CampaignInsights(
+        impressions=900, clicks=30, spend=90.0, conversions=3
+    )
+    ad_insights = AsyncMock(
+        side_effect=[
+            CampaignInsights(
+                impressions=300,
+                clicks=10,
+                spend=30.0,
+                conversions=1,
+                add_to_cart=3,
+                cost_per_add_to_cart=10.0,
+            )
+            for _ in range(3)
+        ]
+    )
+    monkeypatch.setattr(optimization_jobs, "fetch_ad_insights", ad_insights)
+
+    _run(client, optimization_jobs.collect_metrics_for_all_live_campaigns)
+
+    rows = await _metric_rows(campaign_id)
+    ad_rows = [r for r in rows if r.adId is not None]
+    campaign_rows = [r for r in rows if r.adId is None]
+    assert sorted(r.adId for r in ad_rows) == sorted(ad_ids)
+    assert len(campaign_rows) == 1
+    assert ad_rows[0].costPerAddToCart == 10.0
+    assert ad_rows[0].spend == 30.0
+    assert ad_insights.await_count == 3
+
+
+@pytest.mark.asyncio
+async def test_ad_level_rows_never_count_toward_the_campaigns_total_spend(
+    client: TestClient,
+    mock_services: dict[str, AsyncMock],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The campaign-level row ($450) is under the $500 ceiling; the ad rows
+    ($300 each) must not be added on top of it (that would be $1,350)."""
+    campaign_id, _ = await _creative_plan_campaign_with_ads(client)
+    mock_services["insights"].return_value = CampaignInsights(
+        impressions=900, clicks=30, spend=450.0, conversions=3
+    )
+    monkeypatch.setattr(
+        optimization_jobs,
+        "fetch_ad_insights",
+        AsyncMock(
+            return_value=CampaignInsights(
+                impressions=300, clicks=10, spend=300.0, conversions=1
+            )
+        ),
+    )
+
+    _run(client, optimization_jobs.collect_metrics_for_all_live_campaigns)
+
+    campaign = await _fetch_campaign(campaign_id)
+    assert campaign.status == "LIVE"
+    mock_services["pause_ad_set"].assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_one_ad_failing_does_not_block_the_others(
+    client: TestClient,
+    mock_services: dict[str, AsyncMock],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    campaign_id, _ = await _creative_plan_campaign_with_ads(client)
+    monkeypatch.setattr(
+        optimization_jobs,
+        "fetch_ad_insights",
+        AsyncMock(
+            side_effect=[
+                MetaConnectionError("boom"),
+                CampaignInsights(impressions=1, clicks=1, spend=1.0, conversions=0),
+                CampaignInsights(impressions=1, clicks=1, spend=1.0, conversions=0),
+            ]
+        ),
+    )
+
+    _run(client, optimization_jobs.collect_metrics_for_all_live_campaigns)
+
+    rows = await _metric_rows(campaign_id)
+    assert len([r for r in rows if r.adId is not None]) == 2
+
+
+@pytest.mark.asyncio
+async def test_other_plan_types_do_not_fetch_ad_level_metrics(
+    client: TestClient,
+    mock_services: dict[str, AsyncMock],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ad_insights = AsyncMock()
+    monkeypatch.setattr(optimization_jobs, "fetch_ad_insights", ad_insights)
+    _, campaign_id = _live_campaign(client)  # DATA_DRIVEN_STRATEGY
+
+    _run(client, optimization_jobs.collect_metrics_for_all_live_campaigns)
+
+    ad_insights.assert_not_awaited()
+    rows = await _metric_rows(campaign_id)
+    assert all(r.adId is None for r in rows)
+
+
+def test_the_metrics_api_lists_only_campaign_level_rows(client: TestClient) -> None:
+    """Ad-level rows are internal; the dashboard's results list stays as it was."""
+    business_id, campaign_id = _live_campaign(client)
+    seeder_rows = _run(client, _seed_ad_level_row, campaign_id)
+    assert seeder_rows is None
+
+    response = client.get(f"/businesses/{business_id}/campaigns/{campaign_id}/metrics")
+
+    assert response.status_code == 200
+    assert all(m["adSetId"] is None for m in response.json())
+    assert len(response.json()) == 0
+
+
+async def _seed_ad_level_row(campaign_id: str) -> None:
+    """Insert one ad-level Metric (adId set) straight into the database."""
+    from app.core.db import db as app_db
+
+    ad_set = await app_db.adset.find_first(where={"campaignId": campaign_id})
+    assert ad_set is not None
+    ad = await app_db.ad.find_first(where={"adSetId": ad_set.id})
+    assert ad is not None
+    await app_db.metric.create(
+        data={
+            "campaignId": campaign_id,
+            "adSetId": ad_set.id,
+            "adId": ad.id,
+            "impressions": 1,
+            "clicks": 1,
+            "spend": 1.0,
+            "conversions": 0,
+        }
+    )
+
+
+# --- PAUSE_AD targets a specific ad (creative-first Stage 3) -----------------
+
+
+@pytest.mark.asyncio
+async def test_pause_recommendation_records_the_ad_the_model_chose(
+    client: TestClient,
+    mock_services: dict[str, AsyncMock],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """With several ads in the one ad set, the recommendation targets the ad
+    the agent named, not just the first one."""
+    campaign_id, ad_ids = await _creative_plan_campaign_with_ads(client)
+    now = datetime.now(UTC)
+    await _seed_metric(campaign_id, fetched_at=now - timedelta(hours=25), spend=10.0)
+    await _seed_metric(campaign_id, fetched_at=now, spend=25.0)
+    chosen = ad_ids[2]
+    generate = AsyncMock(
+        return_value=_fake_result(
+            _FAKE_RECOMMENDATION.model_copy(
+                update={
+                    "action_type": "PAUSE_AD",
+                    "suggested_budget": None,
+                    "target_ad_id": chosen,
+                }
+            )
+        )
+    )
+    monkeypatch.setattr(optimizer_module, "generate_recommendation", generate)
+    campaign = await _fetch_campaign(campaign_id)
+
+    result = _run(client, optimization_jobs.generate_and_store_recommendation, campaign)
+
+    assert result is not None
+    assert result.targetAdId == chosen
+    assert generate.await_args is not None
+    passed_ads = generate.await_args.kwargs["ads"]
+    assert sorted(a.ad_id for a in passed_ads) == sorted(ad_ids)
+
+
+@pytest.mark.asyncio
+async def test_applying_a_pause_pauses_the_named_ad_on_meta(
+    client: TestClient,
+    mock_services: dict[str, AsyncMock],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pause = AsyncMock(return_value=None)
+    monkeypatch.setattr(optimization_jobs, "pause_meta_ad", pause)
+    campaign_id, ad_ids = await _creative_plan_campaign_with_ads(client)
+    seeder = Prisma()
+    await seeder.connect()
+    try:
+        rec = await seeder.optimizationrecommendation.create(
+            data={
+                "campaignId": campaign_id,
+                "actionType": "PAUSE_AD",
+                "targetAdId": ad_ids[1],
+                "reasoning": "weakest ad",
+                "confidence": 0.9,
+                "risk": "LOW",
+                "requiresApproval": True,
+            }
+        )
+    finally:
+        await seeder.disconnect()
+
+    _run(client, optimization_jobs.apply_recommendation, rec)
+
+    pause.assert_awaited_once()
+    assert pause.await_args is not None
+    assert pause.await_args.kwargs["meta_ad_id"] == "meta_ad_1"
+    seeder = Prisma()
+    await seeder.connect()
+    try:
+        ads = {
+            a.id: a.status
+            for a in await seeder.ad.find_many(where={"id": {"in": ad_ids}})
+        }
+    finally:
+        await seeder.disconnect()
+    assert ads[ad_ids[1]] == "PAUSED"
+    assert ads[ad_ids[0]] == "LIVE"
+    assert ads[ad_ids[2]] == "LIVE"
+
+
+@pytest.mark.asyncio
+async def test_applying_a_pause_refuses_an_ad_from_another_campaign(
+    client: TestClient,
+    mock_services: dict[str, AsyncMock],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pause = AsyncMock(return_value=None)
+    monkeypatch.setattr(optimization_jobs, "pause_meta_ad", pause)
+    campaign_id, _ = await _creative_plan_campaign_with_ads(client)
+    other_client_campaign, other_ad_ids = await _creative_plan_campaign_with_ads(
+        client, ad_count=1
+    )
+    assert other_client_campaign != campaign_id
+    seeder = Prisma()
+    await seeder.connect()
+    try:
+        rec = await seeder.optimizationrecommendation.create(
+            data={
+                "campaignId": campaign_id,
+                "actionType": "PAUSE_AD",
+                "targetAdId": other_ad_ids[0],
+                "reasoning": "wrong ad",
+                "confidence": 0.9,
+                "risk": "LOW",
+                "requiresApproval": True,
+            }
+        )
+    finally:
+        await seeder.disconnect()
+
+    with pytest.raises(ValueError, match="another campaign"):
+        _run(client, optimization_jobs.apply_recommendation, rec)
+
+    pause.assert_not_awaited()
+
+
+# --- Creative test rules, enforced (creative-first Stage 4) ------------------
+
+
+async def _atc_test_with_ads(
+    client: TestClient, ad_count: int = 4
+) -> tuple[str, list[str]]:
+    """An ADD_TO_CART creative test ($20 target) with `ad_count` LIVE ads."""
+    campaign_id = await _make_creative_plan_campaign(
+        client,
+        optimization_event="ADD_TO_CART",
+        daily_budget=75.0,
+        target_cost_per_add_to_cart=20.0,
+    )
+    seeder = Prisma()
+    await seeder.connect()
+    try:
+        ad_set = await seeder.adset.find_first(where={"campaignId": campaign_id})
+        assert ad_set is not None
+        for ad in await seeder.ad.find_many(where={"adSetId": ad_set.id}):
+            await seeder.ad.delete(where={"id": ad.id})
+        ad_ids = []
+        for n in range(ad_count):
+            ad = await seeder.ad.create(
+                data={
+                    "adSetId": ad_set.id,
+                    "name": f"Ad {n}",
+                    "status": "LIVE",
+                    "metaAdId": f"meta_ad_{n}",
+                }
+            )
+            ad_ids.append(ad.id)
+    finally:
+        await seeder.disconnect()
+    return campaign_id, ad_ids
+
+
+async def _seed_ad_metric(
+    campaign_id: str,
+    ad_id: str,
+    *,
+    spend: float,
+    add_to_cart: int | None = None,
+    hours_ago: float = 0.0,
+) -> None:
+    seeder = Prisma()
+    await seeder.connect()
+    try:
+        ad = await seeder.ad.find_unique(where={"id": ad_id})
+        assert ad is not None
+        await seeder.metric.create(
+            data={
+                "campaignId": campaign_id,
+                "adSetId": ad.adSetId,
+                "adId": ad_id,
+                "impressions": 1000,
+                "clicks": 50,
+                "spend": spend,
+                "conversions": 0,
+                "addToCart": add_to_cart,
+                "costPerAddToCart": (spend / add_to_cart) if add_to_cart else None,
+                "fetchedAt": datetime.now(UTC) - timedelta(hours=hours_ago),
+            }
+        )
+    finally:
+        await seeder.disconnect()
+
+
+async def _age_the_test(
+    campaign_id: str, ad_ids: list[str], hours: float = 72.0
+) -> None:
+    """Make the first ad-level snapshot `hours` old, so the time threshold is met."""
+    for ad_id in ad_ids:
+        await _seed_ad_metric(campaign_id, ad_id, spend=0.0, hours_ago=hours)
+
+
+async def _run_rules(client: TestClient, campaign_id: str) -> None:
+    seeder = Prisma()
+    await seeder.connect()
+    try:
+        campaign = await seeder.campaign.find_unique(where={"id": campaign_id})
+        assert campaign is not None
+    finally:
+        await seeder.disconnect()
+    connection = _run(client, get_meta_connection, campaign.businessId)
+    _run(client, optimization_jobs._enforce_creative_test_rules, campaign, connection)
+
+
+async def _recommendations(campaign_id: str) -> list[Any]:
+    seeder = Prisma()
+    await seeder.connect()
+    try:
+        return list(
+            await seeder.optimizationrecommendation.find_many(
+                where={"campaignId": campaign_id}, order={"createdAt": "asc"}
+            )
+        )
+    finally:
+        await seeder.disconnect()
+
+
+async def _ad_status(ad_id: str) -> str:
+    seeder = Prisma()
+    await seeder.connect()
+    try:
+        ad = await seeder.ad.find_unique(where={"id": ad_id})
+        assert ad is not None
+        return str(ad.status)
+    finally:
+        await seeder.disconnect()
+
+
+@pytest.fixture
+def pause_ad_mock(monkeypatch: pytest.MonkeyPatch) -> AsyncMock:
+    mock = AsyncMock(return_value=None)
+    monkeypatch.setattr(optimization_jobs, "pause_meta_ad", mock)
+    return mock
+
+
+@pytest.mark.asyncio
+async def test_a_no_result_ad_is_paused_automatically_and_logged_with_its_numbers(
+    client: TestClient,
+    mock_services: dict[str, AsyncMock],
+    pause_ad_mock: AsyncMock,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    campaign_id, ads = await _atc_test_with_ads(client)
+    await _age_the_test(campaign_id, ads)
+    await _seed_ad_metric(campaign_id, ads[0], spend=60.0)  # 3x target, no add-to-cart
+    for other in ads[1:]:
+        await _seed_ad_metric(campaign_id, other, spend=40.0, add_to_cart=4)
+
+    with caplog.at_level("INFO"):
+        await _run_rules(client, campaign_id)
+
+    pause_ad_mock.assert_awaited_once()
+    assert pause_ad_mock.await_args is not None
+    assert pause_ad_mock.await_args.kwargs["meta_ad_id"] == "meta_ad_0"
+    assert await _ad_status(ads[0]) == "PAUSED"
+    assert await _ad_status(ads[1]) == "LIVE"
+    recs = await _recommendations(campaign_id)
+    assert len(recs) == 1
+    rec = recs[0]
+    assert (rec.actionType, rec.status, rec.targetAdId) == (
+        "PAUSE_AD",
+        "APPLIED",
+        ads[0],
+    )
+    assert rec.requiresApproval is False
+    assert "$60.00" in rec.reasoning
+    assert "$20.00" in rec.reasoning
+    assert "Automatic pause" in rec.reasoning
+    assert "$60.00" in caplog.text  # the log line carries the numbers too
+
+
+@pytest.mark.asyncio
+async def test_nothing_happens_before_the_minimum_running_time(
+    client: TestClient,
+    mock_services: dict[str, AsyncMock],
+    pause_ad_mock: AsyncMock,
+) -> None:
+    campaign_id, ads = await _atc_test_with_ads(client)
+    await _age_the_test(campaign_id, ads, hours=30.0)
+    await _seed_ad_metric(campaign_id, ads[0], spend=500.0)
+
+    await _run_rules(client, campaign_id)
+
+    pause_ad_mock.assert_not_awaited()
+    assert await _recommendations(campaign_id) == []
+
+
+@pytest.mark.asyncio
+async def test_nothing_happens_without_ad_level_data(
+    client: TestClient,
+    mock_services: dict[str, AsyncMock],
+    pause_ad_mock: AsyncMock,
+) -> None:
+    campaign_id, _ = await _atc_test_with_ads(client)
+
+    await _run_rules(client, campaign_id)
+
+    pause_ad_mock.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_only_one_pause_is_automatic_the_rest_wait_for_approval(
+    client: TestClient,
+    mock_services: dict[str, AsyncMock],
+    pause_ad_mock: AsyncMock,
+) -> None:
+    """Two ads qualify in the same cycle: the worst is paused, the other is a
+    proposal. Anything beyond pausing one ad needs the user's approval."""
+    campaign_id, ads = await _atc_test_with_ads(client)
+    await _age_the_test(campaign_id, ads)
+    await _seed_ad_metric(campaign_id, ads[0], spend=200.0)
+    await _seed_ad_metric(campaign_id, ads[1], spend=90.0)
+    await _seed_ad_metric(campaign_id, ads[2], spend=40.0, add_to_cart=4)
+    await _seed_ad_metric(campaign_id, ads[3], spend=40.0, add_to_cart=4)
+
+    await _run_rules(client, campaign_id)
+
+    assert pause_ad_mock.await_count == 1
+    assert await _ad_status(ads[0]) == "PAUSED"
+    assert await _ad_status(ads[1]) == "LIVE"
+    recs = {r.targetAdId: r for r in await _recommendations(campaign_id)}
+    assert recs[ads[0]].status == "APPLIED"
+    assert recs[ads[0]].requiresApproval is False
+    assert recs[ads[1]].status == "PENDING"
+    assert recs[ads[1]].requiresApproval is True
+    assert "$90.00" in recs[ads[1]].reasoning
+
+
+@pytest.mark.asyncio
+async def test_after_the_one_automatic_pause_every_later_pause_is_a_proposal(
+    client: TestClient,
+    mock_services: dict[str, AsyncMock],
+    pause_ad_mock: AsyncMock,
+) -> None:
+    campaign_id, ads = await _atc_test_with_ads(client)
+    await _age_the_test(campaign_id, ads)
+    await _seed_ad_metric(campaign_id, ads[0], spend=200.0)
+    for other in ads[1:]:
+        await _seed_ad_metric(campaign_id, other, spend=40.0, add_to_cart=4)
+    await _run_rules(client, campaign_id)
+    assert pause_ad_mock.await_count == 1
+    # A second ad later runs up spend with nothing to show for it.
+    await _seed_ad_metric(campaign_id, ads[1], spend=130.0, add_to_cart=0)
+
+    await _run_rules(client, campaign_id)
+
+    assert pause_ad_mock.await_count == 1  # no further automatic pause
+    assert await _ad_status(ads[1]) == "LIVE"
+    pending = [r for r in await _recommendations(campaign_id) if r.status == "PENDING"]
+    assert [r.targetAdId for r in pending] == [ads[1]]
+
+
+@pytest.mark.asyncio
+async def test_running_the_rules_twice_does_not_duplicate_anything(
+    client: TestClient,
+    mock_services: dict[str, AsyncMock],
+    pause_ad_mock: AsyncMock,
+) -> None:
+    campaign_id, ads = await _atc_test_with_ads(client)
+    await _age_the_test(campaign_id, ads)
+    await _seed_ad_metric(campaign_id, ads[0], spend=200.0)
+    await _seed_ad_metric(campaign_id, ads[1], spend=90.0)
+    for other in ads[2:]:
+        await _seed_ad_metric(campaign_id, other, spend=40.0, add_to_cart=4)
+
+    await _run_rules(client, campaign_id)
+    await _run_rules(client, campaign_id)
+
+    assert pause_ad_mock.await_count == 1
+    assert len(await _recommendations(campaign_id)) == 2
+
+
+@pytest.mark.asyncio
+async def test_a_failed_meta_pause_leaves_the_ad_live_and_records_nothing(
+    client: TestClient,
+    mock_services: dict[str, AsyncMock],
+    pause_ad_mock: AsyncMock,
+) -> None:
+    pause_ad_mock.side_effect = MetaConnectionError("Meta is down")
+    campaign_id, ads = await _atc_test_with_ads(client)
+    await _age_the_test(campaign_id, ads)
+    await _seed_ad_metric(campaign_id, ads[0], spend=200.0)
+    for other in ads[1:]:
+        await _seed_ad_metric(campaign_id, other, spend=40.0, add_to_cart=4)
+
+    await _run_rules(client, campaign_id)
+
+    assert await _ad_status(ads[0]) == "LIVE"
+    assert await _recommendations(campaign_id) == []
+
+
+@pytest.mark.asyncio
+async def test_the_rules_never_touch_other_plan_types(
+    client: TestClient,
+    mock_services: dict[str, AsyncMock],
+    pause_ad_mock: AsyncMock,
+) -> None:
+    _, campaign_id = _live_campaign(client)  # DATA_DRIVEN_STRATEGY
+
+    await _run_rules(client, campaign_id)
+
+    pause_ad_mock.assert_not_awaited()
+    assert await _recommendations(campaign_id) == []
+
+
+@pytest.mark.asyncio
+async def test_the_collection_job_runs_the_rules(
+    client: TestClient,
+    mock_services: dict[str, AsyncMock],
+    pause_ad_mock: AsyncMock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """End to end through the hourly job: collect, then enforce."""
+    campaign_id, ads = await _atc_test_with_ads(client)
+    await _age_the_test(campaign_id, ads)
+    mock_services["insights"].return_value = CampaignInsights(
+        impressions=1000, clicks=100, spend=100.0, conversions=0
+    )
+    by_ad = {
+        "meta_ad_0": CampaignInsights(
+            impressions=1, clicks=1, spend=60.0, conversions=0
+        ),
+        "meta_ad_1": CampaignInsights(
+            impressions=1,
+            clicks=1,
+            spend=10.0,
+            conversions=0,
+            add_to_cart=4,
+            cost_per_add_to_cart=2.5,
+        ),
+        "meta_ad_2": CampaignInsights(
+            impressions=1,
+            clicks=1,
+            spend=10.0,
+            conversions=0,
+            add_to_cart=4,
+            cost_per_add_to_cart=2.5,
+        ),
+        "meta_ad_3": CampaignInsights(
+            impressions=1,
+            clicks=1,
+            spend=10.0,
+            conversions=0,
+            add_to_cart=4,
+            cost_per_add_to_cart=2.5,
+        ),
+    }
+    monkeypatch.setattr(
+        optimization_jobs,
+        "fetch_ad_insights",
+        AsyncMock(side_effect=lambda **kw: by_ad[kw["meta_ad_id"]]),
+    )
+
+    _run(client, optimization_jobs.collect_metrics_for_all_live_campaigns)
+
+    assert await _ad_status(ads[0]) == "PAUSED"
+    pause_ad_mock.assert_awaited_once()
+
+
+# --- "Cost cap may be too tight": a proposal, never an action ----------------
+
+
+@pytest.fixture
+def update_bid_mock(monkeypatch: pytest.MonkeyPatch) -> AsyncMock:
+    mock = AsyncMock(return_value=None)
+    monkeypatch.setattr(optimization_jobs, "update_meta_ad_set_bid", mock)
+    return mock
+
+
+async def _flag_tight_cost_cap(campaign_id: str) -> None:
+    """Set the delivery signal and seed 3 days of low campaign-level spend."""
+    seeder = Prisma()
+    await seeder.connect()
+    try:
+        await seeder.campaign.update(
+            where={"id": campaign_id},
+            data={"deliverySignal": "COST_CAP_MAY_BE_TOO_TIGHT"},
+        )
+    finally:
+        await seeder.disconnect()
+    now = datetime.now(UTC)
+    await _seed_metric(
+        campaign_id, fetched_at=now - timedelta(days=3, hours=1), spend=0.0
+    )
+    await _seed_metric(campaign_id, fetched_at=now, spend=60.0)
+
+
+@pytest.mark.asyncio
+async def test_a_tight_cost_cap_becomes_a_pending_proposal_with_the_numbers(
+    client: TestClient,
+    mock_services: dict[str, AsyncMock],
+    pause_ad_mock: AsyncMock,
+    update_bid_mock: AsyncMock,
+) -> None:
+    campaign_id, _ = await _atc_test_with_ads(client)
+    await _flag_tight_cost_cap(campaign_id)
+
+    await _run_rules(client, campaign_id)
+
+    recs = await _recommendations(campaign_id)
+    assert len(recs) == 1
+    rec = recs[0]
+    assert (rec.actionType, rec.status) == ("RAISE_COST_CAP", "PENDING")
+    assert rec.requiresApproval is True
+    assert rec.suggestedBid == pytest.approx(25.0)  # $20 cap + 25%
+    assert "$60.00" in rec.reasoning  # spent
+    assert "$225.00" in rec.reasoning  # expected: $75 x 3 days
+    assert "$20.00" in rec.reasoning  # current cap
+    update_bid_mock.assert_not_awaited()  # a proposal, not an action
+
+
+@pytest.mark.asyncio
+async def test_the_cost_cap_proposal_is_not_duplicated(
+    client: TestClient,
+    mock_services: dict[str, AsyncMock],
+    pause_ad_mock: AsyncMock,
+    update_bid_mock: AsyncMock,
+) -> None:
+    campaign_id, _ = await _atc_test_with_ads(client)
+    await _flag_tight_cost_cap(campaign_id)
+
+    await _run_rules(client, campaign_id)
+    await _run_rules(client, campaign_id)
+
+    assert len(await _recommendations(campaign_id)) == 1
+
+
+@pytest.mark.asyncio
+async def test_the_proposal_is_withdrawn_once_the_signal_clears(
+    client: TestClient,
+    mock_services: dict[str, AsyncMock],
+    pause_ad_mock: AsyncMock,
+    update_bid_mock: AsyncMock,
+) -> None:
+    campaign_id, _ = await _atc_test_with_ads(client)
+    await _flag_tight_cost_cap(campaign_id)
+    await _run_rules(client, campaign_id)
+    seeder = Prisma()
+    await seeder.connect()
+    try:
+        await seeder.campaign.update(
+            where={"id": campaign_id}, data={"deliverySignal": None}
+        )
+    finally:
+        await seeder.disconnect()
+
+    await _run_rules(client, campaign_id)
+
+    assert [r.status for r in await _recommendations(campaign_id)] == ["SUPERSEDED"]
+
+
+@pytest.mark.asyncio
+async def test_approving_the_proposal_raises_the_cap_on_meta(
+    client: TestClient,
+    mock_services: dict[str, AsyncMock],
+    pause_ad_mock: AsyncMock,
+    update_bid_mock: AsyncMock,
+) -> None:
+    campaign_id, _ = await _atc_test_with_ads(client)
+    await _flag_tight_cost_cap(campaign_id)
+    await _run_rules(client, campaign_id)
+    rec = (await _recommendations(campaign_id))[0]
+
+    applied = _run(client, optimization_jobs.apply_recommendation, rec)
+
+    update_bid_mock.assert_awaited_once()
+    assert update_bid_mock.await_args is not None
+    assert update_bid_mock.await_args.kwargs["bid_amount_cents"] == 2500
+    assert applied.status == "APPLIED"
+
+
+@pytest.mark.asyncio
+async def test_a_raise_is_capped_at_twice_the_plans_target(
+    client: TestClient,
+    mock_services: dict[str, AsyncMock],
+    pause_ad_mock: AsyncMock,
+    update_bid_mock: AsyncMock,
+) -> None:
+    campaign_id, _ = await _atc_test_with_ads(client)
+    seeder = Prisma()
+    await seeder.connect()
+    try:
+        rec = await seeder.optimizationrecommendation.create(
+            data={
+                "campaignId": campaign_id,
+                "actionType": "RAISE_COST_CAP",
+                "suggestedBid": 500.0,
+                "reasoning": "too tight",
+                "confidence": 1.0,
+                "risk": "MEDIUM",
+                "requiresApproval": True,
+            }
+        )
+    finally:
+        await seeder.disconnect()
+
+    _run(client, optimization_jobs.apply_recommendation, rec)
+
+    assert update_bid_mock.await_args is not None
+    assert update_bid_mock.await_args.kwargs["bid_amount_cents"] == 4000  # 2 x $20
+
+
+# --- Retargeting proposal and Pixel health (creative-first Stage 5) ---------
+
+_HEALTHY_PIXEL = {
+    "PageView": 1923,
+    "ViewContent": 1486,
+    "InitiateCheckout": 41,
+    "Purchase": 12,
+}
+
+
+@pytest.fixture
+def pixel_counts(monkeypatch: pytest.MonkeyPatch) -> AsyncMock:
+    mock = AsyncMock(return_value=dict(_HEALTHY_PIXEL))
+    monkeypatch.setattr(optimization_jobs, "fetch_pixel_event_counts", mock)
+    return mock
+
+
+async def _run_pixel_check(client: TestClient, campaign_id: str) -> None:
+    seeder = Prisma()
+    await seeder.connect()
+    try:
+        campaign = await seeder.campaign.find_unique(where={"id": campaign_id})
+        assert campaign is not None
+    finally:
+        await seeder.disconnect()
+    connection = _run(client, get_meta_connection, campaign.businessId)
+    _run(client, optimization_jobs._check_pixel_signals, campaign, connection)
+
+
+async def _pixel_warning(campaign_id: str) -> str | None:
+    campaign = await _fetch_campaign(campaign_id)
+    return campaign.pixelWarning
+
+
+async def _retargeting_recs(campaign_id: str) -> list[Any]:
+    return [
+        r
+        for r in await _recommendations(campaign_id)
+        if r.actionType == "START_RETARGETING"
+    ]
+
+
+@pytest.mark.asyncio
+async def test_enough_pixel_activity_creates_a_pending_retargeting_proposal(
+    client: TestClient,
+    mock_services: dict[str, AsyncMock],
+    pixel_counts: AsyncMock,
+) -> None:
+    campaign_id = await _make_creative_plan_campaign(
+        client, optimization_event="PURCHASE", daily_budget=75.0
+    )
+    seeder = Prisma()
+    await seeder.connect()
+    try:
+        # What the campaign actually spends: its ad set's daily budget.
+        await seeder.adset.update_many(
+            where={"campaignId": campaign_id}, data={"budget": 75.0}
+        )
+    finally:
+        await seeder.disconnect()
+
+    await _run_pixel_check(client, campaign_id)
+
+    recs = await _retargeting_recs(campaign_id)
+    assert len(recs) == 1
+    rec = recs[0]
+    assert (rec.status, rec.requiresApproval) == ("PENDING", True)
+    assert rec.suggestedBudget == pytest.approx(15.0)  # 20% of the $75 ad set
+    assert "1,923 PageView" in rec.reasoning
+    assert "1,486 ViewContent" in rec.reasoning
+    assert "events, not people" in rec.reasoning
+    assert "excluding purchasers" in rec.reasoning
+    # Nothing was created on Meta: there is no Meta call in this path at all.
+    mock_services["pause_ad_set"].assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_too_little_pixel_activity_proposes_nothing(
+    client: TestClient,
+    mock_services: AsyncMock,
+    pixel_counts: AsyncMock,
+) -> None:
+    campaign_id = await _make_creative_plan_campaign(
+        client, optimization_event="PURCHASE"
+    )
+    pixel_counts.return_value = {"PageView": 999, "ViewContent": 900}
+
+    await _run_pixel_check(client, campaign_id)
+
+    assert await _retargeting_recs(campaign_id) == []
+
+
+@pytest.mark.asyncio
+async def test_the_proposal_is_not_repeated_or_revived_after_a_decision(
+    client: TestClient,
+    mock_services: dict[str, AsyncMock],
+    pixel_counts: AsyncMock,
+) -> None:
+    campaign_id = await _make_creative_plan_campaign(
+        client, optimization_event="PURCHASE"
+    )
+    await _run_pixel_check(client, campaign_id)
+    await _run_pixel_check(client, campaign_id)
+    assert len(await _retargeting_recs(campaign_id)) == 1
+
+    rec = (await _retargeting_recs(campaign_id))[0]
+    seeder = Prisma()
+    await seeder.connect()
+    try:
+        await seeder.optimizationrecommendation.update(
+            where={"id": rec.id}, data={"status": "REJECTED"}
+        )
+    finally:
+        await seeder.disconnect()
+
+    await _run_pixel_check(client, campaign_id)
+
+    assert len(await _retargeting_recs(campaign_id)) == 1  # rejected stays rejected
+
+
+@pytest.mark.asyncio
+async def test_the_proposal_is_withdrawn_when_activity_drops_below_the_threshold(
+    client: TestClient,
+    mock_services: dict[str, AsyncMock],
+    pixel_counts: AsyncMock,
+) -> None:
+    campaign_id = await _make_creative_plan_campaign(
+        client, optimization_event="PURCHASE"
+    )
+    await _run_pixel_check(client, campaign_id)
+    pixel_counts.return_value = {"PageView": 10, "ViewContent": 5}
+
+    await _run_pixel_check(client, campaign_id)
+
+    assert [r.status for r in await _retargeting_recs(campaign_id)] == ["SUPERSEDED"]
+
+
+@pytest.mark.asyncio
+async def test_approving_the_proposal_cannot_create_anything_yet(
+    client: TestClient,
+    mock_services: dict[str, AsyncMock],
+    pixel_counts: AsyncMock,
+) -> None:
+    """The creation interface is documented but unbuilt: approval raises, and
+    the proposal stays pending."""
+    campaign_id = await _make_creative_plan_campaign(
+        client, optimization_event="PURCHASE"
+    )
+    await _run_pixel_check(client, campaign_id)
+    rec = (await _retargeting_recs(campaign_id))[0]
+
+    with pytest.raises(RetargetingNotBuiltError, match="not built"):
+        _run(client, optimization_jobs.apply_recommendation, rec)
+
+    assert (await _retargeting_recs(campaign_id))[0].status == "PENDING"
+
+
+@pytest.mark.asyncio
+async def test_a_purchase_campaign_whose_pixel_never_fires_purchase_gets_a_warning(
+    client: TestClient,
+    mock_services: dict[str, AsyncMock],
+    pixel_counts: AsyncMock,
+) -> None:
+    campaign_id = await _make_creative_plan_campaign(
+        client, optimization_event="PURCHASE"
+    )
+    pixel_counts.return_value = {
+        "PageView": 1923,
+        "ViewContent": 1486,
+        "InitiateCheckout": 41,
+        "AddToCart": 32,
+    }
+
+    await _run_pixel_check(client, campaign_id)
+
+    warning = await _pixel_warning(campaign_id)
+    assert warning is not None
+    assert warning.startswith("Purchase event may not be firing")
+    assert "41 InitiateCheckout" in warning
+    # The proposal repeats the caveat: purchasers can't be excluded reliably.
+    assert (
+        "Purchase event may not be firing"
+        in (await _retargeting_recs(campaign_id))[0].reasoning
+    )
+
+
+@pytest.mark.asyncio
+async def test_the_pixel_warning_clears_once_purchases_fire(
+    client: TestClient,
+    mock_services: dict[str, AsyncMock],
+    pixel_counts: AsyncMock,
+) -> None:
+    campaign_id = await _make_creative_plan_campaign(
+        client, optimization_event="PURCHASE"
+    )
+    pixel_counts.return_value = {"InitiateCheckout": 41}
+    await _run_pixel_check(client, campaign_id)
+    assert await _pixel_warning(campaign_id) is not None
+    pixel_counts.return_value = {"InitiateCheckout": 41, "Purchase": 3}
+
+    await _run_pixel_check(client, campaign_id)
+
+    assert await _pixel_warning(campaign_id) is None
+
+
+@pytest.mark.asyncio
+async def test_an_add_to_cart_campaign_gets_no_purchase_warning(
+    client: TestClient,
+    mock_services: dict[str, AsyncMock],
+    pixel_counts: AsyncMock,
+) -> None:
+    """It doesn't optimize for Purchase, so a silent Purchase event doesn't hurt."""
+    campaign_id = await _make_creative_plan_campaign(
+        client,
+        optimization_event="ADD_TO_CART",
+        target_cost_per_add_to_cart=20.0,
+    )
+    pixel_counts.return_value = {"InitiateCheckout": 41}
+
+    await _run_pixel_check(client, campaign_id)
+
+    assert await _pixel_warning(campaign_id) is None
+
+
+@pytest.mark.asyncio
+async def test_a_pixel_stats_failure_changes_nothing(
+    client: TestClient,
+    mock_services: dict[str, AsyncMock],
+    pixel_counts: AsyncMock,
+) -> None:
+    campaign_id = await _make_creative_plan_campaign(
+        client, optimization_event="PURCHASE"
+    )
+    pixel_counts.side_effect = MetaConnectionError("Meta is down")
+
+    await _run_pixel_check(client, campaign_id)
+
+    assert await _retargeting_recs(campaign_id) == []
+    assert await _pixel_warning(campaign_id) is None
+
+
+@pytest.mark.asyncio
+async def test_a_non_sales_campaign_never_reads_the_pixel(
+    client: TestClient,
+    mock_services: dict[str, AsyncMock],
+    pixel_counts: AsyncMock,
+) -> None:
+    campaign_id = await _make_creative_plan_campaign(
+        client, optimization_event="PURCHASE"
+    )
+    seeder = Prisma()
+    await seeder.connect()
+    try:
+        await seeder.campaign.update(
+            where={"id": campaign_id}, data={"objective": "TRAFFIC"}
+        )
+    finally:
+        await seeder.disconnect()
+
+    await _run_pixel_check(client, campaign_id)
+
+    pixel_counts.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_the_hourly_job_runs_the_pixel_check(
+    client: TestClient,
+    mock_services: dict[str, AsyncMock],
+    pixel_counts: AsyncMock,
+) -> None:
+    campaign_id = await _make_creative_plan_campaign(
+        client, optimization_event="PURCHASE"
+    )
+    mock_services["insights"].return_value = CampaignInsights(
+        impressions=1, clicks=1, spend=1.0, conversions=0
+    )
+
+    _run(client, optimization_jobs.collect_metrics_for_all_live_campaigns)
+
+    assert len(await _retargeting_recs(campaign_id)) == 1

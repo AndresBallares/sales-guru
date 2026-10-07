@@ -27,13 +27,25 @@ test('a fake Meta connection carries a campaign from creation to a live publish 
   await page.getByRole('button', { name: 'Select this ad' }).first().click()
 
   // Selecting an ad navigates to the dedicated ad preview/publish page.
+  // The ad page publishes paused by default; this spec needs a LIVE campaign.
+  // Let the page finish loading first (its checkbox state is local, so a
+  // re-render after the uncheck would silently put it back), then confirm.
+  await expect(page.getByRole('heading', { name: 'Ad preview' })).toBeVisible()
+  await page.waitForLoadState('networkidle')
+  const publishPaused = page.getByLabel(/Publish paused/)
+  await publishPaused.uncheck()
+  await expect(publishPaused).not.toBeChecked()
+  const publishRequest = page.waitForRequest(
+    (request) => request.method() === 'POST' && request.url().endsWith('/publish'),
+  )
   await page.getByRole('button', { name: 'Approve & Publish' }).click()
-  // The button's own accessible name flips to "Publishing…" the instant
-  // the click registers — asserting the *original* name's absence would
-  // pass on that transient relabel alone, racing ahead of the actual
-  // approve+publish call this is meant to wait for.
-  await expect(page.getByRole('button', { name: 'Publishing…' })).toBeVisible()
-  await expect(page.getByRole('button', { name: 'Publishing…' })).not.toBeVisible()
+  expect((await publishRequest).postDataJSON()).toEqual({ paused: false })
+  // Wait for the publish to finish: once the campaign is live the publish
+  // button is gone entirely. (Asserting on the transient "Publishing…"
+  // label raced the instant fake publish.)
+  await expect(
+    page.getByRole('button', { name: /Approve & Publish|Publishing…/ }),
+  ).toHaveCount(0)
   await expect(page.getByRole('alert')).not.toBeVisible()
 
   await page.getByRole('link', { name: '← Back to dashboard' }).click()

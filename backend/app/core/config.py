@@ -107,6 +107,14 @@ class Settings(BaseSettings):
     url_reachability_check_enabled: bool = False
     fake_meta_enabled: bool = Field(default=False, validation_alias="FAKE_META")
     fake_llm_enabled: bool = Field(default=False, validation_alias="FAKE_LLM")
+    # A SALES product priced at or above this optimizes for AddToCart
+    # instead of Purchase (CREATIVE_TEST_PLAN, decided once at creation —
+    # a high-ticket product rarely produces enough purchases to learn from).
+    high_ticket_price_threshold: float = 500.0
+    # Assumed share of add-to-carts that become purchases, used to turn the
+    # target CAC into a target cost per add-to-cart for the cost cap. An
+    # assumption, not measured data: tune it as real funnel data arrives.
+    add_to_cart_to_purchase_rate: float = 0.10
 
     @property
     def cors_origins_list(self) -> list[str]:

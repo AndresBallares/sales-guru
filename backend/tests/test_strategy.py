@@ -14,7 +14,10 @@ import pydantic
 import pytest
 from app.api import strategy as strategy_module
 from app.schemas.strategy import (
+    AudienceConstraints,
     BudgetRecommendation,
+    CreativePersona,
+    CreativeTestPlanContent,
     DataDrivenStrategyContent,
     GeneratedTestPlanFields,
     NormalizedMetrics,
@@ -86,6 +89,25 @@ _FAKE_TEST_PLAN = TestPlanContent(
     baseline_metrics=NormalizedMetrics(),
     benchmark_context=_FAKE_BENCHMARK_CONTEXT,
 )
+_FAKE_CREATIVE_TEST_PLAN = CreativeTestPlanContent(
+    objective="SALES",
+    audience_constraints=AudienceConstraints(),
+    creative_persona=CreativePersona(name="Gift buyers", description="Women 30-55"),
+    hypotheses=[strategist_service._build_creative_hypothesis("Angle A wins.")],
+    offer="Custom emerald rings",
+    positioning="Premium and personal",
+    creative_angles=["Product on skin", "Social proof", "Gifting"],
+    copy_strategy="Lead with the story behind each piece",
+    daily_budget=50,
+    duration_days=10,
+    total_budget=500,
+    optimization_event="PURCHASE",
+    success_criteria=strategist_service._build_creative_success_criteria(
+        _FAKE_BENCHMARK_CONTEXT, None, None
+    ),
+    baseline_metrics=NormalizedMetrics(),
+    benchmark_context=_FAKE_BENCHMARK_CONTEXT,
+)
 
 
 # --- TargetLocation / primary_audience (schema-level) ------------------------
@@ -134,7 +156,9 @@ def _create_business(client: TestClient, name: str = "Acme Widgets") -> str:
     return id_
 
 
-def _create_campaign(client: TestClient, business_id: str) -> str:
+def _create_campaign(
+    client: TestClient, business_id: str, objective: str = "SALES"
+) -> str:
     """Create a campaign under a business, return its id.
 
     Auto-creates a default product/audience — every campaign needs both
@@ -151,7 +175,11 @@ def _create_campaign(client: TestClient, business_id: str) -> str:
     ).json()["id"]
     response = client.post(
         f"/businesses/{business_id}/campaigns",
-        json={"objective": "SALES", "productId": product_id, "audienceId": audience_id},
+        json={
+            "objective": objective,
+            "productId": product_id,
+            "audienceId": audience_id,
+        },
     )
     id_: str = response.json()["id"]
     return id_
@@ -315,14 +343,34 @@ def test_create_strategy_without_meta_or_answer_requires_an_answer(
     assert response.status_code == 428
 
 
-def test_create_strategy_answering_no_generates_a_test_plan(
+def test_create_strategy_answering_no_generates_a_creative_test_plan_for_sales(
     client: TestClient, mock_generate_strategy: AsyncMock
 ) -> None:
-    """Answering "no" to the one-time question resolves to TEST_PLAN."""
-    mock_generate_strategy.return_value = _FAKE_TEST_PLAN
+    """Answering "no" on a SALES campaign resolves to CREATIVE_TEST_PLAN."""
+    mock_generate_strategy.return_value = _FAKE_CREATIVE_TEST_PLAN
     _signed_up_client(client)
     business_id = _create_business(client)
     campaign_id = _create_campaign(client, business_id)
+
+    response = client.post(
+        f"/businesses/{business_id}/campaigns/{campaign_id}/strategy",
+        json={"hasPriorAdvertisingExperience": False},
+    )
+
+    assert response.status_code == 201
+    assert response.json()["content"]["planType"] == "CREATIVE_TEST_PLAN"
+    assert mock_generate_strategy.call_args.kwargs["plan_type"] == "CREATIVE_TEST_PLAN"
+
+
+def test_create_strategy_answering_no_keeps_the_audience_test_plan_for_other_objectives(
+    client: TestClient, mock_generate_strategy: AsyncMock
+) -> None:
+    """Only SALES gets the creative-first plan — every other objective keeps
+    the original audience-vs-audience TEST_PLAN, untouched."""
+    mock_generate_strategy.return_value = _FAKE_TEST_PLAN
+    _signed_up_client(client)
+    business_id = _create_business(client)
+    campaign_id = _create_campaign(client, business_id, objective="TRAFFIC")
 
     response = client.post(
         f"/businesses/{business_id}/campaigns/{campaign_id}/strategy",
@@ -360,7 +408,7 @@ def test_create_strategy_only_asks_the_question_once(
 ) -> None:
     """Once answered, the business's stored answer is reused — the frontend
     never needs to ask again."""
-    mock_generate_strategy.return_value = _FAKE_TEST_PLAN
+    mock_generate_strategy.return_value = _FAKE_CREATIVE_TEST_PLAN
     _signed_up_client(client)
     business_id = _create_business(client)
     campaign_id = _create_campaign(client, business_id)
@@ -375,7 +423,7 @@ def test_create_strategy_only_asks_the_question_once(
     )
 
     assert response.status_code == 201
-    assert mock_generate_strategy.call_args.kwargs["plan_type"] == "TEST_PLAN"
+    assert mock_generate_strategy.call_args.kwargs["plan_type"] == "CREATIVE_TEST_PLAN"
 
 
 def test_create_strategy_uses_real_meta_history_over_a_no_answer(

@@ -520,7 +520,7 @@ async def create_meta_ad_set(
     daily_budget_cents: int,
     optimization_goal: str,
     age_min: int,
-    age_max: int,
+    age_max: int | None,
     pixel_id: str | None = None,
     custom_location: CustomLocation | None = None,
     resolved_locations: list[ResolvedGeoLocation] | None = None,
@@ -529,6 +529,8 @@ async def create_meta_ad_set(
     end_time: datetime | None = None,
     target_cac_cents: int | None = None,
     status: Literal["ACTIVE", "PAUSED"] = "ACTIVE",
+    locales: list[int] | None = None,
+    custom_event_type: str = "PURCHASE",
 ) -> str:
     """Create an AdSet object on Meta, under an already-created campaign.
 
@@ -568,7 +570,9 @@ async def create_meta_ad_set(
             currency unit (cents for USD).
         optimization_goal: A Meta optimization_goal value.
         age_min: Minimum target age.
-        age_max: Maximum target age.
+        age_max: Maximum target age, or None to omit it. Meta rejects an
+            age_max when Advantage+ audience is on (it is fixed at 65), so
+            the creative test plan passes None.
         pixel_id: The MetaConnection's configured Pixel, if any. Required
             by Meta (as a promoted_object) for conversion-tracking
             optimization_goal values — currently just OFFSITE_CONVERSIONS
@@ -624,6 +628,12 @@ async def create_meta_ad_set(
         status: "ACTIVE" (default) or "PAUSED" — see create_meta_campaign's
             own status param, sent identically alongside it by the
             "Publish paused" option.
+        locales: Meta locale ids (language targeting, from
+            app/services/locales.py), if the ad set is restricted to
+            certain languages. A hard limit even with Advantage+ audience
+            on (confirmed against the real API 2026-10-06).
+        custom_event_type: The Pixel event the ad set optimizes for in
+            promoted_object — PURCHASE (default) or ADD_TO_CART.
 
     Returns:
         The new Meta ad set id.
@@ -656,10 +666,13 @@ async def create_meta_ad_set(
         geo_locations = {"countries": ["US"]}
     targeting_spec: dict[str, object] = {
         "age_min": age_min,
-        "age_max": age_max,
         "geo_locations": geo_locations,
         "targeting_automation": {"advantage_audience": advantage_audience},
     }
+    if age_max is not None:
+        targeting_spec["age_max"] = age_max
+    if locales:
+        targeting_spec["locales"] = locales
     if interests:
         targeting_spec["interests"] = interests
     targeting = json.dumps(targeting_spec)
@@ -680,7 +693,7 @@ async def create_meta_ad_set(
         data["bid_amount"] = str(target_cac_cents)
     if pixel_id is not None:
         data["promoted_object"] = json.dumps(
-            {"pixel_id": pixel_id, "custom_event_type": "PURCHASE"}
+            {"pixel_id": pixel_id, "custom_event_type": custom_event_type}
         )
     if end_time is not None:
         data["end_time"] = end_time.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%S+0000")
@@ -1025,6 +1038,9 @@ class CampaignInsights(NamedTuple):
     # not something deltas can be taken of directly (app/services/
     # optimization_jobs.py's CAC circuit breaker).
     purchases: int | None = None
+    # spend / add_to_cart: the creative test's primary metric. None when
+    # there are no add-to-carts to divide by (unavailable, never zero).
+    cost_per_add_to_cart: float | None = None
 
 
 # Meta's own action_type values for the funnel steps the extended metric
@@ -1065,7 +1081,7 @@ async def _fetch_insights(
 ) -> CampaignInsights:
     """Fetch lifetime performance numbers for any Meta object with an /insights edge.
 
-    Works for a Campaign or an AdSet — the endpoint shape and fields are
+    Works for a Campaign, an AdSet or an Ad — the endpoint shape and fields are
     identical either way, Meta's Insights API is symmetric across object
     levels.
 
@@ -1138,6 +1154,7 @@ async def _fetch_insights(
             (add_to_cart / landing_page_views) if landing_page_views else None
         ),
         conversion_rate=(conversions / clicks) if clicks else None,
+        cost_per_add_to_cart=(spend / add_to_cart) if add_to_cart else None,
         cac=(spend / purchases) if purchases else None,
         purchase_value=purchase_value if action_values else None,
         roas=(purchase_value / spend) if spend and action_values else None,
@@ -1201,6 +1218,29 @@ async def fetch_ad_set_insights(
     return await _fetch_insights(
         access_token=access_token, meta_object_id=meta_ad_set_id
     )
+
+
+async def fetch_ad_insights(*, access_token: str, meta_ad_id: str) -> CampaignInsights:
+    """Fetch lifetime performance numbers for one Meta Ad.
+
+    Used for ad-level metric collection on a creative test (CREATIVE_TEST_PLAN):
+    the ads in its one ad set compete, so each ad's own numbers (above all its
+    cost per add-to-cart) are what decide a winner. Same shape and parsing as
+    fetch_ad_set_insights, scoped to one ad's own /insights edge.
+
+    Args:
+        access_token: The business's Meta access token.
+        meta_ad_id: The Meta ad id (Ad.metaAdId).
+
+    Returns:
+        That one ad's lifetime-to-date insights — canned empty in fake mode.
+
+    Raises:
+        MetaConnectionError: If the call fails.
+    """
+    if get_settings().fake_meta_enabled:
+        return CampaignInsights(impressions=0, clicks=0, spend=0.0, conversions=0)
+    return await _fetch_insights(access_token=access_token, meta_object_id=meta_ad_id)
 
 
 class AccountCampaignInsights(NamedTuple):
@@ -1378,6 +1418,74 @@ async def update_meta_ad_set_budget(
     )
 
 
+async def update_meta_ad_set_bid(
+    *, access_token: str, meta_ad_set_id: str, bid_amount_cents: int
+) -> None:
+    """Update a live ad set's cost cap (bid_amount) on Meta (RAISE_COST_CAP).
+
+    Args:
+        access_token: The business's Meta access token.
+        meta_ad_set_id: The Meta ad set id to update (AdSet.metaAdSetId).
+        bid_amount_cents: The new cost cap per result, in the ad account's
+            minor currency unit (cents for USD) — same unit as
+            create_meta_ad_set's target_cac_cents.
+
+    Raises:
+        MetaConnectionError: If the call fails.
+    """
+    if get_settings().fake_meta_enabled:
+        return
+    await _post_json(
+        f"{_GRAPH_BASE_URL}/{meta_ad_set_id}",
+        {"access_token": access_token, "bid_amount": str(bid_amount_cents)},
+    )
+
+
+async def fetch_pixel_event_counts(
+    *, access_token: str, pixel_id: str, days: int = 30
+) -> dict[str, int]:
+    """Count a Pixel's events by name over the last `days` days.
+
+    GET /{pixel_id}/stats?aggregation=event returns hourly buckets of
+    {"value": <event name>, "count": N}; this sums them per event. These are
+    EVENT counts, not people: Meta offers no unique-visitor count for a Pixel
+    (a unique count needs a custom audience), so PageView is an upper bound on
+    visitors. Checked against a real Pixel 2026-10-06 (PageView, ViewContent,
+    AddToCart, InitiateCheckout came back; Purchase is absent when it has
+    never fired).
+
+    Args:
+        access_token: A Meta access token with ads permissions.
+        pixel_id: The MetaConnection's Pixel id.
+        days: How far back to count.
+
+    Returns:
+        Event name -> total count (empty when the Pixel has no data). Canned
+        empty in fake mode.
+
+    Raises:
+        MetaConnectionError: If the call fails.
+    """
+    if get_settings().fake_meta_enabled:
+        return {}
+    now = int(datetime.now(UTC).timestamp())
+    body = await _get_json(
+        f"{_GRAPH_BASE_URL}/{pixel_id}/stats",
+        {
+            "aggregation": "event",
+            "start_time": str(now - days * 86400),
+            "end_time": str(now),
+            "access_token": access_token,
+        },
+    )
+    totals: dict[str, int] = {}
+    for bucket in body.get("data", []):
+        for entry in bucket.get("data", []):
+            name = str(entry["value"])
+            totals[name] = totals.get(name, 0) + int(entry["count"])
+    return totals
+
+
 async def search_ad_interests(*, access_token: str, query: str) -> list[dict[str, Any]]:
     """Search Meta's ad-interest targeting taxonomy for a free-text term.
 
@@ -1497,6 +1605,35 @@ async def search_ad_geolocations(
             "q": query,
             "access_token": access_token,
         },
+    )
+    data: list[dict[str, Any]] = body.get("data", [])
+    return data
+
+
+async def search_ad_locales(*, access_token: str, query: str) -> list[dict[str, Any]]:
+    """Search Meta's language ("locale") taxonomy by name.
+
+    GET /search?type=adlocale&q=... (Targeting Search), confirmed against the
+    real API 2026-10-06: "English" returns "English (US)" (6), "English (UK)"
+    (24) and "English (All)" (1001); "Spanish" returns "Spanish" (23),
+    "Spanish (Spain)" (7) and "Spanish (All)" (1002). The `locales` targeting
+    field takes these numeric keys. Not ad-account-scoped.
+
+    Args:
+        access_token: A Meta access token with ads permissions.
+        query: A language name, e.g. "English".
+
+    Returns:
+        Meta's raw result list, each item {"name": ..., "key": <int>}.
+
+    Raises:
+        MetaConnectionError: If the call fails.
+    """
+    if get_settings().fake_meta_enabled:
+        return [{"name": f"{query} (All)", "key": 1001}]
+    body = await _get_json(
+        f"{_GRAPH_BASE_URL}/search",
+        {"type": "adlocale", "q": query, "access_token": access_token},
     )
     data: list[dict[str, Any]] = body.get("data", [])
     return data

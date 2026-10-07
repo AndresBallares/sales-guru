@@ -15,7 +15,11 @@ from app.schemas.creative import (
     ReorderCreativeCardsRequest,
     SelectCreativeRequest,
 )
-from app.schemas.strategy import StrategyContentAdapter
+from app.schemas.strategy import (
+    MAX_CREATIVE_ANGLES,
+    MIN_CREATIVE_ANGLES,
+    StrategyContentAdapter,
+)
 from app.services.campaign_readiness import is_ready
 from app.services.creative import (
     CreativeAgentError,
@@ -47,6 +51,14 @@ _CAROUSEL_NEEDS_DESTINATION_URL = (
     "ad — every card needs somewhere to link to"
 )
 _NOT_A_CAROUSEL = "This creative isn't a carousel"
+_CREATIVE_PLAN_SINGLE_IMAGE_ONLY = (
+    "A creative test plan uses single-image ads only for now"
+)
+_NOT_A_CREATIVE_TEST_PLAN = (
+    "Only a creative test plan lets you add or remove ads from the test"
+)
+_TEST_FULL = "A creative test runs at most {max} ads — remove one before adding another"
+_TEST_ALREADY_PUBLISHED = "This campaign is already published, so its ads can't change"
 _CARD_NOT_FOUND = "Card not found"
 _CARD_REORDER_MISMATCH = (
     "cardIds must name exactly this creative's current cards, once each"
@@ -192,6 +204,12 @@ async def create_creatives(
     brand_profile = await db.brandprofile.find_unique(where={"businessId": business.id})
 
     creative_format = payload.format if payload is not None else "SINGLE_IMAGE"
+    plan = StrategyContentAdapter.validate_json(strategy.content)
+    if plan.plan_type == "CREATIVE_TEST_PLAN" and creative_format == "CAROUSEL":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=_CREATIVE_PLAN_SINGLE_IMAGE_ONLY,
+        )
     primary_image = None
     card_images = None
     destination_url = None
@@ -227,7 +245,7 @@ async def create_creatives(
         variants = await generate_creatives(
             business=business,
             product=product,
-            strategy=StrategyContentAdapter.validate_json(strategy.content),
+            strategy=plan,
             primary_image=primary_image,
             brand_profile=brand_profile,
             format=creative_format,
@@ -317,6 +335,45 @@ async def list_creatives(
     return await _list_creatives(campaign)
 
 
+async def _is_creative_test_plan(campaign: Campaign) -> bool:
+    strategy = await db.strategy.find_unique(where={"campaignId": campaign.id})
+    if strategy is None:
+        return False
+    plan = StrategyContentAdapter.validate_json(strategy.content)
+    return plan.plan_type == "CREATIVE_TEST_PLAN"
+
+
+async def _check_creative_test_can_change(campaign: Campaign) -> None:
+    """A published creative test's ads are fixed — refuse changes to them."""
+    current = await db.campaign.find_unique(where={"id": campaign.id})
+    if current is not None and current.status in ("LIVE", "PAUSED"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=_TEST_ALREADY_PUBLISHED,
+        )
+
+
+async def _sync_creative_test_status(campaign: Campaign) -> None:
+    """Move the campaign to match how many ads are selected.
+
+    PENDING_APPROVAL once at least MIN_CREATIVE_ANGLES are selected (the test
+    is ready for the approval gate), otherwise back to ADS_GENERATED.
+    """
+    selected = await db.creative.count(
+        where={"campaignId": campaign.id, "status": "SELECTED"}
+    )
+    await db.campaign.update(
+        where={"id": campaign.id},
+        data={
+            "status": (
+                "PENDING_APPROVAL"
+                if selected >= MIN_CREATIVE_ANGLES
+                else "ADS_GENERATED"
+            )
+        },
+    )
+
+
 @router.post("/{creative_id}/select", response_model=CreativeResponse)
 async def select_creative(
     creative_id: str,
@@ -390,10 +447,23 @@ async def select_creative(
                 detail=_NO_PRODUCT_PHOTO,
             )
 
-    await db.creative.update_many(
-        where={"campaignId": campaign.id, "NOT": [{"id": creative.id}]},
-        data={"status": "REJECTED"},
-    )
+    is_creative_plan = await _is_creative_test_plan(campaign)
+    if is_creative_plan:
+        await _check_creative_test_can_change(campaign)
+        selected_count = await db.creative.count(
+            where={"campaignId": campaign.id, "status": "SELECTED"}
+        )
+        if creative.status != "SELECTED" and selected_count >= MAX_CREATIVE_ANGLES:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=_TEST_FULL.format(max=MAX_CREATIVE_ANGLES),
+            )
+    else:
+        # The original single-ad flow: selecting one rejects its siblings.
+        await db.creative.update_many(
+            where={"campaignId": campaign.id, "NOT": [{"id": creative.id}]},
+            data={"status": "REJECTED"},
+        )
     product_image_id = payload.product_image_id if payload is not None else None
     if product_image_id is not None and not is_ready(campaign):
         raise HTTPException(
@@ -431,9 +501,63 @@ async def select_creative(
     )
     assert updated is not None  # just fetched above, can't vanish mid-request
 
-    await db.campaign.update(
-        where={"id": campaign.id}, data={"status": "PENDING_APPROVAL"}
+    if is_creative_plan:
+        await _sync_creative_test_status(campaign)
+    else:
+        await db.campaign.update(
+            where={"id": campaign.id}, data={"status": "PENDING_APPROVAL"}
+        )
+
+    product = await _current_product(campaign)
+    business = await _current_business(campaign)
+    return _to_response(updated, campaign, product, business)
+
+
+@router.post("/{creative_id}/deselect", response_model=CreativeResponse)
+async def deselect_creative(
+    creative_id: str,
+    campaign: Campaign = Depends(get_owned_campaign),
+) -> CreativeResponse:
+    """Remove one ad from a creative test (a CREATIVE_TEST_PLAN campaign only).
+
+    The creative goes back to GENERATED. The campaign drops to ADS_GENERATED
+    when fewer than the minimum ads remain selected, and to PENDING_APPROVAL
+    otherwise (what was approved changed, so it needs approving again).
+
+    Args:
+        creative_id: The creative to remove from the test.
+        campaign: The campaign, resolved and ownership-checked by
+            get_owned_campaign.
+
+    Returns:
+        The now-deselected creative.
+
+    Raises:
+        HTTPException: 404 if no such creative exists on this campaign; 400
+            if the campaign isn't a creative test plan or is already
+            published.
+    """
+    creative = await db.creative.find_first(
+        where={"id": creative_id, "campaignId": campaign.id}
     )
+    if creative is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=_CREATIVE_NOT_FOUND
+        )
+    if not await _is_creative_test_plan(campaign):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=_NOT_A_CREATIVE_TEST_PLAN,
+        )
+    await _check_creative_test_can_change(campaign)
+
+    updated = await db.creative.update(
+        where={"id": creative.id},
+        data={"status": "GENERATED"},
+        include={"cards": {"order_by": {"position": "asc"}}},
+    )
+    assert updated is not None  # just fetched above, can't vanish mid-request
+    await _sync_creative_test_status(campaign)
 
     product = await _current_product(campaign)
     business = await _current_business(campaign)

@@ -13,6 +13,7 @@ from app.services.optimization_jobs import (
     generate_and_store_recommendation,
 )
 from app.services.optimizer import OptimizerError
+from app.services.retargeting import RetargetingNotBuiltError
 
 router = APIRouter(
     prefix="/businesses/{business_id}/campaigns/{campaign_id}/optimize",
@@ -55,6 +56,7 @@ def _to_response(rec: OptimizationRecommendation) -> RecommendationResponse:
             "targetAdId": rec.targetAdId,
             "currentBudget": rec.currentBudget,
             "suggestedBudget": rec.suggestedBudget,
+            "suggestedBid": rec.suggestedBid,
             "reasoning": rec.reasoning,
             "confidence": rec.confidence,
             "risk": rec.risk,
@@ -206,6 +208,11 @@ async def approve_recommendation(
 
     try:
         updated = await apply_recommendation(rec)
+    except RetargetingNotBuiltError as exc:
+        # Documented but unbuilt: refuse clearly, leave the proposal pending.
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail=str(exc)
+        ) from exc
     except MetaConnectionError as exc:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)

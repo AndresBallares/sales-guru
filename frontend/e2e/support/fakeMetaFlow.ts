@@ -45,7 +45,10 @@ export function uniqueEmail(): string {
 // onboarding step ("No products yet") — split out from reachMetaPixelStep
 // so product-photos.spec.ts can exercise ProductForm's own upload/staging
 // UI directly, instead of going through the single-file default below.
-export async function reachProductStep(page: Page): Promise<void> {
+export async function reachProductStep(
+  page: Page,
+  objectiveLabel = 'Awareness',
+): Promise<void> {
   const email = uniqueEmail()
   const password = 'supersecret123'
 
@@ -74,7 +77,7 @@ export async function reachProductStep(page: Page): Promise<void> {
   // AWARENESS (Meta's REACH goal) needs no Pixel at *creation* time —
   // keeps this helper focused on the fake-Meta path, not every
   // objective's own extra setup step.
-  await page.getByLabel('Objective').selectOption({ label: 'Awareness' })
+  await page.getByLabel('Objective').selectOption({ label: objectiveLabel })
   await page.getByRole('button', { name: 'Create campaign' }).click()
 
   await expect(page.getByText('No products yet')).toBeVisible()
@@ -98,13 +101,15 @@ export async function reachMetaPixelStep(
     withProductPhoto = true,
     productPhotoPaths,
     adAccountLabel = 'Fake Ad Account',
+    objectiveLabel = 'Awareness',
   }: {
     withProductPhoto?: boolean
     productPhotoPaths?: string[]
     adAccountLabel?: string
+    objectiveLabel?: string
   } = {},
 ): Promise<string> {
-  await reachProductStep(page)
+  await reachProductStep(page, objectiveLabel)
 
   await page.getByLabel('What do you sell?').fill('Handmade leather wallets')
   // Optional for an AWARENESS campaign at *creation* time, but publish

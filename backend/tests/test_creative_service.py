@@ -1226,3 +1226,269 @@ def test_build_prompt_omits_the_carousel_message_rule_for_single_image() -> None
     prompt = creative._build_prompt(_fake_business(), _fake_product(), _FAKE_STRATEGY)
 
     assert "every card reinforces that same single message" not in prompt
+
+
+# ── CREATIVE_TEST_PLAN: persona + competing-ads framing ──
+
+
+def _creative_plan() -> Any:
+    from app.schemas.strategy import (
+        AudienceConstraints,
+        CreativePersona,
+        CreativeTestPlanContent,
+        NormalizedMetrics,
+    )
+    from app.services import strategist
+
+    benchmark_context = strategist._build_benchmark_context()
+    return CreativeTestPlanContent(
+        objective="SALES",
+        audience_constraints=AudienceConstraints(),
+        creative_persona=CreativePersona(
+            name="Milestone gift buyers",
+            description="Women 30-55 marking a moment with a meaningful piece.",
+            problem="Hard to find a ring that feels personal",
+            desire="Own something unique",
+        ),
+        hypotheses=[strategist._build_creative_hypothesis("On-skin wins.")],
+        offer="Custom emerald rings",
+        positioning="Premium and personal",
+        creative_angles=["Product on skin", "Social proof", "Gifting"],
+        copy_strategy="Lead with the story behind each piece",
+        daily_budget=50.0,
+        duration_days=10,
+        total_budget=500.0,
+        optimization_event="PURCHASE",
+        success_criteria=strategist._build_creative_success_criteria(
+            benchmark_context, None, None
+        ),
+        baseline_metrics=NormalizedMetrics(),
+        benchmark_context=benchmark_context,
+    )
+
+
+def test_build_prompt_gives_a_creative_plan_its_persona_as_context_only() -> None:
+    prompt = creative._build_prompt(_fake_business(), _fake_product(), _creative_plan())
+
+    assert "Milestone gift buyers" in prompt
+    assert "Women 30-55 marking a moment" in prompt
+    assert "not used for targeting" in prompt
+    assert "Hard to find a ring that feels personal" in prompt
+
+
+def test_build_prompt_frames_a_creative_plans_ads_as_competing_angles() -> None:
+    prompt = creative._build_prompt(_fake_business(), _fake_product(), _creative_plan())
+
+    assert "compete against each other in one ad set" in prompt
+    assert "Product on skin" in prompt
+
+
+def test_build_prompt_has_no_persona_text_for_other_plan_types() -> None:
+    prompt = creative._build_prompt(_fake_business(), _fake_product(), _FAKE_STRATEGY)
+
+    assert "Creative persona" not in prompt
+    assert "compete against each other" not in prompt
+
+
+def test_build_prompt_adapts_a_carousel_angle_to_a_single_image() -> None:
+    """A creative plan's angle may still read like a carousel (the plan was
+    generated earlier); every SINGLE_IMAGE variant must stay one image with
+    no cards list, never a mix."""
+    prompt = creative._build_prompt(_fake_business(), _fake_product(), _creative_plan())
+
+    assert "Every variant is a single image" in prompt
+    assert "never return a cards list" in prompt
+
+
+def test_build_prompt_does_not_say_single_image_for_a_carousel_batch() -> None:
+    prompt = creative._build_prompt(
+        _fake_business(),
+        _fake_product(),
+        _creative_plan(),
+        format="CAROUSEL",
+        card_count=3,
+    )
+
+    assert "never return a cards list" not in prompt
+
+
+# ── Never cut copy mid-phrase (the live "Shop the" bug) ──
+
+# The real over-length copy from the VENZI live run: 3 sentences with line
+# breaks (the line breaks count toward the 125-character limit).
+_SHOP_THE_COPY = (
+    "18K gold, natural gemstones, and ceramic — hand-shaped into bold form.\n\n"
+    "Handcrafted in small batches in New York.\n\nShop the collection."
+)
+
+
+def test_trim_body_text_ends_on_the_last_complete_sentence() -> None:
+    """A plain word-boundary cut left "…New York. Shop the"; trim back to the
+    last sentence end that fits instead."""
+    result = creative._trim_body_text(_SHOP_THE_COPY, 125)
+
+    assert result.endswith("New York.")
+    assert "Shop the" not in result
+    assert len(result) <= 125
+
+
+def test_trim_body_text_never_ends_mid_phrase() -> None:
+    result = creative._trim_body_text(_SHOP_THE_COPY, 125)
+
+    assert result[-1] in ".!?"
+
+
+def test_trim_body_text_leaves_copy_that_already_fits_alone() -> None:
+    text = "Short and sweet. Shop now."
+
+    assert creative._trim_body_text(text, 125) == text
+
+
+def test_trim_body_text_drops_line_breaks_when_the_sentence_trim_is_too_short() -> None:
+    """Trimming to the last sentence would leave under ~60 characters, so the
+    line breaks (which count toward the limit) are dropped and the copy is
+    tried again: flattened, it fits and keeps both sentences."""
+    first = "Hand-shaped in 18K gold."
+    second = "Natural gemstones and ceramic set by hand in New York, every piece."
+    text = f"{first}\n\n{second}"
+    max_length = len(first) + 1 + len(second)
+    assert len(text) > max_length
+
+    result = creative._trim_body_text(text, max_length)
+
+    assert result == f"{first} {second}"
+
+
+def test_trim_body_text_falls_back_to_a_word_boundary_as_a_last_resort() -> None:
+    """One long run-on sentence has no earlier sentence end: only then is a
+    word-boundary cut acceptable."""
+    text = "word " * 40  # 200 chars, no punctuation
+
+    result = creative._trim_body_text(text, 50)
+
+    assert len(result) <= 50
+    assert not result.endswith(" ")
+
+
+def test_trim_body_text_flattened_copy_is_trimmed_to_a_sentence_too() -> None:
+    text = (
+        "Sentence number one is quite a long one indeed, really it is.\n\n"
+        "Sentence number two is also fairly long, to be honest here.\n\n"
+        "Sentence number three keeps going on and on and on."
+    )
+
+    result = creative._trim_body_text(text, 130)
+
+    assert result[-1] in ".!?"
+    assert "three" not in result
+    assert len(result) <= 130
+
+
+def test_coerce_batch_never_cuts_primary_text_mid_phrase() -> None:
+    raw: dict[str, object] = {
+        "variants": [
+            {
+                "headline": f"Headline {letter}",
+                "bodyText": _SHOP_THE_COPY,
+                "description": "Desc",
+                "cta": "SHOP_NOW",
+                "creativeAngle": f"Angle {letter}",
+                "imagePrompt": "x",
+                "videoPrompt": "y",
+            }
+            for letter in "ABCD"
+        ]
+    }
+
+    variants = creative._coerce_batch(raw, "SALES", Exception("over length"))
+
+    for variant in variants:
+        assert variant.body_text.endswith("New York.")
+        assert "Shop the" not in variant.body_text
+
+
+def test_the_retry_prompt_states_the_character_rule_explicitly() -> None:
+    retry = creative._retry_prompt("BASE", "primary text is 128 characters")
+
+    assert "BASE" in retry
+    assert "primary text is 128 characters" in retry
+    assert "line breaks count toward the 125-character limit" in retry
+    assert "complete sentence" in retry
+
+
+# ── Pre-publish copy guard: no cut-off or over-length copy goes live ──
+
+
+def _copy_creative(**overrides: object) -> Any:
+    defaults: dict[str, object] = {
+        "headline": "Hand-Shaped. Bold by Design.",
+        "bodyText": "Handcrafted in small batches in New York. Shop the collection.",
+        "description": "18K gold + ceramic",
+        "format": "SINGLE_IMAGE",
+        "cards": [],
+    }
+    defaults.update(overrides)
+    return SimpleNamespace(**defaults)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Made by hand.",
+        "Made by hand!",
+        "Ever seen a ring like this?",
+        'Hand-shaped, never mass-made. "Shop the collection."',
+        "Hand-shaped in New York.  ",
+    ],
+)
+def test_copy_problems_accepts_copy_that_ends_on_a_sentence(text: str) -> None:
+    assert creative.copy_problems(_copy_creative(bodyText=text)) == []
+
+
+def test_copy_problems_catches_the_shop_the_cut_off() -> None:
+    """The first live VENZI run published ads ending "...Shop the"."""
+    copy = (
+        "18K gold, natural gemstones, and ceramic — hand-shaped into bold form.\n"
+        "Handcrafted in small batches in New York.\nShop the"
+    )
+
+    problems = creative.copy_problems(_copy_creative(bodyText=copy))
+
+    assert len(problems) == 1
+    assert "must end with a complete sentence" in problems[0]
+    assert "'Shop the'" in problems[0]
+
+
+def test_copy_problems_rejects_primary_text_over_the_limit() -> None:
+    problems = creative.copy_problems(_copy_creative(bodyText="a" * 125 + "b."))
+
+    assert any("127 characters" in p and "max 125" in p for p in problems)
+
+
+def test_copy_problems_rejects_an_over_long_headline_and_description() -> None:
+    problems = creative.copy_problems(
+        _copy_creative(headline="h" * 41, description="d" * 31)
+    )
+
+    assert any("headline is 41 characters (max 40)" in p for p in problems)
+    assert any("description is 31 characters (max 30)" in p for p in problems)
+
+
+def test_copy_problems_checks_every_carousel_card() -> None:
+    cards = [
+        SimpleNamespace(headline="ok", description=None),
+        SimpleNamespace(headline="h" * 41, description="d" * 31),
+    ]
+
+    problems = creative.copy_problems(_copy_creative(format="CAROUSEL", cards=cards))
+
+    assert any("card 2 headline is 41 characters" in p for p in problems)
+    assert any("card 2 description is 31 characters" in p for p in problems)
+
+
+def test_copy_problems_reports_every_problem_at_once() -> None:
+    problems = creative.copy_problems(
+        _copy_creative(bodyText="x" * 130, headline="h" * 41)
+    )
+
+    assert len(problems) >= 3  # over length, no sentence end, long headline

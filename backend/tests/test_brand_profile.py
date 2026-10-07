@@ -457,3 +457,62 @@ def test_update_brand_profile_404s_for_another_users_business(
     )
 
     assert response.status_code == 404
+
+
+# ── adLanguages (CREATIVE_TEST_PLAN's language hard constraint) ──
+
+
+def test_brand_profile_ad_languages_default_to_english(client: TestClient) -> None:
+    _signed_up_client(client)
+    business_id = _create_business(client)
+
+    response = client.post(
+        f"/businesses/{business_id}/brand-profile", json=_valid_payload()
+    )
+
+    assert response.status_code == 201
+    assert response.json()["adLanguages"] == ["English"]
+
+
+def test_create_brand_profile_with_custom_ad_languages(client: TestClient) -> None:
+    _signed_up_client(client)
+    business_id = _create_business(client)
+
+    response = client.post(
+        f"/businesses/{business_id}/brand-profile",
+        json=_valid_payload(adLanguages=["English", "  Spanish  ", ""]),
+    )
+
+    assert response.status_code == 201
+    assert response.json()["adLanguages"] == ["English", "Spanish"]
+
+
+def test_update_brand_profile_ad_languages_and_reset_to_default(
+    client: TestClient,
+) -> None:
+    _signed_up_client(client)
+    business_id = _create_business(client)
+    client.post(f"/businesses/{business_id}/brand-profile", json=_valid_payload())
+
+    changed = client.patch(
+        f"/businesses/{business_id}/brand-profile", json={"adLanguages": ["Spanish"]}
+    )
+    cleared = client.patch(
+        f"/businesses/{business_id}/brand-profile", json={"adLanguages": []}
+    )
+
+    assert changed.json()["adLanguages"] == ["Spanish"]
+    # An explicit empty list clears the override: back to the English default.
+    assert cleared.json()["adLanguages"] == ["English"]
+
+
+def test_brand_profile_rejects_too_many_ad_languages(client: TestClient) -> None:
+    _signed_up_client(client)
+    business_id = _create_business(client)
+
+    response = client.post(
+        f"/businesses/{business_id}/brand-profile",
+        json=_valid_payload(adLanguages=[f"Lang{i}" for i in range(6)]),
+    )
+
+    assert response.status_code == 422

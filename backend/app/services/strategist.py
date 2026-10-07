@@ -34,8 +34,9 @@ Exists so e2e tests can generate a strategy with no real ANTHROPIC_API_KEY
 and no dependency on live model output.
 """
 
+import json
 import logging
-from typing import Literal
+from typing import Literal, cast
 
 import anthropic
 from anthropic import AsyncAnthropic
@@ -43,10 +44,14 @@ from anthropic.types import Message
 from prisma.models import Audience, BrandProfile, Business, Product
 
 from app.core.config import get_settings
+from app.schemas.brand_profile import DEFAULT_AD_LANGUAGES
 from app.schemas.strategy import (
     BROAD_BASELINE_HYPOTHESIS,
     BROAD_BASELINE_ID,
     BROAD_BASELINE_NAME,
+    CREATIVE_TEST_HYPOTHESIS_ID,
+    CREATIVE_TEST_PRIMARY_METRIC,
+    CREATIVE_TEST_SECONDARY_METRICS,
     DEFAULT_TEST_BUDGET,
     DEFAULT_TEST_DURATION,
     HYPOTHESIS_AUDIENCE_ID,
@@ -54,13 +59,19 @@ from app.schemas.strategy import (
     MIN_TEST_BUDGET,
     PRIMARY_HYPOTHESIS_METRIC,
     SECONDARY_HYPOTHESIS_METRICS,
+    AudienceConstraints,
     AudienceVariant,
     BenchmarkContext,
     BudgetRecommendation,
+    CreativePersona,
+    CreativeTestHypothesis,
+    CreativeTestPlanContent,
     DataDrivenStrategyContent,
+    GeneratedCreativeTestPlanFields,
     GeneratedDataDrivenStrategyFields,
     GeneratedTestPlanFields,
     NormalizedMetrics,
+    OptimizationEvent,
     StrategyContent,
     SuccessCriteria,
     SuccessCriterion,
@@ -92,9 +103,10 @@ _MODEL = "claude-sonnet-5"
 # by a real e2e generation rather than any mocked test.
 _MAX_TOKENS = 8192
 _TEST_PLAN_TOOL_NAME = "submit_test_plan"
+_CREATIVE_TEST_PLAN_TOOL_NAME = "submit_creative_test_plan"
 _DATA_DRIVEN_STRATEGY_TOOL_NAME = "submit_data_driven_strategy"
 
-PlanType = Literal["TEST_PLAN", "DATA_DRIVEN_STRATEGY"]
+PlanType = Literal["TEST_PLAN", "CREATIVE_TEST_PLAN", "DATA_DRIVEN_STRATEGY"]
 
 # Fake mode (Settings.fake_llm_enabled, confirmed 2026-09-09): canned,
 # schema-valid stand-ins for what the LLM would generate, one per plan
@@ -111,6 +123,23 @@ _FAKE_TEST_PLAN_FIELDS = GeneratedTestPlanFields(
     offer="Fake offer copy (FAKE_LLM mode).",
     positioning="Fake positioning copy (FAKE_LLM mode).",
     creative_angles=["Fake creative angle A", "Fake creative angle B"],
+    copy_strategy="Fake copy strategy (FAKE_LLM mode).",
+).model_dump()
+_FAKE_CREATIVE_TEST_PLAN_FIELDS = GeneratedCreativeTestPlanFields(
+    creative_persona=CreativePersona(
+        name="Fake Persona",
+        description="Fake persona description (FAKE_LLM mode).",
+        problem="Fake problem (FAKE_LLM mode).",
+        desire="Fake desire (FAKE_LLM mode).",
+    ),
+    hypothesis_statement="Fake hypothesis statement (FAKE_LLM mode).",
+    offer="Fake offer copy (FAKE_LLM mode).",
+    positioning="Fake positioning copy (FAKE_LLM mode).",
+    creative_angles=[
+        "Fake creative angle A",
+        "Fake creative angle B",
+        "Fake creative angle C",
+    ],
     copy_strategy="Fake copy strategy (FAKE_LLM mode).",
 ).model_dump()
 _FAKE_DATA_DRIVEN_STRATEGY_FIELDS = GeneratedDataDrivenStrategyFields(
@@ -586,6 +615,204 @@ def _build_data_driven_strategy_prompt(
     return "\n".join(lines)
 
 
+# --- CREATIVE_TEST_PLAN helpers ---------------------------------------------
+
+
+def _choose_optimization_event(
+    product: Product | None, high_ticket_threshold: float
+) -> OptimizationEvent:
+    """AddToCart for a high-ticket product, else Purchase — decided once.
+
+    A product priced at or above the threshold rarely produces enough
+    purchases on a test budget for Meta (or us) to learn from, so the ad set
+    optimizes for AddToCart instead. A product with no price on file stays on
+    Purchase. The choice is made at plan creation and never switched
+    mid-flight (changing an ad set's optimization event after creation isn't
+    something Meta documents as supported; a switch is a future Optimizer
+    proposal).
+
+    Args:
+        product: The campaign's product, if any.
+        high_ticket_threshold: Price at or above which AddToCart is used.
+
+    Returns:
+        "ADD_TO_CART" or "PURCHASE".
+    """
+    if (
+        product is not None
+        and product.price is not None
+        and product.price >= high_ticket_threshold
+    ):
+        return "ADD_TO_CART"
+    return "PURCHASE"
+
+
+def _compute_target_cost_per_add_to_cart(
+    unit_economics: UnitEconomicsFields | None,
+    *,
+    add_to_cart_to_purchase_rate: float,
+) -> float:
+    """The cost-cap target for an AddToCart ad set, in dollars.
+
+    The cap must be a cost per add-to-cart, not the per-purchase target CAC
+    (which would strangle an add-to-cart goal). It's the target CAC (the
+    business's own, else the industry benchmark median — never blended)
+    scaled by the assumed share of add-to-carts that become purchases.
+    That share is an assumption (Settings.add_to_cart_to_purchase_rate),
+    not measured data.
+
+    Args:
+        unit_economics: The product's computed unit economics, if any.
+        add_to_cart_to_purchase_rate: Assumed share of add-to-carts that
+            convert to a purchase, between 0 and 1.
+
+    Returns:
+        The target cost per add-to-cart.
+    """
+    target_cac = (
+        unit_economics.target_cac
+        if unit_economics is not None
+        else JEWELRY_META_BENCHMARKS.cac.median
+    )
+    return target_cac * add_to_cart_to_purchase_rate
+
+
+def _ad_languages(brand_profile: BrandProfile | None) -> list[str]:
+    """The business's ad languages, defaulting to English (editable on the profile)."""
+    if brand_profile is not None and brand_profile.adLanguages:
+        return cast(list[str], json.loads(brand_profile.adLanguages))
+    return list(DEFAULT_AD_LANGUAGES)
+
+
+def _build_creative_hypothesis(hypothesis_statement: str) -> CreativeTestHypothesis:
+    """The primary hypothesis: which creative angle is cheapest per add-to-cart."""
+    return CreativeTestHypothesis(
+        id=CREATIVE_TEST_HYPOTHESIS_ID,
+        statement=hypothesis_statement,
+        primary_metric=CREATIVE_TEST_PRIMARY_METRIC,
+        secondary_metrics=CREATIVE_TEST_SECONDARY_METRICS,
+    )
+
+
+def _build_creative_success_criteria(
+    benchmark_context: BenchmarkContext,
+    unit_economics: UnitEconomicsFields | None,
+    target_cost_per_add_to_cart: float | None,
+) -> SuccessCriteria:
+    """TEST_PLAN's success criteria with cost per add-to-cart as the lead signal.
+
+    Cost per add-to-cart is the primary (early) metric: it's the signal a
+    test budget can actually produce. Purchases, CAC and ROAS stay as the
+    secondary economic indicators once volume exists. No industry benchmark
+    is configured for cost per add-to-cart, so benchmark is None and the
+    business target (when the ad set optimizes for AddToCart) is kept
+    separate, never blended.
+    """
+    base = _build_success_criteria(benchmark_context, unit_economics)
+    lead = SuccessCriterion(
+        metric=CREATIVE_TEST_PRIMARY_METRIC,
+        benchmark=None,
+        business_target=target_cost_per_add_to_cart,
+        direction=METRIC_DIRECTIONS[CREATIVE_TEST_PRIMARY_METRIC],
+        guidance=(
+            "The primary metric for this test: which creative angle "
+            "produces the cheapest add-to-cart. No industry benchmark range "
+            "is configured for it — judge angles against each other and "
+            "against the target cost per add-to-cart, when one is set."
+        ),
+    )
+    return SuccessCriteria(
+        leading_indicators=[lead, *base.leading_indicators],
+        economic_indicators=base.economic_indicators,
+        profitability_note=base.profitability_note,
+    )
+
+
+def _build_creative_test_plan_prompt(
+    business: Business,
+    product: Product | None,
+    audience: Audience | None,
+    objective: str,
+    unit_economics: UnitEconomicsFields | None,
+    daily_budget: float,
+    duration_days: int,
+    optimization_event: OptimizationEvent,
+    brand_profile: BrandProfile | None = None,
+) -> str:
+    """Build the grounding prompt for a CREATIVE_TEST_PLAN generation.
+
+    Args:
+        business: The business the plan is for.
+        product: The product being advertised, if one was selected.
+        audience: An existing audience definition, if any — a hint for the
+            creative persona only, never targeting.
+        objective: The campaign's fixed objective (always SALES).
+        unit_economics: This product's computed unit economics, if any.
+        daily_budget: The already-decided daily budget for the single ad
+            set (context only, not something the model sets).
+        duration_days: The already-decided test duration.
+        optimization_event: What the ad set optimizes for.
+        brand_profile: The business's brand profile, if any.
+
+    Returns:
+        The prompt text.
+    """
+    event_note = (
+        "This is a high-ticket product, so the ad set optimizes for "
+        "AddToCart (purchases will be too rare to learn from at this "
+        "budget)."
+        if optimization_event == "ADD_TO_CART"
+        else "The ad set optimizes for Purchase."
+    )
+    lines = [
+        "You are a marketing strategist. This business has no meaningful "
+        "advertising history yet, so you're designing a structured "
+        "creative test.",
+        "",
+        "How the test works (already fixed by the system): one ad set on a "
+        "broad, automated Meta audience (Advantage+), with only hard "
+        "constraints (country, minimum age, language). Nobody is targeted "
+        "by interest or demographic. The thing being tested is the "
+        "CREATIVE: 3 or 4 ads in that one ad set, each built on a "
+        "distinct creative angle, competing to produce the lowest cost "
+        "per add-to-cart.",
+        "",
+        _vertical_grounding(),
+        "",
+        *_business_product_audience_lines(business, product, audience, brand_profile),
+        "",
+        f"Campaign objective: {objective}",
+        f"The single ad set runs at ${daily_budget:.2f}/day for "
+        f"{duration_days} days. {event_note} That is a fixed business "
+        "decision, not something you need to determine, but factor it into "
+        "how many distinct angles are realistic at that spend.",
+        "",
+        "Your job:",
+        "- creative_persona: the one person the creatives should speak to "
+        "(name, a short description, their problem, their desire), drawn "
+        "from the real product/business data above. This is context for "
+        "the ad copywriter and designer, not used for targeting — don't "
+        "describe interests or demographics as if they would be selected "
+        "in the ad set.",
+        "- creative_angles: 3 or 4 distinct angles to test (for example "
+        "product worn on skin, social proof, gifting, craftsmanship). Each "
+        "must differ in what it says or shows, not just in wording, and "
+        "each must be something this product's real details support. "
+        "Every ad in this test is a single static image, so each angle "
+        "must work as one image with its copy — don't propose carousels, "
+        "video, or multi-image angles.",
+        "- hypothesis_statement: a falsifiable statement naming which "
+        "angle you expect to win on cost per add-to-cart and why — not a "
+        'vague claim like "this should perform well."',
+        "Do not propose testing against another ad platform "
+        "(Google, TikTok, etc.) — this product only executes on Meta.",
+    ]
+    if unit_economics is not None:
+        lines += ["", _unit_economics_line(unit_economics)]
+    lines += ["", "Submit your creative test plan using the provided tool."]
+    return "\n".join(lines)
+
+
 async def _call_agent(
     *, tool_name: str, tool_schema: dict[str, object], prompt: str
 ) -> dict[str, object]:
@@ -608,6 +835,8 @@ async def _call_agent(
     if settings.fake_llm_enabled:
         if tool_name == _TEST_PLAN_TOOL_NAME:
             return dict(_FAKE_TEST_PLAN_FIELDS)
+        if tool_name == _CREATIVE_TEST_PLAN_TOOL_NAME:
+            return dict(_FAKE_CREATIVE_TEST_PLAN_FIELDS)
         if tool_name == _DATA_DRIVEN_STRATEGY_TOOL_NAME:
             return dict(_FAKE_DATA_DRIVEN_STRATEGY_FIELDS)
         raise StrategistError(f"fake_llm_enabled has no canned reply for {tool_name!r}")
@@ -713,6 +942,78 @@ async def generate_strategy(
         if unit_economics_tuple is not None
         else None
     )
+
+    if plan_type == "CREATIVE_TEST_PLAN":
+        if objective != "SALES":
+            raise StrategistError(
+                "A creative test plan is only available for the SALES objective"
+            )
+        settings = get_settings()
+        daily_budget = _compute_test_daily_budget(unit_economics)
+        duration_days = DEFAULT_TEST_DURATION
+        optimization_event = _choose_optimization_event(
+            product, settings.high_ticket_price_threshold
+        )
+        target_cost_per_add_to_cart = (
+            _compute_target_cost_per_add_to_cart(
+                unit_economics,
+                add_to_cart_to_purchase_rate=settings.add_to_cart_to_purchase_rate,
+            )
+            if optimization_event == "ADD_TO_CART"
+            else None
+        )
+        prompt = _build_creative_test_plan_prompt(
+            business,
+            product,
+            audience,
+            objective,
+            unit_economics,
+            daily_budget,
+            duration_days,
+            optimization_event,
+            brand_profile,
+        )
+        raw = await _call_agent(
+            tool_name=_CREATIVE_TEST_PLAN_TOOL_NAME,
+            tool_schema=GeneratedCreativeTestPlanFields.model_json_schema(),
+            prompt=prompt,
+        )
+        try:
+            generated_creative = parse_tool_input(raw, GeneratedCreativeTestPlanFields)
+        except ToolInputRecoveryError as exc:
+            raise StrategistError(
+                "The model returned an invalid creative test plan — please "
+                "try generating the strategy again."
+            ) from exc
+        benchmark_context = _build_benchmark_context()
+        return CreativeTestPlanContent.model_validate(
+            {
+                "objective": objective,
+                "audience_constraints": AudienceConstraints(
+                    languages=_ad_languages(brand_profile)
+                ),
+                "creative_persona": generated_creative.creative_persona,
+                "hypotheses": [
+                    _build_creative_hypothesis(generated_creative.hypothesis_statement)
+                ],
+                "offer": generated_creative.offer,
+                "positioning": generated_creative.positioning,
+                "creative_angles": generated_creative.creative_angles,
+                "copy_strategy": generated_creative.copy_strategy,
+                "daily_budget": daily_budget,
+                # One ad set: the full daily rate, once per day.
+                "duration_days": duration_days,
+                "total_budget": daily_budget * duration_days,
+                "optimization_event": optimization_event,
+                "target_cost_per_add_to_cart": target_cost_per_add_to_cart,
+                "success_criteria": _build_creative_success_criteria(
+                    benchmark_context, unit_economics, target_cost_per_add_to_cart
+                ),
+                "baseline_metrics": NormalizedMetrics(),
+                "benchmark_context": benchmark_context,
+                "unit_economics": unit_economics,
+            }
+        )
 
     if plan_type == "TEST_PLAN":
         daily_budget = _compute_test_daily_budget(unit_economics)

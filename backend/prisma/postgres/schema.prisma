@@ -192,6 +192,8 @@ model BrandProfile {
   // Strategy.offer.
   proofPoints      String?
   offer            String?
+  // JSON array of language names for CREATIVE_TEST_PLAN targeting; null = English.
+  adLanguages      String?
   createdAt        DateTime @default(now())
   updatedAt        DateTime @updatedAt
 }
@@ -375,6 +377,10 @@ model Campaign {
   // spend exceeds 1.25x its configured daily budget, cleared back to
   // null once none do.
   dailySpendFlag          String?
+  // Machine-readable monitoring signal for the Optimizer (e.g. COST_CAP_MAY_BE_TOO_TIGHT); null = none.
+  deliverySignal          String?
+  // A Pixel-health warning shown on the campaign (e.g. the Purchase event may not be firing); null = none.
+  pixelWarning            String?
   createdAt               DateTime                     @default(now())
   updatedAt               DateTime                     @updatedAt
 }
@@ -425,6 +431,7 @@ model Ad {
   name      String
   status    String     @default("DRAFT")
   creatives Creative[]
+  metrics   Metric[]
   metaAdId  String?
   createdAt DateTime   @default(now())
   updatedAt DateTime   @updatedAt
@@ -575,6 +582,11 @@ model Metric {
   // undifferentiated pool.
   adSet            AdSet?   @relation(fields: [adSetId], references: [id])
   adSetId          String?
+  // Set only for an ad-level snapshot (a creative test's per-ad numbers);
+  // null for the campaign-level and ad-set-level rows everything else reads.
+  ad               Ad?      @relation(fields: [adId], references: [id])
+  adId             String?
+  costPerAddToCart Float?
   impressions      Int
   clicks           Int
   spend            Float
@@ -638,6 +650,8 @@ model OptimizationRecommendation {
   targetAdId       String?
   currentBudget    Float?
   suggestedBudget  Float?
+  // A proposed cost cap per result, in dollars (RAISE_COST_CAP only).
+  suggestedBid     Float?
   reasoning        String
   confidence       Float
   risk             String

@@ -69,6 +69,7 @@ const brandProfile: api.BrandProfile = {
   exampleCopy: null,
   proofPoints: [],
   offer: null,
+  adLanguages: ['English'],
   logoUrl: null,
 }
 

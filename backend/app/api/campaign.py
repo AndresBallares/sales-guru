@@ -22,9 +22,13 @@ from app.schemas.campaign import (
     CampaignUpdateRequest,
     PublishCampaignRequest,
 )
-from app.schemas.strategy import StrategyContentAdapter
+from app.schemas.strategy import (
+    MAX_CREATIVE_ANGLES,
+    MIN_CREATIVE_ANGLES,
+    StrategyContentAdapter,
+)
 from app.services.campaign_readiness import advance_to_ready_if_complete, is_ready
-from app.services.creative import is_creative_stale
+from app.services.creative import copy_problems, is_creative_stale
 from app.services.event_venues import EVENT_VENUES, default_event_window
 from app.services.meta import MetaConnectionError
 from app.services.publish import (
@@ -55,6 +59,14 @@ _NOT_ACTIVATABLE = (
 _META_NOT_CONNECTED_TO_ACTIVATE = (
     "No Meta connection found for this campaign's business"
 )
+_CREATIVE_TEST_AD_COUNT = (
+    "A creative test needs {min} to {max} selected ads before it can be published"
+)
+_COPY_NOT_PUBLISHABLE = (
+    "Can't publish yet — fix the ad copy first: {failures}. Regenerate the ads "
+    "or edit them, then try again."
+)
+_CREATIVE_TEST_SINGLE_IMAGE = "A creative test uses single-image ads only for now"
 _ALREADY_PUBLISHED = (
     "This campaign has already been published and can't be deleted — its "
     "data is used to optimize future campaigns"
@@ -123,6 +135,7 @@ async def _to_response(campaign: Campaign) -> CampaignResponse:
         end_date=campaign.endDate,
         paused_reason=campaign.pausedReason,
         daily_spend_flag=campaign.dailySpendFlag,
+        pixel_warning=campaign.pixelWarning,
         needs_destination_url=await _needs_destination_url(campaign),
     )
 
@@ -524,15 +537,47 @@ async def publish_campaign(
 
     strategy = await db.strategy.find_unique(where={"campaignId": campaign.id})
     assert strategy is not None  # guaranteed by the status flow (PENDING_APPROVAL+)
+    strategy_content = StrategyContentAdapter.validate_json(strategy.content)
 
     product = (
         await db.product.find_unique(where={"id": campaign.productId})
         if campaign.productId
         else None
     )
-    if is_creative_stale(creative, campaign, product, business):
+    creatives = [creative]
+    if strategy_content.plan_type == "CREATIVE_TEST_PLAN":
+        creatives = await db.creative.find_many(
+            where={"campaignId": campaign.id, "status": "SELECTED"},
+            order={"createdAt": "asc"},
+            include={"cards": {"order_by": {"position": "asc"}}},
+        )
+        if not (MIN_CREATIVE_ANGLES <= len(creatives) <= MAX_CREATIVE_ANGLES):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=_CREATIVE_TEST_AD_COUNT.format(
+                    min=MIN_CREATIVE_ANGLES, max=MAX_CREATIVE_ANGLES
+                ),
+            )
+        if any(c.format != "SINGLE_IMAGE" for c in creatives):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=_CREATIVE_TEST_SINGLE_IMAGE,
+            )
+    if any(is_creative_stale(c, campaign, product, business) for c in creatives):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST, detail=_CREATIVE_STALE
+        )
+    # Last gate before anything goes live: no cut-off or over-length copy,
+    # whatever produced it. Names every ad that fails.
+    copy_failures = [
+        f"Ad '{c.headline}' — {'; '.join(problems)}"
+        for c in creatives
+        if (problems := copy_problems(c))
+    ]
+    if copy_failures:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=_COPY_NOT_PUBLISHABLE.format(failures=" | ".join(copy_failures)),
         )
     destination_url = (product.url if product else None) or business.website
     if not destination_url:
@@ -550,7 +595,8 @@ async def publish_campaign(
             campaign=campaign,
             connection=connection,
             creative=creative,
-            strategy=StrategyContentAdapter.validate_json(strategy.content),
+            creatives=creatives,
+            strategy=strategy_content,
             destination_url=destination_url,
             paused=payload.paused if payload is not None else False,
         )

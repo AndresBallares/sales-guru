@@ -91,7 +91,7 @@ _FAKE_DATA_DRIVEN_STRATEGY = DataDrivenStrategyContent(
 _FAKE_VARIANTS = [
     GeneratedCreativeVariant(
         headline=f"Headline {letter}",
-        body_text=f"Primary text {letter}",
+        body_text=f"Primary text {letter}.",
         description=f"Description {letter}",
         cta="SHOP_NOW",
         creative_angle=f"Angle {letter}",

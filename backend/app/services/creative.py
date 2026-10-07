@@ -300,6 +300,149 @@ def _truncate_at_word_boundary(text: str, max_length: int) -> str:
     return (truncated[:last_space] if last_space > 0 else truncated).rstrip()
 
 
+# Sentence-ending punctuation for the coercion fallback's trim. A "." inside a
+# number or abbreviation ("$2.5", "e.g.x") isn't followed by whitespace, so it
+# is never mistaken for a sentence end.
+_SENTENCE_END = ".!?"
+# Below this, a sentence-trimmed primary text is too thin to run as an ad: the
+# fallback tries again with the line breaks removed before settling for it.
+_MIN_TRIMMED_BODY_LENGTH = 60
+
+
+# Characters that may follow a sentence's final punctuation (a closing quote or
+# bracket) and still leave the sentence complete.
+_CLOSERS = "\"'”’)]»"
+
+
+def copy_problems(creative: Creative) -> list[str]:
+    """Why this creative's copy shouldn't go live, or an empty list if it's fine.
+
+    The last gate before publish, independent of how the copy was generated:
+    primary text must fit Facebook's 125-character preview, end on a complete
+    sentence (. ! or ?, optionally followed by a closing quote or bracket) and
+    not be cut off mid-phrase ("...Shop the", seen in the first live run);
+    the headline, description and every carousel card must fit their limits.
+
+    Args:
+        creative: The creative about to be published.
+
+    Returns:
+        One human-readable problem per issue found, in the order checked.
+    """
+    problems: list[str] = []
+    body = (creative.bodyText or "").strip()
+    if len(body) > MAX_BODY_TEXT_LENGTH:
+        problems.append(
+            f"primary text is {len(body)} characters (max {MAX_BODY_TEXT_LENGTH})"
+        )
+    if not body.rstrip(_CLOSERS).endswith(tuple(_SENTENCE_END)):
+        # The unfinished tail: everything after the last sentence end or line break.
+        cut = max(body.rfind(char) for char in (*_SENTENCE_END, "\n"))
+        ending = body[cut + 1 :].strip() or body[-20:].strip()
+        problems.append(
+            "primary text must end with a complete sentence (. ! or ?) but ends "
+            f"with '{ending}'"
+        )
+    if len(creative.headline) > MAX_HEADLINE_LENGTH:
+        problems.append(
+            f"headline is {len(creative.headline)} characters "
+            f"(max {MAX_HEADLINE_LENGTH})"
+        )
+    description = creative.description
+    if description is not None and len(description) > MAX_DESCRIPTION_LENGTH:
+        problems.append(
+            f"description is {len(description)} characters "
+            f"(max {MAX_DESCRIPTION_LENGTH})"
+        )
+    for position, card in enumerate(creative.cards or [], start=1):
+        if len(card.headline) > MAX_HEADLINE_LENGTH:
+            problems.append(
+                f"card {position} headline is {len(card.headline)} characters "
+                f"(max {MAX_HEADLINE_LENGTH})"
+            )
+        if (
+            card.description is not None
+            and len(card.description) > MAX_DESCRIPTION_LENGTH
+        ):
+            problems.append(
+                f"card {position} description is {len(card.description)} "
+                f"characters (max {MAX_DESCRIPTION_LENGTH})"
+            )
+    return problems
+
+
+def _trim_to_last_sentence(text: str, max_length: int) -> str | None:
+    """Trim text back to the last sentence end within max_length, or None."""
+    window = text[:max_length]
+    best = -1
+    for index, char in enumerate(window):
+        if char in _SENTENCE_END and (
+            index == len(window) - 1 or window[index + 1].isspace()
+        ):
+            best = index
+    return window[: best + 1].rstrip() if best >= 0 else None
+
+
+def _trim_body_text(text: str, max_length: int) -> str:
+    """Shorten primary text without ever leaving it cut off mid-phrase.
+
+    Used by the coercion fallback after two real attempts came back over the
+    limit. Facebook shows only the first ~125 characters before "See more", so
+    copy ending "…Shop the" reads as broken (seen in the first live VENZI
+    run). In order: copy that fits is returned as is; otherwise it is trimmed
+    back to the last complete sentence, which is used if it keeps at least
+    ~60 characters; otherwise the line breaks (which count toward the limit)
+    are dropped and the copy is tried once more, whole and then
+    sentence-trimmed; only if that still fails does it fall back to a plain
+    word-boundary cut.
+
+    Args:
+        text: The model's over-length primary text.
+        max_length: The slot's character limit.
+
+    Returns:
+        Text of at most max_length characters, ending on a sentence end
+        whenever any sentence fits.
+    """
+    stripped = text.strip()
+    if len(stripped) <= max_length:
+        return stripped
+    candidate = _trim_to_last_sentence(stripped, max_length)
+    if candidate is not None and len(candidate) >= _MIN_TRIMMED_BODY_LENGTH:
+        return candidate
+    flat = " ".join(stripped.split())
+    if flat != stripped:
+        if len(flat) <= max_length:
+            return flat
+        candidate = _trim_to_last_sentence(flat, max_length)
+        if candidate is not None and len(candidate) >= _MIN_TRIMMED_BODY_LENGTH:
+            return candidate
+    return _truncate_at_word_boundary(flat, max_length)
+
+
+def _retry_prompt(prompt: str, first_failure: object) -> str:
+    """The prompt for the one retry, stating the character rules explicitly.
+
+    The first failure is usually a slot over its limit, and the model tends to
+    forget that line breaks count toward the 125-character primary text limit
+    (it wrote three short paragraphs that came to 128), so the retry says so
+    outright, along with the rule that copy must end on a complete sentence.
+    """
+    return (
+        f"{prompt}\n\n"
+        "Your previous submission was invalid and must be corrected:\n"
+        f"{first_failure}\n"
+        f"Character rules: primary text (body_text) must be at most "
+        f"{MAX_BODY_TEXT_LENGTH} characters, and line breaks count toward the "
+        f"{MAX_BODY_TEXT_LENGTH}-character limit; it must end on a complete "
+        f"sentence, never cut off mid-phrase. Headlines are at most "
+        f"{MAX_HEADLINE_LENGTH} characters and descriptions at most "
+        f"{MAX_DESCRIPTION_LENGTH}.\n"
+        "Resubmit a complete, corrected batch of "
+        f"{_VARIANT_COUNT} variants."
+    )
+
+
 def _build_prompt(
     business: Business,
     product: Product | None,
@@ -450,6 +593,25 @@ def _build_prompt(
         f"Copy strategy: {strategy.copy_strategy}",
         f"Creative angles to draw from: {', '.join(strategy.creative_angles)}",
     ]
+    if strategy.plan_type == "CREATIVE_TEST_PLAN":
+        persona = strategy.creative_persona
+        lines += [
+            quarantine(
+                "Creative persona (who these ads speak to; this is not used "
+                "for targeting — delivery is broad and the creative does the "
+                "audience selection)",
+                f"{persona.name} — {persona.description}",
+            ),
+            "These ads compete against each other in one ad set, so each "
+            "variant must take a clearly different one of the creative "
+            "angles above — the test is which angle wins.",
+        ]
+        if format == "SINGLE_IMAGE":
+            lines.append(
+                "Every variant is a single image: if a creative angle above "
+                "mentions a carousel, video or several images, adapt it to "
+                "work as one image — never return a cards list."
+            )
     audience = primary_audience(strategy)
     if audience.problem:
         lines.append(f"Target audience problem: {audience.problem}")
@@ -513,8 +675,9 @@ def _coerce_batch(
     Forces the objective's default CTA onto every variant (resolves both
     "CTA not allowed for this objective" and any GET_OFFER-eligibility
     failure at once, since neither applies once the CTA changes) and
-    truncates any over-length headline/body_text/description at a word
-    boundary — including each card's own headline/description, for a
+    truncates any over-length headline/description at a word boundary and
+    trims primary text back to a complete sentence (_trim_body_text, never
+    mid-phrase) — including each card's own headline/description, for a
     CAROUSEL batch (confirmed 2026-09-12, same reasoning as the top-level
     fields) — then re-validates structurally only (no business-rule
     context — the coercion above is exactly what would otherwise fail
@@ -558,7 +721,7 @@ def _coerce_batch(
                     variant["headline"], MAX_HEADLINE_LENGTH
                 )
             if isinstance(variant.get("bodyText"), str):
-                variant["bodyText"] = _truncate_at_word_boundary(
+                variant["bodyText"] = _trim_body_text(
                     variant["bodyText"], MAX_BODY_TEXT_LENGTH
                 )
             if isinstance(variant.get("description"), str):
@@ -792,14 +955,7 @@ async def generate_creatives(
         batch = parse_tool_input(raw, GeneratedCreativeBatch, context=context)
         variants = batch.variants
     except (ValidationError, ToolInputRecoveryError) as first_failure:
-        retry_prompt = (
-            f"{prompt}\n\n"
-            "Your previous submission was invalid and must be corrected:\n"
-            f"{first_failure}\n"
-            "Resubmit a complete, corrected batch of "
-            f"{_VARIANT_COUNT} variants."
-        )
-        raw = await _call(retry_prompt)
+        raw = await _call(_retry_prompt(prompt, first_failure))
         try:
             batch = parse_tool_input(raw, GeneratedCreativeBatch, context=context)
             variants = batch.variants

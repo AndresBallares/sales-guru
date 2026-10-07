@@ -133,7 +133,9 @@ async def list_metrics(
         fetched yet (not a 404; "no results yet" is a normal state, same
         as an empty creatives list before any have been generated).
     """
+    # Campaign- and ad-set-level snapshots only: a creative test's per-ad rows
+    # (adId set) are internal to the Optimizer, not part of this results list.
     metrics = await db.metric.find_many(
-        where={"campaignId": campaign.id}, order={"fetchedAt": "desc"}
+        where={"campaignId": campaign.id, "adId": None}, order={"fetchedAt": "desc"}
     )
     return [_to_response(m) for m in metrics]

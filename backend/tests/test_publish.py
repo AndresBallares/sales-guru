@@ -58,7 +58,7 @@ _FAKE_STRATEGY = DataDrivenStrategyContent(
 _FAKE_VARIANTS = [
     GeneratedCreativeVariant(
         headline=f"Headline {letter}",
-        body_text=f"Primary text {letter}",
+        body_text=f"Primary text {letter}.",
         description=f"Description {letter}",
         cta="SHOP_NOW",
         creative_angle=f"Angle {letter}",
@@ -74,7 +74,7 @@ _FAKE_VARIANTS = [
 _FAKE_CAROUSEL_VARIANTS = [
     GeneratedCreativeVariant(
         headline=f"Headline {letter}",
-        body_text=f"Primary text {letter}",
+        body_text=f"Primary text {letter}.",
         description=f"Description {letter}",
         cta="SHOP_NOW",
         creative_angle=f"Angle {letter}",
@@ -1812,3 +1812,29 @@ def test_delete_400s_once_the_campaign_has_been_published(
 
     assert response.status_code == 400
     assert "published" in response.json()["detail"].lower()
+
+
+@pytest.mark.asyncio
+async def test_publish_refuses_a_single_ad_whose_copy_is_cut_off(
+    client: TestClient, mock_services: dict[str, AsyncMock]
+) -> None:
+    """The guard covers every publish, not just a creative test."""
+    business_id, campaign_id = _ready_campaign(client)
+    creatives = client.get(
+        f"/businesses/{business_id}/campaigns/{campaign_id}/creatives"
+    ).json()
+    selected = next(c for c in creatives if c["status"] == "SELECTED")
+    seeder = Prisma()
+    await seeder.connect()
+    try:
+        await seeder.creative.update(
+            where={"id": selected["id"]}, data={"bodyText": "Handmade. Shop the"}
+        )
+    finally:
+        await seeder.disconnect()
+
+    response = client.post(f"/businesses/{business_id}/campaigns/{campaign_id}/publish")
+
+    assert response.status_code == 400
+    assert f"'{selected['headline']}'" in response.json()["detail"]
+    mock_services["create_campaign"].assert_not_awaited()

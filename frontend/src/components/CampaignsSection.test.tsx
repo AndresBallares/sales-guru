@@ -1,7 +1,7 @@
 import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import type { ReactElement } from 'react'
-import { MemoryRouter } from 'react-router-dom'
+import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { CampaignsSection } from './CampaignsSection'
 import * as api from '../lib/api'
@@ -35,6 +35,7 @@ vi.mock('../lib/api', async (importOriginal) => {
     createCreatives: vi.fn<typeof actual.createCreatives>(),
     listCreatives: vi.fn<typeof actual.listCreatives>(),
     selectCreative: vi.fn<typeof actual.selectCreative>(),
+    deselectCreative: vi.fn<typeof actual.deselectCreative>(),
     reorderCreativeCards: vi.fn<typeof actual.reorderCreativeCards>(),
     removeCreativeCard: vi.fn<typeof actual.removeCreativeCard>(),
     approveCampaign: vi.fn<typeof actual.approveCampaign>(),
@@ -101,6 +102,44 @@ function fakeCreative(overrides: Partial<api.Creative> = {}): api.Creative {
     createdAt: '2026-08-08T00:00:00Z',
     isStale: false,
     ...overrides,
+  }
+}
+
+function fakeCreativeTestPlanContent(): api.CreativeTestPlanContent {
+  const base = fakeTestPlanContent()
+  return {
+    planType: 'CREATIVE_TEST_PLAN',
+    objective: 'SALES',
+    audienceConstraints: { country: 'US', ageMin: 18, languages: ['English'] },
+    creativePersona: {
+      name: 'Milestone gift buyers',
+      description: 'Women 30-55 buying a meaningful piece.',
+      problem: null,
+      desire: null,
+    },
+    hypotheses: [
+      {
+        id: 'creative_angle',
+        statement: 'The on-skin angle will win on cost per add-to-cart.',
+        primaryMetric: 'cost_per_add_to_cart',
+        secondaryMetrics: ['cac', 'ctr'],
+      },
+    ],
+    offer: 'Custom emerald rings',
+    positioning: 'Premium and personal',
+    creativeAngles: ['Product on skin', 'Social proof', 'Gifting'],
+    copyStrategy: 'Lead with the story behind each piece',
+    dailyBudget: 50,
+    durationDays: 10,
+    totalBudget: 500,
+    optimizationEvent: 'PURCHASE',
+    targetCostPerAddToCart: null,
+    successCriteria: base.successCriteria,
+    decisionRules: base.decisionRules,
+    baselineMetrics: base.baselineMetrics,
+    benchmarkContext: base.benchmarkContext,
+    dataSource: base.dataSource,
+    unitEconomics: null,
   }
 }
 
@@ -1529,6 +1568,80 @@ describe('CampaignsSection', () => {
     expect(screen.getByText(/breakeven ROAS 2.50x/)).toBeInTheDocument()
   })
 
+  it('displays a CREATIVE_TEST_PLAN with its own fields', async () => {
+    mockedApi.listCampaigns.mockResolvedValue([
+      {
+        id: 'camp-1',
+        name: null,
+        objective: 'SALES',
+        status: 'READY',
+        productId: 'prod-1',
+        audienceId: 'aud-1',
+        metaCampaignId: null,
+        eventVenueKey: null,
+        startDate: null,
+        endDate: null,
+        pausedReason: null,
+        dailySpendFlag: null,
+        needsDestinationUrl: false,
+      },
+    ])
+    const base = fakeTestPlanContent()
+    mockedApi.createStrategy.mockResolvedValue({
+      id: 'strat-1',
+      campaignId: 'camp-1',
+      createdAt: '2026-10-06T00:00:00Z',
+      content: {
+        planType: 'CREATIVE_TEST_PLAN',
+        objective: 'SALES',
+        audienceConstraints: { country: 'US', ageMin: 18, languages: ['English'] },
+        creativePersona: {
+          name: 'Milestone gift buyers',
+          description: 'Women 30-55 buying a meaningful piece.',
+          problem: null,
+          desire: null,
+        },
+        hypotheses: [
+          {
+            id: 'creative_angle',
+            statement: 'The on-skin angle will win on cost per add-to-cart.',
+            primaryMetric: 'cost_per_add_to_cart',
+            secondaryMetrics: ['cac', 'ctr'],
+          },
+        ],
+        offer: 'Custom emerald rings',
+        positioning: 'Premium and personal',
+        creativeAngles: ['Product on skin', 'Social proof', 'Gifting'],
+        copyStrategy: 'Lead with the story behind each piece',
+        dailyBudget: 50,
+        durationDays: 10,
+        totalBudget: 500,
+        optimizationEvent: 'ADD_TO_CART',
+        targetCostPerAddToCart: 30,
+        successCriteria: base.successCriteria,
+        decisionRules: base.decisionRules,
+        baselineMetrics: base.baselineMetrics,
+        benchmarkContext: base.benchmarkContext,
+        dataSource: base.dataSource,
+        unitEconomics: null,
+      },
+    })
+    const user = userEvent.setup()
+
+    renderCampaigns(<CampaignsSection businessId="biz-1" />)
+    await screen.findByText('Sales — Ready')
+
+    await user.click(screen.getByRole('button', { name: 'Generate strategy' }))
+
+    expect(await screen.findByText(/Creative test/)).toBeInTheDocument()
+    expect(screen.getByText(/runs 3 creative angles/)).toBeInTheDocument()
+    expect(screen.getByText(/cheapest add-to-cart\./)).toBeInTheDocument()
+    expect(screen.getByText(/broad \(Meta Advantage\+\)/)).toBeInTheDocument()
+    expect(screen.getByText(/Milestone gift buyers/)).toBeInTheDocument()
+    expect(screen.getByText('Product on skin')).toBeInTheDocument()
+    expect(screen.getByText(/\$50\/day on one ad set for 10 days/)).toBeInTheDocument()
+  })
+
   it('loads and displays a previously generated strategy for a non-draft campaign', async () => {
     mockedApi.listCampaigns.mockResolvedValue([
       {
@@ -1711,6 +1824,7 @@ describe('CampaignsSection', () => {
       exampleCopy: null,
       proofPoints: [],
       offer: null,
+      adLanguages: ['English'],
       logoUrl: null,
     })
     mockedApi.listCampaigns.mockResolvedValue([
@@ -3318,6 +3432,116 @@ describe('CampaignsSection', () => {
     expect(screen.getByText(/Suggested budget:/)).toBeInTheDocument()
   })
 
+  it('shows a proposed cost cap raise with its number, waiting for approval', async () => {
+    mockedApi.getOptions.mockResolvedValue({
+      ...ALL_OPTIONS,
+      actionTypes: [{ value: 'RAISE_COST_CAP', label: 'Raise cost cap' }],
+    })
+    mockedApi.listCampaigns.mockResolvedValue([
+      {
+        id: 'camp-1',
+        name: null,
+        objective: 'SALES',
+        status: 'LIVE',
+        productId: null,
+        audienceId: null,
+        metaCampaignId: 'meta_campaign_1',
+        eventVenueKey: null,
+        startDate: null,
+        endDate: null,
+        pausedReason: null,
+        dailySpendFlag: null,
+        needsDestinationUrl: false,
+      },
+    ])
+    mockedApi.listRecommendations.mockResolvedValue([
+      fakeRecommendation({
+        actionType: 'RAISE_COST_CAP',
+        suggestedBudget: null,
+        suggestedBid: 25,
+        reasoning: 'The $20.00 cost cap per add-to-cart may be too tight.',
+      }),
+    ])
+
+    renderCampaigns(<CampaignsSection businessId="biz-1" />)
+
+    expect(await screen.findByText('Raise cost cap')).toBeInTheDocument()
+    expect(screen.getByText(/Suggested cost cap:/)).toBeInTheDocument()
+    expect(screen.getByText(/\$25\.00 per result/)).toBeInTheDocument()
+    expect(screen.queryByText(/Suggested budget:/)).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Approve' })).toBeInTheDocument()
+  })
+
+  it('warns when the Pixel looks like its Purchase event is not firing', async () => {
+    mockedApi.listCampaigns.mockResolvedValue([
+      {
+        id: 'camp-1',
+        name: null,
+        objective: 'SALES',
+        status: 'LIVE',
+        productId: null,
+        audienceId: null,
+        metaCampaignId: 'meta_campaign_1',
+        eventVenueKey: null,
+        startDate: null,
+        endDate: null,
+        pausedReason: null,
+        dailySpendFlag: null,
+        pixelWarning: 'Purchase event may not be firing: 0 Purchase events but 41 InitiateCheckout.',
+        needsDestinationUrl: false,
+      },
+    ])
+
+    renderCampaigns(<CampaignsSection businessId="biz-1" />)
+
+    expect(await screen.findByText(/Purchase event may not be firing/)).toBeInTheDocument()
+  })
+
+  it('shows a retargeting proposal and surfaces the refusal when it cannot be created yet', async () => {
+    mockedApi.getOptions.mockResolvedValue({
+      ...ALL_OPTIONS,
+      actionTypes: [{ value: 'START_RETARGETING', label: 'Start retargeting' }],
+    })
+    mockedApi.listCampaigns.mockResolvedValue([
+      {
+        id: 'camp-1',
+        name: null,
+        objective: 'SALES',
+        status: 'LIVE',
+        productId: null,
+        audienceId: null,
+        metaCampaignId: 'meta_campaign_1',
+        eventVenueKey: null,
+        startDate: null,
+        endDate: null,
+        pausedReason: null,
+        dailySpendFlag: null,
+        needsDestinationUrl: false,
+      },
+    ])
+    mockedApi.listRecommendations.mockResolvedValue([
+      fakeRecommendation({
+        actionType: 'START_RETARGETING',
+        suggestedBudget: 15,
+        reasoning: 'Pixel recorded 1,923 PageView events (events, not people).',
+      }),
+    ])
+    mockedApi.approveRecommendation.mockRejectedValue(
+      new api.ApiError(409, 'Creating a retargeting campaign is not built yet'),
+    )
+    const user = userEvent.setup()
+
+    renderCampaigns(<CampaignsSection businessId="biz-1" />)
+
+    expect(await screen.findByText('Start retargeting')).toBeInTheDocument()
+    expect(screen.getByText(/events, not people/)).toBeInTheDocument()
+    expect(screen.getByText(/Suggested budget:/)).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'Approve' }))
+
+    expect(await screen.findByText(/not built yet/)).toBeInTheDocument()
+  })
+
   it('analyzes a live campaign and shows the new recommendation', async () => {
     mockedApi.listCampaigns.mockResolvedValue([
       {
@@ -3756,5 +3980,159 @@ describe('CampaignsSection', () => {
     await screen.findByText(/Live on Meta/)
 
     expect(screen.queryByRole('button', { name: 'Evaluate test' })).not.toBeInTheDocument()
+  })
+})
+
+describe('CampaignsSection creative test (CREATIVE_TEST_PLAN)', () => {
+  const CAMPAIGN = {
+    id: 'camp-1',
+    name: null,
+    objective: 'SALES' as const,
+    status: 'ADS_GENERATED',
+    productId: null,
+    audienceId: null,
+    metaCampaignId: null,
+    eventVenueKey: null,
+    startDate: null,
+    endDate: null,
+    pausedReason: null,
+    dailySpendFlag: null,
+    needsDestinationUrl: false,
+  }
+
+  function fourCreatives(selectedIds: string[]): api.Creative[] {
+    return ['A', 'B', 'C', 'D'].map((letter, index) =>
+      fakeCreative({
+        id: `creative-${index + 1}`,
+        headline: `Headline ${letter}`,
+        status: selectedIds.includes(`creative-${index + 1}`) ? 'SELECTED' : 'GENERATED',
+      }),
+    )
+  }
+
+  beforeEach(() => {
+    mockedApi.getStrategy.mockResolvedValue({
+      id: 'strat-1',
+      campaignId: 'camp-1',
+      createdAt: '2026-10-06T00:00:00Z',
+      content: fakeCreativeTestPlanContent(),
+    })
+  })
+
+  it('adds an ad to the test without collapsing the list or rejecting the others', async () => {
+    mockedApi.listCampaigns.mockResolvedValue([CAMPAIGN])
+    mockedApi.listCreatives.mockResolvedValueOnce(fourCreatives([]))
+    mockedApi.listCreatives.mockResolvedValue(fourCreatives(['creative-1']))
+    mockedApi.selectCreative.mockResolvedValue(
+      fakeCreative({ id: 'creative-1', headline: 'Headline A', status: 'SELECTED' }),
+    )
+    const user = userEvent.setup()
+
+    renderCampaigns(<CampaignsSection businessId="biz-1" />)
+    await screen.findByText('Headline A')
+    expect(screen.getByText('0 of 3–4 ads selected')).toBeInTheDocument()
+
+    await user.click(screen.getAllByRole('button', { name: 'Add to test' })[0])
+
+    expect(mockedApi.selectCreative).toHaveBeenCalledWith('biz-1', 'camp-1', 'creative-1')
+    expect(await screen.findByText('1 of 3–4 ads selected')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Remove from test' })).toBeInTheDocument()
+    // The other ads are still listed (not rejected, not hidden).
+    expect(screen.getByText('Headline B')).toBeInTheDocument()
+    expect(screen.getByText('Headline D')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Review & publish' })).not.toBeInTheDocument()
+  })
+
+  it('offers Review & publish once three ads are selected, and opens the ad page', async () => {
+    mockedApi.listCampaigns.mockResolvedValue([{ ...CAMPAIGN, status: 'PENDING_APPROVAL' }])
+    mockedApi.listCreatives.mockResolvedValue(
+      fourCreatives(['creative-1', 'creative-2', 'creative-3']),
+    )
+    const user = userEvent.setup()
+
+    render(
+      <MemoryRouter initialEntries={['/businesses/biz-1']}>
+        <Routes>
+          <Route path="/businesses/:id" element={<CampaignsSection businessId="biz-1" />} />
+          <Route
+            path="/businesses/biz-1/campaigns/camp-1/ad"
+            element={<p>AD PAGE REACHED</p>}
+          />
+        </Routes>
+      </MemoryRouter>,
+    )
+    await screen.findByText('Headline A')
+    expect(screen.getByText('3 of 3–4 ads selected')).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'Review & publish' }))
+
+    expect(await screen.findByText('AD PAGE REACHED')).toBeInTheDocument()
+  })
+
+  it('stops offering Add to test at four selected ads', async () => {
+    mockedApi.listCampaigns.mockResolvedValue([{ ...CAMPAIGN, status: 'PENDING_APPROVAL' }])
+    mockedApi.listCreatives.mockResolvedValue(
+      fourCreatives(['creative-1', 'creative-2', 'creative-3', 'creative-4']),
+    )
+
+    renderCampaigns(<CampaignsSection businessId="biz-1" />)
+    await screen.findByText('Headline A')
+
+    expect(screen.getByText('4 of 3–4 ads selected')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Add to test' })).not.toBeInTheDocument()
+    expect(screen.getAllByRole('button', { name: 'Remove from test' })).toHaveLength(4)
+  })
+
+  it('removes an ad from the test', async () => {
+    mockedApi.listCampaigns.mockResolvedValue([{ ...CAMPAIGN, status: 'PENDING_APPROVAL' }])
+    mockedApi.listCreatives.mockResolvedValueOnce(
+      fourCreatives(['creative-1', 'creative-2', 'creative-3']),
+    )
+    mockedApi.listCreatives.mockResolvedValue(fourCreatives(['creative-2', 'creative-3']))
+    mockedApi.deselectCreative.mockResolvedValue(
+      fakeCreative({ id: 'creative-1', headline: 'Headline A', status: 'GENERATED' }),
+    )
+    const user = userEvent.setup()
+
+    renderCampaigns(<CampaignsSection businessId="biz-1" />)
+    await screen.findByText('Headline A')
+
+    await user.click(screen.getAllByRole('button', { name: 'Remove from test' })[0])
+
+    expect(mockedApi.deselectCreative).toHaveBeenCalledWith('biz-1', 'camp-1', 'creative-1')
+    expect(await screen.findByText('2 of 3–4 ads selected')).toBeInTheDocument()
+  })
+
+  it('falls back to generic messages when adding or removing fails unexpectedly', async () => {
+    mockedApi.listCampaigns.mockResolvedValue([CAMPAIGN])
+    mockedApi.listCreatives.mockResolvedValue(fourCreatives(['creative-2']))
+    mockedApi.selectCreative.mockRejectedValue(new Error('network down'))
+    mockedApi.deselectCreative.mockRejectedValue(new Error('network down'))
+    const user = userEvent.setup()
+
+    renderCampaigns(<CampaignsSection businessId="biz-1" />)
+    await screen.findByText('Headline A')
+
+    await user.click(screen.getAllByRole('button', { name: 'Add to test' })[0])
+    expect(await screen.findByText('Could not add ad.')).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'Remove from test' }))
+    expect(await screen.findByText('Could not remove ad.')).toBeInTheDocument()
+  })
+
+  it('shows an error when adding an ad fails', async () => {
+    mockedApi.listCampaigns.mockResolvedValue([CAMPAIGN])
+    mockedApi.listCreatives.mockResolvedValue(fourCreatives([]))
+    mockedApi.selectCreative.mockRejectedValue(
+      new api.ApiError(400, 'A creative test runs at most 4 ads'),
+    )
+    const user = userEvent.setup()
+
+    renderCampaigns(<CampaignsSection businessId="biz-1" />)
+    await screen.findByText('Headline A')
+
+    await user.click(screen.getAllByRole('button', { name: 'Add to test' })[0])
+
+    expect(await screen.findByText('A creative test runs at most 4 ads')).toBeInTheDocument()
   })
 })

@@ -69,6 +69,10 @@ export function BrandProfileForm({
     profile?.proofPoints.join('\n') ?? '',
   )
   const [offer, setOffer] = useState(profile?.offer ?? '')
+  // Comma-separated in the input, split back into a list on submit.
+  const [adLanguagesText, setAdLanguagesText] = useState(
+    (profile?.adLanguages ?? ['English']).join(', '),
+  )
   const [formError, setFormError] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
 
@@ -102,6 +106,10 @@ export function BrandProfileForm({
         .split('\n')
         .map((line) => line.trim())
         .filter(Boolean)
+      const adLanguages = adLanguagesText
+        .split(',')
+        .map((language) => language.trim())
+        .filter(Boolean)
       const saved = isEditing
         ? await updateBrandProfile(businessId, {
             description,
@@ -115,6 +123,7 @@ export function BrandProfileForm({
             exampleCopy: exampleCopy || null,
             proofPoints,
             offer: offer || null,
+            adLanguages,
           })
         : await createBrandProfile(businessId, {
             description,
@@ -128,6 +137,7 @@ export function BrandProfileForm({
             exampleCopy: exampleCopy || undefined,
             proofPoints,
             offer: offer || undefined,
+            adLanguages,
           })
       onSaved(saved)
     } catch (err) {
@@ -291,6 +301,21 @@ export function BrandProfileForm({
           placeholder="20% off first order with WELCOME20"
           value={offer}
           onChange={(event) => setOffer(event.target.value)}
+        />
+      </div>
+      <div className="field">
+        <label htmlFor="ad-languages">
+          Ad languages{' '}
+          <span className="field-hint">
+            (comma-separated — ads are shown only to people who use these
+            languages; leave blank for English)
+          </span>
+        </label>
+        <input
+          id="ad-languages"
+          placeholder="English, Spanish"
+          value={adLanguagesText}
+          onChange={(event) => setAdLanguagesText(event.target.value)}
         />
       </div>
       {formError && (

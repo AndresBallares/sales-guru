@@ -7,7 +7,17 @@ from pydantic import Field
 
 from app.schemas.base import CamelCaseModel
 
-ActionType = Literal["PAUSE_AD", "INCREASE_BUDGET", "DECREASE_BUDGET"]
+# What the LLM Optimizer may choose, vs. everything that can be stored: the
+# deterministic creative-test rules also raise RAISE_COST_CAP (a proposal for
+# the user to approve), which the model never picks.
+GeneratedActionType = Literal["PAUSE_AD", "INCREASE_BUDGET", "DECREASE_BUDGET"]
+ActionType = Literal[
+    "PAUSE_AD",
+    "INCREASE_BUDGET",
+    "DECREASE_BUDGET",
+    "RAISE_COST_CAP",
+    "START_RETARGETING",
+]
 RiskLevel = Literal["LOW", "MEDIUM", "HIGH"]
 RecommendationStatus = Literal["PENDING", "APPLIED", "REJECTED", "SUPERSEDED"]
 
@@ -19,6 +29,8 @@ ACTION_TYPE_LABELS: dict[ActionType, str] = {
     "PAUSE_AD": "Pause ad",
     "INCREASE_BUDGET": "Increase budget",
     "DECREASE_BUDGET": "Decrease budget",
+    "RAISE_COST_CAP": "Raise cost cap",
+    "START_RETARGETING": "Start retargeting",
 }
 
 
@@ -33,11 +45,16 @@ class GeneratedRecommendation(CamelCaseModel):
     shown — this field is the model's raw, unbounded suggestion.
     """
 
-    action_type: ActionType
+    action_type: GeneratedActionType
     reasoning: str
     confidence: float = Field(ge=0, le=1)
     risk: RiskLevel
     suggested_budget: float | None = None
+    # PAUSE_AD only, and only when the ad set holds several ads (a creative
+    # test): the id of the one ad to pause, exactly as listed in the prompt.
+    # Validated against that list in app/services/optimizer.py; cleared for
+    # every other action.
+    target_ad_id: str | None = None
 
 
 class RecommendationResponse(CamelCaseModel):
@@ -54,6 +71,7 @@ class RecommendationResponse(CamelCaseModel):
     target_ad_id: str | None
     current_budget: float | None
     suggested_budget: float | None
+    suggested_bid: float | None
     reasoning: str
     confidence: float
     risk: RiskLevel
