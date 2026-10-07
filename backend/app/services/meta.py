@@ -1313,19 +1313,28 @@ async def fetch_account_historical_performance(
 
 
 def has_meaningful_history(rows: list[AccountCampaignInsights]) -> bool:
-    """Whether an account's historical pull shows any real spend.
+    """Whether an account's historical pull shows real advertising history.
 
     Args:
         rows: The result of fetch_account_historical_performance.
 
     Returns:
-        True if any campaign on the account has spent anything at all —
-        the bar for "this business has run ads before" is deliberately
-        low (any real spend, not a dollar threshold): a self-reported "no"
-        should never override real evidence to the contrary, however
-        small (confirmed with the user 2026-08-31).
+        True when the account's lifetime spend AND clicks, summed across every
+        campaign, reach both thresholds (Settings.meaningful_history_min_spend,
+        default $500, and meaningful_history_min_clicks, default 300). A few
+        dollars of spend is not history: it used to count (confirmed
+        2026-08-31) and then pushed accounts off their first creative test on
+        an experiment too small to learn anything from, so the bar is now a
+        real, if modest, amount of delivery. Spend with almost no clicks (a
+        campaign that barely delivered) doesn't count either.
     """
-    return any(row.spend > 0 for row in rows)
+    settings = get_settings()
+    total_spend = sum(row.spend for row in rows)
+    total_clicks = sum(row.clicks for row in rows)
+    return (
+        total_spend >= settings.meaningful_history_min_spend
+        and total_clicks >= settings.meaningful_history_min_clicks
+    )
 
 
 async def pause_meta_ad(*, access_token: str, meta_ad_id: str) -> None:

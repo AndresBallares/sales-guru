@@ -10,6 +10,7 @@ falls back to the business's one-time self-reported answer, asking for it
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from prisma.models import Campaign, Strategy
+from prisma.types import CampaignWhereInput
 
 from app.core.authz import get_owned_campaign
 from app.core.db import db
@@ -59,6 +60,26 @@ def _to_response(strategy: Strategy) -> StrategyResponse:
         content=StrategyContentAdapter.validate_json(strategy.content),
         created_at=strategy.createdAt,
     )
+
+
+async def _first_creative_test_published(business_id: str) -> bool:
+    """Whether this business has already published its controlled Test #1.
+
+    Args:
+        business_id: The business to check.
+
+    Returns:
+        True when any of its campaigns has been published to Meta and its
+        strategy is a CREATIVE_TEST_PLAN. An unpublished test doesn't count:
+        it hasn't produced anything to learn from yet.
+    """
+    where: CampaignWhereInput = {
+        "businessId": business_id,
+        "NOT": [{"metaCampaignId": None}],
+        "strategy": {"is": {"content": {"contains": '"CREATIVE_TEST_PLAN"'}}},
+    }
+    published = await db.campaign.find_many(where=where, take=1)
+    return len(published) > 0
 
 
 @router.post("", response_model=StrategyResponse, status_code=status.HTTP_201_CREATED)
@@ -146,7 +167,14 @@ async def create_strategy(
         elif campaign.objective == "SALES":
             # Cold-start SALES campaigns test creative angles in one broad
             # ad set; every other objective keeps the audience TEST_PLAN.
-            plan_type = "CREATIVE_TEST_PLAN"
+            # The test is Test #1 only: the user can opt out for a standard
+            # campaign (which allows carousel), and once a creative test has
+            # been published for this business later campaigns are standard.
+            wants_standard = body is not None and body.strategy_mode == "STANDARD"
+            if wants_standard or await _first_creative_test_published(business.id):
+                plan_type = "DATA_DRIVEN_STRATEGY"
+            else:
+                plan_type = "CREATIVE_TEST_PLAN"
         else:
             plan_type = "TEST_PLAN"
 

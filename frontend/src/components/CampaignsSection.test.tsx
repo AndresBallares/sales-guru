@@ -1450,7 +1450,7 @@ describe('CampaignsSection', () => {
     expect(screen.getByText('Luxury')).toBeInTheDocument()
     expect(screen.getByText(/Lead with the story/)).toBeInTheDocument()
     expect(screen.getByText(/\$25\/day/)).toBeInTheDocument()
-    expect(mockedApi.createStrategy).toHaveBeenCalledWith('biz-1', 'camp-1', undefined)
+    expect(mockedApi.createStrategy).toHaveBeenCalledWith('biz-1', 'camp-1', undefined, undefined)
     expect(
       screen.getByRole('button', { name: 'Regenerate strategy' }),
     ).toBeInTheDocument()
@@ -1521,7 +1521,7 @@ describe('CampaignsSection', () => {
     await user.click(screen.getByRole('button', { name: 'Yes' }))
 
     expect(await screen.findByText(/Custom emerald rings/)).toBeInTheDocument()
-    expect(mockedApi.createStrategy).toHaveBeenNthCalledWith(2, 'biz-1', 'camp-1', true)
+    expect(mockedApi.createStrategy).toHaveBeenNthCalledWith(2, 'biz-1', 'camp-1', true, undefined)
     expect(
       screen.queryByText('Has this business run advertising campaigns before?'),
     ).not.toBeInTheDocument()
@@ -4146,6 +4146,18 @@ describe('CampaignsSection creative test (CREATIVE_TEST_PLAN)', () => {
     expect(screen.queryByRole('button', { name: 'Regenerate headline' })).not.toBeInTheDocument()
   })
 
+  it('explains why carousel is not part of Test #1 and disables it', async () => {
+    mockedApi.listCampaigns.mockResolvedValue([CAMPAIGN])
+    mockedApi.listCreatives.mockResolvedValue(fourCreatives([]))
+
+    renderCampaigns(<CampaignsSection businessId="biz-1" />)
+    await screen.findByText('Headline A')
+
+    expect(screen.getByRole('radio', { name: 'Carousel' })).toBeDisabled()
+    expect(screen.getByRole('radio', { name: 'Single image' })).toBeChecked()
+    expect(screen.getByText(/Carousel isn.t part of Test #1/)).toBeInTheDocument()
+  })
+
   it('stops offering Add to test at four selected ads', async () => {
     mockedApi.listCampaigns.mockResolvedValue([{ ...CAMPAIGN, status: 'PENDING_APPROVAL' }])
     mockedApi.listCreatives.mockResolvedValue(
@@ -4211,5 +4223,74 @@ describe('CampaignsSection creative test (CREATIVE_TEST_PLAN)', () => {
     await user.click(screen.getAllByRole('button', { name: 'Add to test' })[0])
 
     expect(await screen.findByText('A creative test runs at most 4 ads')).toBeInTheDocument()
+  })
+})
+
+describe('CampaignsSection campaign type (creative test vs standard)', () => {
+  const SALES_CAMPAIGN = {
+    id: 'camp-1',
+    name: null,
+    objective: 'SALES' as const,
+    status: 'READY',
+    productId: 'prod-1',
+    audienceId: 'aud-1',
+    metaCampaignId: null,
+    eventVenueKey: null,
+    startDate: null,
+    endDate: null,
+    pausedReason: null,
+    dailySpendFlag: null,
+    needsDestinationUrl: false,
+  }
+
+  it('defaults a SALES campaign to the creative test and sends no mode', async () => {
+    mockedApi.listCampaigns.mockResolvedValue([SALES_CAMPAIGN])
+    mockedApi.createStrategy.mockResolvedValue(FAKE_STRATEGY)
+    const user = userEvent.setup()
+
+    renderCampaigns(<CampaignsSection businessId="biz-1" />)
+    await screen.findByText('Sales — Ready')
+    expect(
+      screen.getByRole('radio', { name: /Creative test \(recommended for a first campaign\)/ }),
+    ).toBeChecked()
+
+    await user.click(screen.getByRole('button', { name: 'Generate strategy' }))
+
+    await waitFor(() =>
+      expect(mockedApi.createStrategy).toHaveBeenCalledWith('biz-1', 'camp-1', undefined, undefined),
+    )
+  })
+
+  it('lets the user choose a standard campaign, which allows carousel', async () => {
+    mockedApi.listCampaigns.mockResolvedValue([SALES_CAMPAIGN])
+    mockedApi.createStrategy.mockResolvedValue(FAKE_STRATEGY)
+    const user = userEvent.setup()
+
+    renderCampaigns(<CampaignsSection businessId="biz-1" />)
+    await screen.findByText('Sales — Ready')
+
+    await user.click(screen.getByRole('radio', { name: /Standard campaign/ }))
+    await user.click(screen.getByRole('radio', { name: /Creative test/ }))
+    await user.click(screen.getByRole('radio', { name: /Standard campaign/ }))
+    await user.click(screen.getByRole('button', { name: 'Generate strategy' }))
+
+    await waitFor(() =>
+      expect(mockedApi.createStrategy).toHaveBeenCalledWith(
+        'biz-1',
+        'camp-1',
+        undefined,
+        'STANDARD',
+      ),
+    )
+    expect(await screen.findByRole('radio', { name: 'Carousel' })).toBeEnabled()
+  })
+
+  it('does not ask for a campaign type outside SALES', async () => {
+    mockedApi.listCampaigns.mockResolvedValue([{ ...SALES_CAMPAIGN, objective: 'TRAFFIC' }])
+
+    renderCampaigns(<CampaignsSection businessId="biz-1" />)
+    await screen.findByText('Traffic — Ready')
+
+    expect(screen.queryByRole('radio', { name: /Standard campaign/ })).not.toBeInTheDocument()
   })
 })

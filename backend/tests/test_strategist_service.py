@@ -674,6 +674,31 @@ async def test_generate_strategy_returns_a_data_driven_strategy_plan(
     ]
 
 
+@pytest.mark.asyncio
+async def test_data_driven_prompt_recommends_a_carousel_as_a_separate_experiment(
+    anthropic_api_key: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Outside Test #1 carousel is allowed: the strategist suggests it as a
+    follow-up experiment, never mixed into a single-format test."""
+    create = _mock_client_returning(
+        monkeypatch,
+        [SimpleNamespace(type="tool_use", input=_VALID_DATA_DRIVEN_STRATEGY_INPUT)],
+    )
+
+    await strategist.generate_strategy(
+        business=_fake_business(),
+        product=_fake_product(),
+        audience=_fake_audience(),
+        objective="SALES",
+        plan_type="DATA_DRIVEN_STRATEGY",
+    )
+
+    assert create.await_args is not None
+    prompt = str(create.await_args.kwargs["messages"][0]["content"])
+    assert "recommend a carousel as a subsequent experiment" in prompt
+    assert "every ad a carousel" in prompt
+
+
 @pytest.fixture
 def fake_llm_mode(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     """Turn on fake_llm_enabled and make constructing a real client blow up."""

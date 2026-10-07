@@ -1360,26 +1360,57 @@ async def test_fetch_account_historical_performance_raises_on_failure(
         )
 
 
-def test_has_meaningful_history_true_when_any_campaign_has_spend() -> None:
-    """Any real spend at all counts — no dollar threshold (see docstring)."""
+def _history_row(name: str, spend: float, clicks: int) -> meta.AccountCampaignInsights:
+    return meta.AccountCampaignInsights(
+        campaign_name=name,
+        impressions=clicks * 50,
+        clicks=clicks,
+        spend=spend,
+        conversions=0,
+    )
+
+
+def test_a_little_spend_is_not_meaningful_history() -> None:
+    """A $5 experiment is not "has run ads before": any amount of spend used
+    to count, which pushed accounts off the first test on a few dollars."""
+    rows = [_history_row("Holiday Push", spend=5.0, clicks=1)]
+
+    assert meta.has_meaningful_history(rows) is False
+
+
+def test_history_needs_both_enough_spend_and_enough_clicks() -> None:
+    assert meta.has_meaningful_history([_history_row("A", 500.0, 300)]) is True
+    assert meta.has_meaningful_history([_history_row("A", 499.99, 300)]) is False
+    assert meta.has_meaningful_history([_history_row("A", 500.0, 299)]) is False
+    # Spend with almost no clicks is a broken or barely-delivered campaign.
+    assert meta.has_meaningful_history([_history_row("A", 5000.0, 10)]) is False
+
+
+def test_history_is_summed_across_the_accounts_campaigns() -> None:
     rows = [
-        meta.AccountCampaignInsights(
-            campaign_name="Spring Sale",
-            impressions=0,
-            clicks=0,
-            spend=0.0,
-            conversions=0,
-        ),
-        meta.AccountCampaignInsights(
-            campaign_name="Holiday Push",
-            impressions=10,
-            clicks=1,
-            spend=5.0,
-            conversions=0,
-        ),
+        _history_row("Spring Sale", 300.0, 150),
+        _history_row("Holiday Push", 250.0, 200),
     ]
 
     assert meta.has_meaningful_history(rows) is True
+
+
+def test_history_thresholds_are_configurable(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("MEANINGFUL_HISTORY_MIN_SPEND", "50")
+    monkeypatch.setenv("MEANINGFUL_HISTORY_MIN_CLICKS", "20")
+    get_settings.cache_clear()
+    try:
+        assert meta.has_meaningful_history([_history_row("A", 60.0, 25)]) is True
+        assert meta.has_meaningful_history([_history_row("A", 40.0, 25)]) is False
+    finally:
+        get_settings.cache_clear()
+
+
+def test_the_default_history_thresholds_are_500_dollars_and_300_clicks() -> None:
+    get_settings.cache_clear()
+
+    assert get_settings().meaningful_history_min_spend == 500.0
+    assert get_settings().meaningful_history_min_clicks == 300
 
 
 def test_has_meaningful_history_false_with_no_spend_or_no_rows() -> None:
