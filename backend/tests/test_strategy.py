@@ -8,6 +8,7 @@ the user 2026-08-31).
 """
 
 from datetime import UTC, datetime, timedelta
+from typing import Any
 from unittest.mock import AsyncMock
 
 import pydantic
@@ -29,6 +30,7 @@ from app.schemas.strategy import (
 from app.services import strategist as strategist_service
 from app.services.meta import AccountCampaignInsights, MetaConnectionError
 from fastapi.testclient import TestClient
+from prisma import Prisma
 
 _FAKE_DATA_DRIVEN_STRATEGY = DataDrivenStrategyContent(
     objective="SALES",
@@ -262,10 +264,10 @@ def mock_real_account_history(monkeypatch: pytest.MonkeyPatch) -> AsyncMock:
         return_value=[
             AccountCampaignInsights(
                 campaign_name="Spring Sale",
-                impressions=5000,
-                clicks=200,
-                spend=150.0,
-                conversions=5,
+                impressions=50000,
+                clicks=600,
+                spend=900.0,
+                conversions=12,
             )
         ]
     )
@@ -661,3 +663,152 @@ def test_get_strategy_returns_the_stored_strategy(client: TestClient) -> None:
 
     assert response.status_code == 200
     assert response.json() == created
+
+
+# --- Test #1 is not a gate: carousel (and everything else) outside it ----------
+
+
+def _post_strategy(
+    client: TestClient, business_id: str, campaign_id: str, **body: object
+) -> Any:
+    return client.post(
+        f"/businesses/{business_id}/campaigns/{campaign_id}/strategy", json=body
+    )
+
+
+def test_a_cold_start_sales_campaign_defaults_to_the_creative_test(
+    client: TestClient, mock_generate_strategy: AsyncMock
+) -> None:
+    mock_generate_strategy.return_value = _FAKE_CREATIVE_TEST_PLAN
+    _signed_up_client(client)
+    business_id = _create_business(client)
+    campaign_id = _create_campaign(client, business_id)
+
+    _post_strategy(
+        client, business_id, campaign_id, hasPriorAdvertisingExperience=False
+    )
+
+    assert mock_generate_strategy.call_args.kwargs["plan_type"] == "CREATIVE_TEST_PLAN"
+
+
+def test_a_standard_campaign_skips_the_creative_test(
+    client: TestClient, mock_generate_strategy: AsyncMock
+) -> None:
+    """The user can run a normal campaign instead of Test #1; that is a
+    DATA_DRIVEN_STRATEGY, which allows carousel, with no spend needed."""
+    _signed_up_client(client)
+    business_id = _create_business(client)
+    campaign_id = _create_campaign(client, business_id)
+
+    response = _post_strategy(
+        client,
+        business_id,
+        campaign_id,
+        hasPriorAdvertisingExperience=False,
+        strategyMode="STANDARD",
+    )
+
+    assert response.status_code == 201
+    assert (
+        mock_generate_strategy.call_args.kwargs["plan_type"] == "DATA_DRIVEN_STRATEGY"
+    )
+
+
+def test_the_standard_choice_is_ignored_for_other_objectives(
+    client: TestClient, mock_generate_strategy: AsyncMock
+) -> None:
+    mock_generate_strategy.return_value = _FAKE_TEST_PLAN
+    _signed_up_client(client)
+    business_id = _create_business(client)
+    campaign_id = _create_campaign(client, business_id, objective="TRAFFIC")
+
+    _post_strategy(
+        client,
+        business_id,
+        campaign_id,
+        hasPriorAdvertisingExperience=False,
+        strategyMode="STANDARD",
+    )
+
+    assert mock_generate_strategy.call_args.kwargs["plan_type"] == "TEST_PLAN"
+
+
+def test_a_tiny_amount_of_spend_no_longer_counts_as_history(
+    client: TestClient,
+    mock_generate_strategy: AsyncMock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    mock_generate_strategy.return_value = _FAKE_CREATIVE_TEST_PLAN
+    monkeypatch.setattr(
+        strategy_module,
+        "fetch_account_historical_performance",
+        AsyncMock(
+            return_value=[
+                AccountCampaignInsights(
+                    campaign_name="Tiny experiment",
+                    impressions=400,
+                    clicks=8,
+                    spend=12.0,
+                    conversions=0,
+                )
+            ]
+        ),
+    )
+    _signed_up_client(client)
+    business_id = _create_business(client)
+    campaign_id = _create_campaign(client, business_id)
+    _connect_meta(client, business_id)
+
+    _post_strategy(
+        client, business_id, campaign_id, hasPriorAdvertisingExperience=False
+    )
+
+    assert mock_generate_strategy.call_args.kwargs["plan_type"] == "CREATIVE_TEST_PLAN"
+
+
+async def _publish_marker(campaign_id: str, meta_campaign_id: str | None) -> None:
+    seeder = Prisma()
+    await seeder.connect()
+    try:
+        await seeder.campaign.update(
+            where={"id": campaign_id}, data={"metaCampaignId": meta_campaign_id}
+        )
+    finally:
+        await seeder.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_once_the_first_creative_test_is_published_later_campaigns_are_not_tests(
+    client: TestClient, mock_generate_strategy: AsyncMock
+) -> None:
+    """Test #1 happens once per business. After it is published, new SALES
+    campaigns are standard ones (carousel allowed), spend or no spend."""
+    mock_generate_strategy.return_value = _FAKE_CREATIVE_TEST_PLAN
+    _signed_up_client(client)
+    business_id = _create_business(client)
+    first = _create_campaign(client, business_id)
+    _post_strategy(client, business_id, first, hasPriorAdvertisingExperience=False)
+    await _publish_marker(first, "meta_campaign_1")
+    second = _create_campaign(client, business_id)
+
+    _post_strategy(client, business_id, second)
+
+    assert (
+        mock_generate_strategy.call_args.kwargs["plan_type"] == "DATA_DRIVEN_STRATEGY"
+    )
+
+
+@pytest.mark.asyncio
+async def test_an_unpublished_creative_test_does_not_use_up_test_one(
+    client: TestClient, mock_generate_strategy: AsyncMock
+) -> None:
+    mock_generate_strategy.return_value = _FAKE_CREATIVE_TEST_PLAN
+    _signed_up_client(client)
+    business_id = _create_business(client)
+    first = _create_campaign(client, business_id)
+    _post_strategy(client, business_id, first, hasPriorAdvertisingExperience=False)
+    second = _create_campaign(client, business_id)
+
+    _post_strategy(client, business_id, second)
+
+    assert mock_generate_strategy.call_args.kwargs["plan_type"] == "CREATIVE_TEST_PLAN"

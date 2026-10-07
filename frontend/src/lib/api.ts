@@ -846,17 +846,23 @@ export interface Strategy {
 // history either; omitting it when the backend doesn't need it is fine.
 // A 428 response (ApiError with status 428) means the backend does need
 // it and this call should be retried with an answer.
+// SALES with no real ad history defaults to the controlled first creative test
+// (single-image only); STANDARD opts out for a normal campaign that allows carousel.
+export type StrategyMode = 'CREATIVE_TEST' | 'STANDARD'
+
 export function createStrategy(
   businessId: string,
   campaignId: string,
   hasPriorAdvertisingExperience?: boolean,
+  strategyMode?: StrategyMode,
 ): Promise<Strategy> {
+  const body = {
+    ...(hasPriorAdvertisingExperience === undefined ? {} : { hasPriorAdvertisingExperience }),
+    ...(strategyMode === undefined ? {} : { strategyMode }),
+  }
   return request<Strategy>(`/businesses/${businessId}/campaigns/${campaignId}/strategy`, {
     method: 'POST',
-    body:
-      hasPriorAdvertisingExperience === undefined
-        ? undefined
-        : JSON.stringify({ hasPriorAdvertisingExperience }),
+    body: Object.keys(body).length === 0 ? undefined : JSON.stringify(body),
   })
 }
 
@@ -1142,6 +1148,7 @@ export type ActionType =
   | 'DECREASE_BUDGET'
   | 'RAISE_COST_CAP'
   | 'START_RETARGETING'
+  | 'TEST_CAROUSEL'
 export type RiskLevel = 'LOW' | 'MEDIUM' | 'HIGH'
 export type RecommendationStatus = 'PENDING' | 'APPLIED' | 'REJECTED' | 'SUPERSEDED'
 

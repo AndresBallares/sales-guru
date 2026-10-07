@@ -57,7 +57,7 @@ from app.services.benchmarks import JEWELRY_META_BENCHMARKS
 from app.services.meta import CampaignInsights, MetaConnectionError
 from app.services.retargeting import RetargetingNotBuiltError
 from fastapi.testclient import TestClient
-from prisma import Prisma
+from prisma import Base64, Prisma
 from prisma.models import Campaign
 
 
@@ -3266,3 +3266,153 @@ async def test_the_hourly_job_runs_the_pixel_check(
     _run(client, optimization_jobs.collect_metrics_for_all_live_campaigns)
 
     assert len(await _retargeting_recs(campaign_id)) == 1
+
+
+# ── Carousel as a follow-up experiment (after Test #1) ───────
+
+
+async def _add_product_photo(campaign_id: str) -> None:
+    """Give the campaign's product a second photo (it starts with one)."""
+    seeder = Prisma()
+    await seeder.connect()
+    try:
+        campaign = await seeder.campaign.find_unique(where={"id": campaign_id})
+        assert campaign is not None and campaign.productId is not None
+        await seeder.productimage.create(
+            data={
+                "productId": campaign.productId,
+                "data": Base64.encode(b"x"),
+                "contentType": "image/jpeg",
+                "position": 1,
+            }
+        )
+    finally:
+        await seeder.disconnect()
+
+
+async def _carousel_recs(campaign_id: str) -> list[Any]:
+    return [
+        r
+        for r in await _recommendations(campaign_id)
+        if r.actionType == "TEST_CAROUSEL"
+    ]
+
+
+async def _mature_test_with_a_winner(
+    client: TestClient, *, hours: float = 130.0, winner_add_to_carts: int = 6
+) -> tuple[str, list[str]]:
+    campaign_id, ads = await _atc_test_with_ads(client)
+    await _age_the_test(campaign_id, ads, hours=hours)
+    await _seed_ad_metric(
+        campaign_id, ads[0], spend=40.0, add_to_cart=winner_add_to_carts
+    )
+    for other in ads[1:]:
+        await _seed_ad_metric(campaign_id, other, spend=40.0, add_to_cart=2)
+    return campaign_id, ads
+
+
+@pytest.mark.asyncio
+async def test_a_finished_creative_test_with_a_winner_proposes_a_carousel_experiment(
+    client: TestClient, mock_services: dict[str, AsyncMock]
+) -> None:
+    campaign_id, _ = await _mature_test_with_a_winner(client)
+    await _add_product_photo(campaign_id)
+
+    await _run_rules(client, campaign_id)
+
+    recs = await _carousel_recs(campaign_id)
+    assert len(recs) == 1
+    assert (recs[0].status, recs[0].requiresApproval) == ("PENDING", True)
+    assert "Ad 0" in recs[0].reasoning
+    assert "single-image" in recs[0].reasoning
+    assert "carousel" in recs[0].reasoning
+
+
+@pytest.mark.asyncio
+async def test_no_carousel_proposal_before_the_test_has_run_five_days(
+    client: TestClient, mock_services: dict[str, AsyncMock]
+) -> None:
+    campaign_id, _ = await _mature_test_with_a_winner(client, hours=72.0)
+    await _add_product_photo(campaign_id)
+
+    await _run_rules(client, campaign_id)
+
+    assert await _carousel_recs(campaign_id) == []
+
+
+@pytest.mark.asyncio
+async def test_no_carousel_proposal_without_a_clear_winner(
+    client: TestClient, mock_services: dict[str, AsyncMock]
+) -> None:
+    campaign_id, _ = await _mature_test_with_a_winner(client, winner_add_to_carts=4)
+    await _add_product_photo(campaign_id)
+
+    await _run_rules(client, campaign_id)
+
+    assert await _carousel_recs(campaign_id) == []
+
+
+@pytest.mark.asyncio
+async def test_no_carousel_proposal_for_a_product_with_one_photo(
+    client: TestClient, mock_services: dict[str, AsyncMock]
+) -> None:
+    campaign_id, _ = await _mature_test_with_a_winner(client)
+
+    await _run_rules(client, campaign_id)
+
+    assert await _carousel_recs(campaign_id) == []
+
+
+@pytest.mark.asyncio
+async def test_the_carousel_proposal_is_never_repeated_or_revived(
+    client: TestClient, mock_services: dict[str, AsyncMock]
+) -> None:
+    campaign_id, _ = await _mature_test_with_a_winner(client)
+    await _add_product_photo(campaign_id)
+    await _run_rules(client, campaign_id)
+    await _run_rules(client, campaign_id)
+    assert len(await _carousel_recs(campaign_id)) == 1
+
+    seeder = Prisma()
+    await seeder.connect()
+    try:
+        await seeder.optimizationrecommendation.update_many(
+            where={"campaignId": campaign_id, "actionType": "TEST_CAROUSEL"},
+            data={"status": "REJECTED"},
+        )
+    finally:
+        await seeder.disconnect()
+    await _run_rules(client, campaign_id)
+
+    assert len(await _carousel_recs(campaign_id)) == 1
+
+
+@pytest.mark.asyncio
+async def test_approving_the_carousel_experiment_creates_a_draft_campaign(
+    client: TestClient, mock_services: dict[str, AsyncMock]
+) -> None:
+    campaign_id, _ = await _mature_test_with_a_winner(client)
+    await _add_product_photo(campaign_id)
+    await _run_rules(client, campaign_id)
+    rec = (await _carousel_recs(campaign_id))[0]
+
+    applied = _run(client, optimization_jobs.apply_recommendation, rec)
+
+    assert applied.status == "APPLIED"
+    seeder = Prisma()
+    await seeder.connect()
+    try:
+        original = await seeder.campaign.find_unique(where={"id": campaign_id})
+        assert original is not None
+        created = await seeder.campaign.find_many(
+            where={"businessId": original.businessId, "NOT": [{"id": campaign_id}]}
+        )
+    finally:
+        await seeder.disconnect()
+    assert len(created) == 1
+    new = created[0]
+    assert new.objective == "SALES"
+    assert (new.productId, new.audienceId) == (original.productId, original.audienceId)
+    assert new.status == "READY"
+    assert new.metaCampaignId is None  # a draft: nothing created on Meta
+    assert new.name is not None and "carousel experiment" in new.name

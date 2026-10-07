@@ -115,6 +115,12 @@ class Settings(BaseSettings):
     # target CAC into a target cost per add-to-cart for the cost cap. An
     # assumption, not measured data: tune it as real funnel data arrives.
     add_to_cart_to_purchase_rate: float = 0.10
+    # What counts as "this business has run ads before" (Meta ad-account
+    # history): lifetime spend AND clicks across the account at or above both.
+    # Any spend used to count, which pushed an account off its first creative
+    # test on a few dollars; a handful of clicks teaches nothing either.
+    meaningful_history_min_spend: float = 500.0
+    meaningful_history_min_clicks: int = 300
 
     @property
     def cors_origins_list(self) -> list[str]:

@@ -610,6 +610,12 @@ def _build_data_driven_strategy_prompt(
         "plain terms, what result should trigger increasing budget "
         "further.",
         "",
+        "Ad formats: this plan may use single-image or carousel ads. When "
+        "the business has several product photos, recommend a carousel as "
+        "a subsequent experiment in recommendedAdjustments, run as its own "
+        "campaign with every ad a carousel rather than mixed with "
+        "single-image ads, so the format is the only variable.",
+        "",
         "Submit your strategy using the provided tool.",
     ]
     return "\n".join(lines)

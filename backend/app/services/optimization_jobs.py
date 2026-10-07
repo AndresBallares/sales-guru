@@ -79,6 +79,7 @@ from prisma.types import MetricCreateInput
 
 from app.core.db import db
 from app.core.meta_connection import get_meta_connection
+from app.schemas.creative import MIN_CAROUSEL_CARDS
 from app.schemas.strategy import (
     CreativeTestPlanContent,
     StrategyContentAdapter,
@@ -697,6 +698,44 @@ async def _sync_cost_cap_proposal(
     )
 
 
+async def _propose_carousel_experiment(
+    campaign: Campaign,
+    snapshots: list[creative_test_rules.AdSnapshot],
+    hours_running: float,
+) -> None:
+    """Propose a carousel as the next experiment once Test #1 has a winner.
+
+    Exactly one PENDING TEST_CAROUSEL proposal per campaign, never repeated or
+    revived after the user decides. Needs the test to have run
+    CAROUSEL_PROPOSAL_MIN_HOURS, a winning ad, and a product with enough photos
+    to build a carousel. Approving it only creates a draft campaign.
+    """
+    if hours_running < creative_test_rules.CAROUSEL_PROPOSAL_MIN_HOURS:
+        return
+    winner = creative_test_rules.carousel_winner(snapshots)
+    if winner is None or campaign.productId is None:
+        return
+    photo_count = await db.productimage.count(where={"productId": campaign.productId})
+    if photo_count < MIN_CAROUSEL_CARDS:
+        return
+    if await db.optimizationrecommendation.count(
+        where={"campaignId": campaign.id, "actionType": "TEST_CAROUSEL"}
+    ):
+        return
+    await db.optimizationrecommendation.create(
+        data={
+            "campaignId": campaign.id,
+            "actionType": "TEST_CAROUSEL",
+            "reasoning": creative_test_rules.carousel_proposal_reasoning(
+                winner, photo_count
+            ),
+            "confidence": 1.0,
+            "risk": "LOW",
+            "requiresApproval": True,
+        }
+    )
+
+
 async def _enforce_creative_test_rules(
     campaign: Campaign, connection: MetaConnection
 ) -> None:
@@ -733,6 +772,7 @@ async def _enforce_creative_test_rules(
     if first_collected_at is None:
         return
     hours_running = (datetime.now(UTC) - first_collected_at).total_seconds() / 3600
+    await _propose_carousel_experiment(campaign, snapshots, hours_running)
     candidates = creative_test_rules.evaluate_creative_test(
         content, snapshots, hours_running=hours_running
     )
@@ -982,6 +1022,19 @@ async def apply_recommendation(
             ),
             access_token=connection.accessToken,
             ad_account_id=connection.adAccountId or "",
+        )
+    elif recommendation.actionType == "TEST_CAROUSEL":
+        # Only a draft: the user still generates, reviews and publishes it.
+        ready = campaign.productId is not None and campaign.audienceId is not None
+        await db.campaign.create(
+            data={
+                "businessId": campaign.businessId,
+                "name": f"{campaign.name or 'Creative test'} — carousel experiment",
+                "objective": "SALES",
+                "productId": campaign.productId,
+                "audienceId": campaign.audienceId,
+                "status": "READY" if ready else "DRAFT",
+            }
         )
     elif recommendation.actionType == "RAISE_COST_CAP":
         assert recommendation.suggestedBid is not None
