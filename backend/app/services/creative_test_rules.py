@@ -39,6 +39,11 @@ MIN_LIVE_ADS = 2
 AUTO_PAUSE_LIMIT = 1
 # "Cost cap may be too tight" proposes raising the cap by this factor, and an
 # approved raise never takes the cap above this multiple of the plan's target.
+# A carousel is proposed as the next experiment only once the single-image test
+# has had this long (five days) and one ad has clearly won, so the comparison
+# is "the winning image vs. a carousel", not a second guess on thin data.
+CAROUSEL_PROPOSAL_MIN_HOURS = 120.0
+
 COST_CAP_RAISE_FACTOR = 1.25
 COST_CAP_CEILING_MULTIPLE = 2.0
 
@@ -192,3 +197,33 @@ def evaluate_creative_test(
     # NO_RESULT first (spend-ranked), then the rest by severity.
     ordered.sort(key=lambda item: item[1].rule != "NO_RESULT")
     return [candidate for _, candidate in ordered[:pausable]]
+
+
+def carousel_winner(snapshots: list[AdSnapshot]) -> AdSnapshot | None:
+    """The ad with the most add-to-carts, if it has enough to count as a winner.
+
+    Args:
+        snapshots: Every ad of the test with its latest numbers.
+
+    Returns:
+        The best ad by add-to-carts, or None when none reached
+        MIN_ADD_TO_CARTS_TO_COMPARE.
+    """
+    best = max(snapshots, key=lambda s: s.add_to_cart or 0, default=None)
+    if best is None or (best.add_to_cart or 0) < MIN_ADD_TO_CARTS_TO_COMPARE:
+        return None
+    return best
+
+
+def carousel_proposal_reasoning(winner: AdSnapshot, photo_count: int) -> str:
+    """Why a carousel is the next experiment, with the winning ad's numbers."""
+    return (
+        f"Test #1 compared single-image ads, and {winner.name} won with "
+        f"{winner.add_to_cart} add-to-carts after $"
+        f"{winner.spend:,.2f} spend. The next experiment is the same product "
+        f"as a carousel ({photo_count} product photos). Approving creates a "
+        "draft carousel campaign for you to generate, review and publish; "
+        "nothing goes live on Meta until you do. It runs as its own "
+        "campaign so format is the only thing that changes, not a mix of "
+        "single-image and carousel ads in one test."
+    )

@@ -777,3 +777,8 @@ class CreateStrategyRequest(CamelCaseModel):
     """
 
     has_prior_advertising_experience: bool | None = None
+    # SALES with no real history defaults to the controlled first creative test
+    # (single-image only). STANDARD skips it for a normal campaign, which
+    # allows carousel. Ignored when real history exists and for other
+    # objectives.
+    strategy_mode: Literal["CREATIVE_TEST", "STANDARD"] | None = None

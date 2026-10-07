@@ -10,6 +10,7 @@ import {
   createCreatives,
   createRecommendation,
   createStrategy,
+  type StrategyMode,
   createTestEvaluation,
   deleteCampaign,
   getBrandProfile,
@@ -165,6 +166,7 @@ export function CampaignsSection({
   // SINGLE_IMAGE (the pre-existing behavior) until the user picks
   // Carousel. Never inferred from anything else, per the design decision
   // to keep format an explicit, deliberate choice.
+  const [strategyMode, setStrategyMode] = useState<Record<string, StrategyMode>>({})
   const [creativeFormat, setCreativeFormat] = useState<Record<string, CreativeFormat>>({})
   // Reorder/remove state for a carousel creative's cards, keyed by
   // creative id — mirrors the productImages upload/reorder state further
@@ -416,7 +418,12 @@ export function CampaignsSection({
     setGeneratingId(campaignId)
     setStrategyErrors((prev) => ({ ...prev, [campaignId]: '' }))
     try {
-      const strategy = await createStrategy(businessId, campaignId, hasPriorAdvertisingExperience)
+      const strategy = await createStrategy(
+        businessId,
+        campaignId,
+        hasPriorAdvertisingExperience,
+        strategyMode[campaignId],
+      )
       setStrategies((prev) => ({ ...prev, [campaignId]: strategy.content }))
       setNeedsAdExperienceAnswerId(null)
       await refresh()
@@ -1186,6 +1193,33 @@ export function CampaignsSection({
                   </div>
                 ) : (
                   <>
+                    {campaign.objective === 'SALES' && !strategy && (
+                      <fieldset className="strategy-mode-picker">
+                        <legend>Campaign type</legend>
+                        <label>
+                          <input
+                            type="radio"
+                            name={`strategy-mode-${campaign.id}`}
+                            checked={(strategyMode[campaign.id] ?? 'CREATIVE_TEST') === 'CREATIVE_TEST'}
+                            onChange={() =>
+                              setStrategyMode((prev) => ({ ...prev, [campaign.id]: 'CREATIVE_TEST' }))
+                            }
+                          />
+                          Creative test (recommended for a first campaign)
+                        </label>
+                        <label>
+                          <input
+                            type="radio"
+                            name={`strategy-mode-${campaign.id}`}
+                            checked={strategyMode[campaign.id] === 'STANDARD'}
+                            onChange={() =>
+                              setStrategyMode((prev) => ({ ...prev, [campaign.id]: 'STANDARD' }))
+                            }
+                          />
+                          Standard campaign (allows carousel)
+                        </label>
+                      </fieldset>
+                    )}
                     <button
                       type="button"
                       onClick={() => handleGenerateStrategy(campaign.id)}
@@ -1486,6 +1520,7 @@ export function CampaignsSection({
                           type="radio"
                           name={`creative-format-${campaign.id}`}
                           checked={creativeFormat[campaign.id] === 'CAROUSEL'}
+                          disabled={isCreativeTest}
                           onChange={() => {
                             setCreativeFormat((prev) => ({ ...prev, [campaign.id]: 'CAROUSEL' }))
                             if (campaignProductId && !productImages[campaignProductId]) {
@@ -1502,6 +1537,14 @@ export function CampaignsSection({
                         Carousel
                       </label>
                     </fieldset>
+                    {isCreativeTest && (
+                      <p className="field-hint">
+                        Carousel isn&apos;t part of Test #1. The first test compares single-image ads
+                        so any difference in results comes from the creative, not the format.
+                        Once it has run, a carousel is a good next experiment, or start a standard
+                        campaign now.
+                      </p>
+                    )}
                     {creativeFormat[campaign.id] === 'CAROUSEL' &&
                       campaignProductId &&
                       (productImages[campaignProductId]?.length ?? 0) > MAX_CAROUSEL_CARDS && (
