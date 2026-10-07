@@ -19,6 +19,7 @@ import {
   type Creative,
   type ProductImage,
 } from '../lib/api'
+import { onlyPhotos } from '../lib/media'
 import { SocialPostPreview } from '../components/SocialPostPreview'
 import { clearPublishPaused, getPublishPaused, setPublishPaused } from '../lib/publishPaused'
 
@@ -130,7 +131,7 @@ export function AdPreviewPage() {
     setLoadingLibrary(true)
     setImageError(null)
     try {
-      setProductImages(await listProductImages(businessId, campaign.productId))
+      setProductImages(onlyPhotos(await listProductImages(businessId, campaign.productId)))
     } catch (err) {
       setImageError(err instanceof ApiError ? err.message : 'Could not load photo library.')
     } finally {

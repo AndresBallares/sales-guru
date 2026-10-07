@@ -380,6 +380,21 @@ describe('uploadProductImage', () => {
     expect(headers?.['Content-Type']).toBeUndefined()
   })
 
+  it('sends a video\'s thumbnail as a second multipart part', async () => {
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(jsonResponse({ id: 'v1', mediaType: 'VIDEO' }, 201))
+    vi.stubGlobal('fetch', fetchMock)
+    const video = new File(['v'], 'clip.mp4', { type: 'video/mp4' })
+    const thumbnail = new File(['t'], 'thumbnail.jpg', { type: 'image/jpeg' })
+
+    await uploadProductImage('biz-1', 'prod-1', video, thumbnail)
+
+    const body = fetchMock.mock.calls[0][1]?.body as FormData
+    expect(body.get('file')).toBe(video)
+    expect(body.get('thumbnail')).toBe(thumbnail)
+  })
+
   it('throws ApiError when the upload is rejected', async () => {
     vi.stubGlobal(
       'fetch',

@@ -176,7 +176,7 @@ def test_upload_rejects_webp(client: TestClient) -> None:
     )
 
     assert response.status_code == 400
-    assert "Unsupported image type" in response.json()["detail"]
+    assert "Unsupported file type" in response.json()["detail"]
 
 
 def test_upload_rejects_an_unsupported_content_type(client: TestClient) -> None:
@@ -195,7 +195,7 @@ def test_upload_rejects_an_unsupported_content_type(client: TestClient) -> None:
     )
 
     assert response.status_code == 400
-    assert "Unsupported image type" in response.json()["detail"]
+    assert "Unsupported file type" in response.json()["detail"]
 
 
 def test_upload_rejects_a_file_over_the_size_limit(client: TestClient) -> None:

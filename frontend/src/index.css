@@ -1103,3 +1103,27 @@ code {
   color: var(--text-secondary);
   line-height: 1.6;
 }
+
+.media-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+  margin: 0.25rem 0 0;
+}
+
+.media-badge {
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  padding: 0.05rem 0.45rem;
+  font-size: 0.65rem;
+  font-weight: 600;
+  background: var(--surface);
+}
+
+.media-badge-video {
+  background: var(--accent, var(--surface));
+}
+
+.media-badge-unclassified {
+  border-style: dashed;
+}

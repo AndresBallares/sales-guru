@@ -4,19 +4,19 @@
 // drifts, this is just to catch obvious problems before that round-trip
 // (and, unlike the backend, before the file is even sent over the wire).
 
+import { classifyAspect } from './media'
+
 export const ALLOWED_IMAGE_TYPES = new Set(['image/jpeg', 'image/png'])
 export const MAX_IMAGE_BYTES = 8 * 1024 * 1024
 export const MIN_IMAGE_DIMENSION_PX = 600
-export const MIN_ASPECT_RATIO = 4 / 5
-export const MAX_ASPECT_RATIO = 1.0
 
 export const UNSUPPORTED_TYPE_ERROR = 'Unsupported image type — use JPG or PNG'
 export const TOO_LARGE_ERROR = `Image exceeds the ${MAX_IMAGE_BYTES / (1024 * 1024)}MB limit`
 export const TOO_SMALL_ERROR = `Image is smaller than the ${MIN_IMAGE_DIMENSION_PX}px minimum on its short side`
 export const UNREADABLE_IMAGE_ERROR = 'Could not read this image — it may be corrupted'
 export const ASPECT_RATIO_WARNING =
-  "This photo's aspect ratio is outside Meta's recommended 1:1–4:5 range for " +
-  'ad images — it may get cropped unpredictably in some ad placements.'
+  "This photo's shape isn't a standard ad shape (1:1 or 4:5 feed, 9:16 story, " +
+  '1.91:1 landscape) — Meta may crop it unpredictably in some ad placements.'
 
 export interface ImageDimensions {
   width: number
@@ -55,9 +55,8 @@ export function dimensionTooSmall({ width, height }: ImageDimensions): boolean {
   return Math.min(width, height) < MIN_IMAGE_DIMENSION_PX
 }
 
-// Non-blocking — mirrors app/schemas/product_image.py's aspect_ratio_warning.
+// Non-blocking — mirrors app/schemas/product_image.py's unclassified_warning:
+// only a shape that matches no standard ad shape is flagged.
 export function aspectRatioWarning({ width, height }: ImageDimensions): string | null {
-  const ratio = width / height
-  if (ratio < MIN_ASPECT_RATIO || ratio > MAX_ASPECT_RATIO) return ASPECT_RATIO_WARNING
-  return null
+  return classifyAspect(width, height) === 'UNCLASSIFIED' ? ASPECT_RATIO_WARNING : null
 }

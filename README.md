@@ -193,6 +193,25 @@ uv run prisma generate
 Commit the new migration file under `backend/prisma/postgres/migrations/`
 alongside the SQLite one.
 
+## Deploy notes
+
+One-off steps that must run after `prisma migrate deploy` on a database that
+already has data (run them once per database, in order):
+
+- **`add_product_media_metadata` (product video support):** photos uploaded
+  before this migration have no stored width/height/size/aspect class. Backfill
+  them once (idempotent, safe to re-run, reports any unreadable photo and exits
+  non-zero for it):
+
+  ```bash
+  cd backend
+  uv run python scripts/backfill_image_metadata.py --database-url "$DATABASE_URL"
+  ```
+
+  It prints the target before writing. Run it against dev.db with
+  `--database-url "file:$(pwd)/prisma/dev.db"`. Until it has run, old photos
+  simply show no shape badge; nothing else depends on it.
+
 ## CI / CD
 
 - **CI** (`.github/workflows/ci.yml`): path-scoped — backend changes run the

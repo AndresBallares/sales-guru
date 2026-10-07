@@ -226,7 +226,8 @@ async def create_creatives(
                 detail=_CAROUSEL_NEEDS_PRODUCT,
             )
         all_images = await db.productimage.find_many(
-            where={"productId": product.id}, order={"position": "asc"}
+            where={"productId": product.id, "mediaType": "IMAGE"},
+            order={"position": "asc"},
         )
         if len(all_images) < MIN_CAROUSEL_CARDS:
             raise HTTPException(
@@ -445,7 +446,7 @@ async def select_creative(
 
     if campaign.productId is not None:
         photo_count = await db.productimage.count(
-            where={"productId": campaign.productId}
+            where={"productId": campaign.productId, "mediaType": "IMAGE"}
         )
         if photo_count == 0:
             raise HTTPException(
@@ -482,7 +483,11 @@ async def select_creative(
     elif product_image_id is not None:
         product_image = (
             await db.productimage.find_first(
-                where={"id": product_image_id, "productId": campaign.productId}
+                where={
+                    "id": product_image_id,
+                    "productId": campaign.productId,
+                    "mediaType": "IMAGE",
+                }
             )
             if campaign.productId is not None
             else None
@@ -495,7 +500,8 @@ async def select_creative(
         update_data["productImageId"] = product_image.id
     elif creative.imageUrl is None and campaign.productId is not None:
         product_image = await db.productimage.find_first(
-            where={"productId": campaign.productId}, order={"position": "asc"}
+            where={"productId": campaign.productId, "mediaType": "IMAGE"},
+            order={"position": "asc"},
         )
         if product_image is not None:
             update_data["imageUrl"] = product_image_url(product_image.id)
@@ -631,7 +637,11 @@ async def set_creative_image(
     creative = await _find_editable_creative(creative_id, campaign)
     product_image = (
         await db.productimage.find_first(
-            where={"id": payload.product_image_id, "productId": campaign.productId}
+            where={
+                "id": payload.product_image_id,
+                "productId": campaign.productId,
+                "mediaType": "IMAGE",
+            }
         )
         if campaign.productId is not None
         else None

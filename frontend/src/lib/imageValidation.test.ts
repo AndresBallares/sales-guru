@@ -58,12 +58,17 @@ describe('aspectRatioWarning', () => {
     expect(aspectRatioWarning({ width: 800, height: 1000 })).toBeNull()
   })
 
-  it('warns on a taller-than-4:5 portrait image', () => {
-    expect(aspectRatioWarning({ width: 600, height: 1000 })).toMatch(/aspect ratio/)
+  it('returns no warning for a 9:16 story or 1.91:1 landscape image', () => {
+    expect(aspectRatioWarning({ width: 1080, height: 1920 })).toBeNull()
+    expect(aspectRatioWarning({ width: 1200, height: 628 })).toBeNull()
   })
 
-  it('warns on a wider-than-square landscape image', () => {
-    expect(aspectRatioWarning({ width: 1200, height: 800 })).toMatch(/aspect ratio/)
+  it('warns on a shape that matches no ad shape, e.g. 3:5 portrait', () => {
+    expect(aspectRatioWarning({ width: 600, height: 1000 })).toMatch(/standard ad shape/)
+  })
+
+  it('warns on a 3:2 landscape image', () => {
+    expect(aspectRatioWarning({ width: 1200, height: 800 })).toMatch(/standard ad shape/)
   })
 })
 

@@ -238,6 +238,25 @@ model ProductImage {
   // photo's old position, so two photos never tie.
   position    Int      @default(0)
   createdAt   DateTime @default(now())
+  // Product media (video + placement-asset work, 2026-10-07): a row is a photo
+  // (IMAGE, the default and everything that existed before) or a video (VIDEO,
+  // mp4/mov stored in `data` like photos are — database storage for V1, capped
+  // at 50MB, app/schemas/product_image.py's MAX_VIDEO_BYTES). width/height/
+  // sizeBytes/aspectClass are measured at upload (app/services/media_info.py,
+  // image_dimensions.py); rows from before this change are filled in by
+  // scripts/backfill_image_metadata.py and are null until it runs.
+  // aspectClass: FEED (1:1 or 4:5) | STORY (9:16) | LANDSCAPE (1.91:1) |
+  // UNCLASSIFIED. A video's thumbnail is a browser-captured JPEG/PNG stored in
+  // thumbnailData (validated like any image); both thumbnail fields are null
+  // for a photo.
+  mediaType            String  @default("IMAGE")
+  width                Int?
+  height               Int?
+  durationSeconds      Float?
+  sizeBytes            Int?
+  aspectClass          String?
+  thumbnailData        Bytes?
+  thumbnailContentType String?
 }
 
 // Same no-separate-name convention as Product — `description` ("Who buys?")
