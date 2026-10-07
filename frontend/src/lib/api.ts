@@ -185,6 +185,16 @@ export interface ProductImage {
   // product_image.py's ProductImageResponse docstring explains why).
   aspectRatioWarning?: string | null
   createdAt: string
+  // Product media: a photo (IMAGE) or a short video (VIDEO). Measured at upload;
+  // null on photos from before this existed until the backfill script has run.
+  mediaType?: 'IMAGE' | 'VIDEO'
+  width?: number | null
+  height?: number | null
+  durationSeconds?: number | null
+  sizeBytes?: number | null
+  aspectClass?: 'FEED' | 'STORY' | 'LANDSCAPE' | 'UNCLASSIFIED' | null
+  // A video's captured frame; null for a photo.
+  thumbnailUrl?: string | null
 }
 
 export interface Audience {
@@ -499,9 +509,12 @@ export function uploadProductImage(
   businessId: string,
   productId: string,
   file: File,
+  thumbnail?: File,
 ): Promise<ProductImage> {
   const formData = new FormData()
   formData.append('file', file)
+  // A video must come with a browser-captured thumbnail (lib/media.ts's readVideoInfo).
+  if (thumbnail) formData.append('thumbnail', thumbnail)
   return request<ProductImage>(
     `/businesses/${businessId}/products/${productId}/images`,
     { method: 'POST', body: formData },

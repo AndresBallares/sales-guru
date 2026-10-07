@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { ProductForm } from './ProductForm'
 import * as api from '../lib/api'
 import * as imageValidation from '../lib/imageValidation'
+import * as media from '../lib/media'
 
 vi.mock('../lib/api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../lib/api')>()
@@ -31,6 +32,14 @@ vi.mock('../lib/imageValidation', async (importOriginal) => {
   }
 })
 const mockedImageValidation = vi.mocked(imageValidation)
+
+// readVideoInfo needs a real <video> decoder and canvas, which jsdom lacks —
+// mocked so tests control the measured size/duration and the captured frame.
+vi.mock('../lib/media', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../lib/media')>()
+  return { ...actual, readVideoInfo: vi.fn<typeof actual.readVideoInfo>() }
+})
+const mockedMedia = vi.mocked(media)
 
 const product: api.Product = {
   id: 'prod-1',
@@ -140,7 +149,7 @@ describe('ProductForm — create mode photo staging', () => {
 
     await user.upload(screen.getByLabelText(/Product photos/), bigJpeg())
 
-    expect(await screen.findByText(/aspect ratio/)).toBeInTheDocument()
+    expect(await screen.findByText(/standard ad shape/)).toBeInTheDocument()
     // Staged even though it has a warning — this never blocks, unlike size.
     expect(screen.getByRole('img')).toBeInTheDocument()
   })
@@ -211,8 +220,8 @@ describe('ProductForm — create mode photo staging', () => {
         primaryImageUrl: 'http://localhost:8000/product-images/img-1',
       }),
     )
-    expect(mockedApi.uploadProductImage).toHaveBeenNthCalledWith(1, 'biz-1', 'prod-1', fileA)
-    expect(mockedApi.uploadProductImage).toHaveBeenNthCalledWith(2, 'biz-1', 'prod-1', fileB)
+    expect(mockedApi.uploadProductImage).toHaveBeenNthCalledWith(1, 'biz-1', 'prod-1', fileA, undefined)
+    expect(mockedApi.uploadProductImage).toHaveBeenNthCalledWith(2, 'biz-1', 'prod-1', fileB, undefined)
   })
 
   it('still reports the product as saved if a staged photo fails to upload', async () => {
@@ -389,5 +398,178 @@ describe('ProductForm — edit mode live photo management', () => {
     await user.click(screen.getByRole('button', { name: 'Save' }))
 
     expect(await screen.findByRole('alert')).toHaveTextContent('Could not update product.')
+  })
+})
+
+describe('ProductForm — product media (videos and ad-shape badges)', () => {
+  const thumbnail = new File(['t'], 'thumbnail.jpg', { type: 'image/jpeg' })
+  function clip(name = 'clip.mp4', type = 'video/mp4', size = 1024): File {
+    const file = new File([new Uint8Array(8)], name, { type })
+    Object.defineProperty(file, 'size', { value: size })
+    return file
+  }
+  const storyInfo = { width: 1080, height: 1920, durationSeconds: 12, thumbnail }
+
+  beforeEach(() => {
+    mockedMedia.readVideoInfo.mockResolvedValue(storyInfo)
+  })
+
+  it('labels an uploaded video with its length and ad shape and shows its thumbnail', async () => {
+    mockedApi.listProductImages.mockResolvedValue([
+      {
+        id: 'v1',
+        url: 'http://localhost:8000/product-images/v1',
+        thumbnailUrl: 'http://localhost:8000/product-images/v1/thumbnail',
+        mediaType: 'VIDEO',
+        durationSeconds: 75,
+        aspectClass: 'STORY',
+        createdAt: '2026-10-07T00:00:00Z',
+      },
+      {
+        id: 'p1',
+        url: 'http://localhost:8000/product-images/p1',
+        mediaType: 'IMAGE',
+        aspectClass: 'UNCLASSIFIED',
+        createdAt: '2026-10-07T00:00:00Z',
+      },
+    ])
+
+    render(<ProductForm businessId="biz-1" product={product} onSaved={vi.fn<(product: api.Product) => void>()} />)
+
+    const items = await screen.findAllByRole('listitem')
+    expect(within(items[0]).getByText('Video 1:15')).toBeInTheDocument()
+    expect(within(items[0]).getByText('Story 9:16')).toBeInTheDocument()
+    expect(within(items[0]).getByRole('img')).toHaveAttribute(
+      'src',
+      'http://localhost:8000/product-images/v1/thumbnail',
+    )
+    expect(within(items[1]).getByText('Unclassified')).toBeInTheDocument()
+    expect(within(items[1]).queryByText(/^Video/)).not.toBeInTheDocument()
+  })
+
+  it('uploads a video with its captured thumbnail in edit mode', async () => {
+    const file = clip()
+    mockedApi.uploadProductImage.mockResolvedValue({
+      id: 'v1',
+      url: 'http://localhost:8000/product-images/v1',
+      thumbnailUrl: 'http://localhost:8000/product-images/v1/thumbnail',
+      mediaType: 'VIDEO',
+      durationSeconds: 12,
+      aspectClass: 'STORY',
+      createdAt: '2026-10-07T00:00:00Z',
+    })
+    const user = userEvent.setup()
+    render(<ProductForm businessId="biz-1" product={product} onSaved={vi.fn<(product: api.Product) => void>()} />)
+    await waitFor(() => expect(mockedApi.listProductImages).toHaveBeenCalled())
+
+    await user.upload(screen.getByLabelText(/Product photos/), file)
+
+    await waitFor(() =>
+      expect(mockedApi.uploadProductImage).toHaveBeenCalledWith('biz-1', 'prod-1', file, thumbnail),
+    )
+    expect(await screen.findByText('Video 0:12')).toBeInTheDocument()
+    expect(screen.getByText('Story 9:16')).toBeInTheDocument()
+  })
+
+  it('stages a video with its thumbnail in create mode and uploads both on save', async () => {
+    const file = clip()
+    mockedApi.createProduct.mockResolvedValue(product)
+    mockedApi.uploadProductImage.mockResolvedValue({
+      id: 'v1',
+      url: 'http://localhost:8000/product-images/v1',
+      mediaType: 'VIDEO',
+      createdAt: '2026-10-07T00:00:00Z',
+    })
+    const onSaved = vi.fn<(product: api.Product) => void>()
+    const user = userEvent.setup()
+    render(<ProductForm businessId="biz-1" onSaved={onSaved} />)
+
+    await user.type(screen.getByLabelText('What do you sell?'), 'Handmade wallets')
+    await user.upload(screen.getByLabelText(/Product photos/), file)
+    expect(await screen.findByText('Video 0:12')).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Add product' }))
+
+    await waitFor(() =>
+      expect(mockedApi.uploadProductImage).toHaveBeenCalledWith('biz-1', 'prod-1', file, thumbnail),
+    )
+  })
+
+  it('badges a staged photo with its ad shape', async () => {
+    mockedImageValidation.readImageDimensions.mockResolvedValue({ width: 1080, height: 1350 })
+    const user = userEvent.setup()
+    render(<ProductForm businessId="biz-1" onSaved={vi.fn<(product: api.Product) => void>()} />)
+
+    await user.upload(screen.getByLabelText(/Product photos/), bigJpeg())
+
+    expect(await screen.findByText('Feed 1:1 / 4:5')).toBeInTheDocument()
+  })
+
+  it('warns, without blocking, about a video that matches no ad shape', async () => {
+    mockedMedia.readVideoInfo.mockResolvedValue({ ...storyInfo, width: 1000, height: 1500 })
+    const user = userEvent.setup()
+    render(<ProductForm businessId="biz-1" onSaved={vi.fn<(product: api.Product) => void>()} />)
+
+    await user.upload(screen.getByLabelText(/Product photos/), clip())
+
+    expect(await screen.findByText(/standard ad shape/)).toBeInTheDocument()
+    expect(screen.getByText('Unclassified')).toBeInTheDocument()
+  })
+
+  it('rejects a video over 60 seconds before uploading', async () => {
+    mockedMedia.readVideoInfo.mockResolvedValue({ ...storyInfo, durationSeconds: 61 })
+    const user = userEvent.setup()
+    render(<ProductForm businessId="biz-1" product={product} onSaved={vi.fn<(product: api.Product) => void>()} />)
+    await waitFor(() => expect(mockedApi.listProductImages).toHaveBeenCalled())
+
+    await user.upload(screen.getByLabelText(/Product photos/), clip())
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('at most 60 seconds')
+    expect(mockedApi.uploadProductImage).not.toHaveBeenCalled()
+  })
+
+  it('rejects a video over 50MB with guidance to keep it short', async () => {
+    const user = userEvent.setup()
+    render(<ProductForm businessId="biz-1" product={product} onSaved={vi.fn<(product: api.Product) => void>()} />)
+    await waitFor(() => expect(mockedApi.listProductImages).toHaveBeenCalled())
+
+    await user.upload(screen.getByLabelText(/Product photos/), clip('big.mp4', 'video/mp4', 51 * 1024 * 1024))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('under 30 seconds')
+    expect(mockedMedia.readVideoInfo).not.toHaveBeenCalled()
+  })
+
+  it('shows why a video could not be read', async () => {
+    mockedMedia.readVideoInfo.mockRejectedValue(new Error(media.UNREADABLE_VIDEO_ERROR))
+    const user = userEvent.setup()
+    render(<ProductForm businessId="biz-1" product={product} onSaved={vi.fn<(product: api.Product) => void>()} />)
+    await waitFor(() => expect(mockedApi.listProductImages).toHaveBeenCalled())
+
+    await user.upload(screen.getByLabelText(/Product photos/), clip())
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Could not read this video')
+  })
+
+  it('falls back to a generic message for an unexpected video read failure', async () => {
+    mockedMedia.readVideoInfo.mockRejectedValue('boom')
+    const user = userEvent.setup()
+    render(<ProductForm businessId="biz-1" product={product} onSaved={vi.fn<(product: api.Product) => void>()} />)
+    await waitFor(() => expect(mockedApi.listProductImages).toHaveBeenCalled())
+
+    await user.upload(screen.getByLabelText(/Product photos/), clip())
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Could not read this video.')
+  })
+
+  it('names videos as an option when a file type is not supported', async () => {
+    const user = userEvent.setup({ applyAccept: false })
+    render(<ProductForm businessId="biz-1" product={product} onSaved={vi.fn<(product: api.Product) => void>()} />)
+    await waitFor(() => expect(mockedApi.listProductImages).toHaveBeenCalled())
+
+    await user.upload(
+      screen.getByLabelText(/Product photos/),
+      new File(['x'], 'clip.webm', { type: 'video/webm' }),
+    )
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('MP4/MOV video')
   })
 })

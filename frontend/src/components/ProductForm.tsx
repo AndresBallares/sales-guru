@@ -19,11 +19,25 @@ import {
 } from '../lib/api'
 import {
   aspectRatioWarning,
+  ALLOWED_IMAGE_TYPES,
   dimensionTooSmall,
   readImageDimensions,
   TOO_SMALL_ERROR,
   validateImageFile,
 } from '../lib/imageValidation'
+import {
+  ASPECT_CLASS_LABELS,
+  classifyAspect,
+  formatDuration,
+  isVideoType,
+  MAX_VIDEO_SECONDS,
+  readVideoInfo,
+  UNCLASSIFIED_VIDEO_WARNING,
+  UNSUPPORTED_MEDIA_ERROR,
+  validateVideoFile,
+  VIDEO_TOO_LONG_ERROR,
+  type AspectClass,
+} from '../lib/media'
 import {
   DESTINATION_URL_ERROR_MESSAGE,
   isValidDestinationUrl,
@@ -41,6 +55,38 @@ interface StagedPhoto {
   file: File
   previewUrl: string
   warning: string | null
+  // Product media: a staged video carries the browser-captured thumbnail
+  // uploaded with it; previewUrl is then that thumbnail's object URL.
+  isVideo: boolean
+  thumbnail?: File
+  durationSeconds?: number
+  aspectClass: AspectClass
+}
+
+// The small labels under each thumbnail: its ad shape, and a video's length.
+function MediaBadges({
+  aspectClass,
+  isVideo,
+  durationSeconds,
+}: {
+  aspectClass?: AspectClass | null
+  isVideo: boolean
+  durationSeconds?: number | null
+}) {
+  return (
+    <p className="media-badges">
+      {isVideo && (
+        <span className="media-badge media-badge-video">
+          Video{durationSeconds != null ? ` ${formatDuration(durationSeconds)}` : ''}
+        </span>
+      )}
+      {aspectClass && (
+        <span className={`media-badge media-badge-${aspectClass.toLowerCase()}`}>
+          {ASPECT_CLASS_LABELS[aspectClass]}
+        </span>
+      )}
+    </p>
+  )
 }
 
 let stagedPhotoCounter = 0
@@ -136,28 +182,61 @@ export function ProductForm({
 
     setImageError(null)
     for (const file of files) {
-      const typeOrSizeError = validateImageFile(file)
-      if (typeOrSizeError) {
-        setImageError(typeOrSizeError)
-        continue
+      let warning: string | null = null
+      let thumbnail: File | undefined
+      let durationSeconds: number | undefined
+      let aspectClass: AspectClass
+      const isVideo = isVideoType(file.type)
+      if (isVideo) {
+        const videoError = validateVideoFile(file)
+        if (videoError) {
+          setImageError(videoError)
+          continue
+        }
+        let info
+        try {
+          info = await readVideoInfo(file)
+        } catch (err) {
+          setImageError(err instanceof Error ? err.message : 'Could not read this video.')
+          continue
+        }
+        if (info.durationSeconds > MAX_VIDEO_SECONDS) {
+          setImageError(VIDEO_TOO_LONG_ERROR)
+          continue
+        }
+        thumbnail = info.thumbnail
+        durationSeconds = info.durationSeconds
+        aspectClass = classifyAspect(info.width, info.height)
+        if (aspectClass === 'UNCLASSIFIED') warning = UNCLASSIFIED_VIDEO_WARNING
+      } else {
+        if (!ALLOWED_IMAGE_TYPES.has(file.type)) {
+          setImageError(UNSUPPORTED_MEDIA_ERROR)
+          continue
+        }
+        const typeOrSizeError = validateImageFile(file)
+        if (typeOrSizeError) {
+          setImageError(typeOrSizeError)
+          continue
+        }
+        let dimensions
+        try {
+          dimensions = await readImageDimensions(file)
+        } catch (err) {
+          setImageError(err instanceof Error ? err.message : 'Could not read this image.')
+          continue
+        }
+        if (dimensionTooSmall(dimensions)) {
+          setImageError(TOO_SMALL_ERROR)
+          continue
+        }
+        warning = aspectRatioWarning(dimensions)
+        aspectClass = classifyAspect(dimensions.width, dimensions.height)
       }
-      let dimensions
-      try {
-        dimensions = await readImageDimensions(file)
-      } catch (err) {
-        setImageError(err instanceof Error ? err.message : 'Could not read this image.')
-        continue
-      }
-      if (dimensionTooSmall(dimensions)) {
-        setImageError(TOO_SMALL_ERROR)
-        continue
-      }
-      const warning = aspectRatioWarning(dimensions)
 
       if (isEditing) {
         setUploadingImage(true)
         try {
-          const image = await uploadProductImage(businessId, product.id, file)
+          const image = await uploadProductImage(businessId, product.id, file, thumbnail)
           setExistingImages((prev) => [...prev, image])
         } catch (err) {
           setImageError(err instanceof ApiError ? err.message : 'Could not upload image.')
@@ -170,8 +249,12 @@ export function ProductForm({
           {
             id: `staged-${++stagedPhotoCounter}`,
             file,
-            previewUrl: URL.createObjectURL(file),
+            previewUrl: URL.createObjectURL(thumbnail ?? file),
             warning,
+            isVideo,
+            thumbnail,
+            durationSeconds,
+            aspectClass,
           },
         ])
       }
@@ -311,7 +394,12 @@ export function ProductForm({
         // parallel requests could land in a different order than staged.
         for (const [index, photo] of stagedPhotos.entries()) {
           try {
-            const image = await uploadProductImage(businessId, saved.id, photo.file)
+            const image = await uploadProductImage(
+              businessId,
+              saved.id,
+              photo.file,
+              photo.thumbnail,
+            )
             if (index === 0) primaryImageUrl = image.url
           } catch (err) {
             // The product itself was already created successfully — a
@@ -377,10 +465,19 @@ export function ProductForm({
                   <li key={image.id} className="photo-thumb">
                     {index === 0 && <span className="photo-primary-badge">Primary</span>}
                     <img
-                      src={image.url}
-                      alt={`Product ${index + 1}`}
+                      src={
+                        image.mediaType === 'VIDEO' && image.thumbnailUrl
+                          ? image.thumbnailUrl
+                          : image.url
+                      }
+                      alt={`${image.mediaType === 'VIDEO' ? 'Video' : 'Product'} ${index + 1}`}
                       width={96}
                       height={96}
+                    />
+                    <MediaBadges
+                      aspectClass={image.aspectClass}
+                      isVideo={image.mediaType === 'VIDEO'}
+                      durationSeconds={image.durationSeconds}
                     />
                     <div className="photo-thumb-actions">
                       <button
@@ -417,9 +514,14 @@ export function ProductForm({
                     {index === 0 && <span className="photo-primary-badge">Primary</span>}
                     <img
                       src={photo.previewUrl}
-                      alt={`Product ${index + 1}`}
+                      alt={`${photo.isVideo ? 'Video' : 'Product'} ${index + 1}`}
                       width={96}
                       height={96}
+                    />
+                    <MediaBadges
+                      aspectClass={photo.aspectClass}
+                      isVideo={photo.isVideo}
+                      durationSeconds={photo.durationSeconds}
                     />
                     <div className="photo-thumb-actions">
                       <button
@@ -475,13 +577,13 @@ export function ProductForm({
           <span className="photo-dropzone-text">
             <strong>Add photos</strong>
             <br />
-            Drag and drop, or click to browse
+            Drag and drop, or click to browse. Short videos (MP4/MOV, up to 60 seconds and 50MB) work too.
           </span>
           <input
             ref={fileInputRef}
             id={`photos-${idSuffix}`}
             type="file"
-            accept="image/jpeg,image/png"
+            accept="image/jpeg,image/png,video/mp4,video/quicktime"
             multiple
             disabled={uploadingImage}
             onChange={(event) => void handleFilesSelected(event)}

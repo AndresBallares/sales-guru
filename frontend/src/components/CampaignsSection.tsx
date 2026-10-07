@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState, type ChangeEvent, type FormEvent } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { CreativeEditor } from './CreativeEditor'
+import { onlyPhotos } from '../lib/media'
 import {
   activateCampaign,
   ApiError,
@@ -630,7 +631,7 @@ export function CampaignsSection({
     setImageErrors((prev) => ({ ...prev, [creativeId]: '' }))
     try {
       const images = await listProductImages(businessId, productId)
-      setProductImages((prev) => ({ ...prev, [productId]: images }))
+      setProductImages((prev) => ({ ...prev, [productId]: onlyPhotos(images) }))
     } catch (err) {
       setImageErrors((prev) => ({
         ...prev,
@@ -1528,7 +1529,7 @@ export function CampaignsSection({
                                 (images) =>
                                   setProductImages((prev) => ({
                                     ...prev,
-                                    [campaignProductId]: images,
+                                    [campaignProductId]: onlyPhotos(images),
                                   })),
                               )
                             }

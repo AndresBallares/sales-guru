@@ -1,8 +1,10 @@
 """Schemas for product image upload (PRD.md §2 step 4)."""
 
 from datetime import datetime
+from typing import Literal
 
 from app.schemas.base import CamelCaseModel
+from app.services.media_info import AspectClass
 
 # Meta requires a real image for link_data.picture. Narrowed to these two
 # (confirmed 2026-09-09, dropping webp) — both have a simple enough header
@@ -22,34 +24,40 @@ MAX_IMAGE_BYTES = 8 * 1024 * 1024
 # card (confirmed 2026-09-09).
 MIN_IMAGE_DIMENSION_PX = 600
 
-# Meta's recommended range for Feed/Story image ads (1:1 square down to
-# 4:5 portrait) — outside this, the photo still uploads (it's a warning,
-# not a hard rule enforced by Meta itself), but may get cropped
-# unpredictably by ad placements that expect something in this range.
-MIN_ASPECT_RATIO = 4 / 5
-MAX_ASPECT_RATIO = 1.0
-_ASPECT_RATIO_WARNING = (
-    "This photo's aspect ratio is outside Meta's recommended 1:1–4:5 "
-    "range for ad images — it may get cropped unpredictably in some ad "
+# Product media can also be a short video (mp4/mov), stored in the database
+# like photos (Option A — V1 only, object storage deferred, confirmed
+# 2026-10-07). Meta itself allows far larger files; this cap is what a Postgres
+# column and one in-memory request can carry safely, and a 30-second ad video
+# fits well within it.
+ALLOWED_VIDEO_CONTENT_TYPES = frozenset({"video/mp4", "video/quicktime"})
+MAX_VIDEO_BYTES = 50 * 1024 * 1024
+MAX_VIDEO_SECONDS = 60
+
+MediaType = Literal["IMAGE", "VIDEO"]
+
+_UNCLASSIFIED_WARNING = (
+    "This {kind}'s shape isn't a standard ad shape (1:1 or 4:5 feed, 9:16 "
+    "story, 1.91:1 landscape) — Meta may crop it unpredictably in some ad "
     "placements."
 )
 
 
-def aspect_ratio_warning(width: int, height: int) -> str | None:
-    """Whether a photo's aspect ratio falls outside Meta's recommended range.
+def unclassified_warning(aspect_class: AspectClass, kind: str) -> str | None:
+    """A non-blocking warning for media that matches no standard ad shape.
+
+    Replaces the old "outside 1:1-4:5" photo warning: 9:16 and 1.91:1 are now
+    legitimate shapes, so only UNCLASSIFIED media is flagged.
 
     Args:
-        width: The image's width in pixels.
-        height: The image's height in pixels.
+        aspect_class: The media's classification (media_info.classify_aspect).
+        kind: "photo" or "video", for the message.
 
     Returns:
-        A human-readable warning if the ratio is outside
-        [MIN_ASPECT_RATIO, MAX_ASPECT_RATIO], else None — never blocks
-        the upload, unlike MIN_IMAGE_DIMENSION_PX.
+        The warning text for UNCLASSIFIED media, else None. Never blocks an
+        upload, unlike MIN_IMAGE_DIMENSION_PX.
     """
-    ratio = width / height
-    if ratio < MIN_ASPECT_RATIO or ratio > MAX_ASPECT_RATIO:
-        return _ASPECT_RATIO_WARNING
+    if aspect_class == "UNCLASSIFIED":
+        return _UNCLASSIFIED_WARNING.format(kind=kind)
     return None
 
 
@@ -72,6 +80,16 @@ class ProductImageResponse(CamelCaseModel):
     # warning nobody asked to see again.
     aspect_ratio_warning: str | None = None
     created_at: datetime
+    # Measured at upload; null for photos uploaded before product media
+    # existed until scripts/backfill_image_metadata.py has been run.
+    media_type: MediaType = "IMAGE"
+    width: int | None = None
+    height: int | None = None
+    duration_seconds: float | None = None
+    size_bytes: int | None = None
+    aspect_class: AspectClass | None = None
+    # A video's browser-captured thumbnail; null for a photo.
+    thumbnail_url: str | None = None
 
 
 class ReorderProductImagesRequest(CamelCaseModel):

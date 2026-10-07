@@ -9,6 +9,7 @@ import {
   type ProductImage,
   type RegenerableCopyField,
 } from '../lib/api'
+import { onlyPhotos } from '../lib/media'
 
 const COPY_FIELDS: { field: RegenerableCopyField; label: string }[] = [
   { field: 'headline', label: 'headline' },
@@ -55,7 +56,7 @@ export function CreativeEditor({
     if (productId === null) return
     setError('')
     try {
-      setLibrary(await listProductImages(businessId, productId))
+      setLibrary(onlyPhotos(await listProductImages(businessId, productId)))
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Could not load photo library.')
     }

@@ -715,7 +715,9 @@ async def _propose_carousel_experiment(
     winner = creative_test_rules.carousel_winner(snapshots)
     if winner is None or campaign.productId is None:
         return
-    photo_count = await db.productimage.count(where={"productId": campaign.productId})
+    photo_count = await db.productimage.count(
+        where={"productId": campaign.productId, "mediaType": "IMAGE"}
+    )
     if photo_count < MIN_CAROUSEL_CARDS:
         return
     if await db.optimizationrecommendation.count(

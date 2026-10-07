@@ -3364,6 +3364,35 @@ async def test_no_carousel_proposal_for_a_product_with_one_photo(
 
 
 @pytest.mark.asyncio
+async def test_a_video_does_not_count_toward_the_carousels_two_photos(
+    client: TestClient, mock_services: dict[str, AsyncMock]
+) -> None:
+    """A carousel is built from photos only; a product with one photo and one
+    video can't make one."""
+    campaign_id, _ = await _mature_test_with_a_winner(client)
+    seeder = Prisma()
+    await seeder.connect()
+    try:
+        campaign = await seeder.campaign.find_unique(where={"id": campaign_id})
+        assert campaign is not None and campaign.productId is not None
+        await seeder.productimage.create(
+            data={
+                "productId": campaign.productId,
+                "data": Base64.encode(b"v"),
+                "contentType": "video/mp4",
+                "mediaType": "VIDEO",
+                "position": 1,
+            }
+        )
+    finally:
+        await seeder.disconnect()
+
+    await _run_rules(client, campaign_id)
+
+    assert await _carousel_recs(campaign_id) == []
+
+
+@pytest.mark.asyncio
 async def test_the_carousel_proposal_is_never_repeated_or_revived(
     client: TestClient, mock_services: dict[str, AsyncMock]
 ) -> None:

@@ -59,6 +59,19 @@ describe('CreativeEditor', () => {
     expect(api.setCreativeImage).toHaveBeenCalledWith('b1', 'c1', 'cr1', 'p2')
   })
 
+  it('never offers a video as an ad image', async () => {
+    vi.mocked(api.listProductImages).mockResolvedValue([
+      ...photos,
+      { id: 'v1', url: '/product-images/v1', mediaType: 'VIDEO', createdAt: '' },
+    ])
+    renderEditor()
+
+    await userEvent.click(screen.getByRole('button', { name: 'Change image' }))
+    await userEvent.click(screen.getByRole('button', { name: 'Choose from library' }))
+
+    expect(await screen.findAllByAltText('Product option')).toHaveLength(2)
+  })
+
   it('uploads a new photo and uses it for the ad', async () => {
     vi.mocked(api.uploadProductImage).mockResolvedValue({ ...photos[0], id: 'p3' })
     vi.mocked(api.setCreativeImage).mockResolvedValue({ ...creative, imageUrl: '/x' })
