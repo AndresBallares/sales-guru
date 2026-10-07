@@ -89,6 +89,7 @@ function renderPage() {
 }
 
 beforeEach(() => {
+  window.sessionStorage.clear()
   vi.resetAllMocks()
   mockedApi.getBusiness.mockResolvedValue(business)
   mockedApi.getOptions.mockResolvedValue({
@@ -319,6 +320,72 @@ describe('AdPreviewPage', () => {
         paused: false,
       }),
     )
+  })
+
+  it('keeps the unchecked choice when the page re-renders or remounts', async () => {
+    const user = userEvent.setup()
+    const first = render(
+      <MemoryRouter initialEntries={['/businesses/biz-1/campaigns/camp-1/ad']}>
+        <Routes>
+          <Route
+            path="/businesses/:businessId/campaigns/:campaignId/ad"
+            element={<AdPreviewPage />}
+          />
+        </Routes>
+      </MemoryRouter>,
+    )
+    await user.click(await screen.findByLabelText(/Publish paused/))
+    expect(screen.getByLabelText(/Publish paused/)).not.toBeChecked()
+
+    // Something remounts the page (a late auth re-render, a route change).
+    first.unmount()
+    renderPage()
+
+    expect(await screen.findByLabelText(/Publish paused/)).not.toBeChecked()
+  })
+
+  it('carries a choice made on the dashboard over to the ad page', async () => {
+    // CampaignsSection, on the dashboard, stores the choice under this key.
+    window.sessionStorage.setItem('publishPaused:camp-1', 'false')
+    mockedApi.approveCampaign.mockResolvedValue(makeCampaign({ status: 'APPROVED' }))
+    mockedApi.publishCampaign.mockResolvedValue(makeCampaign({ status: 'LIVE' }))
+    const user = userEvent.setup()
+
+    renderPage()
+    expect(await screen.findByLabelText(/Publish paused/)).not.toBeChecked()
+    await user.click(screen.getByRole('button', { name: 'Approve & Publish' }))
+
+    await waitFor(() =>
+      expect(mockedApi.publishCampaign).toHaveBeenCalledWith('biz-1', 'camp-1', {
+        paused: false,
+      }),
+    )
+  })
+
+  it('forgets the choice after a successful publish', async () => {
+    window.sessionStorage.setItem('publishPaused:camp-1', 'false')
+    mockedApi.approveCampaign.mockResolvedValue(makeCampaign({ status: 'APPROVED' }))
+    mockedApi.publishCampaign.mockResolvedValue(makeCampaign({ status: 'LIVE' }))
+    const user = userEvent.setup()
+
+    renderPage()
+    await user.click(await screen.findByRole('button', { name: 'Approve & Publish' }))
+
+    await waitFor(() => expect(mockedApi.publishCampaign).toHaveBeenCalled())
+    expect(window.sessionStorage.getItem('publishPaused:camp-1')).toBeNull()
+  })
+
+  it('keeps the choice if publishing fails, so a retry uses it', async () => {
+    window.sessionStorage.setItem('publishPaused:camp-1', 'false')
+    mockedApi.approveCampaign.mockResolvedValue(makeCampaign({ status: 'APPROVED' }))
+    mockedApi.publishCampaign.mockRejectedValue(new api.ApiError(400, 'Meta says no'))
+    const user = userEvent.setup()
+
+    renderPage()
+    await user.click(await screen.findByRole('button', { name: 'Approve & Publish' }))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Meta says no')
+    expect(window.sessionStorage.getItem('publishPaused:camp-1')).toBe('false')
   })
 
   describe('a creative test with several selected ads', () => {
