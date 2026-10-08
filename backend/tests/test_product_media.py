@@ -20,6 +20,7 @@ from tests.test_product_image import (
     _signed_up_client,
     _valid_jpeg,
 )
+from tests.thumbnail_fixtures import BLACK_JPEG, DARK_JPEG, GRAD_JPEG, make_png
 
 _THUMB = _valid_jpeg(360, 640)
 
@@ -98,6 +99,20 @@ def test_a_quicktime_video_is_accepted(client: TestClient) -> None:
     assert response.json()["aspectClass"] == "FEED"
 
 
+def test_an_m4v_video_is_accepted_and_stored_as_mp4(client: TestClient) -> None:
+    """Apple's .m4v is an MP4 container that browsers tag video/x-m4v; Meta only
+    knows video/mp4, so it is stored and served as that."""
+    business_id, product_id = _setup(client)
+
+    response = _upload_video(
+        client, business_id, product_id, content_type="video/x-m4v"
+    )
+
+    assert response.status_code == 201
+    served = client.get(f"/product-images/{response.json()['id']}")
+    assert served.headers["content-type"] == "video/mp4"
+
+
 def test_an_unsupported_video_type_is_rejected(client: TestClient) -> None:
     business_id, product_id = _setup(client)
 
@@ -146,6 +161,54 @@ def test_an_oversized_thumbnail_is_rejected(
 
     assert response.status_code == 400
     assert "thumbnail" in response.json()["detail"].lower()
+
+
+def test_a_solid_black_thumbnail_is_rejected_with_a_pointer_to_manual_upload(
+    client: TestClient,
+) -> None:
+    """Browsers hand back a black frame for video they cannot render (iPhone
+    HDR/HEVC in Safari); the server refuses it instead of storing it."""
+    business_id, product_id = _setup(client)
+
+    response = _upload_video(client, business_id, product_id, thumbnail=BLACK_JPEG)
+
+    assert response.status_code == 400
+    detail = response.json()["detail"].lower()
+    assert "black" in detail
+    assert "upload a thumbnail" in detail
+    assert "most compatible" in detail
+
+
+def test_a_black_png_thumbnail_is_rejected_too(client: TestClient) -> None:
+    business_id, product_id = _setup(client)
+
+    response = _upload_video(
+        client,
+        business_id,
+        product_id,
+        thumbnail=make_png(64, 48, lambda x, y: (0, 0, 0)),
+        thumbnail_type="image/png",
+    )
+
+    assert response.status_code == 400
+    assert "black" in response.json()["detail"].lower()
+
+
+def test_a_dark_but_real_thumbnail_is_accepted(client: TestClient) -> None:
+    """A night scene is dark, not black: only a solid black frame is refused."""
+    business_id, product_id = _setup(client)
+
+    response = _upload_video(client, business_id, product_id, thumbnail=DARK_JPEG)
+
+    assert response.status_code == 201
+
+
+def test_a_real_bright_thumbnail_is_accepted(client: TestClient) -> None:
+    business_id, product_id = _setup(client)
+
+    response = _upload_video(client, business_id, product_id, thumbnail=GRAD_JPEG)
+
+    assert response.status_code == 201
 
 
 def test_unreadable_video_bytes_are_rejected(client: TestClient) -> None:

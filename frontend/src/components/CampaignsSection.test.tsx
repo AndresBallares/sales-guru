@@ -2294,6 +2294,9 @@ describe('CampaignsSection', () => {
 
     expect(mockedApi.listProductImages).toHaveBeenCalledWith('biz-1', 'prod-1')
     const libraryOption = await screen.findByAltText('Product option')
+    expect(
+      screen.getByText("Videos can be added in the product's photos. Video ads are coming later."),
+    ).toBeInTheDocument()
     await user.click(libraryOption)
 
     expect(mockedApi.selectCreative).toHaveBeenCalledWith(

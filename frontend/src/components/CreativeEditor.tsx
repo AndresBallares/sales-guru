@@ -9,7 +9,7 @@ import {
   type ProductImage,
   type RegenerableCopyField,
 } from '../lib/api'
-import { onlyPhotos } from '../lib/media'
+import { onlyPhotos, PHOTOS_ONLY_HINT } from '../lib/media'
 
 const COPY_FIELDS: { field: RegenerableCopyField; label: string }[] = [
   { field: 'headline', label: 'headline' },
@@ -115,6 +115,7 @@ export function CreativeEditor({
           {uploading && <p>Uploading…</p>}
           {library !== null && (
             <div aria-label="Choose a photo from your library">
+              <p className="field-hint">{PHOTOS_ONLY_HINT}</p>
               {library.map((image) => (
                 <button key={image.id} type="button" onClick={() => void attachImage(image.id)}>
                   <img

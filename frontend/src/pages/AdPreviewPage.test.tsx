@@ -230,6 +230,9 @@ describe('AdPreviewPage', () => {
     await user.click(await screen.findByRole('button', { name: 'Change image' }))
     await user.click(screen.getByRole('button', { name: 'Choose from library' }))
     await screen.findByRole('img', { name: 'Product option' })
+    expect(
+      screen.getByText("Videos can be added in the product's photos. Video ads are coming later."),
+    ).toBeInTheDocument()
     await user.click(screen.getByRole('img', { name: 'Product option' }))
 
     await waitFor(() =>

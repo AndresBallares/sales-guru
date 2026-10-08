@@ -19,7 +19,7 @@ import {
   type Creative,
   type ProductImage,
 } from '../lib/api'
-import { onlyPhotos } from '../lib/media'
+import { onlyPhotos, PHOTOS_ONLY_HINT } from '../lib/media'
 import { SocialPostPreview } from '../components/SocialPostPreview'
 import { clearPublishPaused, getPublishPaused, setPublishPaused } from '../lib/publishPaused'
 
@@ -317,6 +317,7 @@ export function AdPreviewPage() {
                 {uploading && <p>Uploading…</p>}
                 {libraryOpen && (
                   <div aria-label="Choose a photo from your library">
+                    <p className="field-hint">{PHOTOS_ONLY_HINT}</p>
                     {loadingLibrary && <p>Loading…</p>}
                     {!loadingLibrary && productImages.length === 0 && (
                       <p>No photos uploaded for this product yet.</p>

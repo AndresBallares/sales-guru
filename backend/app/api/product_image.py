@@ -12,6 +12,8 @@ sequential index, and product images are meant to be shown to the public
 in ads anyway, so there's no meaningful confidentiality loss.
 """
 
+import asyncio
+
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, status
 from fastapi.responses import Response
 from prisma import Base64
@@ -37,6 +39,7 @@ from app.services.media_info import (
     classify_aspect,
     read_video_info,
 )
+from app.services.thumbnail_brightness import is_nearly_black
 
 router = APIRouter(
     prefix="/businesses/{business_id}/products/{product_id}/images",
@@ -45,7 +48,7 @@ router = APIRouter(
 serve_router = APIRouter(tags=["product-images"])
 
 _UNSUPPORTED_CONTENT_TYPE = (
-    "Unsupported file type — use a JPEG or PNG photo, or an MP4/MOV video"
+    "Unsupported file type — use a JPEG or PNG photo, or an MP4/MOV/M4V video"
 )
 _TOO_LARGE = f"Image exceeds the {MAX_IMAGE_BYTES // (1024 * 1024)}MB limit"
 _VIDEO_TOO_LARGE = (
@@ -58,6 +61,12 @@ _UNREADABLE_VIDEO = (
 )
 _THUMBNAIL_REQUIRED = "A video needs a thumbnail image (captured from the video)"
 _BAD_THUMBNAIL = "The video's thumbnail must be a readable JPEG or PNG image"
+_BLACK_THUMBNAIL = (
+    "The video's thumbnail is a solid black frame — your browser could not "
+    "render this video (common with iPhone HDR/HEVC video). Upload a thumbnail "
+    "image manually, or re-record with iPhone Camera set to Most Compatible and "
+    "HDR Video turned off."
+)
 _UNREADABLE_IMAGE = "Could not read this image — it may be corrupted"
 _TOO_SMALL = (
     f"Image is smaller than the {MIN_IMAGE_DIMENSION_PX}px minimum on its short side"
@@ -183,6 +192,11 @@ async def _validated_thumbnail(thumbnail: UploadFile | None) -> tuple[bytes, str
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST, detail=_BAD_THUMBNAIL
         ) from exc
+    # Off the event loop: decoding is pure Python (up to ~0.5s for a large JPEG).
+    if await asyncio.to_thread(is_nearly_black, data, content_type):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=_BLACK_THUMBNAIL
+        )
     return data, content_type
 
 
@@ -291,7 +305,10 @@ async def _store_video(
         data={
             "productId": product.id,
             "data": Base64.encode(data),
-            "contentType": content_type,
+            # Meta only knows video/mp4; an .m4v is the same container.
+            "contentType": "video/mp4"
+            if content_type == "video/x-m4v"
+            else content_type,
             "position": await _next_position(product.id),
             "mediaType": "VIDEO",
             "width": info.width,

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState, type ChangeEvent, type FormEvent } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { CreativeEditor } from './CreativeEditor'
-import { onlyPhotos } from '../lib/media'
+import { onlyPhotos, PHOTOS_ONLY_HINT } from '../lib/media'
 import {
   activateCampaign,
   ApiError,
@@ -1708,6 +1708,7 @@ export function CampaignsSection({
                               {uploadingImageId === selectedCreative.id && <p>Uploading…</p>}
                               {libraryId === selectedCreative.id && (
                                 <div aria-label="Choose a photo from your library">
+                                  <p className="field-hint">{PHOTOS_ONLY_HINT}</p>
                                   {loadingLibraryId === selectedCreative.id && <p>Loading…</p>}
                                   {loadingLibraryId !== selectedCreative.id &&
                                     (productImages[campaignProductId] ?? []).length === 0 && (

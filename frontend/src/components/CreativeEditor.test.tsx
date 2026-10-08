@@ -70,6 +70,9 @@ describe('CreativeEditor', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Choose from library' }))
 
     expect(await screen.findAllByAltText('Product option')).toHaveLength(2)
+    expect(
+      screen.getByText("Videos can be added in the product's photos. Video ads are coming later."),
+    ).toBeInTheDocument()
   })
 
   it('uploads a new photo and uses it for the ad', async () => {

@@ -3,6 +3,12 @@
 # intentionally excluded here (too slow for commit-time) — it stays
 # CI-only.
 #
+# Every hook except the co-author check is pinned to the pre-commit stage: with
+# no `stages:`, a hook is also registered for commit-msg, where no files are
+# passed, so git's last lines were a wall of "(no files to check) Skipped" that
+# looked like the checks never ran. They run at pre-commit; only
+# no-ai-coauthor-trailer belongs to commit-msg.
+#
 # default_install_hook_types covers both stages with a plain
 # `pre-commit install` — no separate `--hook-type commit-msg` command to
 # remember, which would otherwise leave the no-ai-coauthor check unregistered.
@@ -14,15 +20,23 @@ repos:
     rev: v5.0.0
     hooks:
       - id: trailing-whitespace
+        stages: [pre-commit]
       - id: end-of-file-fixer
+        stages: [pre-commit]
       - id: check-merge-conflict
+        stages: [pre-commit]
       - id: check-added-large-files
+        stages: [pre-commit]
         args: ["--maxkb=1000"]
       - id: mixed-line-ending
+        stages: [pre-commit]
         args: ["--fix=lf"]
       - id: check-yaml
+        stages: [pre-commit]
       - id: check-toml
+        stages: [pre-commit]
       - id: check-json
+        stages: [pre-commit]
         exclude: ^frontend/tsconfig.*\.json$
 
   - repo: local
@@ -34,6 +48,7 @@ repos:
         stages: [commit-msg]
 
       - id: backend-ruff-check
+        stages: [pre-commit]
         name: backend · ruff check
         entry: bash -c 'cd backend && uv run ruff check .'
         language: system
@@ -41,6 +56,7 @@ repos:
         pass_filenames: false
 
       - id: backend-ruff-format
+        stages: [pre-commit]
         name: backend · ruff format --check
         entry: bash -c 'cd backend && uv run ruff format --check .'
         language: system
@@ -48,6 +64,7 @@ repos:
         pass_filenames: false
 
       - id: backend-mypy
+        stages: [pre-commit]
         name: backend · mypy
         entry: bash -c 'cd backend && uv run mypy .'
         language: system
@@ -55,6 +72,7 @@ repos:
         pass_filenames: false
 
       - id: backend-ty
+        stages: [pre-commit]
         name: backend · ty check
         entry: bash -c 'cd backend && uv run ty check'
         language: system
@@ -62,6 +80,7 @@ repos:
         pass_filenames: false
 
       - id: backend-pytest
+        stages: [pre-commit]
         name: backend · pytest (coverage >=90%)
         entry: bash -c 'cd backend && uv run pytest'
         language: system
@@ -69,6 +88,7 @@ repos:
         pass_filenames: false
 
       - id: frontend-oxlint
+        stages: [pre-commit]
         name: frontend · oxlint
         entry: bash -c 'cd frontend && npm run lint'
         language: system
@@ -76,6 +96,7 @@ repos:
         pass_filenames: false
 
       - id: frontend-typecheck
+        stages: [pre-commit]
         name: frontend · tsc -b
         entry: bash -c 'cd frontend && npx tsc -b'
         language: system
@@ -83,6 +104,7 @@ repos:
         pass_filenames: false
 
       - id: frontend-vitest
+        stages: [pre-commit]
         name: frontend · vitest (coverage >=90%)
         entry: bash -c 'cd frontend && npm run test:coverage'
         language: system

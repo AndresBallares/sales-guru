@@ -18,18 +18,22 @@ import {
   type ProductImage,
 } from '../lib/api'
 import {
-  aspectRatioWarning,
+  ASPECT_RATIO_WARNING,
   ALLOWED_IMAGE_TYPES,
   dimensionTooSmall,
+  type ImageDimensions,
   readImageDimensions,
   TOO_SMALL_ERROR,
   validateImageFile,
 } from '../lib/imageValidation'
 import {
   ASPECT_CLASS_LABELS,
+  BLACK_THUMBNAIL_TIP,
+  BlackThumbnailError,
   classifyAspect,
   formatDuration,
-  isVideoType,
+  isVideoFile,
+  normalizeVideoFile,
   MAX_VIDEO_SECONDS,
   readVideoInfo,
   UNCLASSIFIED_VIDEO_WARNING,
@@ -37,6 +41,8 @@ import {
   validateVideoFile,
   VIDEO_TOO_LONG_ERROR,
   type AspectClass,
+  type VideoInfo,
+  type VideoMeta,
 } from '../lib/media'
 import {
   DESTINATION_URL_ERROR_MESSAGE,
@@ -137,6 +143,9 @@ export function ProductForm({
   const [stagedPhotos, setStagedPhotos] = useState<StagedPhoto[]>([])
   const [imageError, setImageError] = useState<string | null>(null)
   const [uploadingImage, setUploadingImage] = useState(false)
+  // A video whose frame the browser could only draw black: waiting on a
+  // manually uploaded thumbnail (or for the user to cancel it).
+  const [blackVideo, setBlackVideo] = useState<{ file: File; meta: VideoMeta } | null>(null)
   const [removingImageId, setRemovingImageId] = useState<string | null>(null)
   const [reorderingImages, setReorderingImages] = useState(false)
   const [isDraggingPhoto, setIsDraggingPhoto] = useState(false)
@@ -181,13 +190,9 @@ export function ProductForm({
     if (files.length === 0) return
 
     setImageError(null)
-    for (const file of files) {
-      let warning: string | null = null
-      let thumbnail: File | undefined
-      let durationSeconds: number | undefined
-      let aspectClass: AspectClass
-      const isVideo = isVideoType(file.type)
-      if (isVideo) {
+    for (const picked of files) {
+      const file = isVideoFile(picked) ? normalizeVideoFile(picked) : picked
+      if (isVideoFile(file)) {
         const videoError = validateVideoFile(file)
         if (videoError) {
           setImageError(videoError)
@@ -197,68 +202,105 @@ export function ProductForm({
         try {
           info = await readVideoInfo(file)
         } catch (err) {
-          setImageError(err instanceof Error ? err.message : 'Could not read this video.')
+          if (err instanceof BlackThumbnailError) {
+            // The browser decoded the size and length but could only draw black
+            // (iPhone HDR/HEVC in Safari): keep the video and ask for a
+            // thumbnail instead of failing the upload outright.
+            if (err.meta.durationSeconds > MAX_VIDEO_SECONDS) {
+              setImageError(VIDEO_TOO_LONG_ERROR)
+            } else {
+              setBlackVideo({ file, meta: err.meta })
+            }
+          } else {
+            setImageError(err instanceof Error ? err.message : 'Could not read this video.')
+          }
           continue
         }
         if (info.durationSeconds > MAX_VIDEO_SECONDS) {
           setImageError(VIDEO_TOO_LONG_ERROR)
           continue
         }
-        thumbnail = info.thumbnail
-        durationSeconds = info.durationSeconds
-        aspectClass = classifyAspect(info.width, info.height)
-        if (aspectClass === 'UNCLASSIFIED') warning = UNCLASSIFIED_VIDEO_WARNING
-      } else {
-        if (!ALLOWED_IMAGE_TYPES.has(file.type)) {
-          setImageError(UNSUPPORTED_MEDIA_ERROR)
-          continue
-        }
-        const typeOrSizeError = validateImageFile(file)
-        if (typeOrSizeError) {
-          setImageError(typeOrSizeError)
-          continue
-        }
-        let dimensions
-        try {
-          dimensions = await readImageDimensions(file)
-        } catch (err) {
-          setImageError(err instanceof Error ? err.message : 'Could not read this image.')
-          continue
-        }
-        if (dimensionTooSmall(dimensions)) {
-          setImageError(TOO_SMALL_ERROR)
-          continue
-        }
-        warning = aspectRatioWarning(dimensions)
-        aspectClass = classifyAspect(dimensions.width, dimensions.height)
+        await addMedia(file, info)
+        continue
       }
 
-      if (isEditing) {
-        setUploadingImage(true)
-        try {
-          const image = await uploadProductImage(businessId, product.id, file, thumbnail)
-          setExistingImages((prev) => [...prev, image])
-        } catch (err) {
-          setImageError(err instanceof ApiError ? err.message : 'Could not upload image.')
-        } finally {
-          setUploadingImage(false)
-        }
-      } else {
-        setStagedPhotos((prev) => [
-          ...prev,
-          {
-            id: `staged-${++stagedPhotoCounter}`,
-            file,
-            previewUrl: URL.createObjectURL(thumbnail ?? file),
-            warning,
-            isVideo,
-            thumbnail,
-            durationSeconds,
-            aspectClass,
-          },
-        ])
+      if (!ALLOWED_IMAGE_TYPES.has(file.type)) {
+        setImageError(UNSUPPORTED_MEDIA_ERROR)
+        continue
       }
+      const typeOrSizeError = validateImageFile(file)
+      if (typeOrSizeError) {
+        setImageError(typeOrSizeError)
+        continue
+      }
+      let dimensions
+      try {
+        dimensions = await readImageDimensions(file)
+      } catch (err) {
+        setImageError(err instanceof Error ? err.message : 'Could not read this image.')
+        continue
+      }
+      if (dimensionTooSmall(dimensions)) {
+        setImageError(TOO_SMALL_ERROR)
+        continue
+      }
+      await addMedia(file, null, dimensions)
     }
+  }
+
+  // Uploads (edit mode) or stages (create mode) one already-validated item: a
+  // photo with its measured dimensions, or a video with its captured thumbnail.
+  async function addMedia(file: File, video: VideoInfo | null, dimensions?: ImageDimensions) {
+    const width = video?.width ?? dimensions?.width ?? 0
+    const height = video?.height ?? dimensions?.height ?? 0
+    const aspectClass = classifyAspect(width, height)
+    const warning =
+      aspectClass !== 'UNCLASSIFIED'
+        ? null
+        : video
+          ? UNCLASSIFIED_VIDEO_WARNING
+          : ASPECT_RATIO_WARNING
+
+    if (isEditing) {
+      setUploadingImage(true)
+      try {
+        const image = await uploadProductImage(businessId, product.id, file, video?.thumbnail)
+        setExistingImages((prev) => [...prev, image])
+      } catch (err) {
+        setImageError(err instanceof ApiError ? err.message : 'Could not upload image.')
+      } finally {
+        setUploadingImage(false)
+      }
+    } else {
+      setStagedPhotos((prev) => [
+        ...prev,
+        {
+          id: `staged-${++stagedPhotoCounter}`,
+          file,
+          previewUrl: URL.createObjectURL(video?.thumbnail ?? file),
+          warning,
+          isVideo: video !== null,
+          thumbnail: video?.thumbnail,
+          durationSeconds: video?.durationSeconds,
+          aspectClass,
+        },
+      ])
+    }
+  }
+
+  async function handleManualThumbnail(event: ChangeEvent<HTMLInputElement>) {
+    const thumbnail = event.target.files?.[0]
+    event.target.value = ''
+    if (!thumbnail || !blackVideo) return
+    const thumbnailError = validateImageFile(thumbnail)
+    if (thumbnailError) {
+      setImageError(thumbnailError)
+      return
+    }
+    setImageError(null)
+    const { file, meta } = blackVideo
+    setBlackVideo(null)
+    await addMedia(file, { ...meta, thumbnail })
   }
 
   async function handleFilesSelected(event: ChangeEvent<HTMLInputElement>) {
@@ -577,19 +619,39 @@ export function ProductForm({
           <span className="photo-dropzone-text">
             <strong>Add photos</strong>
             <br />
-            Drag and drop, or click to browse. Short videos (MP4/MOV, up to 60 seconds and 50MB) work too.
+            Drag and drop, or click to browse. Short videos (MP4/MOV/M4V, up to 60 seconds and 50MB) work too.
           </span>
           <input
             ref={fileInputRef}
             id={`photos-${idSuffix}`}
             type="file"
-            accept="image/jpeg,image/png,video/mp4,video/quicktime"
+            accept="image/jpeg,image/png,video/mp4,video/quicktime,video/x-m4v,.m4v"
             multiple
             disabled={uploadingImage}
             onChange={(event) => void handleFilesSelected(event)}
             className="photo-dropzone-input"
           />
         </label>
+        {blackVideo && (
+          <div className="media-fallback" role="alert">
+            <p>
+              <strong>
+                We could only capture a black frame from &ldquo;{blackVideo.file.name}&rdquo;.
+              </strong>{' '}
+              {BLACK_THUMBNAIL_TIP}
+            </p>
+            <label htmlFor={`manual-thumbnail-${idSuffix}`}>Upload a thumbnail image</label>
+            <input
+              id={`manual-thumbnail-${idSuffix}`}
+              type="file"
+              accept="image/jpeg,image/png"
+              onChange={(event) => void handleManualThumbnail(event)}
+            />
+            <button type="button" onClick={() => setBlackVideo(null)}>
+              Cancel this video
+            </button>
+          </div>
+        )}
         {uploadingImage && <p>Uploading…</p>}
         {imageError && (
           <p className="form-error" role="alert">
