@@ -1,9 +1,15 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   ASPECT_CLASS_LABELS,
+  BlackThumbnailError,
+  captureTimes,
   classifyAspect,
   formatDuration,
+  isVideoFile,
   MAX_VIDEO_BYTES,
+  normalizeVideoFile,
+  meanLuminance,
+  NEAR_BLACK_MEAN_LUMINANCE,
   MAX_VIDEO_SECONDS,
   onlyPhotos,
   readVideoInfo,
@@ -62,12 +68,43 @@ describe('formatDuration', () => {
   })
 })
 
+describe('isVideoFile / normalizeVideoFile', () => {
+  const named = (name: string, type: string) => new File(['v'], name, { type })
+
+  it('recognises videos by type', () => {
+    expect(isVideoFile(named('a.mp4', 'video/mp4'))).toBe(true)
+    expect(isVideoFile(named('a.mov', 'video/quicktime'))).toBe(true)
+    expect(isVideoFile(named('a.m4v', 'video/x-m4v'))).toBe(true)
+    expect(isVideoFile(named('a.jpg', 'image/jpeg'))).toBe(false)
+  })
+
+  it('falls back to the extension when the browser reports no type', () => {
+    expect(isVideoFile(named('clip.m4v', ''))).toBe(true)
+    expect(isVideoFile(named('CLIP.MOV', 'application/octet-stream'))).toBe(true)
+    expect(isVideoFile(named('notes.txt', ''))).toBe(false)
+  })
+
+  it('gives a typeless video its real type so the server accepts it', () => {
+    expect(normalizeVideoFile(named('clip.m4v', '')).type).toBe('video/mp4')
+    expect(normalizeVideoFile(named('clip.mp4', '')).type).toBe('video/mp4')
+    expect(normalizeVideoFile(named('clip.mov', '')).type).toBe('video/quicktime')
+    expect(normalizeVideoFile(named('clip.m4v', '')).name).toBe('clip.m4v')
+  })
+
+  it('leaves a correctly typed file untouched', () => {
+    const file = named('clip.mp4', 'video/mp4')
+
+    expect(normalizeVideoFile(file)).toBe(file)
+  })
+})
+
 describe('validateVideoFile', () => {
   const file = (type: string, size: number) =>
     ({ type, size }) as unknown as File
 
   it('accepts mp4 and quicktime within the size cap', () => {
     expect(validateVideoFile(file('video/mp4', 1024))).toBeNull()
+    expect(validateVideoFile(file('video/x-m4v', 1024))).toBeNull()
     expect(validateVideoFile(file('video/quicktime', MAX_VIDEO_BYTES))).toBeNull()
   })
 
@@ -89,133 +126,319 @@ describe('validateVideoFile', () => {
   })
 })
 
+describe('captureTimes', () => {
+  it.each([
+    [12, [1, 2, 6]],
+    [4, [1, 2, 3]],
+    [2, [0.5, 1, 1.5]],
+  ])('a %d second clip is sampled at %j', (duration, expected) => {
+    expect(captureTimes(duration)).toEqual(expected)
+  })
+
+  it('never samples the first frame, or past the end', () => {
+    for (const duration of [0.4, 1, 3, 10, 60]) {
+      for (const time of captureTimes(duration)) {
+        expect(time).toBeGreaterThan(0)
+        expect(time).toBeLessThan(duration)
+      }
+    }
+  })
+
+  it('has at most three distinct attempts', () => {
+    expect(captureTimes(60)).toHaveLength(3)
+    expect(new Set(captureTimes(0.4)).size).toBe(captureTimes(0.4).length)
+    expect(captureTimes(0.05)).toHaveLength(1)
+  })
+})
+
+describe('meanLuminance', () => {
+  const rgba = (r: number, g: number, b: number, pixels = 4) =>
+    Uint8ClampedArray.from({ length: pixels * 4 }, (_, i) => [r, g, b, 255][i % 4])
+
+  it('is 0 for black and 255 for white', () => {
+    expect(meanLuminance(rgba(0, 0, 0))).toBe(0)
+    expect(meanLuminance(rgba(255, 255, 255))).toBeCloseTo(255, 0)
+  })
+
+  it('weights green above red above blue', () => {
+    expect(meanLuminance(rgba(0, 255, 0))).toBeGreaterThan(meanLuminance(rgba(255, 0, 0)))
+    expect(meanLuminance(rgba(255, 0, 0))).toBeGreaterThan(meanLuminance(rgba(0, 0, 255)))
+  })
+
+  it('treats an empty sample as black', () => {
+    expect(meanLuminance(new Uint8ClampedArray(0))).toBe(0)
+  })
+
+  it('has a black threshold that a dark scene stays above', () => {
+    expect(NEAR_BLACK_MEAN_LUMINANCE).toBeGreaterThan(0)
+    expect(meanLuminance(rgba(20, 20, 20))).toBeGreaterThan(NEAR_BLACK_MEAN_LUMINANCE)
+  })
+})
+
 describe('readVideoInfo', () => {
   afterEach(() => {
     vi.restoreAllMocks()
     vi.unstubAllGlobals()
   })
 
-  interface FakeVideo {
-    preload: string
-    muted: boolean
-    playsInline: boolean
-    duration: number
-    videoWidth: number
-    videoHeight: number
-    currentTime: number
-    onloadedmetadata: (() => void) | null
-    onseeked: (() => void) | null
-    onerror: (() => void) | null
-    src: string
+  // A video element that behaves like a browser's: loading fires
+  // loadedmetadata, setting currentTime fires seeked, and frames are presented
+  // through requestVideoFrameCallback when the browser has it.
+  class FakeVideo {
+    preload = ''
+    muted = false
+    playsInline = false
+    duration = 12
+    videoWidth = 1080
+    videoHeight = 1920
+    onloadedmetadata: (() => void) | null = null
+    onseeked: (() => void) | null = null
+    onerror: (() => void) | null = null
+    seeks: number[] = []
+    plays = 0
+    pauses = 0
+    frameCallbacks = 0
+    private time = 0
+    requestVideoFrameCallback?: (cb: () => void) => number
+    play: () => Promise<void> = () => {
+      this.plays += 1
+      return Promise.resolve()
+    }
+    pause = () => {
+      this.pauses += 1
+    }
+
+    private readonly behavior: {
+      loadFails?: boolean
+      frames?: 'immediate' | 'never' | 'unsupported'
+    }
+
+    constructor(behavior: { loadFails?: boolean; frames?: 'immediate' | 'never' | 'unsupported' }) {
+      this.behavior = behavior
+      if (behavior.frames !== 'unsupported') {
+        this.requestVideoFrameCallback = (cb) => {
+          this.frameCallbacks += 1
+          if (behavior.frames !== 'never') queueMicrotask(cb)
+          return 1
+        }
+      }
+    }
+
+    get currentTime() {
+      return this.time
+    }
+    set currentTime(value: number) {
+      this.time = value
+      this.seeks.push(value)
+      queueMicrotask(() => this.onseeked?.())
+    }
+    set src(_value: string) {
+      queueMicrotask(() =>
+        this.behavior.loadFails ? this.onerror?.() : this.onloadedmetadata?.(),
+      )
+    }
   }
 
-  function stubDom(options: {
-    video?: Partial<FakeVideo>
-    context?: object | null
-    blob?: Blob | null
-  }) {
-    const video: FakeVideo = {
-      preload: '',
-      muted: false,
-      playsInline: false,
-      duration: 12,
-      videoWidth: 1080,
-      videoHeight: 1920,
-      currentTime: 0,
-      onloadedmetadata: null,
-      onseeked: null,
-      onerror: null,
-      src: '',
-      ...options.video,
-    }
-    const drawImage = vi.fn()
-    const canvas = {
-      width: 0,
-      height: 0,
-      getContext: () =>
-        options.context === undefined ? { drawImage } : options.context,
-      toBlob: (cb: (blob: Blob | null) => void) =>
-        cb(options.blob === undefined ? new Blob(['x'], { type: 'image/jpeg' }) : options.blob),
-    }
+  function stubDom(
+    options: {
+      video?: { loadFails?: boolean; frames?: 'immediate' | 'never' | 'unsupported' }
+      duration?: number
+      width?: number
+      height?: number
+      // Brightness (0-255) of each frame sampled, in order; the last one repeats.
+      brightness?: number[]
+      context?: boolean
+      blob?: Blob | null
+    } = {},
+  ) {
+    const video = new FakeVideo(options.video ?? {})
+    if (options.duration !== undefined) video.duration = options.duration
+    if (options.width !== undefined) video.videoWidth = options.width
+    if (options.height !== undefined) video.videoHeight = options.height
+    const brightness = [...(options.brightness ?? [128])]
+    const canvases: { width: number; height: number; draws: number }[] = []
     const realCreate = document.createElement.bind(document)
     vi.spyOn(document, 'createElement').mockImplementation(((tag: string) => {
       if (tag === 'video') return video
-      if (tag === 'canvas') return canvas
+      if (tag === 'canvas') {
+        const canvas = {
+          width: 0,
+          height: 0,
+          draws: 0,
+          getContext: () =>
+            options.context === false
+              ? null
+              : {
+                  drawImage: () => {
+                    canvas.draws += 1
+                  },
+                  getImageData: () => {
+                    const level = brightness.length > 1 ? brightness.shift()! : brightness[0]
+                    return { data: Uint8ClampedArray.from({ length: 16 }, (_, i) => (i % 4 === 3 ? 255 : level)) }
+                  },
+                },
+          toBlob: (cb: (blob: Blob | null) => void) =>
+            cb(options.blob === undefined ? new Blob(['x'], { type: 'image/jpeg' }) : options.blob),
+        }
+        canvases.push(canvas)
+        return canvas
+      }
       return realCreate(tag)
     }) as typeof document.createElement)
-    vi.stubGlobal('URL', { createObjectURL: () => 'blob:x', revokeObjectURL: vi.fn() })
-    return { video, canvas, drawImage }
+    const revoke = vi.fn<(url: string) => void>()
+    vi.stubGlobal('URL', { createObjectURL: () => 'blob:x', revokeObjectURL: revoke })
+    return { video, canvases, revoke }
   }
 
   const file = new File(['v'], 'clip.mp4', { type: 'video/mp4' })
+  const quick = { frameTimeoutMs: 5, playSettleMs: 1, seekTimeoutMs: 50 }
 
-  it('reads size and duration and captures a JPEG thumbnail from the video', async () => {
-    const { video, canvas, drawImage } = stubDom({})
+  it('captures a JPEG thumbnail a second in, never at the first frame', async () => {
+    const { video } = stubDom()
 
-    const pending = readVideoInfo(file)
-    video.onloadedmetadata?.()
-    expect(video.currentTime).toBe(1) // seeks a second in to skip a black first frame
-    video.onseeked?.()
-    const info = await pending
+    const info = await readVideoInfo(file, quick)
 
     expect(info).toMatchObject({ width: 1080, height: 1920, durationSeconds: 12 })
     expect(info.thumbnail).toBeInstanceOf(File)
     expect(info.thumbnail.type).toBe('image/jpeg')
-    expect(canvas.width).toBe(720) // longest side capped at 1280: 1080x1920 -> 720x1280
-    expect(canvas.height).toBe(1280)
-    expect(drawImage).toHaveBeenCalled()
+    expect(video.seeks).toEqual([1])
+    expect(video.seeks.every((time) => time > 0)).toBe(true)
   })
 
-  it('seeks to the middle of a very short clip', async () => {
-    const { video } = stubDom({ video: { duration: 1.2 } })
+  it('samples a quarter of the way in for a short clip', async () => {
+    const { video } = stubDom({ duration: 2 })
 
-    void readVideoInfo(file)
-    video.onloadedmetadata?.()
+    await readVideoInfo(file, quick)
 
-    expect(video.currentTime).toBeCloseTo(0.6)
+    expect(video.seeks).toEqual([0.5])
+  })
+
+  it('waits for a presented frame through requestVideoFrameCallback', async () => {
+    const { video } = stubDom()
+
+    await readVideoInfo(file, quick)
+
+    expect(video.frameCallbacks).toBe(1)
+    expect(video.plays).toBe(0)
+  })
+
+  it('falls back to a brief play then pause when the browser cannot report frames', async () => {
+    const { video } = stubDom({ video: { frames: 'unsupported' } })
+
+    const info = await readVideoInfo(file, quick)
+
+    expect(info.thumbnail).toBeInstanceOf(File)
+    expect(video.plays).toBe(1)
+    expect(video.pauses).toBe(1)
+  })
+
+  it('falls back to play then pause when no frame is ever presented', async () => {
+    const { video } = stubDom({ video: { frames: 'never' } })
+
+    await readVideoInfo(file, quick)
+
+    expect(video.frameCallbacks).toBe(1)
+    expect(video.plays).toBe(1)
+    expect(video.pauses).toBe(1)
+  })
+
+  it('still captures when the browser refuses to play the clip', async () => {
+    const { video } = stubDom({ video: { frames: 'unsupported' } })
+    video.play = () => Promise.reject(new Error('NotAllowedError'))
+
+    await expect(readVideoInfo(file, quick)).resolves.toBeDefined()
+  })
+
+  it('retries at a later time when the first frame is black', async () => {
+    const { video } = stubDom({ brightness: [0, 120] })
+
+    const info = await readVideoInfo(file, quick)
+
+    expect(video.seeks).toEqual([1, 2])
+    expect(info.thumbnail).toBeInstanceOf(File)
+  })
+
+  it('tries three times, at increasing times, before giving up on black frames', async () => {
+    const { video } = stubDom({ brightness: [0, 2, 1] })
+
+    const failure = await readVideoInfo(file, quick).catch((err: unknown) => err)
+
+    expect(failure).toBeInstanceOf(BlackThumbnailError)
+    expect(video.seeks).toEqual([1, 2, 6])
+    expect((failure as BlackThumbnailError).meta).toEqual({
+      width: 1080,
+      height: 1920,
+      durationSeconds: 12,
+    })
+  })
+
+  it('does not treat a dark scene as black', async () => {
+    const { video } = stubDom({ brightness: [20] })
+
+    await readVideoInfo(file, quick)
+
+    expect(video.seeks).toHaveLength(1)
+  })
+
+  it('releases the object URL whether it succeeds or fails', async () => {
+    const ok = stubDom()
+    await readVideoInfo(file, quick)
+    expect(ok.revoke).toHaveBeenCalledTimes(1)
+
+    vi.restoreAllMocks()
+    const failing = stubDom({ brightness: [0] })
+    await readVideoInfo(file, quick).catch(() => undefined)
+    expect(failing.revoke).toHaveBeenCalledTimes(1)
+  })
+
+  it('scales a large frame down to 1280px on its longest side', async () => {
+    const { canvases } = stubDom({ width: 1080, height: 1920 })
+
+    await readVideoInfo(file, quick)
+
+    const main = canvases[0]
+    expect([main.width, main.height]).toEqual([720, 1280])
   })
 
   it('does not scale a small video up', async () => {
-    const { video, canvas } = stubDom({ video: { videoWidth: 640, videoHeight: 360 } })
+    const { canvases } = stubDom({ width: 640, height: 360 })
 
-    const pending = readVideoInfo(file)
-    video.onloadedmetadata?.()
-    video.onseeked?.()
-    await pending
+    await readVideoInfo(file, quick)
 
-    expect([canvas.width, canvas.height]).toEqual([640, 360])
+    expect([canvases[0].width, canvases[0].height]).toEqual([640, 360])
   })
 
-  it.each([
-    ['the browser cannot decode it', {}],
-    ['it reports no usable duration', { video: { duration: Number.NaN } }],
-  ])('rejects when %s', async (_name, options) => {
-    const { video } = stubDom(options)
+  it('rejects a video the browser cannot decode', async () => {
+    stubDom({ video: { loadFails: true } })
 
-    const pending = readVideoInfo(file)
-    if ('video' in options) video.onloadedmetadata?.()
-    else video.onerror?.()
+    await expect(readVideoInfo(file, quick)).rejects.toThrow(UNREADABLE_VIDEO_ERROR)
+  })
 
-    await expect(pending).rejects.toThrow(UNREADABLE_VIDEO_ERROR)
+  it('rejects a video with no usable duration or size', async () => {
+    stubDom({ duration: Number.NaN })
+    await expect(readVideoInfo(file, quick)).rejects.toThrow(UNREADABLE_VIDEO_ERROR)
+
+    vi.restoreAllMocks()
+    stubDom({ width: 0, height: 0 })
+    await expect(readVideoInfo(file, quick)).rejects.toThrow(UNREADABLE_VIDEO_ERROR)
   })
 
   it('rejects when no canvas context is available', async () => {
-    const { video } = stubDom({ context: null })
+    stubDom({ context: false })
 
-    const pending = readVideoInfo(file)
-    video.onloadedmetadata?.()
-    video.onseeked?.()
-
-    await expect(pending).rejects.toThrow(UNREADABLE_VIDEO_ERROR)
+    await expect(readVideoInfo(file, quick)).rejects.toThrow(UNREADABLE_VIDEO_ERROR)
   })
 
   it('rejects when the frame cannot be encoded', async () => {
-    const { video } = stubDom({ blob: null })
+    stubDom({ blob: null })
 
-    const pending = readVideoInfo(file)
-    video.onloadedmetadata?.()
-    video.onseeked?.()
+    await expect(readVideoInfo(file, quick)).rejects.toThrow(UNREADABLE_VIDEO_ERROR)
+  })
 
-    await expect(pending).rejects.toThrow(UNREADABLE_VIDEO_ERROR)
+  it('a black-frame failure is not an unreadable-video failure', () => {
+    const error = new BlackThumbnailError({ width: 1, height: 1, durationSeconds: 1 })
+
+    expect(error.message).toMatch(/black/i)
+    expect(error.message).not.toBe(UNREADABLE_VIDEO_ERROR)
   })
 })
