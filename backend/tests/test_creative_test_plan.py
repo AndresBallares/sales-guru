@@ -548,3 +548,64 @@ async def test_creative_test_plan_prompt_does_not_suggest_a_carousel_angle(
     assert "a collection carousel" not in prompt
     assert "single static image" in prompt
     assert "don't propose carousels" in prompt
+
+
+# ── Test format: Images or Videos, chosen up front ──
+
+
+def test_a_creative_test_plan_defaults_to_single_image_ads() -> None:
+    assert CreativeTestPlanContent(**_plan_dict()).creative_format == "SINGLE_IMAGE"
+
+
+def test_a_creative_test_plan_can_be_a_video_test() -> None:
+    plan = CreativeTestPlanContent(**_plan_dict(creative_format="SINGLE_VIDEO"))
+
+    assert plan.creative_format == "SINGLE_VIDEO"
+
+
+def test_a_creative_test_plan_cannot_be_a_carousel_test() -> None:
+    with pytest.raises(ValidationError):
+        CreativeTestPlanContent(**_plan_dict(creative_format="CAROUSEL"))
+
+
+@pytest.mark.asyncio
+async def test_a_video_test_plan_records_its_format_and_prompts_for_video(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    mock = _mock_agent(monkeypatch, _VALID_INPUT)
+
+    plan = await strategist.generate_strategy(
+        business=_business(),
+        product=_product(),
+        audience=None,
+        objective="SALES",
+        plan_type="CREATIVE_TEST_PLAN",
+        creative_format="SINGLE_VIDEO",
+    )
+
+    assert isinstance(plan, CreativeTestPlanContent)
+    assert plan.creative_format == "SINGLE_VIDEO"
+    prompt = mock.call_args.kwargs["prompt"]
+    assert "short video" in prompt
+    assert "may reuse the same video" in prompt
+    assert "single static image" not in prompt
+    assert "don't propose carousels" in prompt  # still no mixing formats
+
+
+@pytest.mark.asyncio
+async def test_an_image_test_plan_is_unchanged_and_says_single_image(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    mock = _mock_agent(monkeypatch, _VALID_INPUT)
+
+    plan = await strategist.generate_strategy(
+        business=_business(),
+        product=_product(),
+        audience=None,
+        objective="SALES",
+        plan_type="CREATIVE_TEST_PLAN",
+    )
+
+    assert isinstance(plan, CreativeTestPlanContent)
+    assert plan.creative_format == "SINGLE_IMAGE"
+    assert "single static image" in mock.call_args.kwargs["prompt"]

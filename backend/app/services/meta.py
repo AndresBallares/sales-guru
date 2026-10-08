@@ -33,7 +33,9 @@ key raising an uncaught KeyError) — upload_meta_ad_image's own docstring
 has the full history; flag if this still fails on retry.
 """
 
+import asyncio
 import json
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from typing import Any, Literal, NamedTuple, NoReturn
 from uuid import uuid4
@@ -247,13 +249,18 @@ async def _get_json(url: str, params: dict[str, str]) -> dict[str, Any]:
     return body
 
 
-async def _post_json(url: str, data: dict[str, str]) -> dict[str, Any]:
+async def _post_json(
+    url: str, data: dict[str, str], *, timeout: float | None = None
+) -> dict[str, Any]:
     """POST form-encoded data to a Graph API URL and return its parsed JSON body.
 
     Args:
         url: The full Graph API endpoint URL.
         data: Form fields (including the access token) — Meta's object
             -creation endpoints take form-encoded POST bodies, not JSON.
+        timeout: Seconds to allow for the call; None keeps httpx's default
+            (5s), which is enough for everything except a creative that
+            references a video.
 
     Returns:
         The parsed JSON response body.
@@ -263,10 +270,17 @@ async def _post_json(url: str, data: dict[str, str]) -> dict[str, Any]:
             a response body containing Meta's own {"error": ...} shape.
     """
     try:
-        async with httpx.AsyncClient() as client:
+        async with (
+            httpx.AsyncClient()
+            if timeout is None
+            else httpx.AsyncClient(timeout=timeout)
+        ) as client:
             response = await client.post(url, data=data)
     except httpx.HTTPError as exc:
-        raise MetaConnectionError(f"Meta API call failed: {exc}") from exc
+        # A timeout's message is empty, so name the error type too.
+        raise MetaConnectionError(
+            f"Meta API call failed: {str(exc) or type(exc).__name__}"
+        ) from exc
 
     body: dict[str, Any] = response.json()
     if response.is_error or "error" in body:
@@ -777,14 +791,20 @@ async def upload_meta_ad_image(
     # to know or guess Meta's exact echoed key at all.
     extension = content_type.rsplit("/", maxsplit=1)[-1]
     try:
-        async with httpx.AsyncClient() as client:
+        # Not httpx's default 5s: found live 2026-10-08 that adimages can take
+        # longer than that to answer, and a timeout's message is empty.
+        async with httpx.AsyncClient(
+            timeout=httpx.Timeout(10.0, write=120.0, read=60.0)
+        ) as client:
             response = await client.post(
                 url,
                 data={"access_token": access_token},
                 files={"image": (f"image.{extension}", image_data, content_type)},
             )
     except httpx.HTTPError as exc:
-        raise MetaConnectionError(f"Meta API call failed: {exc}") from exc
+        raise MetaConnectionError(
+            f"Meta API call failed: {str(exc) or type(exc).__name__}"
+        ) from exc
 
     body: dict[str, Any] = response.json()
     if response.is_error or "error" in body:
@@ -797,6 +817,195 @@ async def upload_meta_ad_image(
         )
     image_hash: str = next(iter(images.values()))["hash"]
     return image_hash
+
+
+_VIDEO_UPLOAD_WRITE_SECONDS = 600.0
+_VIDEO_CREATIVE_TIMEOUT_SECONDS = 60.0
+
+
+async def upload_meta_video(
+    *,
+    access_token: str,
+    ad_account_id: str,
+    video_data: bytes,
+    content_type: str,
+    name: str,
+) -> str:
+    """Upload a video file to the ad account's video library, returning its id.
+
+    The file is sent as a multipart `source` part (fine for the 50MB V1 cap;
+    Meta's resumable upload is only needed for much larger files). Meta then
+    processes the video in the background: the id isn't usable in a creative
+    until wait_for_meta_video says it is ready.
+
+    Args:
+        access_token: The business's Meta access token.
+        ad_account_id: The connected ad account to upload into.
+        video_data: The raw video bytes (already validated on upload).
+        content_type: video/mp4 or video/quicktime.
+        name: The video's display name in the library.
+
+    Returns:
+        The new Meta video id.
+
+    Raises:
+        MetaConnectionError: If the call fails or returns no id.
+    """
+    if get_settings().fake_meta_enabled:
+        return f"fake_video_{uuid4().hex[:12]}"
+    url = f"{_GRAPH_BASE_URL}/{ad_account_id}/advideos"
+    extension = "mov" if content_type == "video/quicktime" else "mp4"
+    try:
+        # httpx's default 5s write timeout killed a real 31MB upload (found
+        # live 2026-10-08): sending a video takes as long as the connection
+        # needs, so it gets minutes to write and a minute to hear back.
+        async with httpx.AsyncClient(
+            timeout=httpx.Timeout(10.0, write=_VIDEO_UPLOAD_WRITE_SECONDS, read=120.0)
+        ) as client:
+            response = await client.post(
+                url,
+                data={"access_token": access_token, "name": name},
+                files={"source": (f"video.{extension}", video_data, content_type)},
+            )
+    except httpx.HTTPError as exc:
+        # A timeout's message is empty, so name the error type too.
+        raise MetaConnectionError(
+            f"Meta API call failed: {str(exc) or type(exc).__name__}"
+        ) from exc
+
+    body: dict[str, Any] = response.json()
+    if response.is_error or "error" in body:
+        _raise_for_meta_error(url, body, response)
+    video_id = body.get("id")
+    if not video_id:
+        raise MetaConnectionError(
+            f"Meta API call to {httpx.URL(url).path} succeeded but returned "
+            f"no video id: {body}"
+        )
+    return str(video_id)
+
+
+async def wait_for_meta_video(
+    *,
+    access_token: str,
+    video_id: str,
+    timeout_seconds: float = 300,
+    poll_interval_seconds: float = 3,
+    on_progress: Callable[[int | None], None] | None = None,
+) -> None:
+    """Poll a video's processing status until Meta says it is ready.
+
+    Args:
+        access_token: The business's Meta access token.
+        video_id: The id returned by upload_meta_video.
+        timeout_seconds: How long to wait before giving up.
+        poll_interval_seconds: Time between status checks.
+        on_progress: Called after every check with Meta's processing_progress
+            percentage (None when it reports none), so a caller can show
+            "Processing video… 60%".
+
+    Raises:
+        MetaConnectionError: If Meta reports the video failed (with Meta's own
+            reason when it gave one), or it is still processing after
+            timeout_seconds.
+    """
+    if get_settings().fake_meta_enabled:
+        return
+    waited = 0.0
+    while True:
+        body = await _get_json(
+            f"{_GRAPH_BASE_URL}/{video_id}",
+            {"access_token": access_token, "fields": "status"},
+        )
+        status = body.get("status", {})
+        state = status.get("video_status")
+        if on_progress is not None:
+            on_progress(status.get("processing_progress"))
+        if state == "ready":
+            return
+        if state == "error":
+            errors = status.get("processing_phase", {}).get("errors", [])
+            reason = errors[0].get("message") if errors else None
+            raise MetaConnectionError(
+                f"Meta could not process the video: {reason}"
+                if reason
+                else "Meta could not process the video (it reported an error "
+                "without a reason). Try re-recording it as an MP4/MOV with "
+                "standard H.264 video."
+            )
+        if waited >= timeout_seconds:
+            raise MetaConnectionError(
+                f"Meta is still processing the video after "
+                f"{timeout_seconds:g} seconds. Nothing was published — try "
+                "again in a few minutes (the uploaded video is kept in your "
+                "ad account's library)."
+            )
+        await asyncio.sleep(poll_interval_seconds)
+        waited += poll_interval_seconds
+
+
+async def create_meta_video_ad_creative(
+    *,
+    access_token: str,
+    ad_account_id: str,
+    page_id: str,
+    name: str,
+    headline: str,
+    body_text: str,
+    description: str | None,
+    cta: str,
+    link: str,
+    video_id: str,
+    image_hash: str,
+) -> str:
+    """Create a single-video ad creative (object_story_spec.video_data).
+
+    Args:
+        access_token: The business's Meta access token.
+        ad_account_id: The connected ad account.
+        page_id: The connected Page the ad is posted as.
+        name: The creative's display name on Meta.
+        headline: The video ad's title.
+        body_text: The primary text (video_data.message).
+        description: The link description; omitted when None.
+        cta: A Meta call_to_action type value.
+        link: The destination URL (carried inside the call to action, which is
+            where video_data takes it).
+        video_id: A processed video (upload_meta_video + wait_for_meta_video).
+        image_hash: The uploaded thumbnail's hash; video_data requires a
+            cover image.
+
+    Returns:
+        The new Meta ad creative id.
+
+    Raises:
+        MetaConnectionError: If the call fails.
+    """
+    if get_settings().fake_meta_enabled:
+        return f"fake_creative_{uuid4().hex[:12]}"
+    video_spec: dict[str, Any] = {
+        "video_id": video_id,
+        "image_hash": image_hash,
+        "title": headline,
+        "message": body_text,
+        "call_to_action": {"type": cta, "value": {"link": link}},
+    }
+    if description:
+        video_spec["link_description"] = description
+    body = await _post_json(
+        f"{_GRAPH_BASE_URL}/{ad_account_id}/adcreatives",
+        {
+            "access_token": access_token,
+            "name": name,
+            "object_story_spec": json.dumps(
+                {"page_id": page_id, "video_data": video_spec}
+            ),
+        },
+        # Meta checks the video while creating the creative; 5s was not enough.
+        timeout=_VIDEO_CREATIVE_TIMEOUT_SECONDS,
+    )
+    creative_id: str = body["id"]
+    return creative_id
 
 
 async def create_meta_ad_creative(

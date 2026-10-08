@@ -4,6 +4,7 @@ httpx.AsyncClient is mocked throughout — no test here makes a real network
 call to Meta's Graph API.
 """
 
+import asyncio
 import json
 from collections.abc import Iterator
 from datetime import UTC, datetime
@@ -77,7 +78,7 @@ def _mock_client_returning(
 ) -> _FakeAsyncClient:
     """Patch httpx.AsyncClient to return a canned response, return the fake client."""
     fake_client = _FakeAsyncClient(response=response)
-    monkeypatch.setattr(httpx, "AsyncClient", lambda: fake_client)
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **_kwargs: fake_client)
     return fake_client
 
 
@@ -1804,6 +1805,53 @@ async def test_upload_meta_ad_image_returns_the_hash(
 
 
 @pytest.mark.asyncio
+async def test_upload_meta_ad_image_allows_time_to_send_and_hear_back(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The default 5s timeout expired on a real thumbnail upload (found live
+    2026-10-08): Meta's adimages endpoint can take a while to answer."""
+    fake_client = _FakeAsyncClient(
+        response=_FakeResponse({"images": {"image.jpeg": {"hash": "h"}}})
+    )
+    seen: dict[str, Any] = {}
+
+    def make_client(**kwargs: Any) -> _FakeAsyncClient:
+        seen.update(kwargs)
+        return fake_client
+
+    monkeypatch.setattr(httpx, "AsyncClient", make_client)
+
+    await meta.upload_meta_ad_image(
+        access_token="t",
+        ad_account_id="act_1",
+        image_data=b"x",
+        content_type="image/jpeg",
+    )
+
+    assert seen["timeout"].read >= 60
+    assert seen["timeout"].write >= 60
+
+
+@pytest.mark.asyncio
+async def test_upload_meta_ad_image_names_the_error_type_when_the_message_is_empty(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        httpx,
+        "AsyncClient",
+        lambda **_kwargs: _FakeAsyncClient(error=httpx.ReadTimeout("")),
+    )
+
+    with pytest.raises(meta.MetaConnectionError, match="ReadTimeout"):
+        await meta.upload_meta_ad_image(
+            access_token="t",
+            ad_account_id="act_1",
+            image_data=b"x",
+            content_type="image/jpeg",
+        )
+
+
+@pytest.mark.asyncio
 async def test_upload_meta_ad_image_raises_on_network_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1811,7 +1859,7 @@ async def test_upload_meta_ad_image_raises_on_network_error(
     has its own inline try/except (it can't use _post_json, which doesn't
     support multipart), so it needs its own direct coverage of this path."""
     fake_client = _FakeAsyncClient(error=httpx.ConnectError("boom"))
-    monkeypatch.setattr(httpx, "AsyncClient", lambda: fake_client)
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **_kwargs: fake_client)
 
     with pytest.raises(meta.MetaConnectionError, match="Meta API call failed"):
         await meta.upload_meta_ad_image(
@@ -2280,3 +2328,417 @@ async def test_update_meta_ad_set_bid_does_nothing_in_fake_mode(
         )
     finally:
         get_settings.cache_clear()
+
+
+# ── Video upload, processing and creative (Stage 2) ──────────
+
+
+@pytest.mark.asyncio
+async def test_upload_meta_video_posts_the_file_to_advideos_and_returns_the_id(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = _mock_client_returning(monkeypatch, _FakeResponse({"id": "vid_1"}))
+
+    video_id = await meta.upload_meta_video(
+        access_token="token",
+        ad_account_id="act_1",
+        video_data=b"movie bytes",
+        content_type="video/quicktime",
+        name="Spring clip",
+    )
+
+    assert video_id == "vid_1"
+    url, data = client.calls[0]
+    assert url == "https://graph.facebook.com/v21.0/act_1/advideos"
+    assert data == {"access_token": "token", "name": "Spring clip"}
+    files = client.post_files[0]
+    assert files is not None
+    assert files["source"] == ("video.mov", b"movie bytes", "video/quicktime")
+
+
+@pytest.mark.asyncio
+async def test_upload_meta_video_allows_a_slow_large_upload(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """httpx's default 5s write timeout killed a real 31MB upload (found live
+    2026-10-08); a video upload must be allowed minutes to send."""
+    fake_client = _FakeAsyncClient(response=_FakeResponse({"id": "vid_1"}))
+    seen: dict[str, Any] = {}
+
+    def make_client(**kwargs: Any) -> _FakeAsyncClient:
+        seen.update(kwargs)
+        return fake_client
+
+    monkeypatch.setattr(httpx, "AsyncClient", make_client)
+
+    await meta.upload_meta_video(
+        access_token="t",
+        ad_account_id="act_1",
+        video_data=b"x",
+        content_type="video/mp4",
+        name="n",
+    )
+
+    timeout = seen["timeout"]
+    assert timeout.write >= 300
+    assert timeout.read >= 60
+    assert timeout.connect <= 30
+
+
+@pytest.mark.asyncio
+async def test_upload_meta_video_names_the_error_type_when_the_message_is_empty(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A WriteTimeout has an empty message; the user shouldn't see 'failed: '."""
+    monkeypatch.setattr(
+        httpx,
+        "AsyncClient",
+        lambda **_kwargs: _FakeAsyncClient(error=httpx.WriteTimeout("")),
+    )
+
+    with pytest.raises(meta.MetaConnectionError, match="WriteTimeout"):
+        await meta.upload_meta_video(
+            access_token="t",
+            ad_account_id="act_1",
+            video_data=b"x",
+            content_type="video/mp4",
+            name="n",
+        )
+
+
+@pytest.mark.asyncio
+async def test_upload_meta_video_names_an_mp4_by_its_type(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = _mock_client_returning(monkeypatch, _FakeResponse({"id": "vid_1"}))
+
+    await meta.upload_meta_video(
+        access_token="t",
+        ad_account_id="act_1",
+        video_data=b"x",
+        content_type="video/mp4",
+        name="n",
+    )
+
+    assert client.post_files[0] is not None
+    assert client.post_files[0]["source"][0] == "video.mp4"
+
+
+@pytest.mark.asyncio
+async def test_upload_meta_video_raises_on_network_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        httpx,
+        "AsyncClient",
+        lambda **_kwargs: _FakeAsyncClient(error=httpx.ConnectError("x")),
+    )
+
+    with pytest.raises(meta.MetaConnectionError, match="Meta API call failed"):
+        await meta.upload_meta_video(
+            access_token="t",
+            ad_account_id="act_1",
+            video_data=b"x",
+            content_type="video/mp4",
+            name="n",
+        )
+
+
+@pytest.mark.asyncio
+async def test_upload_meta_video_surfaces_metas_rejection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _mock_client_returning(
+        monkeypatch,
+        _FakeResponse(
+            {"error": {"message": "Invalid parameter", "error_user_msg": "Bad codec"}},
+            is_error=True,
+        ),
+    )
+
+    with pytest.raises(meta.MetaConnectionError, match="Bad codec"):
+        await meta.upload_meta_video(
+            access_token="t",
+            ad_account_id="act_1",
+            video_data=b"x",
+            content_type="video/quicktime",
+            name="n",
+        )
+
+
+@pytest.mark.asyncio
+async def test_upload_meta_video_rejects_a_response_without_an_id(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _mock_client_returning(monkeypatch, _FakeResponse({}))
+
+    with pytest.raises(meta.MetaConnectionError, match="no video id"):
+        await meta.upload_meta_video(
+            access_token="t",
+            ad_account_id="act_1",
+            video_data=b"x",
+            content_type="video/mp4",
+            name="n",
+        )
+
+
+class _SequencedClient(_FakeAsyncClient):
+    """A client whose successive GETs return successive canned bodies."""
+
+    def __init__(self, bodies: list[dict[str, Any]]) -> None:
+        super().__init__(response=_FakeResponse({}))
+        self._bodies = bodies
+        self.gets = 0
+
+    async def get(self, url: str, params: dict[str, str]) -> _FakeResponse:
+        self.calls.append((url, params))
+        body = self._bodies[min(self.gets, len(self._bodies) - 1)]
+        self.gets += 1
+        return _FakeResponse(body)
+
+
+def _video_status(
+    state: str, progress: int | None = None, **extra: Any
+) -> dict[str, Any]:
+    status: dict[str, Any] = {"video_status": state, **extra}
+    if progress is not None:
+        status["processing_progress"] = progress
+    return {"status": status, "id": "vid_1"}
+
+
+@pytest.fixture
+def no_sleep(monkeypatch: pytest.MonkeyPatch) -> list[float]:
+    slept: list[float] = []
+
+    async def fake_sleep(seconds: float) -> None:
+        slept.append(seconds)
+
+    monkeypatch.setattr(asyncio, "sleep", fake_sleep)
+    return slept
+
+
+@pytest.mark.asyncio
+async def test_waiting_for_a_video_returns_once_it_is_ready(
+    monkeypatch: pytest.MonkeyPatch, no_sleep: list[float]
+) -> None:
+    client = _SequencedClient(
+        [
+            _video_status("processing", 10),
+            _video_status("processing", 60),
+            _video_status("ready"),
+        ]
+    )
+    monkeypatch.setattr(httpx, "AsyncClient", lambda: client)
+    seen: list[int | None] = []
+
+    await meta.wait_for_meta_video(
+        access_token="t",
+        video_id="vid_1",
+        poll_interval_seconds=2,
+        on_progress=seen.append,
+    )
+
+    assert client.gets == 3
+    assert no_sleep == [2, 2]
+    assert seen == [10, 60, None]
+    url, params = client.calls[0]
+    assert url == "https://graph.facebook.com/v21.0/vid_1"
+    assert params == {"access_token": "t", "fields": "status"}
+
+
+@pytest.mark.asyncio
+async def test_waiting_for_a_video_fails_clearly_when_meta_reports_an_error(
+    monkeypatch: pytest.MonkeyPatch, no_sleep: list[float]
+) -> None:
+    client = _SequencedClient(
+        [
+            _video_status(
+                "error",
+                processing_phase={
+                    "status": "error",
+                    "errors": [{"code": 1363030, "message": "Unsupported codec"}],
+                },
+            )
+        ]
+    )
+    monkeypatch.setattr(httpx, "AsyncClient", lambda: client)
+
+    with pytest.raises(meta.MetaConnectionError, match="Unsupported codec"):
+        await meta.wait_for_meta_video(access_token="t", video_id="vid_1")
+
+
+@pytest.mark.asyncio
+async def test_an_errored_video_without_details_still_fails_with_a_message(
+    monkeypatch: pytest.MonkeyPatch, no_sleep: list[float]
+) -> None:
+    monkeypatch.setattr(
+        httpx, "AsyncClient", lambda: _SequencedClient([_video_status("error")])
+    )
+
+    with pytest.raises(meta.MetaConnectionError, match="could not process"):
+        await meta.wait_for_meta_video(access_token="t", video_id="vid_1")
+
+
+@pytest.mark.asyncio
+async def test_waiting_for_a_video_times_out_with_a_clear_message(
+    monkeypatch: pytest.MonkeyPatch, no_sleep: list[float]
+) -> None:
+    client = _SequencedClient([_video_status("processing", 5)])
+    monkeypatch.setattr(httpx, "AsyncClient", lambda: client)
+
+    with pytest.raises(meta.MetaConnectionError, match="still processing") as caught:
+        await meta.wait_for_meta_video(
+            access_token="t",
+            video_id="vid_1",
+            timeout_seconds=6,
+            poll_interval_seconds=2,
+        )
+
+    assert "6 seconds" in str(caught.value)
+    assert client.gets == 4  # t=0, 2, 4, 6
+
+
+@pytest.mark.asyncio
+async def test_create_meta_video_ad_creative_builds_video_data(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = _mock_client_returning(monkeypatch, _FakeResponse({"id": "creative_9"}))
+
+    creative_id = await meta.create_meta_video_ad_creative(
+        access_token="token",
+        ad_account_id="act_1",
+        page_id="page_1",
+        name="Ad name",
+        headline="Handmade rings",
+        body_text="A ring made for you.",
+        description="Free shipping",
+        cta="SHOP_NOW",
+        link="https://acme.example/ring",
+        video_id="vid_1",
+        image_hash="thumb_hash",
+    )
+
+    assert creative_id == "creative_9"
+    url, data = client.calls[0]
+    assert url == "https://graph.facebook.com/v21.0/act_1/adcreatives"
+    assert data["name"] == "Ad name"
+    spec = json.loads(data["object_story_spec"])
+    assert spec == {
+        "page_id": "page_1",
+        "video_data": {
+            "video_id": "vid_1",
+            "image_hash": "thumb_hash",
+            "title": "Handmade rings",
+            "message": "A ring made for you.",
+            "link_description": "Free shipping",
+            "call_to_action": {
+                "type": "SHOP_NOW",
+                "value": {"link": "https://acme.example/ring"},
+            },
+        },
+    }
+
+
+@pytest.mark.asyncio
+async def test_create_meta_video_ad_creative_waits_longer_than_the_default_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """httpx's 5s default expired on a real video-creative call (found live
+    2026-10-08): Meta checks the video while creating the creative."""
+    fake_client = _FakeAsyncClient(response=_FakeResponse({"id": "c"}))
+    seen: dict[str, Any] = {}
+
+    def make_client(**kwargs: Any) -> _FakeAsyncClient:
+        seen.update(kwargs)
+        return fake_client
+
+    monkeypatch.setattr(httpx, "AsyncClient", make_client)
+
+    await meta.create_meta_video_ad_creative(
+        access_token="t",
+        ad_account_id="act_1",
+        page_id="p",
+        name="n",
+        headline="h",
+        body_text="b.",
+        description=None,
+        cta="SHOP_NOW",
+        link="https://acme.example",
+        video_id="v",
+        image_hash="i",
+    )
+
+    assert seen["timeout"] >= 30
+
+
+@pytest.mark.asyncio
+async def test_post_json_names_the_error_type_when_the_message_is_empty(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        httpx,
+        "AsyncClient",
+        lambda **_kwargs: _FakeAsyncClient(error=httpx.ReadTimeout("")),
+    )
+
+    with pytest.raises(meta.MetaConnectionError, match="ReadTimeout"):
+        await meta._post_json("https://graph.example/x", {"a": "b"})
+
+
+@pytest.mark.asyncio
+async def test_create_meta_video_ad_creative_omits_a_missing_description(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = _mock_client_returning(monkeypatch, _FakeResponse({"id": "c"}))
+
+    await meta.create_meta_video_ad_creative(
+        access_token="t",
+        ad_account_id="act_1",
+        page_id="p",
+        name="n",
+        headline="h",
+        body_text="b.",
+        description=None,
+        cta="SHOP_NOW",
+        link="https://acme.example",
+        video_id="v",
+        image_hash="i",
+    )
+
+    spec = json.loads(client.calls[0][1]["object_story_spec"])
+    assert "link_description" not in spec["video_data"]
+
+
+@pytest.mark.asyncio
+async def test_fake_meta_mode_fakes_video_upload_wait_and_creative(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("FAKE_META", "true")
+    get_settings.cache_clear()
+    try:
+        video_id = await meta.upload_meta_video(
+            access_token="t",
+            ad_account_id="act_1",
+            video_data=b"x",
+            content_type="video/mp4",
+            name="n",
+        )
+        await meta.wait_for_meta_video(access_token="t", video_id=video_id)
+        creative_id = await meta.create_meta_video_ad_creative(
+            access_token="t",
+            ad_account_id="act_1",
+            page_id="p",
+            name="n",
+            headline="h",
+            body_text="b.",
+            description=None,
+            cta="SHOP_NOW",
+            link="https://acme.example",
+            video_id=video_id,
+            image_hash="i",
+        )
+    finally:
+        get_settings.cache_clear()
+
+    assert video_id.startswith("fake_video_")
+    assert creative_id.startswith("fake_creative_")

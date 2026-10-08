@@ -5,6 +5,7 @@ import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { CampaignsSection } from './CampaignsSection'
 import * as api from '../lib/api'
+import * as media from '../lib/media'
 
 // Selecting a creative navigates to its dedicated ad-preview page
 // (useNavigate), which needs a Router in scope even though nothing here
@@ -13,6 +14,29 @@ function renderCampaigns(ui: ReactElement) {
   return render(<MemoryRouter>{ui}</MemoryRouter>)
 }
 
+// readVideoInfo needs a real <video> decoder and canvas, which jsdom lacks.
+vi.mock('../lib/media', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../lib/media')>()
+  return { ...actual, readVideoInfo: vi.fn<typeof actual.readVideoInfo>() }
+})
+
+// The publish job is polled every two seconds in the app; tests poll immediately.
+vi.mock('../lib/publishJob', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../lib/publishJob')>()
+  return {
+    ...actual,
+    waitForPublishJob: (
+      ...[businessId, campaignId, onStatus, options]: Parameters<typeof actual.waitForPublishJob>
+    ) =>
+      actual.waitForPublishJob(businessId, campaignId, onStatus, {
+        intervalMs: 0,
+        // A real (tiny) pause, so each in-between status is on screen long enough to see.
+        sleep: () => new Promise((resolve) => setTimeout(resolve, 30)),
+        ...options,
+      }),
+  }
+})
+
 vi.mock('../lib/api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../lib/api')>()
   return {
@@ -20,6 +44,8 @@ vi.mock('../lib/api', async (importOriginal) => {
     createCampaign: vi.fn<typeof actual.createCampaign>(),
     updateCampaign: vi.fn<typeof actual.updateCampaign>(),
     regenerateCreativeCopy: vi.fn<typeof actual.regenerateCreativeCopy>(),
+    getPublishStatus: vi.fn<typeof actual.getPublishStatus>(),
+    setCreativeImage: vi.fn<typeof actual.setCreativeImage>(),
     listCampaigns: vi.fn<typeof actual.listCampaigns>(),
     getBusiness: vi.fn<typeof actual.getBusiness>(),
     getBrandProfile: vi.fn<typeof actual.getBrandProfile>(),
@@ -1450,7 +1476,7 @@ describe('CampaignsSection', () => {
     expect(screen.getByText('Luxury')).toBeInTheDocument()
     expect(screen.getByText(/Lead with the story/)).toBeInTheDocument()
     expect(screen.getByText(/\$25\/day/)).toBeInTheDocument()
-    expect(mockedApi.createStrategy).toHaveBeenCalledWith('biz-1', 'camp-1', undefined, undefined)
+    expect(mockedApi.createStrategy).toHaveBeenCalledWith('biz-1', 'camp-1', undefined, undefined, undefined)
     expect(
       screen.getByRole('button', { name: 'Regenerate strategy' }),
     ).toBeInTheDocument()
@@ -1521,7 +1547,7 @@ describe('CampaignsSection', () => {
     await user.click(screen.getByRole('button', { name: 'Yes' }))
 
     expect(await screen.findByText(/Custom emerald rings/)).toBeInTheDocument()
-    expect(mockedApi.createStrategy).toHaveBeenNthCalledWith(2, 'biz-1', 'camp-1', true, undefined)
+    expect(mockedApi.createStrategy).toHaveBeenNthCalledWith(2, 'biz-1', 'camp-1', true, undefined, undefined)
     expect(
       screen.queryByText('Has this business run advertising campaigns before?'),
     ).not.toBeInTheDocument()
@@ -4260,7 +4286,7 @@ describe('CampaignsSection campaign type (creative test vs standard)', () => {
     await user.click(screen.getByRole('button', { name: 'Generate strategy' }))
 
     await waitFor(() =>
-      expect(mockedApi.createStrategy).toHaveBeenCalledWith('biz-1', 'camp-1', undefined, undefined),
+      expect(mockedApi.createStrategy).toHaveBeenCalledWith('biz-1', 'camp-1', undefined, undefined, undefined),
     )
   })
 
@@ -4283,6 +4309,7 @@ describe('CampaignsSection campaign type (creative test vs standard)', () => {
         'camp-1',
         undefined,
         'STANDARD',
+        undefined,
       ),
     )
     expect(await screen.findByRole('radio', { name: 'Carousel' })).toBeEnabled()
@@ -4295,5 +4322,419 @@ describe('CampaignsSection campaign type (creative test vs standard)', () => {
     await screen.findByText('Traffic — Ready')
 
     expect(screen.queryByRole('radio', { name: /Standard campaign/ })).not.toBeInTheDocument()
+  })
+})
+
+describe('CampaignsSection video ads and the creative test format', () => {
+  const SALES_CAMPAIGN = {
+    id: 'camp-1',
+    name: null,
+    objective: 'SALES' as const,
+    status: 'READY',
+    productId: 'prod-1',
+    audienceId: 'aud-1',
+    metaCampaignId: null,
+    eventVenueKey: null,
+    startDate: null,
+    endDate: null,
+    pausedReason: null,
+    dailySpendFlag: null,
+    needsDestinationUrl: false,
+  }
+
+  function videoCreatives(): api.Creative[] {
+    return ['A', 'B', 'C', 'D'].map((letter, index) =>
+      fakeCreative({
+        id: `creative-${index + 1}`,
+        headline: `Headline ${letter}`,
+        format: 'SINGLE_VIDEO',
+        imageUrl: 'http://localhost:8000/product-images/v1/thumbnail',
+        videoUrl: 'http://localhost:8000/product-images/v1',
+        status: 'GENERATED',
+      }),
+    )
+  }
+
+  it('asks Images or Videos up front for a creative test, defaulting to images', async () => {
+    mockedApi.listCampaigns.mockResolvedValue([SALES_CAMPAIGN])
+    mockedApi.createStrategy.mockResolvedValue(FAKE_STRATEGY)
+    const user = userEvent.setup()
+
+    renderCampaigns(<CampaignsSection businessId="biz-1" />)
+    await screen.findByText('Sales — Ready')
+    expect(screen.getByRole('radio', { name: 'Images' })).toBeChecked()
+
+    await user.click(screen.getByRole('button', { name: 'Generate strategy' }))
+
+    await waitFor(() =>
+      expect(mockedApi.createStrategy).toHaveBeenCalledWith(
+        'biz-1',
+        'camp-1',
+        undefined,
+        undefined,
+        undefined,
+      ),
+    )
+  })
+
+  it('sends the Videos choice with the strategy request', async () => {
+    mockedApi.listCampaigns.mockResolvedValue([SALES_CAMPAIGN])
+    mockedApi.createStrategy.mockResolvedValue(FAKE_STRATEGY)
+    const user = userEvent.setup()
+
+    renderCampaigns(<CampaignsSection businessId="biz-1" />)
+    await screen.findByText('Sales — Ready')
+    await user.click(screen.getByRole('radio', { name: 'Videos' }))
+    await user.click(screen.getByRole('button', { name: 'Generate strategy' }))
+
+    await waitFor(() =>
+      expect(mockedApi.createStrategy).toHaveBeenCalledWith(
+        'biz-1',
+        'camp-1',
+        undefined,
+        undefined,
+        'VIDEO',
+      ),
+    )
+  })
+
+  it('does not offer the test format for a standard campaign', async () => {
+    mockedApi.listCampaigns.mockResolvedValue([SALES_CAMPAIGN])
+    const user = userEvent.setup()
+
+    renderCampaigns(<CampaignsSection businessId="biz-1" />)
+    await screen.findByText('Sales — Ready')
+    expect(screen.getByRole('radio', { name: 'Videos' })).toBeInTheDocument()
+
+    await user.click(screen.getByRole('radio', { name: /Standard campaign/ }))
+
+    expect(screen.queryByRole('radio', { name: 'Videos' })).not.toBeInTheDocument()
+  })
+
+  describe('in a video test', () => {
+    beforeEach(() => {
+      mockedApi.getStrategy.mockResolvedValue({
+        id: 'strat-1',
+        campaignId: 'camp-1',
+        createdAt: '2026-10-08T00:00:00Z',
+        content: { ...fakeCreativeTestPlanContent(), creativeFormat: 'SINGLE_VIDEO' },
+      })
+      mockedApi.listCampaigns.mockResolvedValue([{ ...SALES_CAMPAIGN, status: 'ADS_GENERATED' }])
+    })
+
+    it('fixes the ad format to video and says why', async () => {
+      mockedApi.listCreatives.mockResolvedValue([])
+
+      renderCampaigns(<CampaignsSection businessId="biz-1" />)
+      await screen.findByRole('radio', { name: 'Single video' })
+
+      expect(screen.getByRole('radio', { name: 'Single video' })).toBeChecked()
+      expect(screen.getByRole('radio', { name: 'Single video' })).toBeDisabled()
+      expect(screen.getByRole('radio', { name: 'Single image' })).toBeDisabled()
+      expect(screen.getByRole('radio', { name: 'Carousel' })).toBeDisabled()
+      expect(screen.getByText(/This is a video test/)).toBeInTheDocument()
+    })
+
+    it('generates video ads', async () => {
+      mockedApi.listCreatives.mockResolvedValue([])
+      mockedApi.createCreatives.mockResolvedValue(videoCreatives())
+      const user = userEvent.setup()
+
+      renderCampaigns(<CampaignsSection businessId="biz-1" />)
+      await user.click(await screen.findByRole('button', { name: 'Generate ads' }))
+
+      expect(mockedApi.createCreatives).toHaveBeenCalledWith('biz-1', 'camp-1', 'SINGLE_VIDEO')
+      expect(await screen.findByText('Headline A')).toBeInTheDocument()
+    })
+
+    it('shows each video ad with its thumbnail and a video label', async () => {
+      mockedApi.listCreatives.mockResolvedValue(videoCreatives())
+
+      renderCampaigns(<CampaignsSection businessId="biz-1" />)
+      await screen.findByText('Headline A')
+
+      expect(screen.getAllByText('Video ad')).toHaveLength(4)
+      expect(screen.getAllByRole('button', { name: 'Change video' })).toHaveLength(4)
+      expect(screen.queryByRole('button', { name: 'Change image' })).not.toBeInTheDocument()
+    })
+  })
+
+  it('lets a standard campaign choose single video per ad', async () => {
+    mockedApi.listCampaigns.mockResolvedValue([{ ...SALES_CAMPAIGN, status: 'ADS_GENERATED' }])
+    mockedApi.getStrategy.mockResolvedValue({
+      id: 'strat-1',
+      campaignId: 'camp-1',
+      createdAt: '2026-10-08T00:00:00Z',
+      content: FAKE_STRATEGY.content,
+    })
+    mockedApi.listCreatives.mockResolvedValue([])
+    mockedApi.createCreatives.mockResolvedValue(videoCreatives())
+    const user = userEvent.setup()
+
+    renderCampaigns(<CampaignsSection businessId="biz-1" />)
+    await user.click(await screen.findByRole('radio', { name: 'Single video' }))
+    await user.click(screen.getByRole('button', { name: 'Generate ads' }))
+
+    expect(mockedApi.createCreatives).toHaveBeenCalledWith('biz-1', 'camp-1', 'SINGLE_VIDEO')
+  })
+
+  describe('publishing a video ad', () => {
+    const APPROVED = {
+      ...SALES_CAMPAIGN,
+      status: 'APPROVED',
+    }
+
+    it('shows the processing step while the background publish runs, then finishes', async () => {
+      mockedApi.listCampaigns
+        .mockResolvedValueOnce([APPROVED])
+        .mockResolvedValue([{ ...APPROVED, status: 'PAUSED', metaCampaignId: 'meta_1' }])
+      mockedApi.publishCampaign.mockResolvedValue({ ...APPROVED, publishing: true })
+      mockedApi.getPublishStatus
+        .mockResolvedValueOnce({ state: 'PROCESSING', step: 'Uploading video', elapsedSeconds: 2 })
+        .mockResolvedValueOnce({
+          state: 'PROCESSING',
+          step: 'Processing video',
+          progress: 40,
+          elapsedSeconds: 12,
+        })
+        .mockResolvedValueOnce({ state: 'DONE' })
+      const user = userEvent.setup()
+
+      renderCampaigns(<CampaignsSection businessId="biz-1" />)
+      await user.click(await screen.findByRole('button', { name: 'Approve & Publish' }))
+
+      expect(await screen.findByText(/Processing video… 40%/)).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: /Processing video… 40%/ })).toBeDisabled()
+      await waitFor(() => expect(mockedApi.getPublishStatus).toHaveBeenCalledTimes(3))
+      await waitFor(() =>
+        expect(screen.queryByText(/Processing video/)).not.toBeInTheDocument(),
+      )
+      expect(screen.queryByRole('button', { name: 'Approve & Publish' })).not.toBeInTheDocument()
+    })
+
+    it('shows the error when the background publish fails', async () => {
+      mockedApi.listCampaigns.mockResolvedValue([APPROVED])
+      mockedApi.publishCampaign.mockResolvedValue({ ...APPROVED, publishing: true })
+      mockedApi.getPublishStatus.mockResolvedValue({
+        state: 'FAILED',
+        error: 'Meta could not process the video: Unsupported codec',
+      })
+      const user = userEvent.setup()
+
+      renderCampaigns(<CampaignsSection businessId="biz-1" />)
+      await user.click(await screen.findByRole('button', { name: 'Approve & Publish' }))
+
+      expect(await screen.findByText(/Unsupported codec/)).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: 'Approve & Publish' })).toBeEnabled()
+    })
+
+    it('picks the progress back up after a reload mid-publish', async () => {
+      mockedApi.listCampaigns
+        .mockResolvedValueOnce([{ ...APPROVED, publishing: true }])
+        .mockResolvedValue([{ ...APPROVED, status: 'PAUSED', metaCampaignId: 'meta_1' }])
+      mockedApi.getPublishStatus
+        .mockResolvedValueOnce({ state: 'PROCESSING', step: 'Processing video', progress: 70 })
+        .mockResolvedValueOnce({ state: 'DONE' })
+
+      renderCampaigns(<CampaignsSection businessId="biz-1" />)
+
+      expect(await screen.findByText(/Processing video… 70%/)).toBeInTheDocument()
+      await waitFor(() => expect(mockedApi.getPublishStatus).toHaveBeenCalledTimes(2))
+      expect(mockedApi.publishCampaign).not.toHaveBeenCalled()
+    })
+
+    it('does not poll for an ordinary (image) publish', async () => {
+      mockedApi.listCampaigns.mockResolvedValue([APPROVED])
+      mockedApi.publishCampaign.mockResolvedValue({ ...APPROVED, status: 'PAUSED' })
+      const user = userEvent.setup()
+
+      renderCampaigns(<CampaignsSection businessId="biz-1" />)
+      await user.click(await screen.findByRole('button', { name: 'Approve & Publish' }))
+
+      await waitFor(() => expect(mockedApi.publishCampaign).toHaveBeenCalled())
+      expect(mockedApi.getPublishStatus).not.toHaveBeenCalled()
+    })
+  })
+})
+
+describe('CampaignsSection changing a video ad\'s video', () => {
+  const CAMPAIGN = {
+    id: 'camp-1',
+    name: null,
+    objective: 'SALES' as const,
+    status: 'ADS_GENERATED',
+    productId: 'prod-1',
+    audienceId: 'aud-1',
+    metaCampaignId: null,
+    eventVenueKey: null,
+    startDate: null,
+    endDate: null,
+    pausedReason: null,
+    dailySpendFlag: null,
+    needsDestinationUrl: false,
+  }
+  const STANDARD_STRATEGY = {
+    id: 'strat-1',
+    campaignId: 'camp-1',
+    createdAt: '2026-10-08T00:00:00Z',
+    content: FAKE_STRATEGY.content,
+  }
+  const thumb = (id: string) => `http://localhost:8000/product-images/${id}/thumbnail`
+  const video = (id: string, headline: string, status: api.Creative['status'] = 'GENERATED') =>
+    fakeCreative({
+      id,
+      headline,
+      format: 'SINGLE_VIDEO',
+      status,
+      imageUrl: thumb('v1'),
+      videoUrl: 'http://localhost:8000/product-images/v1',
+    })
+  const library: api.ProductImage[] = [
+    {
+      id: 'v1',
+      url: 'http://localhost:8000/product-images/v1',
+      thumbnailUrl: thumb('v1'),
+      createdAt: '',
+      mediaType: 'VIDEO',
+      durationSeconds: 10,
+      aspectClass: 'STORY',
+    },
+  ]
+  const uploaded: api.ProductImage = {
+    id: 'v9',
+    url: 'http://localhost:8000/product-images/v9',
+    thumbnailUrl: thumb('v9'),
+    createdAt: '',
+    mediaType: 'VIDEO',
+    durationSeconds: 12,
+    aspectClass: 'STORY',
+  }
+  const thumbnailFile = new File(['t'], 'thumbnail.jpg', { type: 'image/jpeg' })
+
+  beforeEach(() => {
+    mockedApi.getStrategy.mockResolvedValue(STANDARD_STRATEGY)
+    mockedApi.listProductImages.mockResolvedValue(library)
+    vi.mocked(media.readVideoInfo).mockResolvedValue({
+      width: 1080,
+      height: 1920,
+      durationSeconds: 12,
+      thumbnail: thumbnailFile,
+    })
+  })
+
+  it('uploads a new video for one ad and leaves the other ads on theirs', async () => {
+    const changed = { ...video('creative-2', 'Headline B'), imageUrl: thumb('v9') }
+    mockedApi.listCampaigns.mockResolvedValue([CAMPAIGN])
+    const before = [
+      video('creative-1', 'Headline A'),
+      video('creative-2', 'Headline B'),
+      video('creative-3', 'Headline C'),
+    ]
+    mockedApi.listCreatives.mockResolvedValueOnce(before)
+    // The list is re-fetched after the change (the campaign may need re-approval).
+    mockedApi.listCreatives.mockResolvedValue([before[0], changed, before[2]])
+    mockedApi.uploadProductImage.mockResolvedValue(uploaded)
+    mockedApi.setCreativeImage.mockResolvedValue(changed)
+    const user = userEvent.setup()
+
+    renderCampaigns(<CampaignsSection businessId="biz-1" />)
+    await screen.findByText('Headline B')
+    const buttons = screen.getAllByRole('button', { name: 'Change video' })
+    expect(buttons).toHaveLength(3)
+
+    await user.click(buttons[1])
+    await user.upload(
+      await screen.findByLabelText('Upload a new video'),
+      new File([new Uint8Array(8)], 'new.mov', { type: 'video/quicktime' }),
+    )
+
+    await waitFor(() =>
+      expect(mockedApi.setCreativeImage).toHaveBeenCalledWith(
+        'biz-1',
+        'camp-1',
+        'creative-2',
+        'v9',
+      ),
+    )
+    // Saved to the product, then assigned to exactly one ad.
+    expect(mockedApi.uploadProductImage).toHaveBeenCalledWith(
+      'biz-1',
+      'prod-1',
+      expect.any(File),
+      thumbnailFile,
+    )
+    expect(mockedApi.setCreativeImage).toHaveBeenCalledTimes(1)
+    const thumbs = screen
+      .getAllByRole('img')
+      .map((img) => img.getAttribute('src'))
+      .filter((src) => src?.includes('/thumbnail'))
+    expect(thumbs.filter((src) => src === thumb('v9'))).toHaveLength(1)
+    expect(thumbs.filter((src) => src === thumb('v1'))).toHaveLength(2)
+  })
+
+  it('offers the picker in the selected-ad view too, not just the full list', async () => {
+    mockedApi.listCampaigns.mockResolvedValue([{ ...CAMPAIGN, status: 'PENDING_APPROVAL' }])
+    mockedApi.listCreatives.mockResolvedValue([
+      video('creative-1', 'Headline A', 'SELECTED'),
+      video('creative-2', 'Headline B', 'REJECTED'),
+    ])
+    const user = userEvent.setup()
+
+    renderCampaigns(<CampaignsSection businessId="biz-1" />)
+    await screen.findByRole('button', { name: 'Selected' })
+    await user.click(screen.getByRole('button', { name: 'Change video' }))
+
+    expect(await screen.findByLabelText('Upload a new video')).toBeInTheDocument()
+    expect(screen.getAllByAltText('Product video option')).toHaveLength(1)
+    expect(screen.queryByRole('button', { name: 'Regenerate headline' })).not.toBeInTheDocument()
+  })
+
+  it('opens with a product that has no videos yet', async () => {
+    mockedApi.listProductImages.mockResolvedValue([])
+    mockedApi.listCampaigns.mockResolvedValue([CAMPAIGN])
+    mockedApi.listCreatives.mockResolvedValue([video('creative-1', 'Headline A')])
+    const user = userEvent.setup()
+
+    renderCampaigns(<CampaignsSection businessId="biz-1" />)
+    await user.click(await screen.findByRole('button', { name: 'Change video' }))
+
+    expect(await screen.findByText(/No videos on this product yet/)).toBeInTheDocument()
+    expect(screen.getByLabelText('Upload a new video')).toBeInTheDocument()
+  })
+
+  it.each(['LIVE', 'PAUSED'])('cannot change a video once the campaign is %s', async (status) => {
+    mockedApi.listCampaigns.mockResolvedValue([{ ...CAMPAIGN, status }])
+    mockedApi.listCreatives.mockResolvedValue([video('creative-1', 'Headline A', 'SELECTED')])
+
+    renderCampaigns(<CampaignsSection businessId="biz-1" />)
+    await screen.findByText('Headline A')
+
+    expect(screen.queryByRole('button', { name: 'Change video' })).not.toBeInTheDocument()
+  })
+
+  it('refreshes the campaign after a change so approval can drop back to pending', async () => {
+    mockedApi.listCampaigns.mockResolvedValue([CAMPAIGN])
+    mockedApi.listCreatives.mockResolvedValue([video('creative-1', 'Headline A')])
+    mockedApi.setCreativeImage.mockResolvedValue(video('creative-1', 'Headline A'))
+    const user = userEvent.setup()
+
+    renderCampaigns(<CampaignsSection businessId="biz-1" />)
+    await user.click(await screen.findByRole('button', { name: 'Change video' }))
+    const callsBefore = mockedApi.listCampaigns.mock.calls.length
+    await user.click(await screen.findByAltText('Product video option'))
+
+    await waitFor(() =>
+      expect(mockedApi.listCampaigns.mock.calls.length).toBeGreaterThan(callsBefore),
+    )
+  })
+
+  it('shows Single video as the ad format after a reload when the ads are videos', async () => {
+    mockedApi.listCampaigns.mockResolvedValue([CAMPAIGN])
+    mockedApi.listCreatives.mockResolvedValue([video('creative-1', 'Headline A')])
+
+    renderCampaigns(<CampaignsSection businessId="biz-1" />)
+    await screen.findByText('Headline A')
+
+    expect(screen.getByRole('radio', { name: 'Single video' })).toBeChecked()
   })
 })

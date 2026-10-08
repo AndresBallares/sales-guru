@@ -304,6 +304,9 @@ def _build_test_plan_prompt(
             is asked to set. Each of the two variants gets its own AdSet
             at this rate — actual total daily spend is 2x this number.
         duration_days: The already-decided test duration, same reasoning.
+        creative_format: A CREATIVE_TEST_PLAN's format: SINGLE_IMAGE (default)
+            or SINGLE_VIDEO. Stored on the plan and shaping its prompt; ignored
+            for the other plan types.
         brand_profile: The business's brand profile, if one exists (PRD.md
             §5 step 3.5) — folded into a "Brand voice" block via
             _business_product_audience_lines. None falls back to current
@@ -734,6 +737,25 @@ def _build_creative_success_criteria(
     )
 
 
+def _creative_format_instruction(
+    creative_format: Literal["SINGLE_IMAGE", "SINGLE_VIDEO"],
+) -> str:
+    """The prompt sentence fixing what every ad in the test looks like."""
+    if creative_format == "SINGLE_VIDEO":
+        return (
+            "Every ad in this test is a short video from the product's own "
+            "footage, and the test may reuse the same video across all its "
+            "ads with different copy, so each angle must be a message "
+            "(what the ad says and promises), not a different shot — don't "
+            "propose carousels, still-image, or multi-image angles."
+        )
+    return (
+        "Every ad in this test is a single static image, so each angle "
+        "must work as one image with its copy — don't propose carousels, "
+        "video, or multi-image angles."
+    )
+
+
 def _build_creative_test_plan_prompt(
     business: Business,
     product: Product | None,
@@ -744,6 +766,7 @@ def _build_creative_test_plan_prompt(
     duration_days: int,
     optimization_event: OptimizationEvent,
     brand_profile: BrandProfile | None = None,
+    creative_format: Literal["SINGLE_IMAGE", "SINGLE_VIDEO"] = "SINGLE_IMAGE",
 ) -> str:
     """Build the grounding prompt for a CREATIVE_TEST_PLAN generation.
 
@@ -759,6 +782,8 @@ def _build_creative_test_plan_prompt(
         duration_days: The already-decided test duration.
         optimization_event: What the ad set optimizes for.
         brand_profile: The business's brand profile, if any.
+        creative_format: SINGLE_IMAGE or SINGLE_VIDEO — what every ad in the
+            test is, which the prompt states to the model.
 
     Returns:
         The prompt text.
@@ -804,9 +829,7 @@ def _build_creative_test_plan_prompt(
         "product worn on skin, social proof, gifting, craftsmanship). Each "
         "must differ in what it says or shows, not just in wording, and "
         "each must be something this product's real details support. "
-        "Every ad in this test is a single static image, so each angle "
-        "must work as one image with its copy — don't propose carousels, "
-        "video, or multi-image angles.",
+        + _creative_format_instruction(creative_format),
         "- hypothesis_statement: a falsifiable statement naming which "
         "angle you expect to win on cost per add-to-cart and why — not a "
         'vague claim like "this should perform well."',
@@ -904,6 +927,7 @@ async def generate_strategy(
     plan_type: PlanType,
     account_history: list[AccountCampaignInsights] | None = None,
     brand_profile: BrandProfile | None = None,
+    creative_format: Literal["SINGLE_IMAGE", "SINGLE_VIDEO"] = "SINGLE_IMAGE",
 ) -> StrategyContent:
     """Call the Marketing Strategist Agent and return a structured plan.
 
@@ -920,6 +944,9 @@ async def generate_strategy(
             strategy.py), never by the LLM.
         account_history: Real per-campaign Meta ad-account history, if any
             was found — only meaningful for DATA_DRIVEN_STRATEGY.
+        creative_format: A CREATIVE_TEST_PLAN's format: SINGLE_IMAGE (default)
+            or SINGLE_VIDEO. Stored on the plan and shaping its prompt; ignored
+            for the other plan types.
         brand_profile: The business's brand profile, if one exists (PRD.md
             §5 step 3.5) — grounds the plan in a "Brand voice" block. None
             (the default — no profile yet) falls back to current behavior.
@@ -978,6 +1005,7 @@ async def generate_strategy(
             duration_days,
             optimization_event,
             brand_profile,
+            creative_format,
         )
         raw = await _call_agent(
             tool_name=_CREATIVE_TEST_PLAN_TOOL_NAME,
@@ -995,6 +1023,7 @@ async def generate_strategy(
         return CreativeTestPlanContent.model_validate(
             {
                 "objective": objective,
+                "creative_format": creative_format,
                 "audience_constraints": AudienceConstraints(
                     languages=_ad_languages(brand_profile)
                 ),

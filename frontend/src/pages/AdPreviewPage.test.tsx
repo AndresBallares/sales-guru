@@ -5,6 +5,22 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { AdPreviewPage } from './AdPreviewPage'
 import * as api from '../lib/api'
 
+// The publish job is polled every two seconds in the app; tests poll quickly.
+vi.mock('../lib/publishJob', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../lib/publishJob')>()
+  return {
+    ...actual,
+    waitForPublishJob: (
+      ...[businessId, campaignId, onStatus, options]: Parameters<typeof actual.waitForPublishJob>
+    ) =>
+      actual.waitForPublishJob(businessId, campaignId, onStatus, {
+        intervalMs: 0,
+        sleep: () => new Promise((resolve) => setTimeout(resolve, 30)),
+        ...options,
+      }),
+  }
+})
+
 vi.mock('../lib/api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../lib/api')>()
   return {
@@ -18,6 +34,7 @@ vi.mock('../lib/api', async (importOriginal) => {
     selectCreative: vi.fn<typeof actual.selectCreative>(),
     approveCampaign: vi.fn<typeof actual.approveCampaign>(),
     publishCampaign: vi.fn<typeof actual.publishCampaign>(),
+    getPublishStatus: vi.fn<typeof actual.getPublishStatus>(),
     reorderCreativeCards: vi.fn<typeof actual.reorderCreativeCards>(),
     removeCreativeCard: vi.fn<typeof actual.removeCreativeCard>(),
   }
@@ -614,6 +631,107 @@ describe('AdPreviewPage', () => {
       await user.click(screen.getAllByRole('button', { name: 'Remove' })[0])
 
       expect(await screen.findByRole('alert')).toHaveTextContent('Could not remove this card.')
+    })
+  })
+
+  describe('publishing a video ad', () => {
+    beforeEach(() => {
+      mockedApi.listCreatives.mockResolvedValue([
+        makeCreative({
+          format: 'SINGLE_VIDEO',
+          imageUrl: 'http://localhost:8000/product-images/v1/thumbnail',
+          videoUrl: 'http://localhost:8000/product-images/v1',
+        }),
+      ])
+    })
+
+    it('offers Change video instead of a photo picker for a video ad', async () => {
+      mockedApi.listProductImages.mockResolvedValue([
+        {
+          id: 'v1',
+          url: 'http://localhost:8000/product-images/v1',
+          thumbnailUrl: 'http://localhost:8000/product-images/v1/thumbnail',
+          createdAt: '',
+          mediaType: 'VIDEO',
+          durationSeconds: 10,
+          aspectClass: 'STORY',
+        },
+      ])
+      const user = userEvent.setup()
+      renderPage()
+      await screen.findByRole('button', { name: 'Play video' })
+
+      expect(screen.queryByRole('button', { name: 'Change image' })).not.toBeInTheDocument()
+      expect(screen.queryByRole('button', { name: 'Upload Image' })).not.toBeInTheDocument()
+      await user.click(screen.getByRole('button', { name: 'Change video' }))
+
+      expect(await screen.findByLabelText('Upload a new video')).toBeInTheDocument()
+      expect(await screen.findAllByAltText('Product video option')).toHaveLength(1)
+    })
+
+    it('previews the video ad with a play button', async () => {
+      renderPage()
+
+      expect(await screen.findByRole('button', { name: 'Play video' })).toBeInTheDocument()
+    })
+
+    it('shows a visible processing state, then finishes, instead of looking frozen', async () => {
+      mockedApi.approveCampaign.mockResolvedValue(makeCampaign({ status: 'APPROVED' }))
+      mockedApi.publishCampaign.mockResolvedValue(
+        makeCampaign({ status: 'APPROVED', publishing: true }),
+      )
+      mockedApi.getPublishStatus
+        .mockResolvedValueOnce({ state: 'PROCESSING', step: 'Uploading video' })
+        .mockResolvedValueOnce({
+          state: 'PROCESSING',
+          step: 'Processing video',
+          progress: 55,
+          elapsedSeconds: 20,
+        })
+        .mockResolvedValueOnce({ state: 'DONE' })
+      const user = userEvent.setup()
+
+      renderPage()
+      await user.click(await screen.findByRole('button', { name: 'Approve & Publish' }))
+
+      expect(await screen.findByRole('button', { name: /Processing video… 55%/ })).toBeDisabled()
+      await waitFor(() => expect(mockedApi.getPublishStatus).toHaveBeenCalledTimes(3))
+      await waitFor(() =>
+        expect(screen.queryByText(/Processing video/)).not.toBeInTheDocument(),
+      )
+    })
+
+    it('shows why a background publish failed and allows a retry', async () => {
+      mockedApi.approveCampaign.mockResolvedValue(makeCampaign({ status: 'APPROVED' }))
+      mockedApi.publishCampaign.mockResolvedValue(
+        makeCampaign({ status: 'APPROVED', publishing: true }),
+      )
+      mockedApi.getPublishStatus.mockResolvedValue({
+        state: 'FAILED',
+        error: 'Meta is still processing the video after 300 seconds.',
+      })
+      const user = userEvent.setup()
+
+      renderPage()
+      await user.click(await screen.findByRole('button', { name: 'Approve & Publish' }))
+
+      expect(await screen.findByText(/still processing the video/)).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: 'Approve & Publish' })).toBeEnabled()
+    })
+
+    it('resumes the progress display after a reload mid-publish', async () => {
+      mockedApi.listCampaigns.mockResolvedValue([
+        makeCampaign({ status: 'APPROVED', publishing: true }),
+      ])
+      mockedApi.getPublishStatus
+        .mockResolvedValueOnce({ state: 'PROCESSING', step: 'Processing video', progress: 30 })
+        .mockResolvedValueOnce({ state: 'DONE' })
+
+      renderPage()
+
+      expect(await screen.findByText(/Processing video… 30%/)).toBeInTheDocument()
+      await waitFor(() => expect(mockedApi.getPublishStatus).toHaveBeenCalledTimes(2))
+      expect(mockedApi.publishCampaign).not.toHaveBeenCalled()
     })
   })
 })

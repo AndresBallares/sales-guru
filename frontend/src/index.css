@@ -1137,3 +1137,21 @@ code {
   flex-direction: column;
   gap: 0.5rem;
 }
+
+.social-post-video-frame {
+  position: relative;
+}
+
+.social-post-play {
+  position: absolute;
+  inset: 0;
+  margin: auto;
+  width: 3.5rem;
+  height: 3.5rem;
+  border-radius: 999px;
+  border: 0;
+  background: rgb(0 0 0 / 0.6);
+  color: #fff;
+  font-size: 1.4rem;
+  cursor: pointer;
+}

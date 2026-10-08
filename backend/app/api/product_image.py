@@ -14,7 +14,7 @@ in ads anyway, so there's no meaningful confidentiality loss.
 
 import asyncio
 
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, status
+from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile, status
 from fastapi.responses import Response
 from prisma import Base64
 from prisma.models import Product, ProductImage
@@ -33,6 +33,7 @@ from app.schemas.product_image import (
     ReorderProductImagesRequest,
     unclassified_warning,
 )
+from app.services.byte_range import RangeNotSatisfiableError, parse_range
 from app.services.image_dimensions import ImageDimensionError, get_image_dimensions
 from app.services.media_info import (
     VideoParseError,
@@ -80,6 +81,11 @@ _REORDER_MISMATCH = (
 def product_image_url(image_id: str) -> str:
     """Build the absolute, publicly-fetchable URL for a stored image."""
     return f"{get_settings().backend_url}/product-images/{image_id}"
+
+
+def product_thumbnail_url(media_id: str) -> str:
+    """The public URL of a video's thumbnail (the image shown for a video ad)."""
+    return f"{product_image_url(media_id)}/thumbnail"
 
 
 async def get_primary_image(product_id: str) -> ProductImage | None:
@@ -433,7 +439,7 @@ async def _publicly_visible_media(image_id: str) -> ProductImage:
 
 
 @serve_router.get("/product-images/{image_id}", include_in_schema=False)
-async def serve_product_image(image_id: str) -> Response:
+async def serve_product_image(image_id: str, request: Request) -> Response:
     """Serve one photo's or video's raw bytes, publicly and without authentication.
 
     See the module docstring for why this route is deliberately not
@@ -441,6 +447,8 @@ async def serve_product_image(image_id: str) -> Response:
 
     Args:
         image_id: The media to serve.
+        request: The request, for its Range header (a single byte range is
+            answered with 206 so Safari can play video).
 
     Returns:
         The raw bytes with the original upload's Content-Type.
@@ -451,7 +459,26 @@ async def serve_product_image(image_id: str) -> Response:
             behind get_owned_business, so it checks directly instead).
     """
     image = await _publicly_visible_media(image_id)
-    return Response(content=image.data.decode(), media_type=image.contentType)
+    body = image.data.decode()
+    headers = {"Accept-Ranges": "bytes"}
+    try:
+        byte_range = parse_range(request.headers.get("range"), len(body))
+    except RangeNotSatisfiableError:
+        return Response(
+            status_code=status.HTTP_416_REQUESTED_RANGE_NOT_SATISFIABLE,
+            headers={**headers, "Content-Range": f"bytes */{len(body)}"},
+        )
+    if byte_range is None:
+        return Response(content=body, media_type=image.contentType, headers=headers)
+    return Response(
+        content=body[byte_range.first : byte_range.last + 1],
+        status_code=status.HTTP_206_PARTIAL_CONTENT,
+        media_type=image.contentType,
+        headers={
+            **headers,
+            "Content-Range": f"bytes {byte_range.first}-{byte_range.last}/{len(body)}",
+        },
+    )
 
 
 @serve_router.get("/product-images/{image_id}/thumbnail", include_in_schema=False)

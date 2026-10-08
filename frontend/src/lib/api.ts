@@ -244,6 +244,9 @@ export interface Campaign {
   // backend (app/api/campaign.py's _needs_destination_url), never
   // blocking the swap that produced it.
   needsDestinationUrl: boolean
+  // True while a background (video) publish is running, so a reload mid-publish
+  // still shows "Processing video…".
+  publishing?: boolean
 }
 
 export interface CampaignCreateInput {
@@ -615,6 +618,22 @@ export function publishCampaign(
   })
 }
 
+// Progress of a background (video) publish. IDLE when the campaign never ran
+// one (an image publish is a single synchronous request).
+export interface PublishStatus {
+  state: 'IDLE' | 'PROCESSING' | 'DONE' | 'FAILED'
+  step?: string | null
+  progress?: number | null
+  error?: string | null
+  elapsedSeconds?: number
+}
+
+export function getPublishStatus(businessId: string, campaignId: string): Promise<PublishStatus> {
+  return request<PublishStatus>(
+    `/businesses/${businessId}/campaigns/${campaignId}/publish/status`,
+  )
+}
+
 export function pauseCampaign(businessId: string, campaignId: string): Promise<Campaign> {
   return request<Campaign>(`/businesses/${businessId}/campaigns/${campaignId}/pause`, {
     method: 'POST',
@@ -803,6 +822,8 @@ export interface CreativeTestHypothesis {
 
 export interface CreativeTestPlanContent {
   planType: 'CREATIVE_TEST_PLAN'
+  // What every ad in this test is, chosen up front: single images or videos.
+  creativeFormat?: 'SINGLE_IMAGE' | 'SINGLE_VIDEO'
   objective: 'SALES'
   audienceConstraints: { country: string; ageMin: number; languages: string[] }
   creativePersona: CreativePersona
@@ -863,15 +884,20 @@ export interface Strategy {
 // (single-image only); STANDARD opts out for a normal campaign that allows carousel.
 export type StrategyMode = 'CREATIVE_TEST' | 'STANDARD'
 
+// A creative test's format, chosen up front: every ad is an image or every ad a video.
+export type TestFormat = 'IMAGE' | 'VIDEO'
+
 export function createStrategy(
   businessId: string,
   campaignId: string,
   hasPriorAdvertisingExperience?: boolean,
   strategyMode?: StrategyMode,
+  testFormat?: TestFormat,
 ): Promise<Strategy> {
   const body = {
     ...(hasPriorAdvertisingExperience === undefined ? {} : { hasPriorAdvertisingExperience }),
     ...(strategyMode === undefined ? {} : { strategyMode }),
+    ...(testFormat === undefined ? {} : { testFormat }),
   }
   return request<Strategy>(`/businesses/${businessId}/campaigns/${campaignId}/strategy`, {
     method: 'POST',
@@ -896,7 +922,7 @@ export type Cta =
 
 export type CreativeStatus = 'GENERATED' | 'SELECTED' | 'REJECTED'
 
-export type CreativeFormat = 'SINGLE_IMAGE' | 'CAROUSEL'
+export type CreativeFormat = 'SINGLE_IMAGE' | 'SINGLE_VIDEO' | 'CAROUSEL'
 
 export interface CreativeCard {
   id: string
@@ -919,6 +945,8 @@ export interface Creative {
   imagePrompt: string | null
   videoPrompt: string | null
   imageUrl: string | null
+  // A SINGLE_VIDEO ad's playable video (imageUrl is then its thumbnail).
+  videoUrl?: string | null
   format: CreativeFormat
   // Empty for a SINGLE_IMAGE creative; 2-10 cards, in position order, for
   // a CAROUSEL one.
