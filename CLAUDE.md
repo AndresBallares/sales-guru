@@ -111,6 +111,10 @@ path the rule above requires explicit confirmation for).
 - **Run only one test suite at a time; all pytest runs share ./test.db.** Two
   concurrent runs (or a run during a pre-commit hook) collide on that SQLite file
   and stall; stop dev servers and wait for hooks before starting another run.
+- **Before pushing to a branch with an open PR, check the PR's state.** If it's
+  merged, open a new branch off main instead (`gh pr view <n> --json state`). A
+  merged PR's head stops updating, so a push there looks like GitHub lag but
+  never reaches main.
 - **Backend**: PEP-8 via ruff, Google-style docstrings (ruff's `D` rules,
   convention set to `google` in `backend/pyproject.toml`), strict mypy + ty.
   Run `uv run ruff check . && uv run ruff format . && uv run mypy . && uv run ty check && uv run pytest`
