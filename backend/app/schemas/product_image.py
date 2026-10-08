@@ -29,7 +29,8 @@ MIN_IMAGE_DIMENSION_PX = 600
 # 2026-10-07). Meta itself allows far larger files; this cap is what a Postgres
 # column and one in-memory request can carry safely, and a 30-second ad video
 # fits well within it.
-ALLOWED_VIDEO_CONTENT_TYPES = frozenset({"video/mp4", "video/quicktime"})
+# .m4v is an MP4 container that browsers tag video/x-m4v; it is stored as video/mp4.
+ALLOWED_VIDEO_CONTENT_TYPES = frozenset({"video/mp4", "video/quicktime", "video/x-m4v"})
 MAX_VIDEO_BYTES = 50 * 1024 * 1024
 MAX_VIDEO_SECONDS = 60
 

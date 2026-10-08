@@ -515,6 +515,31 @@ describe('ProductForm — product media (videos and ad-shape badges)', () => {
     expect(screen.getByText('Unclassified')).toBeInTheDocument()
   })
 
+  it('accepts a typeless .m4v and uploads it as video/mp4', async () => {
+    mockedApi.uploadProductImage.mockResolvedValue({
+      id: 'v1',
+      url: 'http://localhost:8000/product-images/v1',
+      mediaType: 'VIDEO',
+      durationSeconds: 12,
+      aspectClass: 'STORY',
+      createdAt: '2026-10-07T00:00:00Z',
+    })
+    const user = userEvent.setup({ applyAccept: false })
+    render(<ProductForm businessId="biz-1" product={product} onSaved={vi.fn<(product: api.Product) => void>()} />)
+    await waitFor(() => expect(mockedApi.listProductImages).toHaveBeenCalled())
+
+    await user.upload(screen.getByLabelText(/Product photos/), clip('trip.m4v', ''))
+
+    await waitFor(() => expect(mockedApi.uploadProductImage).toHaveBeenCalled())
+    const uploaded = mockedApi.uploadProductImage.mock.calls[0][2]
+    expect(uploaded.name).toBe('trip.m4v')
+    expect(uploaded.type).toBe('video/mp4')
+    expect(screen.getByLabelText(/Product photos/)).toHaveAttribute(
+      'accept',
+      expect.stringContaining('.m4v'),
+    )
+  })
+
   it('rejects a video over 60 seconds before uploading', async () => {
     mockedMedia.readVideoInfo.mockResolvedValue({ ...storyInfo, durationSeconds: 61 })
     const user = userEvent.setup()
@@ -570,6 +595,134 @@ describe('ProductForm — product media (videos and ad-shape badges)', () => {
       new File(['x'], 'clip.webm', { type: 'video/webm' }),
     )
 
-    expect(await screen.findByRole('alert')).toHaveTextContent('MP4/MOV video')
+    expect(await screen.findByRole('alert')).toHaveTextContent('MP4/MOV/M4V video')
+  })
+
+  describe('when the browser can only capture a black frame', () => {
+    const meta = { width: 1080, height: 1920, durationSeconds: 12 }
+    const manualThumbnail = new File(['m'], 'cover.jpg', { type: 'image/jpeg' })
+
+    beforeEach(() => {
+      mockedMedia.readVideoInfo.mockRejectedValue(new media.BlackThumbnailError(meta))
+    })
+
+    it('explains it, gives the iPhone tip, and offers a manual thumbnail upload', async () => {
+      const user = userEvent.setup()
+      render(<ProductForm businessId="biz-1" product={product} onSaved={vi.fn<(product: api.Product) => void>()} />)
+      await waitFor(() => expect(mockedApi.listProductImages).toHaveBeenCalled())
+
+      await user.upload(screen.getByLabelText(/Product photos/), clip())
+
+      const alert = await screen.findByRole('alert')
+      expect(alert).toHaveTextContent('black frame')
+      expect(alert).toHaveTextContent('Most Compatible')
+      expect(alert).toHaveTextContent('HDR Video')
+      expect(screen.getByLabelText('Upload a thumbnail image')).toBeInTheDocument()
+      expect(mockedApi.uploadProductImage).not.toHaveBeenCalled()
+    })
+
+    it('uploads the video with the manually chosen thumbnail in edit mode', async () => {
+      const file = clip()
+      mockedApi.uploadProductImage.mockResolvedValue({
+        id: 'v1',
+        url: 'http://localhost:8000/product-images/v1',
+        thumbnailUrl: 'http://localhost:8000/product-images/v1/thumbnail',
+        mediaType: 'VIDEO',
+        durationSeconds: 12,
+        aspectClass: 'STORY',
+        createdAt: '2026-10-07T00:00:00Z',
+      })
+      const user = userEvent.setup()
+      render(<ProductForm businessId="biz-1" product={product} onSaved={vi.fn<(product: api.Product) => void>()} />)
+      await waitFor(() => expect(mockedApi.listProductImages).toHaveBeenCalled())
+      await user.upload(screen.getByLabelText(/Product photos/), file)
+
+      await user.upload(await screen.findByLabelText('Upload a thumbnail image'), manualThumbnail)
+
+      await waitFor(() =>
+        expect(mockedApi.uploadProductImage).toHaveBeenCalledWith('biz-1', 'prod-1', file, manualThumbnail),
+      )
+      expect(await screen.findByText('Video 0:12')).toBeInTheDocument()
+      expect(screen.queryByLabelText('Upload a thumbnail image')).not.toBeInTheDocument()
+    })
+
+    it('stages the video with the manual thumbnail in create mode and uploads both on save', async () => {
+      const file = clip()
+      mockedApi.createProduct.mockResolvedValue(product)
+      mockedApi.uploadProductImage.mockResolvedValue({
+        id: 'v1',
+        url: 'http://localhost:8000/product-images/v1',
+        mediaType: 'VIDEO',
+        createdAt: '2026-10-07T00:00:00Z',
+      })
+      const user = userEvent.setup()
+      render(<ProductForm businessId="biz-1" onSaved={vi.fn<(product: api.Product) => void>()} />)
+      await user.type(screen.getByLabelText('What do you sell?'), 'Handmade wallets')
+      await user.upload(screen.getByLabelText(/Product photos/), file)
+
+      await user.upload(await screen.findByLabelText('Upload a thumbnail image'), manualThumbnail)
+      expect(await screen.findByText('Video 0:12')).toBeInTheDocument()
+      await user.click(screen.getByRole('button', { name: 'Add product' }))
+
+      await waitFor(() =>
+        expect(mockedApi.uploadProductImage).toHaveBeenCalledWith('biz-1', 'prod-1', file, manualThumbnail),
+      )
+    })
+
+    it('rejects a manual thumbnail that is not a JPG or PNG and keeps the fallback open', async () => {
+      const user = userEvent.setup({ applyAccept: false })
+      render(<ProductForm businessId="biz-1" product={product} onSaved={vi.fn<(product: api.Product) => void>()} />)
+      await waitFor(() => expect(mockedApi.listProductImages).toHaveBeenCalled())
+      await user.upload(screen.getByLabelText(/Product photos/), clip())
+
+      await user.upload(
+        await screen.findByLabelText('Upload a thumbnail image'),
+        new File(['g'], 'cover.gif', { type: 'image/gif' }),
+      )
+
+      expect(await screen.findByText(/Unsupported image type/)).toBeInTheDocument()
+      expect(screen.getByLabelText('Upload a thumbnail image')).toBeInTheDocument()
+      expect(mockedApi.uploadProductImage).not.toHaveBeenCalled()
+    })
+
+    it('shows the server\'s message if it also finds the thumbnail black', async () => {
+      mockedApi.uploadProductImage.mockRejectedValue(
+        new api.ApiError(400, "The video's thumbnail is a solid black frame"),
+      )
+      const user = userEvent.setup()
+      render(<ProductForm businessId="biz-1" product={product} onSaved={vi.fn<(product: api.Product) => void>()} />)
+      await waitFor(() => expect(mockedApi.listProductImages).toHaveBeenCalled())
+      await user.upload(screen.getByLabelText(/Product photos/), clip())
+
+      await user.upload(await screen.findByLabelText('Upload a thumbnail image'), manualThumbnail)
+
+      expect(await screen.findByText(/solid black frame/)).toBeInTheDocument()
+    })
+
+    it('can be dismissed', async () => {
+      const user = userEvent.setup()
+      render(<ProductForm businessId="biz-1" product={product} onSaved={vi.fn<(product: api.Product) => void>()} />)
+      await waitFor(() => expect(mockedApi.listProductImages).toHaveBeenCalled())
+      await user.upload(screen.getByLabelText(/Product photos/), clip())
+
+      await user.click(await screen.findByRole('button', { name: 'Cancel this video' }))
+
+      expect(screen.queryByLabelText('Upload a thumbnail image')).not.toBeInTheDocument()
+      expect(mockedApi.uploadProductImage).not.toHaveBeenCalled()
+    })
+
+    it('still enforces the 60 second limit instead of offering a manual thumbnail', async () => {
+      mockedMedia.readVideoInfo.mockRejectedValue(
+        new media.BlackThumbnailError({ ...meta, durationSeconds: 75 }),
+      )
+      const user = userEvent.setup()
+      render(<ProductForm businessId="biz-1" product={product} onSaved={vi.fn<(product: api.Product) => void>()} />)
+      await waitFor(() => expect(mockedApi.listProductImages).toHaveBeenCalled())
+
+      await user.upload(screen.getByLabelText(/Product photos/), clip())
+
+      expect(await screen.findByRole('alert')).toHaveTextContent('at most 60 seconds')
+      expect(screen.queryByLabelText('Upload a thumbnail image')).not.toBeInTheDocument()
+    })
   })
 })
