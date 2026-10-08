@@ -116,6 +116,9 @@ class CampaignResponse(CamelCaseModel):
     name: str | None
     objective: str
     status: CampaignStatus
+    # True while a background (video) publish is running for this campaign,
+    # so a page reload mid-publish still shows "Processing video…".
+    publishing: bool = False
     product_id: str | None
     audience_id: str | None
     meta_campaign_id: str | None
@@ -134,3 +137,15 @@ class CampaignResponse(CamelCaseModel):
     # frontend surfaces the warning instead, since the swap itself always
     # succeeds.
     needs_destination_url: bool
+
+
+class PublishStatusResponse(CamelCaseModel):
+    """Progress of a background (video) publish, polled by the frontend."""
+
+    state: Literal["IDLE", "PROCESSING", "DONE", "FAILED"]
+    # What it is doing right now ("Uploading video", "Processing video", ...).
+    step: str | None = None
+    # Meta's processing percentage while it reports one.
+    progress: int | None = None
+    error: str | None = None
+    elapsed_seconds: float = 0.0

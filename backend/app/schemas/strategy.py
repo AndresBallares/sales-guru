@@ -636,6 +636,11 @@ class CreativeTestPlanContent(CamelCaseModel):
     __test__ = False
 
     plan_type: Literal["CREATIVE_TEST_PLAN"] = "CREATIVE_TEST_PLAN"
+    # The test's format, chosen up front: every ad in one test shares it
+    # (mixed formats would blur what the test is comparing). A video test may
+    # reuse one video across all its ads with different copy, which still
+    # isolates the message angle. Carousel is never a test format.
+    creative_format: Literal["SINGLE_IMAGE", "SINGLE_VIDEO"] = "SINGLE_IMAGE"
     objective: Literal["SALES"]
     audience_constraints: AudienceConstraints
     creative_persona: CreativePersona
@@ -782,3 +787,6 @@ class CreateStrategyRequest(CamelCaseModel):
     # allows carousel. Ignored when real history exists and for other
     # objectives.
     strategy_mode: Literal["CREATIVE_TEST", "STANDARD"] | None = None
+    # A creative test's format: IMAGE (default) or VIDEO. Ignored outside a
+    # creative test.
+    test_format: Literal["IMAGE", "VIDEO"] | None = None

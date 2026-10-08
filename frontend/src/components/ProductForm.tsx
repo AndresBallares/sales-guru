@@ -17,85 +17,14 @@ import {
   type Product,
   type ProductImage,
 } from '../lib/api'
-import {
-  ASPECT_RATIO_WARNING,
-  ALLOWED_IMAGE_TYPES,
-  dimensionTooSmall,
-  type ImageDimensions,
-  readImageDimensions,
-  TOO_SMALL_ERROR,
-  validateImageFile,
-} from '../lib/imageValidation'
-import {
-  ASPECT_CLASS_LABELS,
-  BLACK_THUMBNAIL_TIP,
-  BlackThumbnailError,
-  classifyAspect,
-  formatDuration,
-  isVideoFile,
-  normalizeVideoFile,
-  MAX_VIDEO_SECONDS,
-  readVideoInfo,
-  UNCLASSIFIED_VIDEO_WARNING,
-  UNSUPPORTED_MEDIA_ERROR,
-  validateVideoFile,
-  VIDEO_TOO_LONG_ERROR,
-  type AspectClass,
-  type VideoInfo,
-  type VideoMeta,
-} from '../lib/media'
+import { BlackFrameFallback } from './BlackFrameFallback'
+import { MediaBadges } from './MediaBadges'
+import { useMediaIntake, type StagedMedia } from '../lib/useMediaIntake'
 import {
   DESTINATION_URL_ERROR_MESSAGE,
   isValidDestinationUrl,
   normalizeDestinationUrl,
 } from '../lib/urlValidation'
-
-// A photo not yet uploaded — create mode only, since there's no product
-// id to upload against until the form is actually submitted. Kept in the
-// order the user wants (first = primary); uploaded sequentially in that
-// same order right after the product is created, so the backend's own
-// append-order position assignment (app/api/product_image.py's
-// _next_position) reproduces it without a separate reorder call.
-interface StagedPhoto {
-  id: string
-  file: File
-  previewUrl: string
-  warning: string | null
-  // Product media: a staged video carries the browser-captured thumbnail
-  // uploaded with it; previewUrl is then that thumbnail's object URL.
-  isVideo: boolean
-  thumbnail?: File
-  durationSeconds?: number
-  aspectClass: AspectClass
-}
-
-// The small labels under each thumbnail: its ad shape, and a video's length.
-function MediaBadges({
-  aspectClass,
-  isVideo,
-  durationSeconds,
-}: {
-  aspectClass?: AspectClass | null
-  isVideo: boolean
-  durationSeconds?: number | null
-}) {
-  return (
-    <p className="media-badges">
-      {isVideo && (
-        <span className="media-badge media-badge-video">
-          Video{durationSeconds != null ? ` ${formatDuration(durationSeconds)}` : ''}
-        </span>
-      )}
-      {aspectClass && (
-        <span className={`media-badge media-badge-${aspectClass.toLowerCase()}`}>
-          {ASPECT_CLASS_LABELS[aspectClass]}
-        </span>
-      )}
-    </p>
-  )
-}
-
-let stagedPhotoCounter = 0
 
 // Shared by ProductsSection's "Add a product" / "Edit" rows and
 // CampaignsSection's "Change product" picker (Part 1 + Part 2) — one
@@ -140,16 +69,28 @@ export function ProductForm({
   // mode: always empty — see stagedPhotos instead.
   const [existingImages, setExistingImages] = useState<ProductImage[]>([])
   // Create mode: photos picked before the product exists yet.
-  const [stagedPhotos, setStagedPhotos] = useState<StagedPhoto[]>([])
-  const [imageError, setImageError] = useState<string | null>(null)
-  const [uploadingImage, setUploadingImage] = useState(false)
-  // A video whose frame the browser could only draw black: waiting on a
-  // manually uploaded thumbnail (or for the user to cancel it).
-  const [blackVideo, setBlackVideo] = useState<{ file: File; meta: VideoMeta } | null>(null)
+  const [stagedPhotos, setStagedPhotos] = useState<StagedMedia[]>([])
   const [removingImageId, setRemovingImageId] = useState<string | null>(null)
   const [reorderingImages, setReorderingImages] = useState(false)
   const [isDraggingPhoto, setIsDraggingPhoto] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
+  // Validation, thumbnail capture and saving of every photo/video picked here:
+  // the same pipeline the ad editor's "Upload a new video" uses.
+  const {
+    processFiles,
+    submitManualThumbnail,
+    cancelBlackVideo,
+    blackVideo,
+    uploading: uploadingImage,
+    error: imageError,
+    setError: setImageError,
+  } = useMediaIntake({
+    businessId,
+    productId: isEditing ? product.id : null,
+    accept: 'media',
+    onUploaded: (image) => setExistingImages((prev) => [...prev, image]),
+    onStaged: (media) => setStagedPhotos((prev) => [...prev, media]),
+  })
 
   useEffect(() => {
     if (!isEditing) return
@@ -182,126 +123,6 @@ export function ProductForm({
     // change would invalidate previews still in use.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
-
-  // Shared by the file input's change handler and the drop zone's drop
-  // handler below — same validation/staging/upload pipeline regardless
-  // of how the files were picked.
-  async function processFiles(files: File[]) {
-    if (files.length === 0) return
-
-    setImageError(null)
-    for (const picked of files) {
-      const file = isVideoFile(picked) ? normalizeVideoFile(picked) : picked
-      if (isVideoFile(file)) {
-        const videoError = validateVideoFile(file)
-        if (videoError) {
-          setImageError(videoError)
-          continue
-        }
-        let info
-        try {
-          info = await readVideoInfo(file)
-        } catch (err) {
-          if (err instanceof BlackThumbnailError) {
-            // The browser decoded the size and length but could only draw black
-            // (iPhone HDR/HEVC in Safari): keep the video and ask for a
-            // thumbnail instead of failing the upload outright.
-            if (err.meta.durationSeconds > MAX_VIDEO_SECONDS) {
-              setImageError(VIDEO_TOO_LONG_ERROR)
-            } else {
-              setBlackVideo({ file, meta: err.meta })
-            }
-          } else {
-            setImageError(err instanceof Error ? err.message : 'Could not read this video.')
-          }
-          continue
-        }
-        if (info.durationSeconds > MAX_VIDEO_SECONDS) {
-          setImageError(VIDEO_TOO_LONG_ERROR)
-          continue
-        }
-        await addMedia(file, info)
-        continue
-      }
-
-      if (!ALLOWED_IMAGE_TYPES.has(file.type)) {
-        setImageError(UNSUPPORTED_MEDIA_ERROR)
-        continue
-      }
-      const typeOrSizeError = validateImageFile(file)
-      if (typeOrSizeError) {
-        setImageError(typeOrSizeError)
-        continue
-      }
-      let dimensions
-      try {
-        dimensions = await readImageDimensions(file)
-      } catch (err) {
-        setImageError(err instanceof Error ? err.message : 'Could not read this image.')
-        continue
-      }
-      if (dimensionTooSmall(dimensions)) {
-        setImageError(TOO_SMALL_ERROR)
-        continue
-      }
-      await addMedia(file, null, dimensions)
-    }
-  }
-
-  // Uploads (edit mode) or stages (create mode) one already-validated item: a
-  // photo with its measured dimensions, or a video with its captured thumbnail.
-  async function addMedia(file: File, video: VideoInfo | null, dimensions?: ImageDimensions) {
-    const width = video?.width ?? dimensions?.width ?? 0
-    const height = video?.height ?? dimensions?.height ?? 0
-    const aspectClass = classifyAspect(width, height)
-    const warning =
-      aspectClass !== 'UNCLASSIFIED'
-        ? null
-        : video
-          ? UNCLASSIFIED_VIDEO_WARNING
-          : ASPECT_RATIO_WARNING
-
-    if (isEditing) {
-      setUploadingImage(true)
-      try {
-        const image = await uploadProductImage(businessId, product.id, file, video?.thumbnail)
-        setExistingImages((prev) => [...prev, image])
-      } catch (err) {
-        setImageError(err instanceof ApiError ? err.message : 'Could not upload image.')
-      } finally {
-        setUploadingImage(false)
-      }
-    } else {
-      setStagedPhotos((prev) => [
-        ...prev,
-        {
-          id: `staged-${++stagedPhotoCounter}`,
-          file,
-          previewUrl: URL.createObjectURL(video?.thumbnail ?? file),
-          warning,
-          isVideo: video !== null,
-          thumbnail: video?.thumbnail,
-          durationSeconds: video?.durationSeconds,
-          aspectClass,
-        },
-      ])
-    }
-  }
-
-  async function handleManualThumbnail(event: ChangeEvent<HTMLInputElement>) {
-    const thumbnail = event.target.files?.[0]
-    event.target.value = ''
-    if (!thumbnail || !blackVideo) return
-    const thumbnailError = validateImageFile(thumbnail)
-    if (thumbnailError) {
-      setImageError(thumbnailError)
-      return
-    }
-    setImageError(null)
-    const { file, meta } = blackVideo
-    setBlackVideo(null)
-    await addMedia(file, { ...meta, thumbnail })
-  }
 
   async function handleFilesSelected(event: ChangeEvent<HTMLInputElement>) {
     const files = Array.from(event.target.files ?? [])
@@ -633,24 +454,12 @@ export function ProductForm({
           />
         </label>
         {blackVideo && (
-          <div className="media-fallback" role="alert">
-            <p>
-              <strong>
-                We could only capture a black frame from &ldquo;{blackVideo.file.name}&rdquo;.
-              </strong>{' '}
-              {BLACK_THUMBNAIL_TIP}
-            </p>
-            <label htmlFor={`manual-thumbnail-${idSuffix}`}>Upload a thumbnail image</label>
-            <input
-              id={`manual-thumbnail-${idSuffix}`}
-              type="file"
-              accept="image/jpeg,image/png"
-              onChange={(event) => void handleManualThumbnail(event)}
-            />
-            <button type="button" onClick={() => setBlackVideo(null)}>
-              Cancel this video
-            </button>
-          </div>
+          <BlackFrameFallback
+            fileName={blackVideo.file.name}
+            inputId={`manual-thumbnail-${idSuffix}`}
+            onThumbnail={(thumbnail) => void submitManualThumbnail(thumbnail)}
+            onCancel={cancelBlackVideo}
+          />
         )}
         {uploadingImage && <p>Uploading…</p>}
         {imageError && (

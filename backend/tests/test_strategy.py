@@ -812,3 +812,85 @@ async def test_an_unpublished_creative_test_does_not_use_up_test_one(
     _post_strategy(client, business_id, second)
 
     assert mock_generate_strategy.call_args.kwargs["plan_type"] == "CREATIVE_TEST_PLAN"
+
+
+# ── Creative test format (Images / Videos) ──
+
+
+def test_the_creative_test_defaults_to_images(
+    client: TestClient, mock_generate_strategy: AsyncMock
+) -> None:
+    mock_generate_strategy.return_value = _FAKE_CREATIVE_TEST_PLAN
+    _signed_up_client(client)
+    business_id = _create_business(client)
+    campaign_id = _create_campaign(client, business_id)
+
+    _post_strategy(
+        client, business_id, campaign_id, hasPriorAdvertisingExperience=False
+    )
+
+    assert mock_generate_strategy.call_args.kwargs["creative_format"] == "SINGLE_IMAGE"
+
+
+def test_a_video_test_is_requested_with_test_format_video(
+    client: TestClient, mock_generate_strategy: AsyncMock
+) -> None:
+    mock_generate_strategy.return_value = _FAKE_CREATIVE_TEST_PLAN.model_copy(
+        update={"creative_format": "SINGLE_VIDEO"}
+    )
+    _signed_up_client(client)
+    business_id = _create_business(client)
+    campaign_id = _create_campaign(client, business_id)
+
+    response = _post_strategy(
+        client,
+        business_id,
+        campaign_id,
+        hasPriorAdvertisingExperience=False,
+        testFormat="VIDEO",
+    )
+
+    assert response.status_code == 201
+    assert mock_generate_strategy.call_args.kwargs["creative_format"] == "SINGLE_VIDEO"
+    assert response.json()["content"]["creativeFormat"] == "SINGLE_VIDEO"
+
+
+def test_an_unknown_test_format_is_rejected(
+    client: TestClient, mock_generate_strategy: AsyncMock
+) -> None:
+    _signed_up_client(client)
+    business_id = _create_business(client)
+    campaign_id = _create_campaign(client, business_id)
+
+    response = _post_strategy(
+        client,
+        business_id,
+        campaign_id,
+        hasPriorAdvertisingExperience=False,
+        testFormat="GIF",
+    )
+
+    assert response.status_code == 422
+
+
+def test_the_test_format_is_ignored_for_a_standard_campaign(
+    client: TestClient, mock_generate_strategy: AsyncMock
+) -> None:
+    mock_generate_strategy.return_value = _FAKE_DATA_DRIVEN_STRATEGY
+    _signed_up_client(client)
+    business_id = _create_business(client)
+    campaign_id = _create_campaign(client, business_id)
+
+    response = _post_strategy(
+        client,
+        business_id,
+        campaign_id,
+        hasPriorAdvertisingExperience=False,
+        strategyMode="STANDARD",
+        testFormat="VIDEO",
+    )
+
+    assert response.status_code == 201
+    assert (
+        mock_generate_strategy.call_args.kwargs["plan_type"] == "DATA_DRIVEN_STRATEGY"
+    )

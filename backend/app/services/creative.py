@@ -55,7 +55,7 @@ creative_angle stay shared across a variant's own cards, same as before.
 import copy
 import json
 import logging
-from typing import Literal, cast
+from typing import Literal, NamedTuple, cast
 
 import anthropic
 from anthropic import AsyncAnthropic
@@ -69,6 +69,7 @@ from prisma.models import ProductImage as PrismaProductImage
 from pydantic import ValidationError
 
 from app.core.config import get_settings
+from app.core.db import db
 from app.schemas.campaign import Objective
 from app.schemas.creative import (
     ALLOWED_CTAS_BY_OBJECTIVE,
@@ -82,6 +83,7 @@ from app.schemas.creative import (
     GeneratedCreativeCard,
     GeneratedCreativeVariant,
 )
+from app.schemas.product_image import MAX_VIDEO_BYTES, MAX_VIDEO_SECONDS
 from app.schemas.strategy import StrategyContent, primary_audience
 from app.services.brand_voice import brand_voice_lines
 from app.services.prompt_safety import quarantine
@@ -276,6 +278,18 @@ def _fake_carousel_variants(card_count: int) -> list[GeneratedCreativeVariant]:
     ]
 
 
+class VideoInput(NamedTuple):
+    """What the Creative Agent is told about a SINGLE_VIDEO creative's video.
+
+    The agent can't watch a video, so it gets the thumbnail (a frame, passed as
+    its vision input, already base64) and the duration.
+    """
+
+    thumbnail_data: str
+    thumbnail_content_type: str
+    duration_seconds: float
+
+
 class CreativeAgentError(RuntimeError):
     """Raised when the Creative Agent fails to produce ad creatives."""
 
@@ -371,6 +385,40 @@ def copy_problems(creative: Creative) -> list[str]:
     return problems
 
 
+async def media_problems(creative: Creative) -> list[str]:
+    """Why a video creative's media shouldn't go live, or an empty list.
+
+    The media half of the pre-publish guard (copy_problems is the copy half):
+    a SINGLE_VIDEO creative must still point at an existing product video that
+    has its thumbnail and is within the limits it was accepted under. Other
+    formats have nothing to check here (an image's own existence is checked
+    when its bytes are uploaded to Meta).
+
+    Args:
+        creative: The creative about to be published.
+
+    Returns:
+        One human-readable problem per issue found.
+    """
+    if creative.format != "SINGLE_VIDEO":
+        return []
+    if creative.productImageId is None:
+        return ["no video is attached"]
+    video = await db.productimage.find_unique(where={"id": creative.productImageId})
+    if video is None:
+        return ["its video no longer exists — pick another video"]
+    if video.mediaType != "VIDEO":
+        return ["the attached file isn't a video"]
+    problems: list[str] = []
+    if video.thumbnailData is None:
+        problems.append("its video has no thumbnail")
+    if (video.durationSeconds or 0) > MAX_VIDEO_SECONDS:
+        problems.append(f"its video is longer than {MAX_VIDEO_SECONDS} seconds")
+    if (video.sizeBytes or 0) > MAX_VIDEO_BYTES:
+        problems.append("its video is over the size limit")
+    return problems
+
+
 def _trim_to_last_sentence(text: str, max_length: int) -> str | None:
     """Trim text back to the last sentence end within max_length, or None."""
     window = text[:max_length]
@@ -453,6 +501,7 @@ def _build_prompt(
     has_logo: bool = False,
     format: CreativeFormat = "SINGLE_IMAGE",
     card_count: int = 0,
+    video_seconds: float | None = None,
 ) -> str:
     """Build the grounding prompt from the business/product and its strategy.
 
@@ -485,13 +534,15 @@ def _build_prompt(
             content block alongside this prompt (see generate_creatives)
             — same has_image reasoning, a visual style cue rather than a
             literal product photo.
-        format: SINGLE_IMAGE (default) or CAROUSEL — CAROUSEL adds
+        format: SINGLE_IMAGE (default), SINGLE_VIDEO or CAROUSEL — CAROUSEL adds
             instructions for the per-card headline/description structure
             below and implies has_image is irrelevant (every card image
             is attached instead of just the primary one).
         card_count: How many product photos are attached as per-card
             image blocks, when format is CAROUSEL (see generate_creatives)
             — ignored for SINGLE_IMAGE.
+        video_seconds: For SINGLE_VIDEO, the video's length; the prompt then
+            says the ad is a video and the attached image is a frame from it.
 
     Returns:
         The prompt text.
@@ -577,7 +628,14 @@ def _build_prompt(
             lines.append(f"Features: {product.features}")
         if product.benefits:
             lines.append(f"Benefits: {product.benefits}")
-        if has_image:
+        if format == "SINGLE_VIDEO" and video_seconds is not None:
+            lines.append(
+                f"This ad is a {video_seconds:.0f}-second video of the product. "
+                "The image attached above is a frame from that video — ground "
+                "the creative angles in what it shows, in addition to the "
+                "description and features/benefits given here."
+            )
+        elif has_image:
             lines.append(
                 "A photo of the product is attached above — ground the "
                 "creative angles in what it actually looks like (materials, "
@@ -611,6 +669,14 @@ def _build_prompt(
                 "Every variant is a single image: if a creative angle above "
                 "mentions a carousel, video or several images, adapt it to "
                 "work as one image — never return a cards list."
+            )
+        if format == "SINGLE_VIDEO":
+            lines.append(
+                "Every variant is the same video with different copy: the "
+                "angles must differ in what the copy says and promises, not "
+                "in footage. If a creative angle above mentions a carousel "
+                "or several images, adapt it to a message over one video — "
+                "never return a cards list."
             )
     audience = primary_audience(strategy)
     if audience.problem:
@@ -800,6 +866,7 @@ async def generate_creatives(
     brand_profile: BrandProfile | None = None,
     format: CreativeFormat = "SINGLE_IMAGE",
     card_images: list[PrismaProductImage] | None = None,
+    video: VideoInput | None = None,
 ) -> list[GeneratedCreativeVariant]:
     """Call the Creative Agent and return a batch of ad creative variants.
 
@@ -835,6 +902,9 @@ async def generate_creatives(
             MAX_CAROUSEL_CARDS by the caller) — one card is generated per
             image, in the same order. Required (non-None, 2-10 items)
             when format is CAROUSEL; ignored for SINGLE_IMAGE.
+        video: For SINGLE_VIDEO, the video's thumbnail (passed as the vision
+            input in place of primary_image) and duration, so the prompt can
+            tell the agent the ad is a video. Ignored for other formats.
 
     Returns:
         Exactly four generated creative variants (Creative A-D), their
@@ -859,7 +929,8 @@ async def generate_creatives(
         raise CreativeAgentError("ANTHROPIC_API_KEY is not configured")
 
     client = AsyncAnthropic(api_key=settings.anthropic_api_key)
-    has_image = not is_carousel and primary_image is not None
+    is_video = format == "SINGLE_VIDEO" and video is not None
+    has_image = not is_carousel and (primary_image is not None or is_video)
     has_logo = business.logoData is not None
     prompt = _build_prompt(
         business,
@@ -870,6 +941,7 @@ async def generate_creatives(
         has_logo=has_logo,
         format=format,
         card_count=len(card_images) if is_carousel and card_images else 0,
+        video_seconds=video.duration_seconds if is_video and video else None,
     )
 
     image_blocks: list[ImageBlockParam] = []
@@ -899,6 +971,19 @@ async def generate_creatives(
                     },
                 }
             )
+    elif is_video and video is not None:
+        image_blocks.append(
+            {
+                "type": "image",
+                "source": {
+                    "type": "base64",
+                    "media_type": cast(
+                        _SupportedImageMediaType, video.thumbnail_content_type
+                    ),
+                    "data": video.thumbnail_data,
+                },
+            }
+        )
     elif primary_image is not None:
         media_type = cast(_SupportedImageMediaType, primary_image.contentType)
         image_blocks.append(

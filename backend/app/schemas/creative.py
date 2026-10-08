@@ -23,7 +23,7 @@ CtaType = Literal[
 
 CreativeStatus = Literal["GENERATED", "SELECTED", "REJECTED"]
 
-CreativeFormat = Literal["SINGLE_IMAGE", "CAROUSEL"]
+CreativeFormat = Literal["SINGLE_IMAGE", "SINGLE_VIDEO", "CAROUSEL"]
 
 # Meta's own per-carousel-ad card limit (confirmed 2026-09-12) — a product
 # with more photos than this has the extra ones silently excluded (in
@@ -308,9 +308,9 @@ class GeneratedCreativeBatch(CamelCaseModel):
         has_cards = self.variants[0].cards is not None
         if requested_format == "CAROUSEL" and not has_cards:
             raise ValueError("CAROUSEL format was requested but the batch has no cards")
-        if requested_format == "SINGLE_IMAGE" and has_cards:
+        if requested_format in ("SINGLE_IMAGE", "SINGLE_VIDEO") and has_cards:
             raise ValueError(
-                "SINGLE_IMAGE format was requested but the batch has cards"
+                f"{requested_format} format was requested but the batch has cards"
             )
         return self
 
@@ -376,13 +376,14 @@ class SelectCreativeRequest(CamelCaseModel):
 class CreateCreativesRequest(CamelCaseModel):
     """Optional body for POST .../creatives (generate a new batch).
 
-    format defaults to SINGLE_IMAGE — the pre-existing behavior, and
-    still the only option for a campaign whose product has fewer than
-    MIN_CAROUSEL_CARDS photos (app/api/creative.py 400s before ever
-    calling the agent in that case).
+    format defaults to None, meaning "the campaign's own default": a
+    creative test uses its plan's format (images or videos), anything else
+    SINGLE_IMAGE — the pre-existing behavior. CAROUSEL needs at least
+    MIN_CAROUSEL_CARDS photos and SINGLE_VIDEO at least one product video
+    (app/api/creative.py 400s before ever calling the agent otherwise).
     """
 
-    format: CreativeFormat = "SINGLE_IMAGE"
+    format: CreativeFormat | None = None
 
 
 class SetCreativeImageRequest(CamelCaseModel):
@@ -442,6 +443,9 @@ class CreativeResponse(CamelCaseModel):
     image_prompt: str | None
     video_prompt: str | None
     image_url: str | None
+    # A SINGLE_VIDEO creative's playable video (imageUrl is its thumbnail);
+    # None for every other format.
+    video_url: str | None = None
     format: CreativeFormat
     # Empty for a SINGLE_IMAGE creative; 2-10 cards, in position order,
     # for a CAROUSEL one.

@@ -187,6 +187,11 @@ async def create_strategy(
             plan_type=plan_type,
             account_history=account_history,
             brand_profile=brand_profile,
+            creative_format=(
+                "SINGLE_VIDEO"
+                if body is not None and body.test_format == "VIDEO"
+                else "SINGLE_IMAGE"
+            ),
         )
     except StrategistError as exc:
         raise HTTPException(

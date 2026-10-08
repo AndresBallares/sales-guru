@@ -28,8 +28,9 @@ same as before.
 """
 
 import logging
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
-from typing import Literal
+from typing import Literal, NamedTuple
 
 from prisma.models import Campaign, Creative, MetaConnection
 from prisma.types import CampaignUpdateInput
@@ -514,6 +515,117 @@ async def _resolve_carousel_cards(
     return cards
 
 
+class VideoAsset(NamedTuple):
+    """A video that is on Meta and ready to use, with its cover image."""
+
+    video_id: str
+    image_hash: str
+
+
+StatusReporter = Callable[[str, int | None], None]
+
+
+async def _resolve_video_assets(
+    creatives: list[Creative],
+    *,
+    access_token: str,
+    ad_account_id: str,
+    report: StatusReporter | None = None,
+) -> dict[str, VideoAsset]:
+    """Upload each distinct video, wait for Meta to process it, upload its cover.
+
+    Runs before anything is created on Meta, so a video that fails or times out
+    never leaves a half-published campaign behind. A video reused by several ads
+    (a video test may do that) is uploaded and processed once.
+
+    Args:
+        creatives: Every creative about to be published.
+        access_token: The business's Meta access token.
+        ad_account_id: The connected ad account.
+        report: Called with a short step name and an optional percentage so a
+            caller can show "Processing video… 40%".
+
+    Returns:
+        The ready video for each ProductImage id a SINGLE_VIDEO creative uses.
+
+    Raises:
+        MetaConnectionError: If a video row is gone or incomplete, or any
+            upload fails, or Meta can't process the video in time.
+    """
+    notify = report or (lambda _step, _percent: None)
+    assets: dict[str, VideoAsset] = {}
+    for creative in creatives:
+        media_id = creative.productImageId
+        if creative.format != "SINGLE_VIDEO" or media_id in assets:
+            continue
+        video = (
+            await db.productimage.find_unique(where={"id": media_id})
+            if media_id is not None
+            else None
+        )
+        if (
+            video is None
+            or video.mediaType != "VIDEO"
+            or video.thumbnailData is None
+            or video.thumbnailContentType is None
+        ):
+            raise MetaConnectionError(
+                f"The video for ad '{creative.headline}' no longer exists — "
+                "pick another video and publish again."
+            )
+        notify("Uploading video", None)
+        video_id = await meta.upload_meta_video(
+            access_token=access_token,
+            ad_account_id=ad_account_id,
+            video_data=video.data.decode(),
+            content_type=video.contentType,
+            name=f"Sales Guru video {video.id}",
+        )
+        notify("Processing video", None)
+        await meta.wait_for_meta_video(
+            access_token=access_token,
+            video_id=video_id,
+            on_progress=lambda percent: notify("Processing video", percent),
+        )
+        notify("Uploading thumbnail", None)
+        image_hash = await meta.upload_meta_ad_image(
+            access_token=access_token,
+            ad_account_id=ad_account_id,
+            image_data=video.thumbnailData.decode(),
+            content_type=video.thumbnailContentType,
+        )
+        assets[video.id] = VideoAsset(video_id, image_hash)
+    notify("Creating ads", None)
+    return assets
+
+
+async def _create_video_meta_creative(
+    creative: Creative,
+    *,
+    assets: dict[str, VideoAsset],
+    access_token: str,
+    ad_account_id: str,
+    page_id: str,
+    destination_url: str,
+) -> str:
+    """Create the Meta creative (video_data) for a SINGLE_VIDEO creative."""
+    assert creative.productImageId is not None
+    asset = assets[creative.productImageId]
+    return await meta.create_meta_video_ad_creative(
+        access_token=access_token,
+        ad_account_id=ad_account_id,
+        page_id=page_id,
+        name=creative.headline,
+        headline=creative.headline,
+        body_text=creative.bodyText,
+        description=creative.description,
+        cta=creative.cta,
+        link=destination_url,
+        video_id=asset.video_id,
+        image_hash=asset.image_hash,
+    )
+
+
 async def publish_campaign_to_meta(
     *,
     campaign: Campaign,
@@ -523,6 +635,7 @@ async def publish_campaign_to_meta(
     destination_url: str,
     paused: bool = False,
     creatives: list[Creative] | None = None,
+    report: StatusReporter | None = None,
 ) -> Campaign:
     """Create the campaign on Meta, then mirror it locally.
 
@@ -554,8 +667,10 @@ async def publish_campaign_to_meta(
             confirmed 2026-09-18) — when True, the Meta campaign/every
             AdSet/every Ad are created with status PAUSED instead of
             ACTIVE, so nothing spends until a human clicks Activate (this
-            app or Ads Manager). Applies identically to CAROUSEL and
-            SINGLE_IMAGE, and to every TEST_PLAN variant.
+            app or Ads Manager). Applies identically to CAROUSEL, SINGLE_IMAGE
+            and SINGLE_VIDEO, and to every TEST_PLAN variant.
+        report: Called with a short step name and an optional percentage as a
+            video uploads and processes, so a background job can show progress.
 
     Returns:
         The campaign, now LIVE (or PAUSED if paused=True, with
@@ -580,6 +695,15 @@ async def publish_campaign_to_meta(
     assert connection.pageId is not None
     ad_account_id = connection.adAccountId
 
+    # Videos first: uploaded and processed before any campaign object exists on
+    # Meta, so a processing failure leaves nothing half-published.
+    video_assets = await _resolve_video_assets(
+        creatives or [creative],
+        access_token=connection.accessToken,
+        ad_account_id=ad_account_id,
+        report=report,
+    )
+
     if strategy.plan_type == "CREATIVE_TEST_PLAN":
         assert creatives, "a creative test plan publishes its selected creatives"
         return await _publish_creative_test_plan(
@@ -589,6 +713,7 @@ async def publish_campaign_to_meta(
             strategy=strategy,
             destination_url=destination_url,
             paused=paused,
+            video_assets=video_assets,
         )
 
     optimization_goal = _OPTIMIZATION_GOAL_BY_OBJECTIVE[campaign.objective]
@@ -616,7 +741,16 @@ async def publish_campaign_to_meta(
         objective=campaign.objective,
         status=meta_status,
     )
-    if creative.format == "CAROUSEL":
+    if creative.format == "SINGLE_VIDEO":
+        meta_creative_id = await _create_video_meta_creative(
+            creative,
+            assets=video_assets,
+            access_token=connection.accessToken,
+            ad_account_id=ad_account_id,
+            page_id=connection.pageId,
+            destination_url=destination_url,
+        )
+    elif creative.format == "CAROUSEL":
         carousel_cards = await _resolve_carousel_cards(
             creative, access_token=connection.accessToken, ad_account_id=ad_account_id
         )
@@ -705,6 +839,7 @@ async def _publish_creative_test_plan(
     strategy: CreativeTestPlanContent,
     destination_url: str,
     paused: bool,
+    video_assets: dict[str, VideoAsset],
 ) -> Campaign:
     """Publish a CREATIVE_TEST_PLAN: one ad set, one ad per selected creative.
 
@@ -725,6 +860,8 @@ async def _publish_creative_test_plan(
         strategy: The campaign's CREATIVE_TEST_PLAN.
         destination_url: Where each ad's CTA links to.
         paused: Create everything PAUSED instead of ACTIVE.
+        video_assets: The already-processed videos of a video test's ads
+            (see _resolve_video_assets); empty for an image test.
 
     Returns:
         The campaign, LIVE (or PAUSED), with metaCampaignId and endDate set.
@@ -800,21 +937,31 @@ async def _publish_creative_test_plan(
     )
 
     for creative in creatives:
-        image_hash = await _resolve_image_hash(
-            creative, access_token=access_token, ad_account_id=ad_account_id
-        )
-        meta_creative_id = await meta.create_meta_ad_creative(
-            access_token=access_token,
-            ad_account_id=ad_account_id,
-            page_id=connection.pageId,
-            name=creative.headline,
-            headline=creative.headline,
-            body_text=creative.bodyText,
-            description=creative.description,
-            cta=creative.cta,
-            link=destination_url,
-            image_hash=image_hash,
-        )
+        if creative.format == "SINGLE_VIDEO":
+            meta_creative_id = await _create_video_meta_creative(
+                creative,
+                assets=video_assets,
+                access_token=access_token,
+                ad_account_id=ad_account_id,
+                page_id=connection.pageId,
+                destination_url=destination_url,
+            )
+        else:
+            image_hash = await _resolve_image_hash(
+                creative, access_token=access_token, ad_account_id=ad_account_id
+            )
+            meta_creative_id = await meta.create_meta_ad_creative(
+                access_token=access_token,
+                ad_account_id=ad_account_id,
+                page_id=connection.pageId,
+                name=creative.headline,
+                headline=creative.headline,
+                body_text=creative.bodyText,
+                description=creative.description,
+                cta=creative.cta,
+                link=destination_url,
+                image_hash=image_hash,
+            )
         meta_ad_id = await meta.create_meta_ad(
             access_token=access_token,
             ad_account_id=ad_account_id,

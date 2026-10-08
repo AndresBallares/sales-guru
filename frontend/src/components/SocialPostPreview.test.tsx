@@ -1,4 +1,5 @@
 import { render, screen } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { describe, expect, it } from 'vitest'
 import { SocialPostPreview } from './SocialPostPreview'
 import type { Business, Creative } from '../lib/api'
@@ -104,5 +105,76 @@ describe('SocialPostPreview', () => {
     // to the SINGLE_IMAGE layout — a carousel's per-card headline/
     // description replace it entirely.
     expect(screen.queryByText('Shop Now')).not.toBeInTheDocument()
+  })
+
+  describe('a single-video creative', () => {
+    const video = makeCreative({
+      format: 'SINGLE_VIDEO',
+      imageUrl: 'http://localhost:8000/product-images/v1/thumbnail',
+      videoUrl: 'http://localhost:8000/product-images/v1',
+    })
+
+    it('shows the thumbnail with a play button, without loading the video yet', () => {
+      const { container } = render(
+        <SocialPostPreview business={business} creative={video} ctaLabel="Shop Now" />,
+      )
+
+      expect(screen.getByRole('img', { name: 'A great headline' })).toHaveAttribute(
+        'src',
+        'http://localhost:8000/product-images/v1/thumbnail',
+      )
+      expect(screen.getByRole('button', { name: 'Play video' })).toBeInTheDocument()
+      expect(container.querySelector('video')).toBeNull()
+      expect(screen.getByText('A great headline')).toBeInTheDocument()
+      expect(screen.getByText('Shop Now')).toBeInTheDocument()
+    })
+
+    it('plays the video when the play button is clicked', async () => {
+      const user = userEvent.setup()
+      const { container } = render(
+        <SocialPostPreview business={business} creative={video} ctaLabel="Shop Now" />,
+      )
+
+      await user.click(screen.getByRole('button', { name: 'Play video' }))
+
+      const player = container.querySelector('video')
+      expect(player).not.toBeNull()
+      expect(player).toHaveAttribute('src', 'http://localhost:8000/product-images/v1')
+      expect(player).toHaveAttribute('poster', 'http://localhost:8000/product-images/v1/thumbnail')
+      expect(player).toHaveAttribute('controls')
+      expect(screen.queryByRole('button', { name: 'Play video' })).not.toBeInTheDocument()
+    })
+
+    it('shows just the thumbnail when there is no playable video url', () => {
+      render(
+        <SocialPostPreview
+          business={business}
+          creative={{ ...video, videoUrl: null }}
+          ctaLabel="Shop Now"
+        />,
+      )
+
+      expect(screen.getByRole('img', { name: 'A great headline' })).toBeInTheDocument()
+      expect(screen.queryByRole('button', { name: 'Play video' })).not.toBeInTheDocument()
+    })
+
+    it('starts back on the thumbnail when a different video is shown', async () => {
+      const user = userEvent.setup()
+      const { container, rerender } = render(
+        <SocialPostPreview business={business} creative={video} ctaLabel="Shop Now" />,
+      )
+      await user.click(screen.getByRole('button', { name: 'Play video' }))
+
+      rerender(
+        <SocialPostPreview
+          business={business}
+          creative={{ ...video, videoUrl: 'http://localhost:8000/product-images/v2' }}
+          ctaLabel="Shop Now"
+        />,
+      )
+
+      expect(container.querySelector('video')).toBeNull()
+      expect(screen.getByRole('button', { name: 'Play video' })).toBeInTheDocument()
+    })
   })
 })

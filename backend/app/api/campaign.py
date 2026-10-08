@@ -5,10 +5,11 @@ objective can be picked and a strategy generated without ever connecting
 Meta; that connection only matters at publish time (step 8).
 """
 
+from collections.abc import Callable
 from datetime import UTC, datetime, time
 from typing import cast
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Response, status
 from prisma.models import Business, Campaign
 from prisma.types import CampaignUpdateInput
 
@@ -21,14 +22,16 @@ from app.schemas.campaign import (
     CampaignStatus,
     CampaignUpdateRequest,
     PublishCampaignRequest,
+    PublishStatusResponse,
 )
 from app.schemas.strategy import (
     MAX_CREATIVE_ANGLES,
     MIN_CREATIVE_ANGLES,
     StrategyContentAdapter,
 )
+from app.services import publish_jobs
 from app.services.campaign_readiness import advance_to_ready_if_complete, is_ready
-from app.services.creative import copy_problems, is_creative_stale
+from app.services.creative import copy_problems, is_creative_stale, media_problems
 from app.services.event_venues import EVENT_VENUES, default_event_window
 from app.services.meta import MetaConnectionError
 from app.services.publish import (
@@ -50,6 +53,7 @@ _PRODUCT_MISSING_URL_FOR_OBJECTIVE = (
 _AUDIENCE_NOT_FOUND = "Audience not found"
 _EVENT_VENUE_NOT_FOUND = "Unknown event venue"
 _NOT_READY_FOR_APPROVAL = "Select an ad creative before approving this campaign"
+_ALREADY_PUBLISHING = "This campaign is already being published — wait for it to finish"
 _NOT_READY_FOR_PUBLISH = "Approve this campaign before publishing"
 _CAMPAIGN_NOT_READY = "Add a product and an audience to this campaign before publishing"
 _NOT_LIVE_TO_PAUSE = "Only a live campaign can be paused"
@@ -66,7 +70,14 @@ _COPY_NOT_PUBLISHABLE = (
     "Can't publish yet — fix the ad copy first: {failures}. Regenerate the ads "
     "or edit them, then try again."
 )
-_CREATIVE_TEST_SINGLE_IMAGE = "A creative test uses single-image ads only for now"
+_CREATIVE_TEST_SINGLE_IMAGE = (
+    "This is an image test: every ad in it must be a single image, so other "
+    "formats can't be mixed in"
+)
+_VIDEO_TEST_VIDEOS_ONLY = (
+    "This is a video test: every ad in it must be a video, so other formats "
+    "can't be mixed in"
+)
 _ALREADY_PUBLISHED = (
     "This campaign has already been published and can't be deleted — its "
     "data is used to optimize future campaigns"
@@ -76,6 +87,7 @@ _META_NOT_CONNECTED = (
 )
 _META_NOT_CONNECTED_TO_PAUSE = "No Meta connection found for this campaign's business"
 _NO_CREATIVE_SELECTED = "Select an ad creative before publishing"
+_MEDIA_NOT_PUBLISHABLE = "These ads' media can't be published yet: {failures}"
 _CREATIVE_STALE = (
     "This ad was generated from an older version of the product — "
     "regenerate it before publishing"
@@ -119,6 +131,7 @@ async def _to_response(campaign: Campaign) -> CampaignResponse:
     """
     return CampaignResponse(
         id=campaign.id,
+        publishing=publish_jobs.is_running(campaign.id),
         name=campaign.name,
         objective=campaign.objective,
         # Prisma types the column as plain str (schema.prisma has no native
@@ -469,6 +482,7 @@ async def approve_campaign(
 
 @router.post("/{campaign_id}/publish", response_model=CampaignResponse)
 async def publish_campaign(
+    response: Response,
     payload: PublishCampaignRequest | None = None,
     campaign: Campaign = Depends(get_owned_campaign),
 ) -> CampaignResponse:
@@ -482,6 +496,8 @@ async def publish_campaign(
     Meta API call becomes a 500.
 
     Args:
+        response: The response, so a background (video) publish can answer
+            202 Accepted instead of 200.
         payload: Optional — payload.paused (the frontend's "Publish
             paused" checkbox, default checked there) publishes with
             everything created PAUSED on Meta instead of ACTIVE when
@@ -502,6 +518,10 @@ async def publish_campaign(
             Meta API call fails (the campaign is moved to FAILED first,
             so it can be retried).
     """
+    if publish_jobs.is_running(campaign.id):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail=_ALREADY_PUBLISHING
+        )
     if campaign.status not in ("APPROVED", "FAILED"):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST, detail=_NOT_READY_FOR_PUBLISH
@@ -558,10 +578,14 @@ async def publish_campaign(
                     min=MIN_CREATIVE_ANGLES, max=MAX_CREATIVE_ANGLES
                 ),
             )
-        if any(c.format != "SINGLE_IMAGE" for c in creatives):
+        if any(c.format != strategy_content.creative_format for c in creatives):
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail=_CREATIVE_TEST_SINGLE_IMAGE,
+                detail=(
+                    _VIDEO_TEST_VIDEOS_ONLY
+                    if strategy_content.creative_format == "SINGLE_VIDEO"
+                    else _CREATIVE_TEST_SINGLE_IMAGE
+                ),
             )
     if any(is_creative_stale(c, campaign, product, business) for c in creatives):
         raise HTTPException(
@@ -574,6 +598,16 @@ async def publish_campaign(
         for c in creatives
         if (problems := copy_problems(c))
     ]
+    media_failures = [
+        f"Ad '{c.headline}' — {'; '.join(problems)}"
+        for c in creatives
+        if (problems := await media_problems(c))
+    ]
+    if media_failures:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=_MEDIA_NOT_PUBLISHABLE.format(failures=" | ".join(media_failures)),
+        )
     if copy_failures:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -590,6 +624,33 @@ async def publish_campaign(
             status_code=status.HTTP_400_BAD_REQUEST, detail=_NO_PIXEL_CONFIGURED
         )
 
+    paused = payload.paused if payload is not None else False
+    if any(c.format == "SINGLE_VIDEO" for c in creatives):
+        # Uploading and processing a video takes minutes: run the publish as a
+        # background job the frontend polls (GET .../publish/status).
+        async def publish_in_background(
+            report: Callable[[str, int | None], None],
+        ) -> None:
+            await publish_campaign_to_meta(
+                campaign=campaign,
+                connection=connection,
+                creative=creative,
+                creatives=creatives,
+                strategy=strategy_content,
+                destination_url=destination_url,
+                paused=paused,
+                report=report,
+            )
+
+        async def mark_failed() -> None:
+            await db.campaign.update(
+                where={"id": campaign.id}, data={"status": "FAILED"}
+            )
+
+        publish_jobs.start_job(campaign.id, publish_in_background, mark_failed)
+        response.status_code = status.HTTP_202_ACCEPTED
+        return await _to_response(campaign)
+
     try:
         updated = await publish_campaign_to_meta(
             campaign=campaign,
@@ -598,7 +659,7 @@ async def publish_campaign(
             creatives=creatives,
             strategy=strategy_content,
             destination_url=destination_url,
-            paused=payload.paused if payload is not None else False,
+            paused=paused,
         )
     except MetaConnectionError as exc:
         await db.campaign.update(where={"id": campaign.id}, data={"status": "FAILED"})
@@ -607,6 +668,35 @@ async def publish_campaign(
         ) from exc
 
     return await _to_response(updated)
+
+
+@router.get("/{campaign_id}/publish/status", response_model=PublishStatusResponse)
+async def publish_status(
+    campaign: Campaign = Depends(get_owned_campaign),
+) -> PublishStatusResponse:
+    """Where a background (video) publish is: IDLE, PROCESSING, DONE or FAILED.
+
+    Args:
+        campaign: The campaign, resolved and ownership-checked by
+            get_owned_campaign.
+
+    Returns:
+        IDLE when this campaign has never run a background publish (an image
+        publish is synchronous and has no job); otherwise the latest job's
+        state, current step ("Uploading video", "Processing video", ...),
+        percentage when Meta reports one, error when FAILED, and seconds
+        elapsed.
+    """
+    job = publish_jobs.get_job(campaign.id)
+    if job is None:
+        return PublishStatusResponse(state="IDLE")
+    return PublishStatusResponse(
+        state=job.state,
+        step=job.step,
+        progress=job.progress,
+        error=job.error,
+        elapsed_seconds=round(job.elapsed_seconds, 1),
+    )
 
 
 @router.post("/{campaign_id}/pause", response_model=CampaignResponse)

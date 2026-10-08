@@ -439,8 +439,19 @@ def mock_services(monkeypatch: pytest.MonkeyPatch) -> dict[str, AsyncMock]:
     monkeypatch.setattr(meta_service_module, "pause_meta_ad_set", pause_ad_set)
     resume_ad_set = AsyncMock(return_value=None)
     monkeypatch.setattr(meta_service_module, "resume_meta_ad_set", resume_ad_set)
+    upload_video = AsyncMock(return_value="meta_video_1")
+    monkeypatch.setattr(meta_service_module, "upload_meta_video", upload_video)
+    wait_video = AsyncMock(return_value=None)
+    monkeypatch.setattr(meta_service_module, "wait_for_meta_video", wait_video)
+    create_video_creative = AsyncMock(return_value="meta_video_creative_1")
+    monkeypatch.setattr(
+        meta_service_module, "create_meta_video_ad_creative", create_video_creative
+    )
 
     return {
+        "upload_video": upload_video,
+        "wait_video": wait_video,
+        "create_video_creative": create_video_creative,
         "create_campaign": create_campaign,
         "create_ad_set": create_ad_set,
         "create_ad_creative": create_ad_creative,

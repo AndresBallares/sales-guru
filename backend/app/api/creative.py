@@ -1,16 +1,23 @@
 """Creative Agent endpoints (PRD.md build step 6)."""
 
-from fastapi import APIRouter, Depends, HTTPException, status
-from prisma.models import Business, Campaign, Creative, Product
-from prisma.types import CreativeUpdateInput
+from typing import cast
 
-from app.api.product_image import get_primary_image, product_image_url
+from fastapi import APIRouter, Depends, HTTPException, status
+from prisma.models import Business, Campaign, Creative, Product, ProductImage
+from prisma.types import CreativeCreateInput, CreativeUpdateInput
+
+from app.api.product_image import (
+    get_primary_image,
+    product_image_url,
+    product_thumbnail_url,
+)
 from app.core.authz import get_owned_campaign
 from app.core.db import db
 from app.schemas.creative import (
     MAX_CAROUSEL_CARDS,
     MIN_CAROUSEL_CARDS,
     CreateCreativesRequest,
+    CreativeFormat,
     CreativeResponse,
     RegenerateCreativeRequest,
     ReorderCreativeCardsRequest,
@@ -25,6 +32,7 @@ from app.schemas.strategy import (
 from app.services.campaign_readiness import is_ready
 from app.services.creative import (
     CreativeAgentError,
+    VideoInput,
     generate_creatives,
     is_creative_stale,
 )
@@ -53,6 +61,18 @@ _CAROUSEL_NEEDS_DESTINATION_URL = (
     "ad — every card needs somewhere to link to"
 )
 _NOT_A_CAROUSEL = "This creative isn't a carousel"
+_VIDEO_TEST_VIDEOS_ONLY = (
+    "This is a video test: every ad in it must be a video, so images can't be mixed in"
+)
+_IMAGE_TEST_IMAGES_ONLY = (
+    "This is an image test: every ad in it must be a single image, so "
+    "videos can't be mixed in"
+)
+_NEEDS_PRODUCT_VIDEO = "Add a video to this product's photos before creating video ads"
+_NO_PRODUCT_VIDEO = (
+    "Add at least one product video before selecting a video ad to publish"
+)
+_VIDEO_GONE = "This ad's video no longer exists — pick another video"
 _CREATIVE_PLAN_SINGLE_IMAGE_ONLY = (
     "A creative test plan uses single-image ads only for now"
 )
@@ -112,6 +132,11 @@ def _to_response(
             "id": creative.id,
             "campaignId": creative.campaignId,
             "adId": creative.adId,
+            "videoUrl": (
+                product_image_url(creative.productImageId)
+                if creative.format == "SINGLE_VIDEO" and creative.productImageId
+                else None
+            ),
             "headline": creative.headline,
             "bodyText": creative.bodyText,
             "description": creative.description,
@@ -153,6 +178,28 @@ async def _list_creatives(campaign: Campaign) -> list[CreativeResponse]:
     product = await _current_product(campaign)
     business = await _current_business(campaign)
     return [_to_response(c, campaign, product, business) for c in creatives]
+
+
+def _video_input(video: ProductImage) -> VideoInput:
+    """What the Creative Agent is told about a VIDEO row: thumbnail and length."""
+    assert video.thumbnailData is not None  # enforced at upload
+    return VideoInput(
+        thumbnail_data=str(video.thumbnailData),
+        thumbnail_content_type=video.thumbnailContentType or "image/jpeg",
+        duration_seconds=video.durationSeconds or 0.0,
+    )
+
+
+def _media_type_for(creative: Creative) -> str:
+    """The product media a creative's format uses: videos or photos."""
+    return "VIDEO" if creative.format == "SINGLE_VIDEO" else "IMAGE"
+
+
+def _media_url(media: ProductImage) -> str:
+    """The URL an ad shows for this media: a video's thumbnail, a photo itself."""
+    if media.mediaType == "VIDEO":
+        return product_thumbnail_url(media.id)
+    return product_image_url(media.id)
 
 
 @router.post(
@@ -209,15 +256,30 @@ async def create_creatives(
     )
     brand_profile = await db.brandprofile.find_unique(where={"businessId": business.id})
 
-    creative_format = payload.format if payload is not None else "SINGLE_IMAGE"
+    requested_format = payload.format if payload is not None else None
     plan = StrategyContentAdapter.validate_json(strategy.content)
-    if plan.plan_type == "CREATIVE_TEST_PLAN" and creative_format == "CAROUSEL":
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=_CREATIVE_PLAN_SINGLE_IMAGE_ONLY,
-        )
+    if plan.plan_type == "CREATIVE_TEST_PLAN":
+        creative_format = requested_format or plan.creative_format
+        if creative_format == "CAROUSEL":
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=_CREATIVE_PLAN_SINGLE_IMAGE_ONLY,
+            )
+        if creative_format != plan.creative_format:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    _VIDEO_TEST_VIDEOS_ONLY
+                    if plan.creative_format == "SINGLE_VIDEO"
+                    else _IMAGE_TEST_IMAGES_ONLY
+                ),
+            )
+    else:
+        creative_format = requested_format or "SINGLE_IMAGE"
     primary_image = None
     card_images = None
+    video_row = None
+    video_input = None
     destination_url = None
     if creative_format == "CAROUSEL":
         if product is None:
@@ -245,6 +307,20 @@ async def create_creatives(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=_CAROUSEL_NEEDS_DESTINATION_URL,
             )
+    elif creative_format == "SINGLE_VIDEO":
+        video_row = (
+            await db.productimage.find_first(
+                where={"productId": product.id, "mediaType": "VIDEO"},
+                order={"position": "asc"},
+            )
+            if product is not None
+            else None
+        )
+        if video_row is None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST, detail=_NEEDS_PRODUCT_VIDEO
+            )
+        video_input = _video_input(video_row)
     elif product is not None:
         primary_image = await get_primary_image(product.id)
 
@@ -257,6 +333,7 @@ async def create_creatives(
             brand_profile=brand_profile,
             format=creative_format,
             card_images=card_images,
+            video=video_input,
         )
     except CreativeAgentError as exc:
         raise HTTPException(
@@ -279,29 +356,35 @@ async def create_creatives(
         )
     await db.creative.delete_many(where={"campaignId": campaign.id})
     for variant in variants:
-        created = await db.creative.create(
-            data={
-                "campaignId": campaign.id,
-                "headline": variant.headline,
-                "bodyText": variant.body_text,
-                "description": variant.description,
-                "cta": variant.cta,
-                "creativeAngle": variant.creative_angle,
-                "imagePrompt": variant.image_prompt,
-                "videoPrompt": variant.video_prompt,
-                "format": creative_format,
-                # Snapshot the business/product this batch was actually
-                # grounded in (app/services/creative.py's is_creative_stale
-                # compares against this later) — the product fields are
-                # None/None when there's no product, same as the prompt
-                # itself handling that case; sourceBusinessDescription is
-                # always set since a campaign's business is never optional.
-                "sourceProductId": product.id if product is not None else None,
-                "sourceDescription": source_description,
-                "sourceUrl": source_url,
-                "sourceBusinessDescription": business.description,
-            }
-        )
+        data: CreativeCreateInput = {
+            "campaignId": campaign.id,
+            "headline": variant.headline,
+            "bodyText": variant.body_text,
+            "description": variant.description,
+            "cta": variant.cta,
+            "creativeAngle": variant.creative_angle,
+            "imagePrompt": variant.image_prompt,
+            "videoPrompt": variant.video_prompt,
+            "format": creative_format,
+            # Snapshot the business/product this batch was actually
+            # grounded in (app/services/creative.py's is_creative_stale
+            # compares against this later) — the product fields are
+            # None/None when there's no product, same as the prompt
+            # itself handling that case; sourceBusinessDescription is
+            # always set since a campaign's business is never optional.
+            "sourceProductId": product.id if product is not None else None,
+            "sourceDescription": source_description,
+            "sourceUrl": source_url,
+            "sourceBusinessDescription": business.description,
+        }
+        if video_row is not None:
+            # A video ad points at its product video through the same
+            # productImageId an image ad uses for its photo (this field
+            # can reference a VIDEO row); imageUrl is the video's
+            # thumbnail, which is what lists and previews show.
+            data["productImageId"] = video_row.id
+            data["imageUrl"] = product_thumbnail_url(video_row.id)
+        created = await db.creative.create(data=data)
         if variant.cards is not None:
             assert card_images is not None  # only set alongside CAROUSEL
             assert destination_url is not None  # gated above
@@ -444,14 +527,17 @@ async def select_creative(
             status_code=status.HTTP_404_NOT_FOUND, detail=_CREATIVE_NOT_FOUND
         )
 
+    media_type = _media_type_for(creative)
     if campaign.productId is not None:
-        photo_count = await db.productimage.count(
-            where={"productId": campaign.productId, "mediaType": "IMAGE"}
+        media_count = await db.productimage.count(
+            where={"productId": campaign.productId, "mediaType": media_type}
         )
-        if photo_count == 0:
+        if media_count == 0:
             raise HTTPException(
                 status_code=status.HTTP_428_PRECONDITION_REQUIRED,
-                detail=_NO_PRODUCT_PHOTO,
+                detail=(
+                    _NO_PRODUCT_VIDEO if media_type == "VIDEO" else _NO_PRODUCT_PHOTO
+                ),
             )
 
     is_creative_plan = await _is_creative_test_plan(campaign)
@@ -486,7 +572,7 @@ async def select_creative(
                 where={
                     "id": product_image_id,
                     "productId": campaign.productId,
-                    "mediaType": "IMAGE",
+                    "mediaType": media_type,
                 }
             )
             if campaign.productId is not None
@@ -496,9 +582,13 @@ async def select_creative(
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND, detail=_PRODUCT_IMAGE_NOT_FOUND
             )
-        update_data["imageUrl"] = product_image_url(product_image.id)
+        update_data["imageUrl"] = _media_url(product_image)
         update_data["productImageId"] = product_image.id
-    elif creative.imageUrl is None and campaign.productId is not None:
+    elif (
+        creative.imageUrl is None
+        and creative.format == "SINGLE_IMAGE"
+        and campaign.productId is not None
+    ):
         product_image = await db.productimage.find_first(
             where={"productId": campaign.productId, "mediaType": "IMAGE"},
             order={"position": "asc"},
@@ -640,7 +730,7 @@ async def set_creative_image(
             where={
                 "id": payload.product_image_id,
                 "productId": campaign.productId,
-                "mediaType": "IMAGE",
+                "mediaType": _media_type_for(creative),
             }
         )
         if campaign.productId is not None
@@ -653,7 +743,7 @@ async def set_creative_image(
     updated = await db.creative.update(
         where={"id": creative.id},
         data={
-            "imageUrl": product_image_url(product_image.id),
+            "imageUrl": _media_url(product_image),
             "productImageId": product_image.id,
         },
         include={"cards": {"order_by": {"position": "asc"}}},
@@ -702,7 +792,21 @@ async def regenerate_creative_copy(
     business = await _current_business(campaign)
     product = await _current_product(campaign)
     brand_profile = await db.brandprofile.find_unique(where={"businessId": business.id})
-    primary_image = await get_primary_image(product.id) if product is not None else None
+    primary_image = None
+    video_input = None
+    if creative.format == "SINGLE_VIDEO":
+        video = (
+            await db.productimage.find_unique(where={"id": creative.productImageId})
+            if creative.productImageId is not None
+            else None
+        )
+        if video is None or video.mediaType != "VIDEO":
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST, detail=_VIDEO_GONE
+            )
+        video_input = _video_input(video)
+    elif product is not None:
+        primary_image = await get_primary_image(product.id)
 
     try:
         variants = await generate_creatives(
@@ -711,6 +815,8 @@ async def regenerate_creative_copy(
             strategy=StrategyContentAdapter.validate_json(strategy.content),
             primary_image=primary_image,
             brand_profile=brand_profile,
+            format=cast(CreativeFormat, creative.format),
+            video=video_input,
         )
     except CreativeAgentError as exc:
         raise HTTPException(

@@ -348,6 +348,91 @@ def test_a_video_is_served_publicly_with_its_content_type(client: TestClient) ->
     assert response.headers["content-type"] == "video/mp4"
 
 
+def _served_video(client: TestClient) -> tuple[str, bytes]:
+    business_id, product_id = _setup(client)
+    video = make_mp4(padding=1000)
+    image = _upload_video(client, business_id, product_id, video=video).json()
+    client.post("/auth/logout")
+    return image["id"], video
+
+
+def test_serving_advertises_byte_range_support(client: TestClient) -> None:
+    media_id, video = _served_video(client)
+
+    response = client.get(f"/product-images/{media_id}")
+
+    assert response.status_code == 200
+    assert response.headers["accept-ranges"] == "bytes"
+    assert response.headers["content-length"] == str(len(video))
+
+
+@pytest.mark.parametrize(
+    ("header", "start", "end"),
+    [
+        ("bytes=0-99", 0, 99),
+        ("bytes=100-199", 100, 199),
+        ("bytes=500-", 500, None),  # to the end
+        ("bytes=-50", None, None),  # the last 50 bytes
+        ("bytes=900-99999", 900, None),  # end past the file is clamped
+    ],
+)
+def test_a_range_request_gets_a_206_with_just_those_bytes(
+    client: TestClient, header: str, start: int | None, end: int | None
+) -> None:
+    """Safari will not play a <video> unless the server answers byte ranges."""
+    media_id, video = _served_video(client)
+    total = len(video)
+    if start is None:  # suffix range
+        first, last = total - 50, total - 1
+    else:
+        first, last = start, (total - 1 if end is None else end)
+    last = min(last, total - 1)
+
+    response = client.get(f"/product-images/{media_id}", headers={"Range": header})
+
+    assert response.status_code == 206
+    assert response.content == video[first : last + 1]
+    assert response.headers["content-range"] == f"bytes {first}-{last}/{total}"
+    assert response.headers["content-length"] == str(last - first + 1)
+    assert response.headers["content-type"] == "video/mp4"
+
+
+def test_a_range_past_the_end_is_not_satisfiable(client: TestClient) -> None:
+    media_id, video = _served_video(client)
+
+    response = client.get(
+        f"/product-images/{media_id}", headers={"Range": f"bytes={len(video)}-"}
+    )
+
+    assert response.status_code == 416
+    assert response.headers["content-range"] == f"bytes */{len(video)}"
+
+
+@pytest.mark.parametrize("header", ["bytes=abc", "items=0-5", "bytes=5-2", "bytes=-0"])
+def test_a_malformed_range_is_ignored_and_the_whole_file_served(
+    client: TestClient, header: str
+) -> None:
+    """RFC 9110: an unparseable Range is ignored, not an error."""
+    media_id, video = _served_video(client)
+
+    response = client.get(f"/product-images/{media_id}", headers={"Range": header})
+
+    assert response.status_code == 200
+    assert response.content == video
+
+
+def test_photos_support_ranges_too(client: TestClient) -> None:
+    business_id, product_id = _setup(client)
+    photo = _upload_photo(client, business_id, product_id, 800, 800).json()
+
+    response = client.get(
+        f"/product-images/{photo['id']}", headers={"Range": "bytes=0-9"}
+    )
+
+    assert response.status_code == 206
+    assert len(response.content) == 10
+
+
 def test_a_thumbnail_is_served_publicly_as_an_image(client: TestClient) -> None:
     business_id, product_id = _setup(client)
     image = _upload_video(client, business_id, product_id).json()

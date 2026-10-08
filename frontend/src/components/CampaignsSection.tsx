@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useState, type ChangeEvent, type FormEvent } from 'react'
+import { useCallback, useEffect, useRef, useState, type ChangeEvent, type FormEvent } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { CreativeEditor } from './CreativeEditor'
 import { onlyPhotos, PHOTOS_ONLY_HINT } from '../lib/media'
+import { describePublishStatus, PublishJobError, waitForPublishJob } from '../lib/publishJob'
 import {
   activateCampaign,
   ApiError,
@@ -11,7 +12,9 @@ import {
   createCreatives,
   createRecommendation,
   createStrategy,
+  type PublishStatus,
   type StrategyMode,
+  type TestFormat,
   createTestEvaluation,
   deleteCampaign,
   getBrandProfile,
@@ -168,6 +171,10 @@ export function CampaignsSection({
   // Carousel. Never inferred from anything else, per the design decision
   // to keep format an explicit, deliberate choice.
   const [strategyMode, setStrategyMode] = useState<Record<string, StrategyMode>>({})
+  const [testFormat, setTestFormat] = useState<Record<string, TestFormat>>({})
+  // A background (video) publish in flight, by campaign: what the button shows.
+  const [publishStatuses, setPublishStatuses] = useState<Record<string, PublishStatus>>({})
+  const watchingPublish = useRef(new Set<string>())
   const [creativeFormat, setCreativeFormat] = useState<Record<string, CreativeFormat>>({})
   // Reorder/remove state for a carousel creative's cards, keyed by
   // creative id — mirrors the productImages upload/reorder state further
@@ -415,6 +422,26 @@ export function CampaignsSection({
     }
   }
 
+  // A page reload mid-publish: the server still reports the campaign as
+  // publishing, so pick the progress display back up.
+  useEffect(() => {
+    for (const campaign of campaigns) {
+      if (!campaign.publishing || watchingPublish.current.has(campaign.id)) continue
+      const campaignId = campaign.id
+      void watchPublish(campaignId)
+        .then(() => refresh())
+        .catch((err: unknown) =>
+          setApproveErrors((prev) => ({
+            ...prev,
+            [campaignId]:
+              err instanceof PublishJobError ? err.message : 'Could not publish campaign.',
+          })),
+        )
+    }
+    // watchPublish only closes over businessId and setters.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [campaigns])
+
   async function handleGenerateStrategy(campaignId: string, hasPriorAdvertisingExperience?: boolean) {
     setGeneratingId(campaignId)
     setStrategyErrors((prev) => ({ ...prev, [campaignId]: '' }))
@@ -424,6 +451,8 @@ export function CampaignsSection({
         campaignId,
         hasPriorAdvertisingExperience,
         strategyMode[campaignId],
+        // The test format only means something for a creative test.
+        strategyMode[campaignId] === 'STANDARD' ? undefined : testFormat[campaignId],
       )
       setStrategies((prev) => ({ ...prev, [campaignId]: strategy.content }))
       setNeedsAdExperienceAnswerId(null)
@@ -448,11 +477,14 @@ export function CampaignsSection({
     setGeneratingCreativesId(campaignId)
     setCreativeErrors((prev) => ({ ...prev, [campaignId]: '' }))
     try {
-      const generated = await createCreatives(
-        businessId,
-        campaignId,
-        creativeFormat[campaignId] ?? 'SINGLE_IMAGE',
-      )
+      const plan = strategies[campaignId]
+      // A creative test's format is fixed by the plan; anything else is the
+      // user's per-campaign ad-format choice.
+      const format =
+        plan?.planType === 'CREATIVE_TEST_PLAN'
+          ? (plan.creativeFormat ?? 'SINGLE_IMAGE')
+          : (creativeFormat[campaignId] ?? creatives[campaignId]?.[0]?.format ?? 'SINGLE_IMAGE')
+      const generated = await createCreatives(businessId, campaignId, format)
       setCreatives((prev) => ({ ...prev, [campaignId]: generated }))
     } catch (err) {
       setCreativeErrors((prev) => ({
@@ -647,6 +679,23 @@ export function CampaignsSection({
   // one deliberate click (PRD.md §5 step 8's checkpoint requirement).
   // Skips the approve call when already APPROVED/FAILED, since retrying a
   // publish shouldn't need re-approving first.
+  // Polls a background publish to its end, mirroring its progress into
+  // publishStatuses (cleared once it finishes either way). Throws its error.
+  async function watchPublish(campaignId: string) {
+    watchingPublish.current.add(campaignId)
+    try {
+      await waitForPublishJob(businessId, campaignId, (status) =>
+        setPublishStatuses((prev) => ({ ...prev, [campaignId]: status })),
+      )
+    } finally {
+      watchingPublish.current.delete(campaignId)
+      setPublishStatuses((prev) => {
+        const { [campaignId]: _done, ...rest } = prev
+        return rest
+      })
+    }
+  }
+
   async function handleApproveAndPublish(campaignId: string, currentStatus: string) {
     setApprovingId(campaignId)
     setApproveErrors((prev) => ({ ...prev, [campaignId]: '' }))
@@ -657,7 +706,10 @@ export function CampaignsSection({
       // publishPaused defaults to checked (true) — a campaign not yet in
       // the map hasn't had its checkbox touched.
       const paused = publishPaused[campaignId] ?? getPublishPaused(campaignId)
-      await publishCampaign(businessId, campaignId, { paused })
+      const published = await publishCampaign(businessId, campaignId, { paused })
+      // A video publish runs as a background job (uploading and processing
+      // takes minutes): wait for it, showing its progress.
+      if (published.publishing) await watchPublish(campaignId)
       clearPublishPaused(campaignId)
       setPublishPausedState((prev) => {
         const { [campaignId]: _published, ...rest } = prev
@@ -667,7 +719,10 @@ export function CampaignsSection({
     } catch (err) {
       setApproveErrors((prev) => ({
         ...prev,
-        [campaignId]: err instanceof ApiError ? err.message : 'Could not publish campaign.',
+        [campaignId]:
+          err instanceof ApiError || err instanceof PublishJobError
+            ? err.message
+            : 'Could not publish campaign.',
       }))
     } finally {
       setApprovingId(null)
@@ -907,6 +962,19 @@ export function CampaignsSection({
             const evaluateError = evaluateErrors[campaign.id]
             const selectedCreative = campaignCreatives.find((c) => c.status === 'SELECTED')
             const isCreativeTest = strategy?.planType === 'CREATIVE_TEST_PLAN'
+            // A creative test's format is fixed by its plan; otherwise it is the
+            // user's per-campaign ad-format choice.
+            const planFormat =
+              strategy?.planType === 'CREATIVE_TEST_PLAN'
+                ? (strategy.creativeFormat ?? 'SINGLE_IMAGE')
+                : null
+            // Before the user picks one (e.g. after a reload), show the format the
+            // existing ads already are.
+            const effectiveFormat =
+              planFormat ??
+              creativeFormat[campaign.id] ??
+              campaignCreatives[0]?.format ??
+              'SINGLE_IMAGE'
             const testAdCount = campaignCreatives.filter((c) => c.status === 'SELECTED').length
             // Own name (not just campaign.productId inline below) so its
             // narrowed non-null type survives into the JSX callbacks that
@@ -1221,6 +1289,40 @@ export function CampaignsSection({
                         </label>
                       </fieldset>
                     )}
+                    {campaign.objective === 'SALES' &&
+                      !strategy &&
+                      strategyMode[campaign.id] !== 'STANDARD' && (
+                        <fieldset className="strategy-mode-picker">
+                          <legend>Test format</legend>
+                          <label>
+                            <input
+                              type="radio"
+                              name={`test-format-${campaign.id}`}
+                              checked={(testFormat[campaign.id] ?? 'IMAGE') === 'IMAGE'}
+                              onChange={() =>
+                                setTestFormat((prev) => ({ ...prev, [campaign.id]: 'IMAGE' }))
+                              }
+                            />
+                            Images
+                          </label>
+                          <label>
+                            <input
+                              type="radio"
+                              name={`test-format-${campaign.id}`}
+                              checked={testFormat[campaign.id] === 'VIDEO'}
+                              onChange={() =>
+                                setTestFormat((prev) => ({ ...prev, [campaign.id]: 'VIDEO' }))
+                              }
+                            />
+                            Videos
+                          </label>
+                          <p className="field-hint">
+                            Every ad in the test shares one format, so any difference in results
+                            comes from the message, not the format. A video test can reuse one
+                            video across all its ads with different copy.
+                          </p>
+                        </fieldset>
+                      )}
                     <button
                       type="button"
                       onClick={() => handleGenerateStrategy(campaign.id)}
@@ -1509,7 +1611,8 @@ export function CampaignsSection({
                         <input
                           type="radio"
                           name={`creative-format-${campaign.id}`}
-                          checked={(creativeFormat[campaign.id] ?? 'SINGLE_IMAGE') === 'SINGLE_IMAGE'}
+                          checked={effectiveFormat === 'SINGLE_IMAGE'}
+                          disabled={isCreativeTest}
                           onChange={() =>
                             setCreativeFormat((prev) => ({ ...prev, [campaign.id]: 'SINGLE_IMAGE' }))
                           }
@@ -1520,7 +1623,19 @@ export function CampaignsSection({
                         <input
                           type="radio"
                           name={`creative-format-${campaign.id}`}
-                          checked={creativeFormat[campaign.id] === 'CAROUSEL'}
+                          checked={effectiveFormat === 'SINGLE_VIDEO'}
+                          disabled={isCreativeTest}
+                          onChange={() =>
+                            setCreativeFormat((prev) => ({ ...prev, [campaign.id]: 'SINGLE_VIDEO' }))
+                          }
+                        />
+                        Single video
+                      </label>
+                      <label>
+                        <input
+                          type="radio"
+                          name={`creative-format-${campaign.id}`}
+                          checked={effectiveFormat === 'CAROUSEL'}
                           disabled={isCreativeTest}
                           onChange={() => {
                             setCreativeFormat((prev) => ({ ...prev, [campaign.id]: 'CAROUSEL' }))
@@ -1538,7 +1653,14 @@ export function CampaignsSection({
                         Carousel
                       </label>
                     </fieldset>
-                    {isCreativeTest && (
+                    {isCreativeTest && planFormat === 'SINGLE_VIDEO' && (
+                      <p className="field-hint">
+                        This is a video test: every ad is a video, so any difference in results
+                        comes from the message, not the format. Pick the video for each ad below;
+                        one video can back all of them.
+                      </p>
+                    )}
+                    {isCreativeTest && planFormat !== 'SINGLE_VIDEO' && (
                       <p className="field-hint">
                         Carousel isn&apos;t part of Test #1. The first test compares single-image ads
                         so any difference in results comes from the creative, not the format.
@@ -1664,6 +1786,29 @@ export function CampaignsSection({
                                 </p>
                               )}
                             </>
+                          ) : selectedCreative.format === 'SINGLE_VIDEO' ? (
+                            // The same picker as the full ads list: this ad's video
+                            // only, with the option to upload a new one. Locked once
+                            // the campaign is published, like every other edit.
+                            campaign.status !== 'LIVE' &&
+                            campaign.status !== 'PAUSED' && (
+                            <CreativeEditor
+                              businessId={businessId}
+                              campaignId={campaign.id}
+                              productId={campaignProductId ?? null}
+                              creative={selectedCreative}
+                              showCopyControls={false}
+                              onUpdated={(updated) => {
+                                setCreatives((prev) => ({
+                                  ...prev,
+                                  [campaign.id]: (prev[campaign.id] ?? []).map((x) =>
+                                    x.id === updated.id ? updated : x,
+                                  ),
+                                }))
+                                void refresh()
+                              }}
+                            />
+                            )
                           ) : (
                             campaignProductId && (
                             <div className="image-picker">
@@ -1793,6 +1938,9 @@ export function CampaignsSection({
                                   Creative {VARIANT_LETTERS[index] ?? index + 1} —{' '}
                                   {c.status}
                                 </strong>
+                                {c.format === 'SINGLE_VIDEO' && (
+                                  <span className="media-badge media-badge-video">Video ad</span>
+                                )}
                               </p>
                               {c.imageUrl && (
                                 <img
@@ -1830,7 +1978,7 @@ export function CampaignsSection({
                                   <strong>Video prompt:</strong> {c.videoPrompt}
                                 </p>
                               )}
-                              {c.format === 'SINGLE_IMAGE' &&
+                              {c.format !== 'CAROUSEL' &&
                                 campaign.status !== 'LIVE' &&
                                 campaign.status !== 'PAUSED' && (
                                   <CreativeEditor
@@ -1914,13 +2062,15 @@ export function CampaignsSection({
                     <button
                       type="button"
                       onClick={() => handleApproveAndPublish(campaign.id, campaign.status)}
-                      disabled={approvingId === campaign.id}
+                      disabled={approvingId === campaign.id || campaign.id in publishStatuses}
                     >
-                      {approvingId === campaign.id
-                        ? 'Publishing…'
-                        : campaign.status === 'FAILED'
-                          ? 'Retry publish'
-                          : 'Approve & Publish'}
+                      {campaign.id in publishStatuses
+                        ? describePublishStatus(publishStatuses[campaign.id])
+                        : approvingId === campaign.id
+                          ? 'Publishing…'
+                          : campaign.status === 'FAILED'
+                            ? 'Retry publish'
+                            : 'Approve & Publish'}
                     </button>
                     {approveError && (
                       <p className="form-error" role="alert">

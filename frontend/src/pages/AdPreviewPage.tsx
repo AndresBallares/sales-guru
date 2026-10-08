@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState, type ChangeEvent } from 'react'
+import { useCallback, useEffect, useRef, useState, type ChangeEvent } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import {
   ApiError,
@@ -18,8 +18,11 @@ import {
   type Campaign,
   type Creative,
   type ProductImage,
+  type PublishStatus,
 } from '../lib/api'
 import { onlyPhotos, PHOTOS_ONLY_HINT } from '../lib/media'
+import { describePublishStatus, PublishJobError, waitForPublishJob } from '../lib/publishJob'
+import { CreativeEditor } from '../components/CreativeEditor'
 import { SocialPostPreview } from '../components/SocialPostPreview'
 import { clearPublishPaused, getPublishPaused, setPublishPaused } from '../lib/publishPaused'
 
@@ -59,6 +62,9 @@ export function AdPreviewPage() {
     if (campaignId) setPublishPaused(campaignId, paused)
   }
   const [publishing, setPublishing] = useState(false)
+  // A background (video) publish in flight: the button shows its progress.
+  const [publishStatus, setPublishStatus] = useState<PublishStatus | null>(null)
+  const watchingPublish = useRef(false)
   const [publishError, setPublishError] = useState<string | null>(null)
 
   const [cardActionId, setCardActionId] = useState<string | null>(null)
@@ -199,15 +205,50 @@ export function AdPreviewPage() {
       if (campaign.status !== 'APPROVED' && campaign.status !== 'FAILED') {
         await approveCampaign(businessId, campaignId)
       }
-      await publishCampaign(businessId, campaignId, { paused: publishPaused })
+      const published = await publishCampaign(businessId, campaignId, { paused: publishPaused })
+      // A video publish runs as a background job (uploading and processing
+      // takes minutes): wait for it, showing its progress.
+      if (published.publishing) await watchPublish()
       clearPublishPaused(campaignId)
       await refresh()
     } catch (err) {
-      setPublishError(err instanceof ApiError ? err.message : 'Could not publish this ad.')
+      setPublishError(
+        err instanceof ApiError || err instanceof PublishJobError
+          ? err.message
+          : 'Could not publish this ad.',
+      )
     } finally {
       setPublishing(false)
     }
   }
+
+  // Polls the background publish to its end, mirroring its progress into the
+  // button; throws the job's own error if it failed.
+  async function watchPublish() {
+    if (!businessId || !campaignId) return
+    watchingPublish.current = true
+    try {
+      await waitForPublishJob(businessId, campaignId, setPublishStatus)
+    } finally {
+      watchingPublish.current = false
+      setPublishStatus(null)
+    }
+  }
+
+  // A reload mid-publish: the server still reports the campaign as publishing,
+  // so pick the progress display back up.
+  useEffect(() => {
+    if (!campaign?.publishing || watchingPublish.current) return
+    void watchPublish()
+      .then(() => refresh())
+      .catch((err: unknown) =>
+        setPublishError(
+          err instanceof PublishJobError ? err.message : 'Could not publish this ad.',
+        ),
+      )
+    // watchPublish only closes over businessId/campaignId and setters.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [campaign?.publishing])
 
   const canPublish = campaign !== null && _PUBLISHABLE_STATUSES.includes(campaign.status)
 
@@ -293,6 +334,15 @@ export function AdPreviewPage() {
                 </p>
               )}
             </>
+          ) : creative.format === 'SINGLE_VIDEO' ? (
+            <CreativeEditor
+              businessId={businessId ?? ''}
+              campaignId={campaignId ?? ''}
+              productId={campaign?.productId ?? null}
+              creative={creative}
+              showCopyControls={false}
+              onUpdated={() => void refresh()}
+            />
           ) : (
             campaign?.productId && (
               <div className="image-picker">
@@ -362,13 +412,15 @@ export function AdPreviewPage() {
               <button
                 type="button"
                 onClick={() => void handleApproveAndPublish()}
-                disabled={publishing}
+                disabled={publishing || publishStatus !== null}
               >
-                {publishing
-                  ? 'Publishing…'
-                  : campaign?.status === 'FAILED'
-                    ? 'Retry publish'
-                    : 'Approve & Publish'}
+                {publishStatus
+                  ? describePublishStatus(publishStatus)
+                  : publishing
+                    ? 'Publishing…'
+                    : campaign?.status === 'FAILED'
+                      ? 'Retry publish'
+                      : 'Approve & Publish'}
               </button>
               {publishError && (
                 <p className="form-error" role="alert">

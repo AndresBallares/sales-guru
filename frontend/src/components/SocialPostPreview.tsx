@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import type { Business, Creative } from '../lib/api'
 
 // The one place a selected ad's Facebook/Instagram-post look is defined —
@@ -50,6 +51,17 @@ export function SocialPostPreview({
             </li>
           ))}
         </ul>
+      ) : creative.format === 'SINGLE_VIDEO' ? (
+        <>
+          <VideoFrame creative={creative} />
+          <div className="social-post-link-card">
+            <div className="social-post-link-card-text">
+              <p className="social-post-headline">{creative.headline}</p>
+              <p className="social-post-description">{creative.description}</p>
+            </div>
+            <span className="social-post-cta">{ctaLabel}</span>
+          </div>
+        </>
       ) : (
         <>
           {creative.imageUrl && (
@@ -75,6 +87,45 @@ export function SocialPostPreview({
         <span>💬 Comment</span>
         <span>↗ Share</span>
       </div>
+    </div>
+  )
+}
+
+// A video ad: its thumbnail with a play button; clicking swaps in the real
+// player (so nothing is downloaded until the user asks to watch).
+function VideoFrame({ creative }: { creative: Creative }) {
+  // Which video is playing, so showing a different one starts back on its thumbnail.
+  const [playing, setPlaying] = useState<string | null>(null)
+  const isPlaying = playing !== null && playing === creative.videoUrl
+  if (isPlaying) {
+    return (
+      <div className="social-post-image-frame">
+        <video
+          className="social-post-image"
+          src={creative.videoUrl ?? undefined}
+          poster={creative.imageUrl ?? undefined}
+          controls
+          autoPlay
+          playsInline
+        />
+      </div>
+    )
+  }
+  return (
+    <div className="social-post-image-frame social-post-video-frame">
+      {creative.imageUrl && (
+        <img className="social-post-image" src={creative.imageUrl} alt={creative.headline} />
+      )}
+      {creative.videoUrl && (
+        <button
+          type="button"
+          className="social-post-play"
+          aria-label="Play video"
+          onClick={() => setPlaying(creative.videoUrl ?? null)}
+        >
+          <span aria-hidden="true">▶</span>
+        </button>
+      )}
     </div>
   )
 }
