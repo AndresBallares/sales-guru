@@ -24,6 +24,7 @@ import { onlyPhotos, PHOTOS_ONLY_HINT } from '../lib/media'
 import { describePublishStatus, PublishJobError, waitForPublishJob } from '../lib/publishJob'
 import { CreativeEditor } from '../components/CreativeEditor'
 import { SocialPostPreview } from '../components/SocialPostPreview'
+import { InstagramNote } from '../components/InstagramNote'
 import { clearPublishPaused, getPublishPaused, setPublishPaused } from '../lib/publishPaused'
 
 const _PUBLISHABLE_STATUSES = ['PENDING_APPROVAL', 'APPROVED', 'FAILED']
@@ -400,6 +401,7 @@ export function AdPreviewPage() {
 
           {canPublish && (
             <div>
+              {businessId && <InstagramNote businessId={businessId} />}
               <label htmlFor="publish-paused">
                 <input
                   id="publish-paused"

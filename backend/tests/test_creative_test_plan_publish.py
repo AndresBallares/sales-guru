@@ -327,6 +327,28 @@ def test_publish_creates_one_ad_set_with_one_ad_per_selected_creative(
     assert len({c["adId"] for c in linked}) == 3
 
 
+def test_every_ad_of_a_creative_test_carries_the_linked_instagram_account(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    mock_services: dict[str, AsyncMock],  # noqa: F811
+) -> None:
+    from app.api import meta as meta_api_module
+
+    monkeypatch.setattr(
+        meta_api_module,
+        "fetch_page_instagram_account",
+        AsyncMock(return_value="ig_venzi"),
+    )
+    business_id, campaign_id, _ = _creative_plan_campaign(client, monkeypatch, select=3)
+
+    response = client.post(f"/businesses/{business_id}/campaigns/{campaign_id}/publish")
+
+    assert response.status_code == 200
+    creatives = mock_services["create_ad_creative"].await_args_list
+    assert len(creatives) == 3
+    assert {c.kwargs["instagram_user_id"] for c in creatives} == {"ig_venzi"}
+
+
 def test_publish_sends_the_expected_ad_set_payload_for_a_purchase_plan(
     client: TestClient,
     monkeypatch: pytest.MonkeyPatch,

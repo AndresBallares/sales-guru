@@ -301,6 +301,13 @@ model MetaConnection {
   accessToken    String
   adAccountId    String?
   pageId         String?
+  // The Instagram account linked to the chosen Page (the Page's
+  // instagram_business_account, else its connected_instagram_account), read
+  // once finalize picks the Page and refreshable without reconnecting
+  // (POST .../meta/instagram/refresh). Sent as instagram_user_id on every ad
+  // creative; null means no Instagram account is linked, and ads then run on
+  // Facebook placements only.
+  instagramUserId String?
   // Optional — only conversion-tracking optimization goals (currently
   // just SALES -> OFFSITE_CONVERSIONS) need one. Selected as its own
   // follow-up step after adAccountId/pageId are set (GET .../meta/pixels

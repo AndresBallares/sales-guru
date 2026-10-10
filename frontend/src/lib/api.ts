@@ -1081,6 +1081,9 @@ export interface MetaConnection {
   metaUserId: string
   adAccountId: string | null
   pageId: string | null
+  // The Instagram account linked to the chosen Page; null means none is
+  // linked, so ads run on Facebook placements only.
+  instagramUserId: string | null
   pixelId: string | null
   // True once the user explicitly dismissed the Pixel step for this
   // connection ("Skip for now") rather than never having gotten to it
@@ -1123,6 +1126,14 @@ export function finalizeMetaConnection(
   return request<MetaConnection>(`/businesses/${businessId}/meta/finalize`, {
     method: 'POST',
     body: JSON.stringify(input),
+  })
+}
+
+// Re-reads the Page's linked Instagram account from Meta (read-only), without
+// reconnecting.
+export function refreshMetaInstagram(businessId: string): Promise<MetaConnection> {
+  return request<MetaConnection>(`/businesses/${businessId}/meta/instagram/refresh`, {
+    method: 'POST',
   })
 }
 

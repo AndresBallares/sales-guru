@@ -62,6 +62,9 @@ class MetaConnectionResponse(CamelCaseModel):
     meta_user_id: str
     ad_account_id: str | None
     page_id: str | None
+    # The Instagram account linked to the chosen Page; None means none is
+    # linked, so ads run on Facebook placements only.
+    instagram_user_id: str | None
     pixel_id: str | None
     # True once the user explicitly dismissed the Pixel step for this
     # connection ("Skip for now") rather than never having gotten to it

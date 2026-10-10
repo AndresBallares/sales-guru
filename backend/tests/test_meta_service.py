@@ -2742,3 +2742,166 @@ async def test_fake_meta_mode_fakes_video_upload_wait_and_creative(
 
     assert video_id.startswith("fake_video_")
     assert creative_id.startswith("fake_creative_")
+
+
+# --- Instagram account linked to a Page ---------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_fetch_page_instagram_account_prefers_the_business_account(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A read-only GET of the Page's two Instagram fields; the first wins."""
+    client = _mock_client_returning(
+        monkeypatch,
+        _FakeResponse(
+            {
+                "id": "page_1",
+                "instagram_business_account": {"id": "ig_business"},
+                "connected_instagram_account": {"id": "ig_connected"},
+            }
+        ),
+    )
+
+    account = await meta.fetch_page_instagram_account("token", "page_1")
+
+    assert account == "ig_business"
+    url, params = client.calls[0]
+    assert url == "https://graph.facebook.com/v21.0/page_1"
+    assert params["access_token"] == "token"
+    assert "instagram_business_account" in params["fields"]
+    assert "connected_instagram_account" in params["fields"]
+
+
+@pytest.mark.asyncio
+async def test_fetch_page_instagram_account_falls_back_to_the_connected_account(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _mock_client_returning(
+        monkeypatch,
+        _FakeResponse(
+            {"id": "page_1", "connected_instagram_account": {"id": "ig_connected"}}
+        ),
+    )
+
+    assert await meta.fetch_page_instagram_account("token", "page_1") == "ig_connected"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "body",
+    [
+        {"id": "page_1"},
+        {"id": "page_1", "instagram_business_account": {}},
+        {"id": "page_1", "instagram_business_account": None},
+        {"id": "page_1", "connected_instagram_account": {"username": "no_id"}},
+    ],
+)
+async def test_fetch_page_instagram_account_is_none_when_not_linked(
+    monkeypatch: pytest.MonkeyPatch, body: dict[str, Any]
+) -> None:
+    _mock_client_returning(monkeypatch, _FakeResponse(body))
+
+    assert await meta.fetch_page_instagram_account("token", "page_1") is None
+
+
+@pytest.mark.asyncio
+async def test_fetch_page_instagram_account_raises_on_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake_client = _FakeAsyncClient(error=httpx.ConnectError("boom"))
+    monkeypatch.setattr(httpx, "AsyncClient", lambda: fake_client)
+
+    with pytest.raises(meta.MetaConnectionError, match="Meta API call failed"):
+        await meta.fetch_page_instagram_account("token", "page_1")
+
+
+@pytest.mark.asyncio
+async def test_fetch_page_instagram_account_is_canned_in_fake_mode(
+    fake_meta_mode: None,
+) -> None:
+    assert await meta.fetch_page_instagram_account("t", "p") == "fake_instagram_account"
+
+
+def _image_creative(**extra: Any) -> Any:
+    return meta.create_meta_ad_creative(
+        access_token="token",
+        ad_account_id="act_1",
+        page_id="page_1",
+        name="Creative",
+        headline="Headline",
+        body_text="Body",
+        description=None,
+        cta="SHOP_NOW",
+        link="https://acme.example/rings",
+        image_hash="hash",
+        **extra,
+    )
+
+
+def _video_creative(**extra: Any) -> Any:
+    return meta.create_meta_video_ad_creative(
+        access_token="token",
+        ad_account_id="act_1",
+        page_id="page_1",
+        name="Creative",
+        headline="Headline",
+        body_text="Body",
+        description=None,
+        cta="SHOP_NOW",
+        link="https://acme.example/rings",
+        video_id="vid_1",
+        image_hash="thumb",
+        **extra,
+    )
+
+
+def _carousel_creative(**extra: Any) -> Any:
+    return meta.create_meta_carousel_ad_creative(
+        access_token="token",
+        ad_account_id="act_1",
+        page_id="page_1",
+        name="Creative",
+        body_text="Body",
+        cta="SHOP_NOW",
+        link="https://acme.example/rings",
+        cards=[
+            meta.CarouselCard(
+                image_hash="h1", headline="One", description=None, link="https://x.io"
+            ),
+            meta.CarouselCard(
+                image_hash="h2", headline="Two", description=None, link="https://x.io"
+            ),
+        ],
+        **extra,
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("make", [_image_creative, _video_creative, _carousel_creative])
+async def test_creatives_send_instagram_user_id_when_one_is_linked(
+    monkeypatch: pytest.MonkeyPatch, make: Any
+) -> None:
+    """A top-level creative field (validated against Meta), not part of
+    object_story_spec."""
+    client = _mock_client_returning(monkeypatch, _FakeResponse({"id": "creative_1"}))
+
+    await make(instagram_user_id="ig_venzi")
+
+    _, data = client.calls[0]
+    assert data["instagram_user_id"] == "ig_venzi"
+    assert "instagram" not in data["object_story_spec"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("make", [_image_creative, _video_creative, _carousel_creative])
+@pytest.mark.parametrize("extra", [{}, {"instagram_user_id": None}])
+async def test_creatives_publish_as_before_without_a_linked_instagram_account(
+    monkeypatch: pytest.MonkeyPatch, make: Any, extra: dict[str, Any]
+) -> None:
+    client = _mock_client_returning(monkeypatch, _FakeResponse({"id": "creative_1"}))
+
+    await make(**extra)
+
+    _, data = client.calls[0]
+    assert "instagram_user_id" not in data

@@ -12,6 +12,7 @@ ten real minutes pass in a test.
 """
 
 from datetime import UTC, datetime, timedelta
+from typing import Any
 from unittest.mock import AsyncMock, Mock
 
 import pytest
@@ -72,7 +73,10 @@ def mock_meta_service(monkeypatch: pytest.MonkeyPatch) -> dict[str, AsyncMock | 
     monkeypatch.setattr(meta_module, "list_pages", pages)
     pixels = AsyncMock(return_value=[MetaPixel(id="pixel_1", name="venzi jewelry")])
     monkeypatch.setattr(meta_module, "list_ad_pixels", pixels)
+    instagram = AsyncMock(return_value="ig_1")
+    monkeypatch.setattr(meta_module, "fetch_page_instagram_account", instagram)
     return {
+        "instagram": instagram,
         "build_url": build_url,
         "exchange_code": exchange_code,
         "long_lived": long_lived,
@@ -291,6 +295,166 @@ def test_finalize_stores_the_chosen_ad_account_and_page(client: TestClient) -> N
     body = response.json()
     assert body["adAccountId"] == "act_1"
     assert body["pageId"] == "page_1"
+
+
+def _finalize(client: TestClient, business_id: str) -> dict[str, Any]:
+    response = client.post(
+        f"/businesses/{business_id}/meta/finalize",
+        json={"adAccountId": "act_1", "pageId": "page_1"},
+    )
+    assert response.status_code == 200
+    body: dict[str, Any] = response.json()
+    return body
+
+
+def test_finalize_stores_the_pages_linked_instagram_account(
+    client: TestClient, mock_meta_service: dict[str, AsyncMock | Mock]
+) -> None:
+    """Finalize reads the chosen Page's Instagram account and stores its id."""
+    _signed_up_client(client)
+    business_id = _create_business(client)
+    _connect(client, business_id)
+
+    body = _finalize(client, business_id)
+
+    assert body["instagramUserId"] == "ig_1"
+    mock_meta_service["instagram"].assert_awaited_once_with(
+        "long-lived-token", "page_1"
+    )
+    assert client.get(f"/businesses/{business_id}/meta").json()["instagramUserId"] == (
+        "ig_1"
+    )
+
+
+def test_finalize_leaves_instagram_unset_when_the_page_has_none(
+    client: TestClient, mock_meta_service: dict[str, AsyncMock | Mock]
+) -> None:
+    """A Page with no linked Instagram account stores null."""
+    mock_meta_service["instagram"].return_value = None
+    _signed_up_client(client)
+    business_id = _create_business(client)
+    _connect(client, business_id)
+
+    body = _finalize(client, business_id)
+
+    assert body["instagramUserId"] is None
+    assert body["pageId"] == "page_1"
+
+
+def test_finalize_still_succeeds_when_the_instagram_lookup_fails(
+    client: TestClient, mock_meta_service: dict[str, AsyncMock | Mock]
+) -> None:
+    """A failed Instagram read must not block connecting; it stays unset."""
+    from app.services.meta import MetaConnectionError
+
+    mock_meta_service["instagram"].side_effect = MetaConnectionError("boom")
+    _signed_up_client(client)
+    business_id = _create_business(client)
+    _connect(client, business_id)
+
+    body = _finalize(client, business_id)
+
+    assert body["pageId"] == "page_1"
+    assert body["instagramUserId"] is None
+
+
+def test_reconnecting_clears_the_stored_instagram_account(client: TestClient) -> None:
+    """A fresh connection starts without one, same as the Page and ad account."""
+    _signed_up_client(client)
+    business_id = _create_business(client)
+    _connect(client, business_id)
+    assert _finalize(client, business_id)["instagramUserId"] == "ig_1"
+
+    _connect(client, business_id)
+
+    body = client.get(f"/businesses/{business_id}/meta").json()
+    assert body["pageId"] is None
+    assert body["instagramUserId"] is None
+
+
+def test_refresh_instagram_requires_a_session(client: TestClient) -> None:
+    response = client.post("/businesses/some-id/meta/instagram/refresh")
+
+    assert response.status_code == 401
+
+
+def test_refresh_instagram_404s_without_a_connection(client: TestClient) -> None:
+    _signed_up_client(client)
+    business_id = _create_business(client)
+
+    response = client.post(f"/businesses/{business_id}/meta/instagram/refresh")
+
+    assert response.status_code == 404
+
+
+def test_refresh_instagram_400s_before_a_page_is_chosen(
+    client: TestClient, mock_meta_service: dict[str, AsyncMock | Mock]
+) -> None:
+    _signed_up_client(client)
+    business_id = _create_business(client)
+    _connect(client, business_id)
+
+    response = client.post(f"/businesses/{business_id}/meta/instagram/refresh")
+
+    assert response.status_code == 400
+    mock_meta_service["instagram"].assert_not_awaited()
+
+
+def test_refresh_instagram_backfills_an_existing_connection(
+    client: TestClient, mock_meta_service: dict[str, AsyncMock | Mock]
+) -> None:
+    """A connection finalized before Instagram was stored picks it up, with no
+    reconnect: the same Page, ad account and token are kept."""
+    mock_meta_service["instagram"].return_value = None
+    _signed_up_client(client)
+    business_id = _create_business(client)
+    _connect(client, business_id)
+    assert _finalize(client, business_id)["instagramUserId"] is None
+    mock_meta_service["instagram"].return_value = "ig_venzi"
+
+    response = client.post(f"/businesses/{business_id}/meta/instagram/refresh")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["instagramUserId"] == "ig_venzi"
+    assert body["pageId"] == "page_1"
+    assert body["adAccountId"] == "act_1"
+    mock_meta_service["instagram"].assert_awaited_with("long-lived-token", "page_1")
+
+
+def test_refresh_instagram_clears_it_when_the_page_no_longer_has_one(
+    client: TestClient, mock_meta_service: dict[str, AsyncMock | Mock]
+) -> None:
+    _signed_up_client(client)
+    business_id = _create_business(client)
+    _connect(client, business_id)
+    assert _finalize(client, business_id)["instagramUserId"] == "ig_1"
+    mock_meta_service["instagram"].return_value = None
+
+    response = client.post(f"/businesses/{business_id}/meta/instagram/refresh")
+
+    assert response.status_code == 200
+    assert response.json()["instagramUserId"] is None
+
+
+def test_refresh_instagram_500s_and_keeps_the_stored_value_when_meta_fails(
+    client: TestClient, mock_meta_service: dict[str, AsyncMock | Mock]
+) -> None:
+    from app.services.meta import MetaConnectionError
+
+    _signed_up_client(client)
+    business_id = _create_business(client)
+    _connect(client, business_id)
+    assert _finalize(client, business_id)["instagramUserId"] == "ig_1"
+    mock_meta_service["instagram"].side_effect = MetaConnectionError("Meta is down")
+
+    response = client.post(f"/businesses/{business_id}/meta/instagram/refresh")
+
+    assert response.status_code == 500
+    assert "Meta is down" in response.json()["detail"]
+    assert client.get(f"/businesses/{business_id}/meta").json()["instagramUserId"] == (
+        "ig_1"
+    )
 
 
 def test_get_pixels_requires_a_session(client: TestClient) -> None:

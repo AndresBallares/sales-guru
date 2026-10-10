@@ -9,6 +9,7 @@ app. The callback always ends in a browser redirect back to the frontend,
 never a JSON response, since it's a top-level navigation, not an API call.
 """
 
+import logging
 from datetime import UTC, datetime, timedelta
 
 from fastapi import APIRouter, Cookie, Depends, HTTPException, status
@@ -34,6 +35,7 @@ from app.services.meta import (
     MetaConnectionError,
     build_authorization_url,
     exchange_code_for_token,
+    fetch_page_instagram_account,
     get_long_lived_token,
     get_meta_user_id,
     is_business_tools_terms_error,
@@ -42,11 +44,14 @@ from app.services.meta import (
     list_pages,
 )
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter(prefix="/businesses/{business_id}/meta", tags=["meta"])
 callback_router = APIRouter(tags=["meta"])
 
 _CONNECTION_NOT_FOUND = "Meta connection not found"
 _AD_ACCOUNT_NOT_SET = "Select an ad account and Page before choosing a Pixel"
+_PAGE_NOT_CHOSEN = "Select an ad account and Page before refreshing Instagram"
 _STATE_TTL = timedelta(minutes=10)
 _FAKE_META_DISABLED = "Fake Meta mode is not enabled"
 _FAKE_META_TOKEN_LIFETIME = timedelta(days=60)
@@ -71,6 +76,7 @@ def _to_response(connection: MetaConnection) -> MetaConnectionResponse:
         meta_user_id=connection.metaUserId,
         ad_account_id=connection.adAccountId,
         page_id=connection.pageId,
+        instagram_user_id=connection.instagramUserId,
         pixel_id=connection.pixelId,
         pixel_skipped=connection.pixelSkipped,
         token_expires_at=connection.tokenExpiresAt,
@@ -178,6 +184,7 @@ async def fake_connect(
                 "tokenExpiresAt": datetime.now(UTC) + _FAKE_META_TOKEN_LIFETIME,
                 "adAccountId": None,
                 "pageId": None,
+                "instagramUserId": None,
                 "pixelSkipped": False,
             },
         },
@@ -275,9 +282,65 @@ async def finalize(
         HTTPException: 404 if no connection exists yet.
     """
     connection = await _require_connection(business.id)
+    # Best effort: a failed Instagram lookup must not block connecting. It
+    # leaves the account unset, and "refresh" can read it again later.
+    try:
+        instagram_user_id = await fetch_page_instagram_account(
+            connection.accessToken, payload.page_id
+        )
+    except MetaConnectionError:
+        logger.warning(
+            "Could not read the Instagram account for Page %s", payload.page_id
+        )
+        instagram_user_id = None
     updated = await db.metaconnection.update(
         where={"id": connection.id},
-        data={"adAccountId": payload.ad_account_id, "pageId": payload.page_id},
+        data={
+            "adAccountId": payload.ad_account_id,
+            "pageId": payload.page_id,
+            "instagramUserId": instagram_user_id,
+        },
+    )
+    assert updated is not None  # just fetched above, can't vanish mid-request
+    return _to_response(updated)
+
+
+@router.post("/instagram/refresh", response_model=MetaConnectionResponse)
+async def refresh_instagram(
+    business: Business = Depends(get_owned_business),
+) -> MetaConnectionResponse:
+    """Re-read the chosen Page's linked Instagram account, without reconnecting.
+
+    For a connection made before Instagram was stored, or after the Page's
+    Instagram account was linked or unlinked in Meta. Read-only toward Meta.
+
+    Args:
+        business: The business, resolved and ownership-checked by
+            get_owned_business.
+
+    Returns:
+        The connection, with instagramUserId set to what Meta reports now
+        (null when no Instagram account is linked).
+
+    Raises:
+        HTTPException: 404 if there is no connection; 400 if no Page has been
+            chosen yet; 500 if the Meta call fails.
+    """
+    connection = await _require_connection(business.id)
+    if connection.pageId is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=_PAGE_NOT_CHOSEN
+        )
+    try:
+        instagram_user_id = await fetch_page_instagram_account(
+            connection.accessToken, connection.pageId
+        )
+    except MetaConnectionError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)
+        ) from exc
+    updated = await db.metaconnection.update(
+        where={"id": connection.id}, data={"instagramUserId": instagram_user_id}
     )
     assert updated is not None  # just fetched above, can't vanish mid-request
     return _to_response(updated)
@@ -502,6 +565,7 @@ async def meta_callback(
                 "tokenExpiresAt": expires_at,
                 "adAccountId": None,
                 "pageId": None,
+                "instagramUserId": None,
                 "pixelSkipped": False,
             },
         },
