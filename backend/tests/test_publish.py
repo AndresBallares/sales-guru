@@ -34,6 +34,7 @@ from app.schemas.strategy import (
 )
 from app.services import geo as geo_module
 from app.services import meta as meta_service_module
+from app.services import optimization_jobs
 from app.services import strategist as strategist_module
 from app.services.benchmarks import JEWELRY_META_BENCHMARKS
 from app.services.event_venues import EVENT_VENUES
@@ -454,6 +455,18 @@ def mock_services(monkeypatch: pytest.MonkeyPatch) -> dict[str, AsyncMock]:
     monkeypatch.setattr(meta_service_module, "resume_meta_ad", resume_ad)
     object_status = AsyncMock(return_value="ACTIVE")
     monkeypatch.setattr(meta_service_module, "fetch_meta_object_status", object_status)
+
+    # Pausing takes a final metrics snapshot (optimization_jobs); keep it off the
+    # real Meta API.
+    monkeypatch.setattr(
+        optimization_jobs,
+        "fetch_campaign_insights",
+        AsyncMock(
+            return_value=meta_service_module.CampaignInsights(
+                impressions=100, clicks=5, spend=2.0, conversions=0
+            )
+        ),
+    )
 
     return {
         "resume_campaign": resume_campaign,

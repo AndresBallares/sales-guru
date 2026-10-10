@@ -88,6 +88,7 @@ from app.schemas.strategy import (
 )
 from app.schemas.test_evaluation import StopReason
 from app.services import creative_test_rules, optimizer, retargeting
+from app.services.campaign_status_sync import sync_campaign_statuses
 from app.services.meta import (
     CampaignInsights,
     MetaConnectionError,
@@ -245,6 +246,56 @@ async def _collect_metrics_for_campaign(campaign: Campaign, access_token: str) -
         )
 
 
+async def collect_final_snapshot(campaign: Campaign, access_token: str) -> None:
+    """Take one last metrics snapshot of a campaign that has just been paused.
+
+    Collection only runs for LIVE campaigns, so without this a paused campaign's
+    stored numbers stop at the last 15-minute collection. Best effort: a failure
+    here is logged and never undoes or fails the pause.
+
+    Args:
+        campaign: The campaign, already PAUSED.
+        access_token: The business's Meta access token.
+    """
+    if campaign.metaCampaignId is None:
+        return
+    try:
+        await _collect_metrics_for_campaign(campaign, access_token)
+        await _collect_ad_level_metrics(campaign, access_token)
+    except Exception:
+        logger.exception("Final snapshot failed for campaign %s", campaign.id)
+
+
+async def pause_campaign_and_capture(
+    *, campaign: Campaign, connection: MetaConnection, reason: str
+) -> Campaign:
+    """Pause a campaign (pause_campaign), then take its final metrics snapshot.
+
+    The one way the app pauses a campaign on its own behalf (the manual pause
+    click, the spend and CAC breakers, the duration-elapsed job), so its stored
+    numbers are complete. The snapshot comes after the pause so spend has
+    stopped, and before anything that reads the numbers (the TEST_PLAN
+    auto-evaluation).
+
+    Args:
+        campaign: The campaign to pause (the caller confirmed it is LIVE).
+        connection: The business's Meta connection.
+        reason: Stored as Campaign.pausedReason.
+
+    Returns:
+        The PAUSED campaign.
+
+    Raises:
+        MetaConnectionError: If the pause itself fails (the snapshot never
+            raises).
+    """
+    paused = await pause_campaign(
+        campaign=campaign, connection=connection, reason=reason
+    )
+    await collect_final_snapshot(paused, connection.accessToken)
+    return paused
+
+
 async def _latest_total_spend(campaign_id: str) -> float:
     """Sum the most recent spend snapshot per AdSet (or the campaign-level one).
 
@@ -348,7 +399,7 @@ async def _enforce_spend_circuit_breaker(
         total_spend,
         planned_budget,
     )
-    paused = await pause_campaign(
+    paused = await pause_campaign_and_capture(
         campaign=campaign,
         connection=connection,
         reason=(
@@ -466,7 +517,7 @@ async def _enforce_cac_circuit_breaker(
         )
 
     logger.warning("CAC circuit breaker: campaign %s — %s", campaign.id, reason)
-    paused = await pause_campaign(
+    paused = await pause_campaign_and_capture(
         campaign=campaign, connection=connection, reason=reason
     )
     if content.plan_type == "TEST_PLAN":
@@ -946,6 +997,13 @@ async def collect_metrics_for_all_live_campaigns() -> None:
     `business.is.deletedAt: None` filter below is a defensive backstop
     for that invariant, not something reachable in normal operation.
     """
+    # First line the app's statuses up with Meta's, so a campaign paused or
+    # switched back on in Ads Manager is collected (or not) accordingly. A
+    # failure here must never stop the collection itself.
+    try:
+        await sync_campaign_statuses(on_paused=collect_final_snapshot)
+    except Exception:
+        logger.exception("Campaign status sync failed")
     campaigns = await db.campaign.find_many(
         where={"status": "LIVE", "business": {"is": {"deletedAt": None}}}
     )
@@ -1345,7 +1403,7 @@ async def pause_expired_campaigns() -> None:
         if connection is None:
             continue
         try:
-            paused = await pause_campaign(
+            paused = await pause_campaign_and_capture(
                 campaign=campaign,
                 connection=connection,
                 reason="Planned end date reached",

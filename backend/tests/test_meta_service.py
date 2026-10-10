@@ -3264,3 +3264,102 @@ async def test_fetch_insights_revenue_takes_the_largest_alias_not_the_sum(
     assert insights.purchases == 3
     assert insights.purchase_value == 450.0
     assert insights.roas == 4.5
+
+
+@pytest.mark.asyncio
+async def test_fetch_meta_delivery_status_reads_the_campaign_and_its_ad_sets(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Two GETs, one per level, and nothing else: the status sync is read-only."""
+    responses = [
+        _FakeResponse({"effective_status": "ACTIVE", "id": "campaign_123"}),
+        _FakeResponse(
+            {
+                "data": [
+                    {"effective_status": "PAUSED", "id": "a1"},
+                    {"effective_status": "ACTIVE", "id": "a2"},
+                ]
+            }
+        ),
+    ]
+    client = _FakeAsyncClient(response=None)
+
+    async def get(url: str, params: dict[str, str]) -> _FakeResponse:
+        client.calls.append((url, params))
+        return responses[len(client.calls) - 1]
+
+    async def post(*_args: object, **_kwargs: object) -> _FakeResponse:
+        raise AssertionError("reading a campaign's status must never write to Meta")
+
+    monkeypatch.setattr(client, "get", get)
+    monkeypatch.setattr(client, "post", post)
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **_kwargs: client)
+
+    status = await meta.fetch_meta_delivery_status(
+        access_token="token", meta_campaign_id="campaign_123"
+    )
+
+    assert status == meta.MetaDeliveryStatus("ACTIVE", ["PAUSED", "ACTIVE"])
+    assert [url for url, _params in client.calls] == [
+        "https://graph.facebook.com/v21.0/campaign_123",
+        "https://graph.facebook.com/v21.0/campaign_123/adsets",
+    ]
+    assert all(params["fields"] == "effective_status" for _url, params in client.calls)
+
+
+@pytest.mark.asyncio
+async def test_fetch_meta_delivery_status_with_no_ad_sets(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = _FakeAsyncClient(response=None)
+    responses = [
+        _FakeResponse({"effective_status": "PAUSED"}),
+        _FakeResponse({"data": []}),
+    ]
+
+    async def get(url: str, params: dict[str, str]) -> _FakeResponse:
+        client.calls.append((url, params))
+        return responses[len(client.calls) - 1]
+
+    monkeypatch.setattr(client, "get", get)
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **_kwargs: client)
+
+    status = await meta.fetch_meta_delivery_status(
+        access_token="token", meta_campaign_id="campaign_123"
+    )
+
+    assert status == meta.MetaDeliveryStatus("PAUSED", [])
+
+
+@pytest.mark.asyncio
+async def test_fetch_meta_delivery_status_raises_when_meta_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A campaign Meta no longer has (or any API failure) surfaces as the usual
+    MetaConnectionError, which the sync logs and skips."""
+    _mock_client_returning(
+        monkeypatch,
+        _FakeResponse({"error": {"message": "Unsupported get request"}}, is_error=True),
+    )
+
+    with pytest.raises(meta.MetaConnectionError):
+        await meta.fetch_meta_delivery_status(
+            access_token="token", meta_campaign_id="gone"
+        )
+
+
+@pytest.mark.asyncio
+async def test_fetch_meta_delivery_status_is_none_in_fake_mode(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """There is no real Meta state to read, so nothing may be inferred from it."""
+    monkeypatch.setenv("FAKE_META", "true")
+    get_settings.cache_clear()
+    try:
+        status = await meta.fetch_meta_delivery_status(
+            access_token="token", meta_campaign_id="campaign_123"
+        )
+    finally:
+        get_settings.cache_clear()
+
+    assert status is None

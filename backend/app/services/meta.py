@@ -1883,6 +1883,59 @@ async def update_meta_ad_set_bid(
     )
 
 
+class MetaDeliveryStatus(NamedTuple):
+    """What Meta says a campaign and its ad sets are doing right now.
+
+    These are Meta's effective_status values ("ACTIVE", "PAUSED",
+    "CAMPAIGN_PAUSED", "ADSET_PAUSED", "DELETED", "IN_PROCESS", ...), kept as
+    Meta reports them; app/services/campaign_status_sync.py decides what they
+    mean.
+    """
+
+    campaign_status: str
+    ad_set_statuses: list[str]
+
+
+async def fetch_meta_delivery_status(
+    *, access_token: str, meta_campaign_id: str
+) -> MetaDeliveryStatus | None:
+    """Read a campaign's and its ad sets' effective status from Meta.
+
+    Read-only: two GETs (the campaign, then its ad sets), nothing is changed on
+    Meta. The app pauses at the ad set level while leaving the campaign object
+    itself alone, and Ads Manager lets a user pause at the campaign, ad set or
+    ad level, so both levels are read.
+
+    Args:
+        access_token: The business's Meta access token.
+        meta_campaign_id: The Meta campaign id (Campaign.metaCampaignId).
+
+    Returns:
+        The statuses, or None in fake mode (there is no real Meta state to
+        read, so nothing should be inferred from it).
+
+    Raises:
+        MetaConnectionError: If a call fails (including a campaign Meta no
+            longer has).
+    """
+    if get_settings().fake_meta_enabled:
+        return None
+    campaign = await _get_json(
+        f"{_GRAPH_BASE_URL}/{meta_campaign_id}",
+        {"fields": "effective_status", "access_token": access_token},
+    )
+    ad_sets = await _get_json(
+        f"{_GRAPH_BASE_URL}/{meta_campaign_id}/adsets",
+        {"fields": "effective_status", "limit": "100", "access_token": access_token},
+    )
+    return MetaDeliveryStatus(
+        campaign_status=str(campaign.get("effective_status", "")),
+        ad_set_statuses=[
+            str(row.get("effective_status", "")) for row in ad_sets.get("data", [])
+        ],
+    )
+
+
 async def fetch_pixel_event_counts(
     *, access_token: str, pixel_id: str, days: int = 30
 ) -> dict[str, int]:

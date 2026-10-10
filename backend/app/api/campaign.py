@@ -34,13 +34,13 @@ from app.services.campaign_readiness import advance_to_ready_if_complete, is_rea
 from app.services.creative import copy_problems, is_creative_stale, media_problems
 from app.services.event_venues import EVENT_VENUES, default_event_window
 from app.services.meta import MetaConnectionError
+from app.services.optimization_jobs import pause_campaign_and_capture
 from app.services.publish import (
     PUBLISHED_PAUSED_REASON,
     publish_campaign_to_meta,
     requires_pixel,
 )
 from app.services.publish import activate_campaign as activate_campaign_on_meta
-from app.services.publish import pause_campaign as pause_campaign_on_meta
 from app.services.url_validation import requires_destination_url
 
 router = APIRouter(prefix="/businesses/{business_id}/campaigns", tags=["campaigns"])
@@ -740,7 +740,7 @@ async def pause_campaign(
         )
 
     try:
-        updated = await pause_campaign_on_meta(
+        updated = await pause_campaign_and_capture(
             campaign=campaign, connection=connection, reason="Manually paused"
         )
     except MetaConnectionError as exc:
