@@ -124,6 +124,23 @@ def test_build_authorization_url_includes_state_and_redirect_uri(
     assert "ads_management" in url
 
 
+def test_the_oauth_scopes_include_pages_read_engagement_and_the_ads_permissions(
+    meta_app_credentials: None,
+) -> None:
+    """pages_read_engagement is what lets the app read the Page's Instagram
+    account; the ads and Page-listing permissions it already had stay."""
+    url = meta.build_authorization_url("abc123")
+
+    scopes = url.split("scope=")[1].split("&")[0].split(",")
+    assert scopes == [
+        "ads_management",
+        "ads_read",
+        "pages_show_list",
+        "business_management",
+        "pages_read_engagement",
+    ]
+
+
 @pytest.mark.asyncio
 async def test_exchange_code_for_token_raises_without_app_credentials(
     monkeypatch: pytest.MonkeyPatch,
@@ -2905,3 +2922,80 @@ async def test_creatives_publish_as_before_without_a_linked_instagram_account(
 
     _, data = client.calls[0]
     assert "instagram_user_id" not in data
+
+
+# --- Validating a hand-entered Instagram account id ---------------------------
+
+
+def _instagram_check() -> Any:
+    return meta.validate_instagram_account(
+        access_token="token",
+        ad_account_id="act_1",
+        page_id="page_1",
+        instagram_user_id="17841400000000001",
+    )
+
+
+@pytest.mark.asyncio
+async def test_validate_instagram_account_is_a_validate_only_creative(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Meta is asked to check the id; execution_options=validate_only means no
+    creative is created."""
+    client = _mock_client_returning(monkeypatch, _FakeResponse({"success": True}))
+
+    await _instagram_check()
+
+    url, data = client.calls[0]
+    assert url == "https://graph.facebook.com/v21.0/act_1/adcreatives"
+    assert data["instagram_user_id"] == "17841400000000001"
+    assert json.loads(data["execution_options"]) == ["validate_only"]
+    assert json.loads(data["object_story_spec"])["page_id"] == "page_1"
+
+
+@pytest.mark.asyncio
+async def test_validate_instagram_account_rejects_an_id_meta_does_not_accept(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _mock_client_returning(
+        monkeypatch,
+        _FakeResponse(
+            {
+                "error": {
+                    "message": "(#100) Param instagram_user_id must be a valid "
+                    "Instagram account id",
+                    "code": 100,
+                }
+            },
+        ),
+    )
+
+    with pytest.raises(meta.InvalidInstagramAccountError):
+        await _instagram_check()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "error",
+    [
+        {"message": "(#100) Param link is invalid", "code": 100},
+        {"message": "Invalid OAuth access token. instagram_user_id", "code": 190},
+    ],
+)
+async def test_validate_instagram_account_passes_other_meta_errors_through(
+    monkeypatch: pytest.MonkeyPatch, error: dict[str, Any]
+) -> None:
+    """Only Meta's "not a valid Instagram account id" counts as a bad id."""
+    _mock_client_returning(monkeypatch, _FakeResponse({"error": error}))
+
+    with pytest.raises(meta.MetaConnectionError) as raised:
+        await _instagram_check()
+
+    assert not isinstance(raised.value, meta.InvalidInstagramAccountError)
+
+
+@pytest.mark.asyncio
+async def test_validate_instagram_account_is_a_no_op_in_fake_mode(
+    fake_meta_mode: None,
+) -> None:
+    await _instagram_check()

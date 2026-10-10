@@ -40,6 +40,8 @@ const PENDING_CONNECTION: api.MetaConnection = {
   adAccountId: null,
   pageId: null,
   instagramUserId: null,
+  instagramUserIdDiscovered: null,
+  instagramUserIdManual: null,
   pixelId: null,
   pixelSkipped: false,
   tokenExpiresAt: '2026-10-01T00:00:00Z',
@@ -51,6 +53,8 @@ const COMPLETE_CONNECTION: api.MetaConnection = {
   adAccountId: 'act_1',
   pageId: 'page_1',
   instagramUserId: 'ig_1',
+  instagramUserIdDiscovered: 'ig_1',
+  instagramUserIdManual: null,
 }
 
 beforeEach(() => {

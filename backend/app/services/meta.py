@@ -48,7 +48,12 @@ from app.schemas.meta import MetaAdAccount, MetaPage, MetaPixel
 _GRAPH_VERSION = "v21.0"
 _GRAPH_BASE_URL = f"https://graph.facebook.com/{_GRAPH_VERSION}"
 _AUTH_DIALOG_URL = f"https://www.facebook.com/{_GRAPH_VERSION}/dialog/oauth"
-_SCOPES = "ads_management,ads_read,pages_show_list,business_management"
+# pages_read_engagement lets us read the chosen Page's linked Instagram account
+# (fetch_page_instagram_account). App Review must list it with the ads
+# permissions (see PRD.md).
+_SCOPES = (
+    "ads_management,ads_read,pages_show_list,business_management,pages_read_engagement"
+)
 
 # Fake-mode-only sentinel — see list_ad_accounts/list_ad_pixels below.
 _FAKE_TERMS_NOT_ACCEPTED_AD_ACCOUNT_ID = "act_fake_terms_not_accepted"
@@ -468,6 +473,64 @@ async def fetch_page_instagram_account(access_token: str, page_id: str) -> str |
         if isinstance(account, dict) and account.get("id"):
             return str(account["id"])
     return None
+
+
+class InvalidInstagramAccountError(MetaConnectionError):
+    """Meta rejected an Instagram account id as an ad identity."""
+
+
+async def validate_instagram_account(
+    *,
+    access_token: str,
+    ad_account_id: str,
+    page_id: str,
+    instagram_user_id: str,
+) -> None:
+    """Check with Meta that an Instagram account id can be used on this ad account.
+
+    A validate-only creative create: Meta runs its full checks and creates
+    nothing (execution_options=validate_only). A plain GET of the id cannot
+    answer this: without instagram_basic Meta returns the same "does not
+    exist or missing permissions" for a real account as for a made-up one.
+
+    Args:
+        access_token: The business's Meta access token.
+        ad_account_id: The connected ad account.
+        page_id: The connected Page the creative would be posted as.
+        instagram_user_id: The Instagram account id to check.
+
+    Raises:
+        InvalidInstagramAccountError: Meta says the id is not a valid
+            Instagram account for ads.
+        MetaConnectionError: Any other failure (network, permissions).
+    """
+    if get_settings().fake_meta_enabled:
+        return
+    link_data = {
+        "message": "Instagram account check",
+        "link": f"https://www.facebook.com/{page_id}",
+        "call_to_action": {"type": "LEARN_MORE"},
+    }
+    try:
+        await _post_json(
+            f"{_GRAPH_BASE_URL}/{ad_account_id}/adcreatives",
+            {
+                "access_token": access_token,
+                "name": "Instagram account check",
+                "object_story_spec": json.dumps(
+                    {"page_id": page_id, "link_data": link_data}
+                ),
+                "instagram_user_id": instagram_user_id,
+                "execution_options": json.dumps(["validate_only"]),
+            },
+            timeout=_VIDEO_CREATIVE_TIMEOUT_SECONDS,
+        )
+    except MetaConnectionError as exc:
+        if exc.code == 100 and "instagram_user_id" in str(exc):
+            raise InvalidInstagramAccountError(
+                str(exc), code=exc.code, error_subcode=exc.error_subcode
+            ) from exc
+        raise
 
 
 async def list_ad_pixels(access_token: str, ad_account_id: str) -> list[MetaPixel]:

@@ -26,3 +26,18 @@ async def get_meta_connection(business_id: str) -> MetaConnection | None:
     if connection is not None:
         connection.accessToken = decrypt_token(connection.accessToken)
     return connection
+
+
+def effective_instagram_user_id(connection: MetaConnection) -> str | None:
+    """Pick the Instagram account to publish as.
+
+    The hand-entered id if set, else the one discovered on the Page, else
+    None (no Instagram account).
+
+    Args:
+        connection: The business's MetaConnection.
+
+    Returns:
+        The Instagram account id, or None when there is none.
+    """
+    return connection.instagramUserIdManual or connection.instagramUserId

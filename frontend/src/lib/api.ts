@@ -1081,9 +1081,12 @@ export interface MetaConnection {
   metaUserId: string
   adAccountId: string | null
   pageId: string | null
-  // The Instagram account linked to the chosen Page; null means none is
-  // linked, so ads run on Facebook placements only.
+  // The Instagram account ads are published as: the hand-entered one if set,
+  // else the one found on the Page. null means none, so ads run on Facebook
+  // placements only.
   instagramUserId: string | null
+  instagramUserIdDiscovered: string | null
+  instagramUserIdManual: string | null
   pixelId: string | null
   // True once the user explicitly dismissed the Pixel step for this
   // connection ("Skip for now") rather than never having gotten to it
@@ -1126,6 +1129,18 @@ export function finalizeMetaConnection(
   return request<MetaConnection>(`/businesses/${businessId}/meta/finalize`, {
     method: 'POST',
     body: JSON.stringify(input),
+  })
+}
+
+// Saves a hand-entered Instagram account ID (checked with Meta first), or, with
+// null, clears it so the one found on the Page is used again.
+export function setMetaInstagramAccount(
+  businessId: string,
+  instagramUserId: string | null,
+): Promise<MetaConnection> {
+  return request<MetaConnection>(`/businesses/${businessId}/meta/instagram`, {
+    method: 'PUT',
+    body: JSON.stringify({ instagramUserId }),
   })
 }
 

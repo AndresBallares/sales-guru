@@ -36,6 +36,7 @@ from prisma.models import Campaign, Creative, MetaConnection
 from prisma.types import CampaignUpdateInput
 
 from app.core.db import db
+from app.core.meta_connection import effective_instagram_user_id
 from app.schemas.strategy import (
     AudienceVariant,
     CreativeTestPlanContent,
@@ -750,7 +751,7 @@ async def publish_campaign_to_meta(
             access_token=connection.accessToken,
             ad_account_id=ad_account_id,
             page_id=connection.pageId,
-            instagram_user_id=connection.instagramUserId,
+            instagram_user_id=effective_instagram_user_id(connection),
             destination_url=destination_url,
         )
     elif creative.format == "CAROUSEL":
@@ -761,7 +762,7 @@ async def publish_campaign_to_meta(
             access_token=connection.accessToken,
             ad_account_id=ad_account_id,
             page_id=connection.pageId,
-            instagram_user_id=connection.instagramUserId,
+            instagram_user_id=effective_instagram_user_id(connection),
             name=creative.headline,
             body_text=creative.bodyText,
             cta=creative.cta,
@@ -776,7 +777,7 @@ async def publish_campaign_to_meta(
             access_token=connection.accessToken,
             ad_account_id=ad_account_id,
             page_id=connection.pageId,
-            instagram_user_id=connection.instagramUserId,
+            instagram_user_id=effective_instagram_user_id(connection),
             name=creative.headline,
             headline=creative.headline,
             body_text=creative.bodyText,
@@ -949,7 +950,7 @@ async def _publish_creative_test_plan(
                 access_token=access_token,
                 ad_account_id=ad_account_id,
                 page_id=connection.pageId,
-                instagram_user_id=connection.instagramUserId,
+                instagram_user_id=effective_instagram_user_id(connection),
                 destination_url=destination_url,
             )
         else:
@@ -960,7 +961,7 @@ async def _publish_creative_test_plan(
                 access_token=access_token,
                 ad_account_id=ad_account_id,
                 page_id=connection.pageId,
-                instagram_user_id=connection.instagramUserId,
+                instagram_user_id=effective_instagram_user_id(connection),
                 name=creative.headline,
                 headline=creative.headline,
                 body_text=creative.bodyText,

@@ -10,6 +10,7 @@ vi.mock('../lib/api', async (importOriginal) => {
     ...actual,
     getMetaConnection: vi.fn<typeof actual.getMetaConnection>(),
     refreshMetaInstagram: vi.fn<typeof actual.refreshMetaInstagram>(),
+    setMetaInstagramAccount: vi.fn<typeof actual.setMetaInstagramAccount>(),
   }
 })
 
@@ -23,6 +24,8 @@ function connection(overrides: Partial<api.MetaConnection> = {}): api.MetaConnec
     adAccountId: 'act_1',
     pageId: 'page_1',
     instagramUserId: null,
+    instagramUserIdDiscovered: null,
+    instagramUserIdManual: null,
     pixelId: 'pixel_1',
     pixelSkipped: false,
     tokenExpiresAt: '2030-01-01T00:00:00Z',
@@ -98,5 +101,36 @@ describe('InstagramNote', () => {
 
     expect(await screen.findByRole('alert')).toHaveTextContent('Meta is down')
     expect(screen.getByText(NO_INSTAGRAM_NOTE)).toBeInTheDocument()
+  })
+})
+
+describe('InstagramNote manual entry', () => {
+  beforeEach(() => {
+    vi.resetAllMocks()
+  })
+
+  it('lets the user enter the account ID, and the note goes away once Meta accepts it', async () => {
+    mockedApi.getMetaConnection.mockResolvedValue(connection())
+    mockedApi.setMetaInstagramAccount.mockResolvedValue(
+      connection({ instagramUserId: '17841400000000001', instagramUserIdManual: '17841400000000001' }),
+    )
+    render(<InstagramNote businessId="biz-1" />)
+
+    await userEvent.click(await screen.findByText('Enter the Instagram account ID yourself'))
+    await userEvent.type(screen.getByLabelText('Instagram account ID'), '17841400000000001')
+    await userEvent.click(screen.getByRole('button', { name: 'Save account ID' }))
+
+    await waitFor(() => expect(screen.queryByText(NO_INSTAGRAM_NOTE)).not.toBeInTheDocument())
+    expect(mockedApi.setMetaInstagramAccount).toHaveBeenCalledWith('biz-1', '17841400000000001')
+  })
+
+  it('stays quiet when a hand-entered account is already in use', async () => {
+    mockedApi.getMetaConnection.mockResolvedValue(
+      connection({ instagramUserId: '222222', instagramUserIdManual: '222222' }),
+    )
+    render(<InstagramNote businessId="biz-1" />)
+
+    await waitFor(() => expect(mockedApi.getMetaConnection).toHaveBeenCalled())
+    expect(screen.queryByText(NO_INSTAGRAM_NOTE)).not.toBeInTheDocument()
   })
 })

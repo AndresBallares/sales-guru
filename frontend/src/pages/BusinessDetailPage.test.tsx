@@ -283,6 +283,8 @@ describe('BusinessDetailPage', () => {
       adAccountId: 'act_1',
       pageId: 'page_1',
       instagramUserId: 'ig_1',
+      instagramUserIdDiscovered: 'ig_1',
+      instagramUserIdManual: null,
       pixelId: 'pixel_1',
       pixelSkipped: false,
       tokenExpiresAt: '2026-10-01T00:00:00Z',
