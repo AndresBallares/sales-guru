@@ -2,9 +2,7 @@ import { useEffect, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { AudiencesSection } from '../components/AudiencesSection'
 import { BrandProfileSection } from '../components/BrandProfileSection'
-import { BusinessEditForm } from '../components/BusinessEditForm'
 import { CampaignsSection } from '../components/CampaignsSection'
-import { DeleteBusinessSection } from '../components/DeleteBusinessSection'
 import { MetaConnectionSection } from '../components/MetaConnectionSection'
 import { ProductsSection } from '../components/ProductsSection'
 import {
@@ -39,7 +37,6 @@ export function BusinessDetailPage() {
   const [products, setProducts] = useState<Product[] | null>(null)
   const [audiences, setAudiences] = useState<Audience[] | null>(null)
   const [metaSetupComplete, setMetaSetupComplete] = useState(false)
-  const [editingBusiness, setEditingBusiness] = useState(false)
 
   useEffect(() => {
     if (!businessId) {
@@ -63,34 +60,12 @@ export function BusinessDetailPage() {
       <p>
         <Link to="/">&larr; Back to dashboard</Link>
       </p>
-      {business && editingBusiness ? (
-        <BusinessEditForm
-          businessId={business.id}
-          business={business}
-          onSaved={(updated) => {
-            setBusiness(updated)
-            setEditingBusiness(false)
-          }}
-          onCancel={() => setEditingBusiness(false)}
-        />
-      ) : (
-        <>
-          <h1>{business ? business.name : 'Loading…'}</h1>
-          {business?.industry && (
-            <p className="field-hint">
-              {industries.find((option) => option.value === business.industry)?.label ??
-                business.industry}
-            </p>
-          )}
-          {business && (
-            <button type="button" onClick={() => setEditingBusiness(true)}>
-              Edit
-            </button>
-          )}
-          {business && (
-            <DeleteBusinessSection businessId={business.id} businessName={business.name} />
-          )}
-        </>
+      <h1>{business ? business.name : 'Loading…'}</h1>
+      {business?.industry && (
+        <p className="field-hint">
+          {industries.find((option) => option.value === business.industry)?.label ??
+            business.industry}
+        </p>
       )}
       {businessError && (
         <p className="form-error" role="alert">
