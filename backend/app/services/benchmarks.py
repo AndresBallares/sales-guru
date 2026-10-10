@@ -205,3 +205,13 @@ class GoogleJewelryBenchmarks(NamedTuple):
 JEWELRY_GOOGLE_BENCHMARKS = GoogleJewelryBenchmarks(
     ctr_pct=6.64, cpc_usd=4.44, cvr_pct=4.50, cost_per_lead_usd=97.51
 )
+
+
+# Link CTR (clicks through to the destination / impressions) bands for the
+# campaign dashboard (user brief, 2026-10-10): a typical jewelry link CTR is
+# about 1.2-1.5%, and below about 0.8% the creative is the likely problem.
+# These are dashboard guide values, not validated percentile data, and are
+# separate from JEWELRY_META_BENCHMARKS.ctr above, which is the all-clicks CTR.
+LINK_CTR_WEAK_BELOW_PCT = 0.8
+LINK_CTR_TYPICAL_LOW_PCT = 1.2
+LINK_CTR_TYPICAL_HIGH_PCT = 1.5
