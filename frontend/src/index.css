@@ -1155,3 +1155,11 @@ code {
   font-size: 1.4rem;
   cursor: pointer;
 }
+
+/* The panels for "Delete business" and "Edit business" (which sit beside
+   "Create business" and use the same button style) take their own line in
+   the button row. */
+.delete-business-panel,
+.edit-business-panel {
+  flex-basis: 100%;
+}
