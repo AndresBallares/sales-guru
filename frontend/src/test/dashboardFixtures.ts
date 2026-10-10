@@ -1,4 +1,10 @@
-import type { DashboardConfidence, DashboardTier1, DashboardTier2 } from '../lib/api'
+import type {
+  DashboardAdRow,
+  DashboardConfidence,
+  DashboardTier1,
+  DashboardTier2,
+  DashboardTier3,
+} from '../lib/api'
 
 export const thinConfidence = (basis: number, noun = 'purchases'): DashboardConfidence => ({
   sufficient: false,
@@ -107,6 +113,46 @@ export function makeTier2(overrides: Partial<DashboardTier2> = {}): DashboardTie
       { key: 'checkout', label: 'Checkout started', count: 3, rateFromPrevious: 75, dropOffFromPrevious: 25 },
       { key: 'purchase', label: 'Purchases', count: 3, rateFromPrevious: 100, dropOffFromPrevious: 0 },
     ],
+    ...overrides,
+  }
+}
+
+export function makeAdRow(overrides: Partial<DashboardAdRow> = {}): DashboardAdRow {
+  return {
+    adId: 'ad-1',
+    name: 'Ad A',
+    status: 'live',
+    spend: 52,
+    linkCtr: 1.4,
+    addToCart: 7,
+    costPerAddToCart: 7.43,
+    purchases: 2,
+    cac: 26,
+    isLeader: false,
+    ...overrides,
+  }
+}
+
+// Three ads, no clear leader yet (the third has too little data to compare).
+export function makeTier3(overrides: Partial<DashboardTier3> = {}): DashboardTier3 {
+  return {
+    ads: [
+      makeAdRow(),
+      makeAdRow({ adId: 'ad-2', name: 'Ad B', spend: 48, addToCart: 5, costPerAddToCart: 9.6, purchases: 1, cac: 48 }),
+      makeAdRow({
+        adId: 'ad-3',
+        name: 'Ad C',
+        status: 'proposed_pause',
+        spend: 42.5,
+        linkCtr: 0.8,
+        addToCart: 2,
+        costPerAddToCart: 21.25,
+        purchases: 0,
+        cac: null,
+      }),
+    ],
+    leader: null,
+    leaderMessage: 'No clear leader yet',
     ...overrides,
   }
 }

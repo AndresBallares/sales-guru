@@ -1410,3 +1410,91 @@ code {
   color: var(--text-secondary);
   font-size: 0.85rem;
 }
+
+.dash-table-wrap {
+  overflow-x: auto;
+  margin-top: 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+}
+
+.dash-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9rem;
+}
+
+.dash-table th,
+.dash-table td {
+  padding: 0.6rem 0.75rem;
+  text-align: right;
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+
+.dash-table th:first-child,
+.dash-table td:first-child {
+  text-align: left;
+}
+
+.dash-table thead th {
+  vertical-align: bottom;
+  font-weight: 600;
+  background: var(--surface);
+}
+
+.dash-table tbody tr:last-child th,
+.dash-table tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.dash-th-term {
+  display: block;
+  font-weight: 400;
+}
+
+/* The leading ad is marked with a tag and a tint, never colour alone. */
+.dash-leader-row th,
+.dash-leader-row td {
+  background: var(--success-bg);
+}
+
+.dash-leader-tag {
+  display: inline-block;
+  margin-left: 0.5rem;
+  padding: 0.05rem 0.5rem;
+  border: 1px solid var(--success-border);
+  border-radius: 999px;
+  color: var(--text);
+  font-size: 0.75rem;
+  font-weight: 700;
+}
+
+.dash-leader-line {
+  margin: 0.25rem 0 0;
+  font-weight: 600;
+}
+
+.dash-status {
+  display: inline-block;
+  padding: 0.1rem 0.55rem;
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  font-size: 0.8rem;
+}
+
+.dash-status-proposed_pause {
+  border-color: var(--warning);
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}

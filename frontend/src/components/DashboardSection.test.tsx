@@ -6,6 +6,7 @@ import {
   enoughConfidence,
   makeTier1,
   makeTier2,
+  makeTier3,
   thinConfidence,
 } from '../test/dashboardFixtures'
 import { DashboardSection } from './DashboardSection'
@@ -330,6 +331,60 @@ describe('DashboardSection', () => {
 
       expect(await screen.findByText(/Too early to judge sales/)).toBeInTheDocument()
       expect(screen.getByRole('note')).toHaveTextContent('Paused')
+    })
+  })
+
+  describe('the per-ad comparison', () => {
+    it('shows the ad table last, after the early signals and the sales cards', async () => {
+      mockedApi.getCampaignDashboard.mockResolvedValue(
+        dashboard('c1', { tier2: makeTier2(), tier3: makeTier3() }),
+      )
+
+      renderSection()
+
+      const table = await screen.findByRole('heading', { name: 'How each ad is doing' })
+      const sales = screen.getByLabelText('Campaign results')
+      const signals = screen.getByRole('heading', { name: 'How people are responding' })
+      for (const earlier of [sales, signals]) {
+        expect(
+          earlier.compareDocumentPosition(table) & Node.DOCUMENT_POSITION_FOLLOWING,
+        ).toBeTruthy()
+      }
+      expect(screen.getByText('No clear leader yet')).toBeInTheDocument()
+    })
+
+    it('shows the ad table last even once the sales cards lead', async () => {
+      const confidence = enoughConfidence(12)
+      mockedApi.getCampaignDashboard.mockResolvedValue(
+        dashboard('c1', {
+          tier1: makeTier1({
+            purchases: { value: 12, confidence },
+            revenue: { value: 1800, confidence },
+          }),
+          tier2: makeTier2(),
+          tier3: makeTier3(),
+        }),
+      )
+
+      renderSection()
+
+      const table = await screen.findByRole('heading', { name: 'How each ad is doing' })
+      const signals = screen.getByRole('heading', { name: 'How people are responding' })
+      expect(
+        signals.compareDocumentPosition(table) & Node.DOCUMENT_POSITION_FOLLOWING,
+      ).toBeTruthy()
+    })
+
+    it('has no ad table when the campaign has no per-ad numbers', async () => {
+      mockedApi.getCampaignDashboard.mockResolvedValue(dashboard('c1', { tier3: null }))
+
+      renderSection()
+
+      await screen.findByLabelText('Campaign results')
+      expect(
+        screen.queryByRole('heading', { name: 'How each ad is doing' }),
+      ).not.toBeInTheDocument()
+      expect(screen.queryByRole('table')).not.toBeInTheDocument()
     })
   })
 

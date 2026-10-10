@@ -15,6 +15,7 @@ import { CardHeading } from './CardHeading'
 import { ConfidenceFlag } from './ConfidenceFlag'
 import { Tier1Cards } from './Tier1Cards'
 import { Tier2Cards } from './Tier2Cards'
+import { Tier3Table } from './Tier3Table'
 
 // Local development only: Vite sets import.meta.env.DEV false in a production
 // build, so the sample switch never exists in what ships. (The backend also
@@ -250,6 +251,9 @@ export function DashboardSection({ businessId }: { businessId: string }) {
                       {shown.tier2 && <Tier2Cards tier2={shown.tier2} />}
                     </>
                   )}
+                  {/* The per-ad comparison is what a creative test is for, so it
+                      comes last, after the numbers it explains. */}
+                  {shown.tier3 && <Tier3Table tier3={shown.tier3} />}
                 </>
               ) : shown.status === 'PAUSED' ? (
                 <div className="dash-empty">
