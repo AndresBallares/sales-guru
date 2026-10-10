@@ -944,6 +944,202 @@ async def wait_for_meta_video(
         waited += poll_interval_seconds
 
 
+class PlacementAsset(NamedTuple):
+    """One asset of a placement-customized ad: an uploaded photo or a video.
+
+    A photo is identified by its image_hash; a video by its video_id plus the
+    hash of its cover image. Both assets of one ad must be the same kind.
+    """
+
+    image_hash: str | None = None
+    video_id: str | None = None
+    thumbnail_hash: str | None = None
+
+
+# Where the story asset shows. The feed asset is limited to the feeds, and the
+# square asset (when the ad has one) takes every placement not named, so
+# Advantage+ placements stay on and none is left without an asset. (A lone rule is
+# rejected by Meta, so a spec always has a second, default rule.)
+_STORY_PLACEMENTS: dict[str, Any] = {
+    "publisher_platforms": ["facebook", "instagram"],
+    "facebook_positions": ["story", "facebook_reels"],
+    "instagram_positions": ["story", "reels"],
+}
+_FEED_PLACEMENTS: dict[str, Any] = {
+    "publisher_platforms": ["facebook", "instagram"],
+    "facebook_positions": ["feed", "video_feeds"],
+    "instagram_positions": ["stream", "profile_feed"],
+}
+_FEED_LABEL = "sg_feed"
+_STORY_LABEL = "sg_story"
+_SQUARE_LABEL = "sg_square"
+
+
+def placement_asset_feed_spec(
+    *,
+    headline: str,
+    body_text: str,
+    description: str | None,
+    cta: str,
+    link: str,
+    feed: PlacementAsset,
+    story: PlacementAsset | None,
+    square: PlacementAsset | None = None,
+) -> dict[str, Any]:
+    """Build the asset_feed_spec that maps an ad's assets to placements.
+
+    Verified with Meta's validate-only mode on real 4:5, 9:16 and 1:1 video
+    clips (2026-10-08/09): the spec must name exactly one ad format and have at
+    least two customization rules. Rules, in priority order:
+
+    - a story asset takes Stories and Reels (Facebook and Instagram);
+    - with a square asset, the feed asset takes the Facebook and Instagram feeds
+      and the square asset is the catch-all for every placement not named (right
+      column, Marketplace, search, Messenger, Audience Network, ...);
+    - without a square asset the feed asset is the catch-all.
+
+    The shared copy goes in as single-entry lists, so every placement shows the
+    same text, headline, description and call to action.
+
+    Args:
+        headline: The ad headline (the spec's title).
+        body_text: The primary text.
+        description: The description; omitted when None.
+        cta: A Meta call_to_action type value.
+        link: The destination URL.
+        feed: The feed asset (1:1 or 4:5).
+        story: The Stories & Reels asset (9:16), if the ad has one.
+        square: The optional exactly-1:1 asset.
+
+    Returns:
+        The asset_feed_spec dict.
+
+    Raises:
+        ValueError: If the ad has neither a story nor a square asset, or its
+            assets aren't all photos or all videos.
+    """
+    if story is None and square is None:
+        raise ValueError("A placement creative needs a story or square asset")
+    assets: list[tuple[PlacementAsset, str]] = [(feed, _FEED_LABEL)]
+    if story is not None:
+        assets.append((story, _STORY_LABEL))
+    if square is not None:
+        assets.append((square, _SQUARE_LABEL))
+    is_video = feed.video_id is not None
+    if any((asset.video_id is not None) != is_video for asset, _ in assets):
+        raise ValueError("Every placement asset must be the same media type")
+
+    spec: dict[str, Any] = {}
+    if is_video:
+        spec["ad_formats"] = ["SINGLE_VIDEO"]
+        spec["videos"] = [
+            {
+                "video_id": asset.video_id,
+                "thumbnail_hash": asset.thumbnail_hash,
+                "adlabels": [{"name": label}],
+            }
+            for asset, label in assets
+        ]
+    else:
+        spec["ad_formats"] = ["SINGLE_IMAGE"]
+        spec["images"] = [
+            {"hash": asset.image_hash, "adlabels": [{"name": label}]}
+            for asset, label in assets
+        ]
+    spec["bodies"] = [{"text": body_text}]
+    spec["titles"] = [{"text": headline}]
+    if description:
+        spec["descriptions"] = [{"text": description}]
+    spec["link_urls"] = [{"website_url": link}]
+    spec["call_to_action_types"] = [cta]
+
+    label_key = "video_label" if is_video else "image_label"
+    # (placements, label) in priority order; the last has an empty spec, the
+    # catch-all for everything not named above it.
+    plan: list[tuple[dict[str, Any], str]] = []
+    if story is not None:
+        plan.append((_STORY_PLACEMENTS, _STORY_LABEL))
+    if square is not None:
+        plan.append((_FEED_PLACEMENTS, _FEED_LABEL))
+        plan.append(({}, _SQUARE_LABEL))
+    else:
+        plan.append(({}, _FEED_LABEL))
+    spec["asset_customization_rules"] = [
+        {"customization_spec": placements, label_key: {"name": label}, "priority": rank}
+        for rank, (placements, label) in enumerate(plan, start=1)
+    ]
+    return spec
+
+
+async def create_meta_placement_ad_creative(
+    *,
+    access_token: str,
+    ad_account_id: str,
+    page_id: str,
+    name: str,
+    headline: str,
+    body_text: str,
+    description: str | None,
+    cta: str,
+    link: str,
+    feed: PlacementAsset,
+    story: PlacementAsset | None = None,
+    square: PlacementAsset | None = None,
+) -> str:
+    """Create one ad creative with a feed asset plus a story and/or square asset.
+
+    Uses asset_feed_spec (see placement_asset_feed_spec for which asset shows
+    where). Photos and videos must already be uploaded (and a video processed).
+
+    Args:
+        access_token: The business's Meta access token.
+        ad_account_id: The connected ad account.
+        page_id: The connected Page the ad is posted as.
+        name: The creative's display name on Meta.
+        headline: The ad headline.
+        body_text: The primary text.
+        description: The description; omitted when None.
+        cta: A Meta call_to_action type value.
+        link: The destination URL.
+        feed: The feed asset (1:1 or 4:5).
+        story: The Stories & Reels asset (9:16), the same media type.
+        square: The optional exactly-1:1 asset, the same media type.
+
+    Returns:
+        The new Meta ad creative id.
+
+    Raises:
+        MetaConnectionError: If the call fails.
+        ValueError: If there is no story or square asset, or the assets aren't
+            all the same media type.
+    """
+    spec = placement_asset_feed_spec(
+        headline=headline,
+        body_text=body_text,
+        description=description,
+        cta=cta,
+        link=link,
+        feed=feed,
+        story=story,
+        square=square,
+    )
+    if get_settings().fake_meta_enabled:
+        return f"fake_creative_{uuid4().hex[:12]}"
+    body = await _post_json(
+        f"{_GRAPH_BASE_URL}/{ad_account_id}/adcreatives",
+        {
+            "access_token": access_token,
+            "name": name,
+            "object_story_spec": json.dumps({"page_id": page_id}),
+            "asset_feed_spec": json.dumps(spec),
+        },
+        # Meta checks the assets while creating the creative; 5s was not enough.
+        timeout=_VIDEO_CREATIVE_TIMEOUT_SECONDS,
+    )
+    creative_id: str = body["id"]
+    return creative_id
+
+
 async def create_meta_video_ad_creative(
     *,
     access_token: str,

@@ -2742,3 +2742,356 @@ async def test_fake_meta_mode_fakes_video_upload_wait_and_creative(
 
     assert video_id.startswith("fake_video_")
     assert creative_id.startswith("fake_creative_")
+
+
+# ── Placement asset customization: one creative, a feed and a story asset ──
+
+_STORY_RULE_SPEC = {
+    "publisher_platforms": ["facebook", "instagram"],
+    "facebook_positions": ["story", "facebook_reels"],
+    "instagram_positions": ["story", "reels"],
+}
+
+
+async def _placement_creative(
+    monkeypatch: pytest.MonkeyPatch,
+    feed: meta.PlacementAsset,
+    story: meta.PlacementAsset,
+    *,
+    description: str | None = "Free shipping",
+) -> tuple[dict[str, Any], _FakeAsyncClient]:
+    client = _mock_client_returning(monkeypatch, _FakeResponse({"id": "creative_pair"}))
+    creative_id = await meta.create_meta_placement_ad_creative(
+        access_token="token",
+        ad_account_id="act_1",
+        page_id="page_1",
+        name="Ad name",
+        headline="Handmade rings",
+        body_text="A ring made for you.",
+        description=description,
+        cta="SHOP_NOW",
+        link="https://acme.example/ring",
+        feed=feed,
+        story=story,
+    )
+    assert creative_id == "creative_pair"
+    url, data = client.calls[0]
+    assert url == "https://graph.facebook.com/v21.0/act_1/adcreatives"
+    assert data["name"] == "Ad name"
+    assert json.loads(data["object_story_spec"]) == {"page_id": "page_1"}
+    return json.loads(data["asset_feed_spec"]), client
+
+
+@pytest.mark.asyncio
+async def test_a_video_pair_maps_the_story_video_to_stories_and_reels(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The shape Meta's validate-only accepted for a real 4:5 + 9:16 pair
+    (2026-10-08): exactly one ad format, a story rule, and a catch-all default."""
+    spec, _ = await _placement_creative(
+        monkeypatch,
+        meta.PlacementAsset(video_id="vid_feed", thumbnail_hash="thumb_feed"),
+        meta.PlacementAsset(video_id="vid_story", thumbnail_hash="thumb_story"),
+    )
+
+    assert spec == {
+        "ad_formats": ["SINGLE_VIDEO"],
+        "videos": [
+            {
+                "video_id": "vid_feed",
+                "thumbnail_hash": "thumb_feed",
+                "adlabels": [{"name": "sg_feed"}],
+            },
+            {
+                "video_id": "vid_story",
+                "thumbnail_hash": "thumb_story",
+                "adlabels": [{"name": "sg_story"}],
+            },
+        ],
+        "bodies": [{"text": "A ring made for you."}],
+        "titles": [{"text": "Handmade rings"}],
+        "descriptions": [{"text": "Free shipping"}],
+        "link_urls": [{"website_url": "https://acme.example/ring"}],
+        "call_to_action_types": ["SHOP_NOW"],
+        "asset_customization_rules": [
+            {
+                "customization_spec": _STORY_RULE_SPEC,
+                "video_label": {"name": "sg_story"},
+                "priority": 1,
+            },
+            # Everything else (feed, marketplace, search, Audience Network,
+            # Messenger, ...) gets the feed asset, so Advantage+ placements stay on.
+            {
+                "customization_spec": {},
+                "video_label": {"name": "sg_feed"},
+                "priority": 2,
+            },
+        ],
+    }
+
+
+@pytest.mark.asyncio
+async def test_an_image_pair_uses_image_hashes_and_image_labels(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    spec, _ = await _placement_creative(
+        monkeypatch,
+        meta.PlacementAsset(image_hash="hash_feed"),
+        meta.PlacementAsset(image_hash="hash_story"),
+    )
+
+    assert spec["ad_formats"] == ["SINGLE_IMAGE"]
+    assert spec["images"] == [
+        {"hash": "hash_feed", "adlabels": [{"name": "sg_feed"}]},
+        {"hash": "hash_story", "adlabels": [{"name": "sg_story"}]},
+    ]
+    assert "videos" not in spec
+    assert spec["asset_customization_rules"] == [
+        {
+            "customization_spec": _STORY_RULE_SPEC,
+            "image_label": {"name": "sg_story"},
+            "priority": 1,
+        },
+        {"customization_spec": {}, "image_label": {"name": "sg_feed"}, "priority": 2},
+    ]
+
+
+@pytest.mark.asyncio
+async def test_a_pair_uses_one_copy_for_both_placements_and_omits_a_missing_description(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    spec, _ = await _placement_creative(
+        monkeypatch,
+        meta.PlacementAsset(image_hash="a"),
+        meta.PlacementAsset(image_hash="b"),
+        description=None,
+    )
+
+    assert len(spec["bodies"]) == len(spec["titles"]) == len(spec["link_urls"]) == 1
+    assert len(spec["call_to_action_types"]) == 1
+    assert "descriptions" not in spec
+
+
+@pytest.mark.asyncio
+async def test_a_pair_creative_waits_longer_than_the_default_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seen: dict[str, Any] = {}
+    fake = _FakeAsyncClient(response=_FakeResponse({"id": "c"}))
+
+    def make_client(**kwargs: Any) -> _FakeAsyncClient:
+        seen.update(kwargs)
+        return fake
+
+    monkeypatch.setattr(httpx, "AsyncClient", make_client)
+
+    await meta.create_meta_placement_ad_creative(
+        access_token="t",
+        ad_account_id="act_1",
+        page_id="p",
+        name="n",
+        headline="h",
+        body_text="b.",
+        description=None,
+        cta="SHOP_NOW",
+        link="https://acme.example",
+        feed=meta.PlacementAsset(video_id="v1", thumbnail_hash="t1"),
+        story=meta.PlacementAsset(video_id="v2", thumbnail_hash="t2"),
+    )
+
+    assert seen["timeout"] >= 30
+
+
+def test_a_pair_must_be_all_photos_or_all_videos() -> None:
+    with pytest.raises(ValueError, match="same media type"):
+        meta.placement_asset_feed_spec(
+            headline="h",
+            body_text="b.",
+            description=None,
+            cta="SHOP_NOW",
+            link="https://acme.example",
+            feed=meta.PlacementAsset(image_hash="a"),
+            story=meta.PlacementAsset(video_id="v", thumbnail_hash="t"),
+        )
+
+
+@pytest.mark.asyncio
+async def test_fake_meta_mode_fakes_a_pair_creative(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("FAKE_META", "true")
+    get_settings.cache_clear()
+    try:
+        creative_id = await meta.create_meta_placement_ad_creative(
+            access_token="t",
+            ad_account_id="act_1",
+            page_id="p",
+            name="n",
+            headline="h",
+            body_text="b.",
+            description=None,
+            cta="SHOP_NOW",
+            link="https://acme.example",
+            feed=meta.PlacementAsset(image_hash="a"),
+            story=meta.PlacementAsset(image_hash="b"),
+        )
+    finally:
+        get_settings.cache_clear()
+
+    assert creative_id.startswith("fake_creative_")
+
+
+# ── Three assets: feed (4:5), story (9:16) and an optional square (1:1) ──
+
+_FEED_RULE_SPEC = {
+    "publisher_platforms": ["facebook", "instagram"],
+    "facebook_positions": ["feed", "video_feeds"],
+    "instagram_positions": ["stream", "profile_feed"],
+}
+
+
+async def _three_asset_creative(
+    monkeypatch: pytest.MonkeyPatch,
+    feed: meta.PlacementAsset,
+    story: meta.PlacementAsset | None,
+    square: meta.PlacementAsset,
+) -> dict[str, Any]:
+    client = _mock_client_returning(monkeypatch, _FakeResponse({"id": "creative_3"}))
+    await meta.create_meta_placement_ad_creative(
+        access_token="token",
+        ad_account_id="act_1",
+        page_id="page_1",
+        name="Ad",
+        headline="Handmade rings",
+        body_text="A ring made for you.",
+        description="Free shipping",
+        cta="SHOP_NOW",
+        link="https://acme.example/ring",
+        feed=feed,
+        story=story,
+        square=square,
+    )
+    spec: dict[str, Any] = json.loads(client.calls[0][1]["asset_feed_spec"])
+    return spec
+
+
+@pytest.mark.asyncio
+async def test_three_videos_map_story_feed_and_square_to_their_placements(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The shape Meta's validate-only accepted (2026-10-09, three real clips):
+    the square asset is the catch-all, the feed asset is limited to feeds."""
+    spec = await _three_asset_creative(
+        monkeypatch,
+        meta.PlacementAsset(video_id="v_feed", thumbnail_hash="t_feed"),
+        meta.PlacementAsset(video_id="v_story", thumbnail_hash="t_story"),
+        meta.PlacementAsset(video_id="v_square", thumbnail_hash="t_square"),
+    )
+
+    assert spec["ad_formats"] == ["SINGLE_VIDEO"]
+    assert [v["video_id"] for v in spec["videos"]] == ["v_feed", "v_story", "v_square"]
+    assert [v["adlabels"] for v in spec["videos"]] == [
+        [{"name": "sg_feed"}],
+        [{"name": "sg_story"}],
+        [{"name": "sg_square"}],
+    ]
+    assert spec["asset_customization_rules"] == [
+        {
+            "customization_spec": _STORY_RULE_SPEC,
+            "video_label": {"name": "sg_story"},
+            "priority": 1,
+        },
+        {
+            "customization_spec": _FEED_RULE_SPEC,
+            "video_label": {"name": "sg_feed"},
+            "priority": 2,
+        },
+        # Right column, Marketplace, search, Messenger, Audience Network and every
+        # placement not named above get the square asset.
+        {
+            "customization_spec": {},
+            "video_label": {"name": "sg_square"},
+            "priority": 3,
+        },
+    ]
+    assert len(spec["bodies"]) == len(spec["titles"]) == 1  # one shared copy
+
+
+@pytest.mark.asyncio
+async def test_three_images_use_image_labels_and_the_same_rules(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    spec = await _three_asset_creative(
+        monkeypatch,
+        meta.PlacementAsset(image_hash="h_feed"),
+        meta.PlacementAsset(image_hash="h_story"),
+        meta.PlacementAsset(image_hash="h_square"),
+    )
+
+    assert spec["ad_formats"] == ["SINGLE_IMAGE"]
+    assert [i["hash"] for i in spec["images"]] == ["h_feed", "h_story", "h_square"]
+    assert [r["image_label"]["name"] for r in spec["asset_customization_rules"]] == [
+        "sg_story",
+        "sg_feed",
+        "sg_square",
+    ]
+    assert [r["customization_spec"] for r in spec["asset_customization_rules"]] == [
+        _STORY_RULE_SPEC,
+        _FEED_RULE_SPEC,
+        {},
+    ]
+
+
+@pytest.mark.asyncio
+async def test_a_feed_and_square_pair_without_a_story_asset(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """No story asset: the feed asset takes the feeds and the square the rest."""
+    spec = await _three_asset_creative(
+        monkeypatch,
+        meta.PlacementAsset(video_id="v_feed", thumbnail_hash="t_feed"),
+        None,
+        meta.PlacementAsset(video_id="v_square", thumbnail_hash="t_square"),
+    )
+
+    assert [v["video_id"] for v in spec["videos"]] == ["v_feed", "v_square"]
+    assert spec["asset_customization_rules"] == [
+        {
+            "customization_spec": _FEED_RULE_SPEC,
+            "video_label": {"name": "sg_feed"},
+            "priority": 1,
+        },
+        {
+            "customization_spec": {},
+            "video_label": {"name": "sg_square"},
+            "priority": 2,
+        },
+    ]
+
+
+def test_a_placement_creative_needs_a_story_or_a_square_asset() -> None:
+    with pytest.raises(ValueError, match="story or square"):
+        meta.placement_asset_feed_spec(
+            headline="h",
+            body_text="b.",
+            description=None,
+            cta="SHOP_NOW",
+            link="https://acme.example",
+            feed=meta.PlacementAsset(image_hash="a"),
+            story=None,
+            square=None,
+        )
+
+
+def test_every_asset_of_an_ad_must_share_one_media_type() -> None:
+    with pytest.raises(ValueError, match="same media type"):
+        meta.placement_asset_feed_spec(
+            headline="h",
+            body_text="b.",
+            description=None,
+            cta="SHOP_NOW",
+            link="https://acme.example",
+            feed=meta.PlacementAsset(image_hash="a"),
+            story=meta.PlacementAsset(image_hash="b"),
+            square=meta.PlacementAsset(video_id="v", thumbnail_hash="t"),
+        )

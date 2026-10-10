@@ -35,6 +35,7 @@ vi.mock('../lib/api', async (importOriginal) => {
     approveCampaign: vi.fn<typeof actual.approveCampaign>(),
     publishCampaign: vi.fn<typeof actual.publishCampaign>(),
     getPublishStatus: vi.fn<typeof actual.getPublishStatus>(),
+    setCreativeStoryAsset: vi.fn<typeof actual.setCreativeStoryAsset>(),
     reorderCreativeCards: vi.fn<typeof actual.reorderCreativeCards>(),
     removeCreativeCard: vi.fn<typeof actual.removeCreativeCard>(),
   }
@@ -733,5 +734,27 @@ describe('AdPreviewPage', () => {
       await waitFor(() => expect(mockedApi.getPublishStatus).toHaveBeenCalledTimes(2))
       expect(mockedApi.publishCampaign).not.toHaveBeenCalled()
     })
+  })
+
+  it('offers the Stories & Reels and Square slots for a single image ad', async () => {
+    renderPage()
+
+    expect(await screen.findByRole('button', { name: 'Add Stories & Reels image' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Add Square image' })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Stories & Reels (9:16)' })).toBeInTheDocument()
+  })
+
+  it('shows the Feed / Story toggle once the ad has a story asset', async () => {
+    mockedApi.listCreatives.mockResolvedValue([
+      makeCreative({
+        imageUrl: 'http://localhost:8000/product-images/f1',
+        storyAssetId: 's1',
+        storyImageUrl: 'http://localhost:8000/product-images/s1',
+      }),
+    ])
+
+    renderPage()
+
+    expect(await screen.findByRole('button', { name: 'Story' })).toBeInTheDocument()
   })
 })

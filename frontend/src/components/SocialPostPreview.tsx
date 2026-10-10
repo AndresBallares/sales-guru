@@ -6,7 +6,7 @@ import type { Business, Creative } from '../lib/api'
 // (the compact "Selected ad" view on BusinessDetailPage) so the two never
 // drift apart the way the old, CampaignsSection-only `.ad-preview` (a
 // plain data card with no logo/page-name/Sponsored chrome at all) did.
-export function SocialPostPreview({
+function FeedPost({
   business,
   creative,
   ctaLabel,
@@ -53,7 +53,7 @@ export function SocialPostPreview({
         </ul>
       ) : creative.format === 'SINGLE_VIDEO' ? (
         <>
-          <VideoFrame creative={creative} />
+          <VideoFrame imageUrl={creative.imageUrl} videoUrl={creative.videoUrl} alt={creative.headline} />
           <div className="social-post-link-card">
             <div className="social-post-link-card-text">
               <p className="social-post-headline">{creative.headline}</p>
@@ -91,19 +91,27 @@ export function SocialPostPreview({
   )
 }
 
-// A video ad: its thumbnail with a play button; clicking swaps in the real
-// player (so nothing is downloaded until the user asks to watch).
-function VideoFrame({ creative }: { creative: Creative }) {
+// A video: its thumbnail with a play button; clicking swaps in the real player
+// (so nothing is downloaded until the user asks to watch).
+function VideoFrame({
+  imageUrl,
+  videoUrl,
+  alt,
+}: {
+  imageUrl: string | null | undefined
+  videoUrl: string | null | undefined
+  alt: string
+}) {
   // Which video is playing, so showing a different one starts back on its thumbnail.
   const [playing, setPlaying] = useState<string | null>(null)
-  const isPlaying = playing !== null && playing === creative.videoUrl
+  const isPlaying = playing !== null && playing === videoUrl
   if (isPlaying) {
     return (
       <div className="social-post-image-frame">
         <video
           className="social-post-image"
-          src={creative.videoUrl ?? undefined}
-          poster={creative.imageUrl ?? undefined}
+          src={videoUrl ?? undefined}
+          poster={imageUrl ?? undefined}
           controls
           autoPlay
           playsInline
@@ -113,18 +121,126 @@ function VideoFrame({ creative }: { creative: Creative }) {
   }
   return (
     <div className="social-post-image-frame social-post-video-frame">
-      {creative.imageUrl && (
-        <img className="social-post-image" src={creative.imageUrl} alt={creative.headline} />
-      )}
-      {creative.videoUrl && (
+      {imageUrl && <img className="social-post-image" src={imageUrl} alt={alt} />}
+      {videoUrl && (
         <button
           type="button"
           className="social-post-play"
           aria-label="Play video"
-          onClick={() => setPlaying(creative.videoUrl ?? null)}
+          onClick={() => setPlaying(videoUrl)}
         >
           <span aria-hidden="true">▶</span>
         </button>
+      )}
+    </div>
+  )
+}
+
+// Where Meta's Stories UI covers a 9:16 asset: the profile/name bar on top and the
+// reply/call-to-action bar below. Keep faces, text and the product out of these.
+const STORY_SAFE_TOP_PERCENT = 14
+const STORY_SAFE_BOTTOM_PERCENT = 20
+
+// The story placement: the 9:16 asset full-screen, with the covered areas shaded.
+function StoryPreview({ creative }: { creative: Creative }) {
+  const isVideo = creative.format === 'SINGLE_VIDEO'
+  return (
+    <div className="story-preview">
+      <div className="story-frame">
+        {isVideo ? (
+          <VideoFrame
+            imageUrl={creative.storyImageUrl}
+            videoUrl={creative.storyVideoUrl}
+            alt="Stories & Reels preview"
+          />
+        ) : (
+          creative.storyImageUrl && (
+            <img
+              className="story-media"
+              src={creative.storyImageUrl}
+              alt="Stories & Reels preview"
+            />
+          )
+        )}
+        <div
+          className="story-safe story-safe-top"
+          style={{ height: `${STORY_SAFE_TOP_PERCENT}%` }}
+          aria-hidden="true"
+        />
+        <div
+          className="story-safe story-safe-bottom"
+          style={{ height: `${STORY_SAFE_BOTTOM_PERCENT}%` }}
+          aria-hidden="true"
+        />
+      </div>
+      <p className="field-hint">
+        Shaded top {STORY_SAFE_TOP_PERCENT}% and bottom {STORY_SAFE_BOTTOM_PERCENT}%:{' '}
+        <span>Covered by the Stories UI</span>
+      </p>
+    </div>
+  )
+}
+
+// The square asset: shown for every placement the feed and story assets don't
+// cover (right column, Marketplace, search, Messenger, Audience Network, ...).
+function SquarePreview({ creative }: { creative: Creative }) {
+  const isVideo = creative.format === 'SINGLE_VIDEO'
+  return (
+    <div className="square-preview">
+      <div className="square-frame">
+        {isVideo ? (
+          <VideoFrame
+            imageUrl={creative.squareImageUrl}
+            videoUrl={creative.squareVideoUrl}
+            alt="Square preview"
+          />
+        ) : (
+          creative.squareImageUrl && (
+            <img className="square-media" src={creative.squareImageUrl} alt="Square preview" />
+          )
+        )}
+      </div>
+      <p className="field-hint">
+        Shown in the right column, Marketplace, search, Messenger, Audience Network and every
+        other placement not named for the feed or Stories &amp; Reels.
+      </p>
+    </div>
+  )
+}
+
+// The ad as it will look. An ad with a Stories & Reels asset gets a Feed / Story
+// toggle showing each placement's own asset; every other ad is just the post.
+export function SocialPostPreview(props: {
+  business?: Business | null
+  creative: Creative
+  ctaLabel: string
+}) {
+  const [view, setView] = useState<'feed' | 'story' | 'square'>('feed')
+  const isCarousel = props.creative.format === 'CAROUSEL'
+  const views: { id: 'feed' | 'story' | 'square'; label: string }[] = [{ id: 'feed', label: 'Feed' }]
+  if (props.creative.storyAssetId && !isCarousel) views.push({ id: 'story', label: 'Story' })
+  if (props.creative.squareAssetId && !isCarousel) views.push({ id: 'square', label: 'Square' })
+  if (views.length === 1) return <FeedPost {...props} />
+  return (
+    <div className="placement-preview">
+      <div className="placement-toggle" role="group" aria-label="Placement">
+        {views.map((option) => (
+          <button
+            key={option.id}
+            type="button"
+            aria-pressed={view === option.id}
+            onClick={() => setView(option.id)}
+          >
+            {option.label}
+          </button>
+        ))}
+      </div>
+      {view === 'story' ? (
+        <StoryPreview creative={props.creative} />
+      ) : view === 'square' ? (
+        <SquarePreview creative={props.creative} />
+      ) : (
+        <FeedPost {...props} />
       )}
     </div>
   )

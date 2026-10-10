@@ -123,6 +123,13 @@ export function classifyAspect(width: number, height: number): AspectClass {
   return 'UNCLASSIFIED'
 }
 
+// Mirrors app/services/media_info.py's is_square: exactly 1:1, within tolerance.
+// FEED covers both 1:1 and 4:5, so an ad's Square slot needs this on top of the class.
+export function isSquare(width?: number | null, height?: number | null): boolean {
+  if (!width || !height) return false
+  return Math.abs(width / height - 1) <= ASPECT_TOLERANCE
+}
+
 export function formatDuration(seconds: number): string {
   const whole = Math.floor(seconds)
   return `${Math.floor(whole / 60)}:${String(whole % 60).padStart(2, '0')}`
