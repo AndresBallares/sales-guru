@@ -1,9 +1,10 @@
 """Sample dashboard data for local development only.
 
 Reachable solely through `?sample=true` on the dashboard endpoints, which
-404 unless Settings.fake_meta_enabled (env FAKE_META) is on. That flag can't
-be on in production (Settings refuses to construct with it when
-ENVIRONMENT=production), and nothing here is ever written to the database: it
+404 unless Settings.dashboard_sample_enabled (env DASHBOARD_SAMPLE_DATA) or
+fake_meta_enabled (FAKE_META) is on. Neither can be on in production
+(Settings refuses to construct with either when ENVIRONMENT=production), and
+nothing here is ever written to the database: it
 is built in memory and passed through the same assembler as real numbers, so
 local development sees exactly what real data would look like.
 """

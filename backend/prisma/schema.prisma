@@ -391,6 +391,10 @@ model Campaign {
   // campaign stopped, not just that it did. Null for a campaign that
   // was never paused.
   pausedReason            String?
+  // When a LIVE campaign was paused (manual pause, spend breaker, duration
+  // elapsed); cleared on activate. Null for a campaign published paused
+  // (pausedReason "Published paused"), which never ran.
+  pausedAt                DateTime?
   // A live, self-clearing warning — not a pause — for a daily spend
   // sanity check (app/services/optimization_jobs.py, confirmed
   // 2026-09-03): Meta's own daily-budget pacing can overspend up to

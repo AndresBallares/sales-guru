@@ -13,12 +13,16 @@ from app.services.dashboard_sample import sample_business, sample_campaign
 
 router = APIRouter(prefix="/businesses/{business_id}", tags=["dashboard"])
 
-_SAMPLE_UNAVAILABLE = "Sample data is only available in local fake mode"
+_SAMPLE_UNAVAILABLE = (
+    "Sample data is only available in local development "
+    "(start the backend with DASHBOARD_SAMPLE_DATA=1)"
+)
 
 
 def _require_sample_allowed() -> None:
-    """404 unless the local fake-mode flag is on (never true in production)."""
-    if not get_settings().fake_meta_enabled:
+    """404 unless a local sample/fake flag is on (never true in production)."""
+    settings = get_settings()
+    if not (settings.dashboard_sample_enabled or settings.fake_meta_enabled):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail=_SAMPLE_UNAVAILABLE
         )
@@ -42,8 +46,9 @@ async def campaign_dashboard(
     time (see app/services/dashboard.py).
 
     Args:
-        sample: Local fake mode only: return in-memory sample numbers instead
-            of stored ones (404 when FAKE_META is off).
+        sample: Local development only: return in-memory sample numbers
+            instead of stored ones (404 unless DASHBOARD_SAMPLE_DATA or
+            FAKE_META is on).
         campaign: The campaign, resolved and ownership-checked.
 
     Returns:
@@ -103,6 +108,8 @@ async def campaign_dashboard(
         ],
         pixel_warning=campaign.pixelWarning,
         is_sample=False,
+        paused_at=campaign.pausedAt,
+        paused_reason=campaign.pausedReason,
     )
 
 
@@ -114,7 +121,8 @@ async def business_dashboard(
     """The stat strip across a business's published campaigns.
 
     Args:
-        sample: Local fake mode only (404 when FAKE_META is off).
+        sample: Local development only (404 unless DASHBOARD_SAMPLE_DATA or
+            FAKE_META is on).
         business: The business, resolved and ownership-checked.
 
     Returns:

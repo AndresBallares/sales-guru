@@ -139,3 +139,27 @@ def test_fake_llm_off_in_production_is_fine(monkeypatch: pytest.MonkeyPatch) -> 
 
     assert settings.fake_llm_enabled is False
     assert settings.environment == "production"
+
+
+def test_dashboard_sample_data_defaults_off(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("DASHBOARD_SAMPLE_DATA", raising=False)
+
+    assert Settings(_env_file=None).dashboard_sample_enabled is False
+
+
+def test_dashboard_sample_data_flag_turns_on(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("DASHBOARD_SAMPLE_DATA", "true")
+
+    assert Settings(_env_file=None).dashboard_sample_enabled is True
+
+
+def test_dashboard_sample_data_in_production_refuses_to_construct(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Sample numbers must never be servable in production: a deploy with the
+    flag on does not boot."""
+    monkeypatch.setenv("DASHBOARD_SAMPLE_DATA", "true")
+    monkeypatch.setenv("ENVIRONMENT", "production")
+
+    with pytest.raises(ValueError, match="DASHBOARD_SAMPLE_DATA must never be enabled"):
+        Settings(_env_file=None)

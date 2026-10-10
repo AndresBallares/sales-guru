@@ -236,6 +236,8 @@ export interface Campaign {
   startDate: string | null
   endDate: string | null
   pausedReason: string | null
+  // When a live campaign was paused; null for one published paused (it never ran).
+  pausedAt?: string | null
   dailySpendFlag: string | null
   // A Pixel-health warning (e.g. the Purchase event may not be firing).
   pixelWarning?: string | null
@@ -1332,5 +1334,188 @@ export function listTestEvaluations(
 ): Promise<TestEvaluation[]> {
   return request<TestEvaluation[]>(
     `/businesses/${businessId}/campaigns/${campaignId}/test-evaluation`,
+  )
+}
+
+// --- Campaign dashboard (app/schemas/dashboard.py) --------------------------
+//
+// Every figure is computed by the backend; null means unavailable, never zero.
+// Percent fields (link CTR, funnel rates, percent of plan) are percentages
+// (1.5 means 1.5%).
+
+export interface DashboardConfidence {
+  sufficient: boolean
+  basis: number | null
+  threshold: number
+  unit: string
+  // Only set when the basis is too thin, worded
+  // "Based on N <unit> — too early to judge".
+  label: string | null
+}
+
+export interface DashboardSpend {
+  value: number
+  plannedTotal: number | null
+  plannedDaily: number | null
+  percentOfPlan: number | null
+}
+
+export interface DashboardCount {
+  value: number | null
+  confidence: DashboardConfidence
+}
+
+export interface DashboardCostPerPurchase {
+  value: number | null
+  target: number
+  targetSource: 'unit_economics' | 'industry_benchmark'
+  breakeven: number | null
+  position: 'below_target' | 'above_target' | null
+  confidence: DashboardConfidence
+}
+
+export interface DashboardRoas {
+  value: number | null
+  breakeven: number | null
+  position: 'above_breakeven' | 'below_breakeven' | null
+  confidence: DashboardConfidence
+}
+
+export interface DashboardTier1 {
+  spend: DashboardSpend
+  purchases: DashboardCount
+  revenue: DashboardCount
+  costPerPurchase: DashboardCostPerPurchase
+  roas: DashboardRoas
+}
+
+export interface DashboardFunnelStep {
+  key: 'impressions' | 'link_clicks' | 'add_to_cart' | 'checkout' | 'purchase'
+  label: string
+  count: number | null
+  rateFromPrevious: number | null
+  dropOffFromPrevious: number | null
+}
+
+export interface DashboardTier2 {
+  linkCtr: {
+    value: number | null
+    band: 'weak' | 'below_typical' | 'typical' | 'strong' | null
+    weakBelow: number
+    typicalLow: number
+    typicalHigh: number
+    confidence: DashboardConfidence
+  }
+  cpm: {
+    value: number | null
+    benchmarkLow: number
+    benchmarkMedian: number
+    benchmarkHigh: number
+    zone: 'needs_attention' | 'within_acceptable_range' | 'strong' | 'exceptional' | null
+    confidence: DashboardConfidence
+  }
+  addToCart: {
+    count: number | null
+    rate: number | null
+    costPer: number | null
+    targetCostPer: number | null
+    confidence: DashboardConfidence
+  }
+  checkout: {
+    count: number | null
+    rate: number | null
+    confidence: DashboardConfidence
+  }
+  funnel: DashboardFunnelStep[]
+}
+
+export type DashboardAdStatus = 'live' | 'paused' | 'paused_by_optimizer' | 'proposed_pause'
+
+export interface DashboardAdRow {
+  adId: string
+  name: string
+  status: DashboardAdStatus
+  spend: number | null
+  linkCtr: number | null
+  addToCart: number | null
+  costPerAddToCart: number | null
+  purchases: number | null
+  cac: number | null
+  isLeader: boolean
+}
+
+export interface DashboardTier3 {
+  ads: DashboardAdRow[]
+  leader: { adId: string; basis: 'cac' | 'cost_per_add_to_cart' } | null
+  leaderMessage: string
+}
+
+export interface DashboardProposal {
+  id: string
+  actionType: string
+  targetAdId: string | null
+  targetAdName: string | null
+  reasoning: string
+  risk: string
+  confidence: number
+  currentBudget: number | null
+  suggestedBudget: number | null
+  suggestedBid: number | null
+  createdAt: string
+}
+
+export interface CampaignDashboard {
+  campaignId: string
+  campaignName: string | null
+  status: string
+  // True once the campaign has actually delivered (nothing delivered yet is no data).
+  hasData: boolean
+  asOf: string | null
+  // Set while paused: when a live campaign was paused (null if it never ran) and why.
+  pausedAt: string | null
+  pausedReason: string | null
+  isSample: boolean
+  pixelWarning: string | null
+  proposals: DashboardProposal[]
+  tier1: DashboardTier1 | null
+  tier2: DashboardTier2 | null
+  tier3: DashboardTier3 | null
+}
+
+export interface BusinessDashboardSummary {
+  activeCampaigns: number
+  totalSpend: number
+  purchases: number | null
+  revenue: number | null
+  costPerPurchase: number | null
+  confidence: DashboardConfidence
+  campaigns: {
+    campaignId: string
+    name: string | null
+    status: string
+    spend: number
+    purchases: number | null
+  }[]
+  isSample: boolean
+}
+
+// `sample` asks for the backend's in-memory sample numbers; it only works on a
+// local backend started with DASHBOARD_SAMPLE_DATA=1 (a 404 otherwise).
+export function getCampaignDashboard(
+  businessId: string,
+  campaignId: string,
+  sample = false,
+): Promise<CampaignDashboard> {
+  return request<CampaignDashboard>(
+    `/businesses/${businessId}/campaigns/${campaignId}/dashboard${sample ? '?sample=true' : ''}`,
+  )
+}
+
+export function getBusinessDashboard(
+  businessId: string,
+  sample = false,
+): Promise<BusinessDashboardSummary> {
+  return request<BusinessDashboardSummary>(
+    `/businesses/${businessId}/dashboard${sample ? '?sample=true' : ''}`,
   )
 }

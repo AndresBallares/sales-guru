@@ -1163,3 +1163,203 @@ code {
 .edit-business-panel {
   flex-basis: 100%;
 }
+
+/* ---------- Campaign dashboard ---------- */
+
+.dashboard-section {
+  margin-bottom: 2rem;
+}
+
+.dashboard-heading-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 0.5rem 1rem;
+}
+
+.dashboard-sample-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  color: var(--text-secondary);
+  font-size: 0.9rem;
+}
+
+/* The global input style is full width; a checkbox sits inline with its label. */
+.dashboard-sample-switch input[type='checkbox'] {
+  width: auto;
+  margin: 0;
+}
+
+.dash-strip,
+.dash-cards {
+  display: grid;
+  gap: 1rem;
+  margin: 1rem 0;
+}
+
+/* Four across for the stat strip where they fit; the result cards are wider. */
+.dash-strip {
+  grid-template-columns: repeat(auto-fit, minmax(9.5rem, 1fr));
+}
+
+.dash-cards {
+  grid-template-columns: repeat(auto-fit, minmax(13rem, 1fr));
+}
+
+.dash-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 0.75rem;
+  padding: 1rem 1.1rem;
+}
+
+.dash-card h3 {
+  margin: 0 0 0.25rem;
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.dash-value {
+  margin: 0;
+  font-size: 1.75rem;
+  font-weight: 700;
+  line-height: 1.2;
+}
+
+.dash-sub {
+  margin: 0.25rem 0 0;
+  color: var(--text-secondary);
+  font-size: 0.9rem;
+}
+
+.dash-bar {
+  display: block;
+  width: 100%;
+  height: 0.5rem;
+  margin-top: 0.5rem;
+  accent-color: var(--accent);
+}
+
+/* The confidence flag sits on the card itself, in words, with a tag so it does
+   not rely on colour alone. */
+.dash-flag {
+  margin: 0.6rem 0 0;
+  padding: 0.4rem 0.6rem;
+  border: 1px solid var(--warning);
+  border-radius: 0.5rem;
+  background: var(--warning-bg);
+  color: var(--text);
+  font-size: 0.85rem;
+}
+
+.dash-flag-tag {
+  font-weight: 700;
+  color: var(--text);
+  text-transform: uppercase;
+  font-size: 0.75rem;
+  letter-spacing: 0.04em;
+}
+
+.dash-basis {
+  margin: 0.6rem 0 0;
+  color: var(--text-secondary);
+  font-size: 0.85rem;
+}
+
+.dash-chip {
+  display: inline-block;
+  margin: 0.4rem 0 0;
+  padding: 0.15rem 0.6rem;
+  border-radius: 999px;
+  border: 1px solid;
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+
+.dash-chip-good {
+  color: var(--success);
+  background: var(--success-bg);
+  border-color: var(--success-border);
+}
+
+.dash-chip-bad {
+  color: var(--error);
+  background: var(--error-bg);
+  border-color: var(--error-border);
+}
+
+.dash-panel {
+  margin-top: 1.5rem;
+}
+
+.dash-picker {
+  max-width: 28rem;
+}
+
+.dash-warning {
+  margin: 1rem 0;
+  padding: 0.75rem 1rem;
+  border: 1px solid var(--error-border);
+  border-radius: 0.5rem;
+  background: var(--error-bg);
+  color: var(--text);
+}
+
+.dash-proposals {
+  margin: 1rem 0;
+  padding: 0.75rem 1rem;
+  border: 1px solid var(--warning);
+  border-radius: 0.5rem;
+  background: var(--warning-bg);
+}
+
+.dash-proposals h3 {
+  margin: 0 0 0.5rem;
+  font-size: 1rem;
+}
+
+.dash-proposals ul {
+  margin: 0;
+  padding-left: 1.2rem;
+}
+
+.dash-empty {
+  margin: 1rem 0;
+  padding: 1rem 1.1rem;
+  border: 1px dashed var(--border-strong);
+  border-radius: 0.75rem;
+  color: var(--text-secondary);
+}
+
+.dash-sample-banner {
+  display: block;
+  margin: 0.75rem 0;
+  padding: 0.4rem 0.75rem;
+  border: 1px solid var(--warning);
+  border-radius: 0.5rem;
+  background: var(--warning-bg);
+  font-weight: 600;
+}
+
+.dash-term {
+  margin: 0 0 0.5rem;
+  color: var(--text-secondary);
+  font-size: 0.75rem;
+}
+
+.dash-note {
+  margin: 0.5rem 0 0;
+  color: var(--text-secondary);
+  font-size: 0.85rem;
+}
+
+.dash-paused {
+  margin: 1rem 0 0.5rem;
+  padding: 0.6rem 0.9rem;
+  border: 1px solid var(--border-strong);
+  border-radius: 0.5rem;
+  background: var(--surface);
+}

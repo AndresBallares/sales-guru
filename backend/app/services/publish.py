@@ -1058,7 +1058,11 @@ async def pause_campaign(
 
     updated = await db.campaign.update(
         where={"id": campaign.id},
-        data={"status": "PAUSED", "pausedReason": reason},
+        data={
+            "status": "PAUSED",
+            "pausedReason": reason,
+            "pausedAt": datetime.now(UTC),
+        },
     )
     assert updated is not None  # just fetched by the caller, can't vanish mid-request
     return updated
@@ -1176,7 +1180,7 @@ async def activate_campaign(
 
     updated = await db.campaign.update(
         where={"id": campaign.id},
-        data={"status": "LIVE", "pausedReason": None},
+        data={"status": "LIVE", "pausedReason": None, "pausedAt": None},
     )
     assert updated is not None  # just fetched by the caller, can't vanish mid-request
     return updated

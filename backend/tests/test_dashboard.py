@@ -108,6 +108,8 @@ async def _seed_campaign(
     strategy: str | None = None,
     pixel_warning: str | None = None,
     ad_sets: int = 1,
+    paused_at: datetime | None = None,
+    paused_reason: str | None = None,
 ) -> str:
     seeder = Prisma()
     await seeder.connect()
@@ -120,6 +122,8 @@ async def _seed_campaign(
                 "status": status,
                 "metaCampaignId": "meta_campaign" if published else None,
                 "pixelWarning": pixel_warning,
+                "pausedAt": paused_at,
+                "pausedReason": paused_reason,
             }
         )
         if strategy is not None:
@@ -308,6 +312,101 @@ def test_campaign_with_no_snapshots_has_no_tiers(client: TestClient) -> None:
     assert body["tier3"] is None
     assert body["isSample"] is False
     assert body["proposals"] == []
+
+
+# --- delivered or not, live or paused ---------------------------------------------
+
+
+def test_snapshots_with_no_delivery_count_as_no_data(client: TestClient) -> None:
+    """A live campaign Meta hasn't delivered yet still gets (all-zero) snapshots:
+    that is "no results yet", not $0.00 of results."""
+    business_id, campaign_id = _setup(client)
+    for hours_ago in (2.0, 1.0, 0.0):
+        _run(
+            client,
+            lambda h=hours_ago: _seed_metric(
+                campaign_id, hours_ago=h, impressions=0, spend=0.0
+            ),
+        )
+
+    body = client.get(_url(business_id, campaign_id)).json()
+
+    assert body["hasData"] is False
+    assert body["tier1"] is None
+    assert body["tier2"] is None
+    assert body["asOf"] is None
+
+
+def test_spend_without_impressions_still_counts_as_delivered(
+    client: TestClient,
+) -> None:
+    business_id, campaign_id = _setup(client)
+    _run(client, lambda: _seed_metric(campaign_id, impressions=0, spend=2.5))
+
+    body = client.get(_url(business_id, campaign_id)).json()
+
+    assert body["hasData"] is True
+    assert body["tier1"]["spend"]["value"] == 2.5
+
+
+def test_a_paused_campaign_that_never_ran_has_no_data_and_no_paused_time(
+    client: TestClient,
+) -> None:
+    business_id, campaign_id = _setup(
+        client, status="PAUSED", paused_reason="Published paused"
+    )
+
+    body = client.get(_url(business_id, campaign_id)).json()
+
+    assert body["status"] == "PAUSED"
+    assert body["hasData"] is False
+    assert body["pausedAt"] is None
+    assert body["pausedReason"] == "Published paused"
+
+
+def test_a_campaign_paused_after_delivering_keeps_its_last_numbers(
+    client: TestClient,
+) -> None:
+    """Collection only runs for LIVE campaigns, so a paused one keeps whatever
+    was stored when it stopped, and says when and why."""
+    paused_at = NOW - timedelta(hours=3)
+    business_id, campaign_id = _setup(
+        client,
+        status="PAUSED",
+        paused_at=paused_at,
+        paused_reason="Manually paused",
+    )
+    _run(
+        client,
+        lambda: _seed_metric(
+            campaign_id,
+            hours_ago=4.0,
+            impressions=3000,
+            spend=45.0,
+            purchases=1,
+            purchase_value=90.0,
+        ),
+    )
+
+    body = client.get(_url(business_id, campaign_id)).json()
+
+    assert body["status"] == "PAUSED"
+    assert body["hasData"] is True
+    assert body["tier1"]["spend"]["value"] == 45.0
+    assert body["tier1"]["purchases"]["value"] == 1
+    assert body["pausedReason"] == "Manually paused"
+    assert abs(datetime.fromisoformat(body["pausedAt"]) - paused_at) < timedelta(
+        seconds=1
+    )
+
+
+def test_a_live_campaign_has_no_paused_fields(client: TestClient) -> None:
+    business_id, campaign_id = _setup(client)
+
+    body = client.get(_url(business_id, campaign_id)).json()
+
+    assert body["pausedAt"] is None
+    assert body["pausedReason"] is None
 
 
 # --- latest lifetime totals, never summed over time ------------------
@@ -714,6 +813,8 @@ def test_business_summary_adds_each_campaigns_latest_totals_only(
     assert body["costPerPurchase"] == 40.0
     assert {c["name"] for c in body["campaigns"]} == {"A", "B", "C"}
     assert body["isSample"] is False
+    assert body["confidence"]["sufficient"] is False
+    assert body["confidence"]["label"] == "Based on 5 purchases — too early to judge"
 
 
 def test_business_summary_with_no_published_campaigns(client: TestClient) -> None:
@@ -727,6 +828,7 @@ def test_business_summary_with_no_published_campaigns(client: TestClient) -> Non
     assert body["purchases"] is None
     assert body["costPerPurchase"] is None
     assert body["campaigns"] == []
+    assert body["confidence"]["label"] == "Based on 0 purchases — too early to judge"
 
 
 def test_business_summary_ignores_other_businesses(client: TestClient) -> None:
@@ -756,13 +858,14 @@ def test_sample_data_is_a_404_when_fake_mode_is_off(client: TestClient) -> None:
 
     assert campaign.status_code == 404
     assert business.status_code == 404
-    assert "fake mode" in campaign.json()["detail"]
+    assert "local" in campaign.json()["detail"]
 
 
-def test_sample_data_in_fake_mode_is_labelled_and_never_stored(
+def test_sample_data_with_the_sample_flag_is_labelled_and_never_stored(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setenv("FAKE_META", "true")
+    """DASHBOARD_SAMPLE_DATA is the dev switch: it leaves real Meta calls alone."""
+    monkeypatch.setenv("DASHBOARD_SAMPLE_DATA", "true")
     get_settings.cache_clear()
     try:
         business_id, campaign_id = _setup(client)
@@ -788,11 +891,27 @@ def test_sample_data_in_fake_mode_is_labelled_and_never_stored(
         get_settings.cache_clear()
 
 
+def test_sample_data_is_also_allowed_in_full_fake_mode(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("FAKE_META", "true")
+    get_settings.cache_clear()
+    try:
+        business_id, campaign_id = _setup(client)
+
+        response = client.get(_url(business_id, campaign_id, "?sample=true"))
+
+        assert response.status_code == 200
+        assert response.json()["isSample"] is True
+    finally:
+        get_settings.cache_clear()
+
+
 def test_sample_data_only_appears_when_asked_for(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Even in fake mode the plain endpoint never returns sample numbers."""
-    monkeypatch.setenv("FAKE_META", "true")
+    """Even with the flag on, the plain endpoint never returns sample numbers."""
+    monkeypatch.setenv("DASHBOARD_SAMPLE_DATA", "true")
     get_settings.cache_clear()
     try:
         business_id, campaign_id = _setup(client)

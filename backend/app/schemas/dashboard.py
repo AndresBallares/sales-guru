@@ -194,8 +194,14 @@ class CampaignDashboardResponse(CamelCaseModel):
     campaign_id: str
     campaign_name: str | None
     status: str
+    # True once the campaign has actually delivered (impressions or spend
+    # reported); snapshots with nothing delivered yet are "no data", not zeros.
     has_data: bool
     as_of: datetime | None
+    # Set while the campaign is paused: when a live campaign was paused (None
+    # for one published paused, which never ran) and why.
+    paused_at: datetime | None
+    paused_reason: str | None
     is_sample: bool
     pixel_warning: str | None
     proposals: list[Proposal]
@@ -222,5 +228,6 @@ class BusinessDashboardSummary(CamelCaseModel):
     purchases: int | None
     revenue: float | None
     cost_per_purchase: float | None
+    confidence: Confidence
     campaigns: list[CampaignSummary]
     is_sample: bool

@@ -562,6 +562,8 @@ def assemble_campaign(
     recommendations: Sequence[RecommendationInfo],
     pixel_warning: str | None,
     is_sample: bool,
+    paused_at: datetime | None = None,
+    paused_reason: str | None = None,
 ) -> CampaignDashboardResponse:
     """Build the whole campaign dashboard from rows already loaded.
 
@@ -587,6 +589,12 @@ def assemble_campaign(
         if r.status == "PENDING"
     ]
     totals = campaign_totals(snapshots)
+    # A campaign Meta hasn't delivered yet still gets all-zero snapshots; that is
+    # "no results yet", not a campaign with $0 of results.
+    if totals is not None and totals.impressions == 0 and totals.spend == 0:
+        totals = None
+    # Only a paused campaign has a pause to describe.
+    is_paused = status == "PAUSED"
     base = {
         "campaign_id": campaign_id,
         "campaign_name": name,
@@ -594,6 +602,8 @@ def assemble_campaign(
         "is_sample": is_sample,
         "pixel_warning": pixel_warning,
         "proposals": proposals,
+        "paused_at": paused_at if is_paused else None,
+        "paused_reason": paused_reason if is_paused else None,
     }
     if totals is None:
         return CampaignDashboardResponse(
@@ -666,6 +676,9 @@ def summarize_business(
         purchases=purchases,
         revenue=revenue,
         cost_per_purchase=_ratio(spend, purchases),
+        confidence=confidence(
+            purchases or 0, MIN_PURCHASES_TO_JUDGE, "purchases", "purchase"
+        ),
         campaigns=rows,
         is_sample=is_sample,
     )
