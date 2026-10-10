@@ -633,6 +633,15 @@ model Metric {
   // rolling-window CAC — app/services/optimization_jobs.py's CAC
   // circuit breaker, confirmed 2026-09-03).
   purchases        Int?
+  // Link-specific numbers behind the campaign dashboard (Meta's own
+  // inline_link_click fields): `clicks`/`ctr` above count every tap (likes,
+  // shares, profile visits), these count only clicks through to the
+  // destination. initiatedCheckout is the pixel's checkout-start count.
+  // Null = unavailable (snapshots taken before these fields existed too),
+  // never zero.
+  linkClicks        Int?
+  linkCtr           Float?
+  initiatedCheckout Int?
   fetchedAt        DateTime @default(now())
 }
 

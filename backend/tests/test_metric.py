@@ -414,3 +414,44 @@ def test_list_metrics_returns_most_recent_first(
     assert len(listed) == 2
     assert listed[0]["impressions"] == 2000
     assert listed[1]["impressions"] == 1000
+
+
+def test_refresh_stores_and_returns_the_link_and_checkout_fields(
+    client: TestClient, mock_services: dict[str, AsyncMock]
+) -> None:
+    """A manual refresh keeps link clicks, link CTR and checkout starts, the same
+    fields the scheduled collector stores."""
+    business_id, campaign_id = _live_campaign(client)
+    mock_services["insights"].return_value = meta_service_module.CampaignInsights(
+        impressions=2000,
+        clicks=90,
+        spend=30.0,
+        conversions=8,
+        link_clicks=30,
+        link_ctr=1.5,
+        initiated_checkout=3,
+    )
+
+    response = client.post(
+        f"/businesses/{business_id}/campaigns/{campaign_id}/metrics/refresh"
+    )
+
+    assert response.status_code == 201
+    body = response.json()
+    assert body["linkClicks"] == 30
+    assert body["linkCtr"] == 1.5
+    assert body["initiatedCheckout"] == 3
+
+
+def test_refresh_returns_none_link_fields_when_unavailable(
+    client: TestClient, mock_services: dict[str, AsyncMock]
+) -> None:
+    business_id, campaign_id = _live_campaign(client)
+
+    body = client.post(
+        f"/businesses/{business_id}/campaigns/{campaign_id}/metrics/refresh"
+    ).json()
+
+    assert body["linkClicks"] is None
+    assert body["linkCtr"] is None
+    assert body["initiatedCheckout"] is None

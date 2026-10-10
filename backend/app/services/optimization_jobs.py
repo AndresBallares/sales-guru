@@ -104,7 +104,7 @@ from app.services.publish import pause_campaign
 logger = logging.getLogger(__name__)
 
 
-def _metric_create_data(
+def metric_create_data(
     *,
     campaign_id: str,
     insights: CampaignInsights,
@@ -140,6 +140,9 @@ def _metric_create_data(
         "purchaseValue": insights.purchase_value,
         "roas": insights.roas,
         "purchases": insights.purchases,
+        "linkClicks": insights.link_clicks,
+        "linkCtr": insights.link_ctr,
+        "initiatedCheckout": insights.initiated_checkout,
     }
 
 
@@ -178,7 +181,7 @@ async def _collect_ad_level_metrics(campaign: Campaign, access_token: str) -> No
                 )
                 continue
             await db.metric.create(
-                data=_metric_create_data(
+                data=metric_create_data(
                     campaign_id=campaign.id,
                     insights=insights,
                     ad_set_id=ad_set.id,
@@ -218,7 +221,7 @@ async def _collect_metrics_for_campaign(campaign: Campaign, access_token: str) -
             logger.warning("Metrics collection failed for campaign %s", campaign.id)
             return
         await db.metric.create(
-            data=_metric_create_data(campaign_id=campaign.id, insights=insights)
+            data=metric_create_data(campaign_id=campaign.id, insights=insights)
         )
         return
 
@@ -236,7 +239,7 @@ async def _collect_metrics_for_campaign(campaign: Campaign, access_token: str) -
             )
             continue
         await db.metric.create(
-            data=_metric_create_data(
+            data=metric_create_data(
                 campaign_id=campaign.id, insights=insights, ad_set_id=ad_set.id
             )
         )

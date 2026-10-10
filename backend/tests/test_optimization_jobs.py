@@ -3445,3 +3445,23 @@ async def test_approving_the_carousel_experiment_creates_a_draft_campaign(
     assert new.status == "READY"
     assert new.metaCampaignId is None  # a draft: nothing created on Meta
     assert new.name is not None and "carousel experiment" in new.name
+
+
+def test_metric_create_data_carries_the_link_and_checkout_fields() -> None:
+    """The collector stores link clicks, link CTR and checkouts on every snapshot."""
+    data = optimization_jobs.metric_create_data(
+        campaign_id="camp-1",
+        insights=CampaignInsights(
+            impressions=1000,
+            clicks=80,
+            spend=10.0,
+            conversions=0,
+            link_clicks=30,
+            link_ctr=3.0,
+            initiated_checkout=2,
+        ),
+    )
+
+    assert data["linkClicks"] == 30
+    assert data["linkCtr"] == 3.0
+    assert data["initiatedCheckout"] == 2
