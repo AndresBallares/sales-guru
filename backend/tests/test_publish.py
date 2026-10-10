@@ -1526,6 +1526,61 @@ async def test_publish_paused_creates_everything_paused_on_meta(
     assert all(a.status == "PAUSED" for a in ads)
 
 
+def test_publish_sends_the_linked_instagram_account_on_the_creative(
+    client: TestClient,
+    mock_services: dict[str, AsyncMock],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The Page's Instagram account, read at connect time, goes out as the
+    creative's instagram_user_id."""
+    monkeypatch.setattr(
+        meta_api_module,
+        "fetch_page_instagram_account",
+        AsyncMock(return_value="ig_venzi"),
+    )
+    business_id, campaign_id = _ready_campaign(client)
+
+    response = client.post(f"/businesses/{business_id}/campaigns/{campaign_id}/publish")
+
+    assert response.status_code == 200
+    _, creative_kwargs = mock_services["create_ad_creative"].call_args
+    assert creative_kwargs["instagram_user_id"] == "ig_venzi"
+
+
+def test_publish_without_a_linked_instagram_account_publishes_as_before(
+    client: TestClient, mock_services: dict[str, AsyncMock]
+) -> None:
+    """No Instagram account on the Page: nothing is sent, and the publish
+    still succeeds."""
+    business_id, campaign_id = _ready_campaign(client)
+
+    response = client.post(f"/businesses/{business_id}/campaigns/{campaign_id}/publish")
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "LIVE"
+    _, creative_kwargs = mock_services["create_ad_creative"].call_args
+    assert creative_kwargs["instagram_user_id"] is None
+
+
+def test_publish_sends_the_linked_instagram_account_on_a_carousel_too(
+    client: TestClient,
+    mock_services: dict[str, AsyncMock],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        meta_api_module,
+        "fetch_page_instagram_account",
+        AsyncMock(return_value="ig_venzi"),
+    )
+    business_id, campaign_id = _ready_carousel_campaign(client, monkeypatch)
+
+    response = client.post(f"/businesses/{business_id}/campaigns/{campaign_id}/publish")
+
+    assert response.status_code == 200
+    _, kwargs = mock_services["create_carousel_ad_creative"].call_args
+    assert kwargs["instagram_user_id"] == "ig_venzi"
+
+
 def test_publish_without_paused_still_defaults_to_live(
     client: TestClient, mock_services: dict[str, AsyncMock]
 ) -> None:

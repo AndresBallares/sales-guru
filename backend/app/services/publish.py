@@ -607,6 +607,7 @@ async def _create_video_meta_creative(
     ad_account_id: str,
     page_id: str,
     destination_url: str,
+    instagram_user_id: str | None,
 ) -> str:
     """Create the Meta creative (video_data) for a SINGLE_VIDEO creative."""
     assert creative.productImageId is not None
@@ -623,6 +624,7 @@ async def _create_video_meta_creative(
         link=destination_url,
         video_id=asset.video_id,
         image_hash=asset.image_hash,
+        instagram_user_id=instagram_user_id,
     )
 
 
@@ -748,6 +750,7 @@ async def publish_campaign_to_meta(
             access_token=connection.accessToken,
             ad_account_id=ad_account_id,
             page_id=connection.pageId,
+            instagram_user_id=connection.instagramUserId,
             destination_url=destination_url,
         )
     elif creative.format == "CAROUSEL":
@@ -758,6 +761,7 @@ async def publish_campaign_to_meta(
             access_token=connection.accessToken,
             ad_account_id=ad_account_id,
             page_id=connection.pageId,
+            instagram_user_id=connection.instagramUserId,
             name=creative.headline,
             body_text=creative.bodyText,
             cta=creative.cta,
@@ -772,6 +776,7 @@ async def publish_campaign_to_meta(
             access_token=connection.accessToken,
             ad_account_id=ad_account_id,
             page_id=connection.pageId,
+            instagram_user_id=connection.instagramUserId,
             name=creative.headline,
             headline=creative.headline,
             body_text=creative.bodyText,
@@ -944,6 +949,7 @@ async def _publish_creative_test_plan(
                 access_token=access_token,
                 ad_account_id=ad_account_id,
                 page_id=connection.pageId,
+                instagram_user_id=connection.instagramUserId,
                 destination_url=destination_url,
             )
         else:
@@ -954,6 +960,7 @@ async def _publish_creative_test_plan(
                 access_token=access_token,
                 ad_account_id=ad_account_id,
                 page_id=connection.pageId,
+                instagram_user_id=connection.instagramUserId,
                 name=creative.headline,
                 headline=creative.headline,
                 body_text=creative.bodyText,
