@@ -1078,30 +1078,92 @@ async def activate_campaign(
         connection: The business's Meta connection (already confirmed to
             have a usable accessToken by the caller).
 
+    Resumes, on Meta, the Campaign object, every ad set, and every ad that
+    was paused at publish — but not an ad the optimizer paused (it has an
+    APPLIED PAUSE_AD recommendation). Afterwards each resumed object's
+    status is read back from Meta and must be ACTIVE. An ad paused by hand
+    in Ads Manager before activation looks the same as one paused at
+    publish and is resumed too.
+
     Returns:
         The campaign, now LIVE, pausedReason cleared.
 
     Raises:
-        MetaConnectionError: If any Graph API call fails. Ad sets already
-            resumed before the failure stay resumed — same "no rollback"
-            simplification as pause_campaign above.
+        MetaConnectionError: If any Graph API call fails, or Meta does not
+            confirm every resumed object as ACTIVE. Objects already resumed
+            stay resumed (no rollback, as in pause_campaign above) and the
+            campaign stays published-paused, so Activate can be retried.
     """
-    ad_sets = await db.adset.find_many(where={"campaignId": campaign.id})
-    paused_ad_set_ids: list[str] = []
-    for ad_set in ad_sets:
-        if ad_set.metaAdSetId is None:
-            continue
-        await meta.resume_meta_ad_set(
-            access_token=connection.accessToken, meta_ad_set_id=ad_set.metaAdSetId
-        )
-        paused_ad_set_ids.append(ad_set.id)
+    token = connection.accessToken
+    ad_sets = [
+        a
+        for a in await db.adset.find_many(where={"campaignId": campaign.id})
+        if a.metaAdSetId is not None
+    ]
 
-    if paused_ad_set_ids:
-        await db.adset.update_many(
-            where={"id": {"in": paused_ad_set_ids}}, data={"status": "LIVE"}
+    # Ads the optimizer paused stay paused: each one has an APPLIED PAUSE_AD
+    # recommendation. Everything else still PAUSED was paused at publish.
+    optimizer_paused = {
+        r.targetAdId
+        for r in await db.optimizationrecommendation.find_many(
+            where={
+                "campaignId": campaign.id,
+                "actionType": "PAUSE_AD",
+                "status": "APPLIED",
+            }
         )
+        if r.targetAdId is not None
+    }
+    ads = [
+        ad
+        for ad in await db.ad.find_many(
+            where={"adSetId": {"in": [a.id for a in ad_sets]}, "status": "PAUSED"}
+        )
+        if ad.metaAdId is not None and ad.id not in optimizer_paused
+    ]
+
+    # Campaign object first (nothing delivers under a paused campaign), then
+    # ad sets, then the ads.
+    intended: list[str] = []
+    if campaign.metaCampaignId is not None:
+        await meta.resume_meta_campaign(
+            access_token=token, meta_campaign_id=campaign.metaCampaignId
+        )
+        intended.append(campaign.metaCampaignId)
+    for ad_set in ad_sets:
+        assert ad_set.metaAdSetId is not None
+        await meta.resume_meta_ad_set(
+            access_token=token, meta_ad_set_id=ad_set.metaAdSetId
+        )
+        intended.append(ad_set.metaAdSetId)
+    for ad in ads:
+        assert ad.metaAdId is not None
+        await meta.resume_meta_ad(access_token=token, meta_ad_id=ad.metaAdId)
+        intended.append(ad.metaAdId)
+
+    # Read back from Meta (read-only) and confirm every intended object is
+    # ACTIVE before the app says so. On a mismatch the campaign stays
+    # published-paused, so Activate can simply be run again.
+    not_active: list[str] = []
+    for meta_object_id in intended:
+        object_status = await meta.fetch_meta_object_status(
+            access_token=token, meta_object_id=meta_object_id
+        )
+        if object_status != "ACTIVE":
+            not_active.append(f"{meta_object_id} ({object_status or 'unknown'})")
+    if not_active:
+        raise MetaConnectionError(
+            "Meta did not confirm these as active after resuming: "
+            + ", ".join(not_active)
+        )
+
+    if ad_sets:
+        await db.adset.update_many(
+            where={"id": {"in": [a.id for a in ad_sets]}}, data={"status": "LIVE"}
+        )
+    if ads:
         await db.ad.update_many(
-            where={"adSetId": {"in": paused_ad_set_ids}}, data={"status": "LIVE"}
+            where={"id": {"in": [a.id for a in ads]}}, data={"status": "LIVE"}
         )
 
     updated = await db.campaign.update(

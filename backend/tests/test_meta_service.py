@@ -1514,6 +1514,91 @@ async def test_resume_meta_ad_set_raises_on_failure(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("func", "kwarg"),
+    [
+        (meta.resume_meta_campaign, "meta_campaign_id"),
+        (meta.resume_meta_ad, "meta_ad_id"),
+    ],
+)
+async def test_resume_campaign_and_ad_send_the_active_status(
+    monkeypatch: pytest.MonkeyPatch, func: Any, kwarg: str
+) -> None:
+    """Resuming a campaign or an ad POSTs status=ACTIVE to its own node."""
+    client = _mock_client_returning(monkeypatch, _FakeResponse({"success": True}))
+
+    await func(access_token="token", **{kwarg: "obj_123"})
+
+    url, data = client.calls[0]
+    assert url == "https://graph.facebook.com/v21.0/obj_123"
+    assert data["status"] == "ACTIVE"
+    assert data["access_token"] == "token"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("func", "kwarg"),
+    [
+        (meta.resume_meta_campaign, "meta_campaign_id"),
+        (meta.resume_meta_ad, "meta_ad_id"),
+    ],
+)
+async def test_resume_campaign_and_ad_raise_on_failure(
+    monkeypatch: pytest.MonkeyPatch, func: Any, kwarg: str
+) -> None:
+    """A Graph API failure surfaces as MetaConnectionError."""
+    fake_client = _FakeAsyncClient(error=httpx.ConnectError("boom"))
+    monkeypatch.setattr(httpx, "AsyncClient", lambda: fake_client)
+
+    with pytest.raises(meta.MetaConnectionError, match="Meta API call failed"):
+        await func(access_token="token", **{kwarg: "obj_123"})
+
+
+@pytest.mark.asyncio
+async def test_fetch_meta_object_status_reads_the_status_field(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A read-only GET of the object's own `status`."""
+    client = _mock_client_returning(
+        monkeypatch, _FakeResponse({"status": "ACTIVE", "id": "ad_1"})
+    )
+
+    status = await meta.fetch_meta_object_status(
+        access_token="token", meta_object_id="ad_1"
+    )
+
+    assert status == "ACTIVE"
+    url, params = client.calls[0]
+    assert url == "https://graph.facebook.com/v21.0/ad_1"
+    assert params == {"access_token": "token", "fields": "status"}
+
+
+@pytest.mark.asyncio
+async def test_fetch_meta_object_status_is_empty_when_meta_returns_none(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _mock_client_returning(monkeypatch, _FakeResponse({"id": "ad_1"}))
+
+    assert (
+        await meta.fetch_meta_object_status(access_token="token", meta_object_id="ad_1")
+        == ""
+    )
+
+
+@pytest.mark.asyncio
+async def test_resume_and_status_read_are_canned_in_fake_mode(
+    fake_meta_mode: None,
+) -> None:
+    """Fake mode: resumes are no-ops and the read-back says ACTIVE."""
+    await meta.resume_meta_campaign(access_token="t", meta_campaign_id="c")
+    await meta.resume_meta_ad(access_token="t", meta_ad_id="a")
+    assert (
+        await meta.fetch_meta_object_status(access_token="t", meta_object_id="a")
+        == "ACTIVE"
+    )
+
+
+@pytest.mark.asyncio
 async def test_update_meta_ad_set_budget_sends_the_new_budget(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

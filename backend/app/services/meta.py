@@ -1614,6 +1614,77 @@ async def resume_meta_ad_set(*, access_token: str, meta_ad_set_id: str) -> None:
     )
 
 
+async def resume_meta_campaign(*, access_token: str, meta_campaign_id: str) -> None:
+    """Resume a paused Campaign object on Meta.
+
+    Only ever called by app/services/publish.py's activate_campaign: a
+    campaign published paused has its Meta Campaign object created PAUSED,
+    and an ad set (or ad) being ACTIVE does not deliver while its campaign
+    is paused.
+
+    Args:
+        access_token: The business's Meta access token.
+        meta_campaign_id: The Meta campaign id to resume (Campaign.metaCampaignId).
+
+    Raises:
+        MetaConnectionError: If the call fails.
+    """
+    if get_settings().fake_meta_enabled:
+        return
+    await _post_json(
+        f"{_GRAPH_BASE_URL}/{meta_campaign_id}",
+        {"access_token": access_token, "status": "ACTIVE"},
+    )
+
+
+async def resume_meta_ad(*, access_token: str, meta_ad_id: str) -> None:
+    """Resume a paused ad on Meta — the reverse of pause_meta_ad.
+
+    Only ever called by app/services/publish.py's activate_campaign, for ads
+    that were paused at publish (never ads the optimizer paused).
+
+    Args:
+        access_token: The business's Meta access token.
+        meta_ad_id: The Meta ad id to resume (Ad.metaAdId).
+
+    Raises:
+        MetaConnectionError: If the call fails.
+    """
+    if get_settings().fake_meta_enabled:
+        return
+    await _post_json(
+        f"{_GRAPH_BASE_URL}/{meta_ad_id}",
+        {"access_token": access_token, "status": "ACTIVE"},
+    )
+
+
+async def fetch_meta_object_status(*, access_token: str, meta_object_id: str) -> str:
+    """Read an object's own (configured) status back from Meta. Read-only.
+
+    Works for a campaign, ad set or ad id. This is the `status` the object
+    was set to (ACTIVE / PAUSED / ...), not `effective_status`, which also
+    reflects parents and review (so a freshly resumed ad can read
+    PENDING_REVIEW there while its own status is correctly ACTIVE).
+
+    Args:
+        access_token: The business's Meta access token.
+        meta_object_id: The Meta campaign, ad set or ad id.
+
+    Returns:
+        The object's status string ("" if Meta returned none).
+
+    Raises:
+        MetaConnectionError: If the call fails.
+    """
+    if get_settings().fake_meta_enabled:
+        return "ACTIVE"
+    body = await _get_json(
+        f"{_GRAPH_BASE_URL}/{meta_object_id}",
+        {"access_token": access_token, "fields": "status"},
+    )
+    return str(body.get("status", ""))
+
+
 async def update_meta_ad_set_budget(
     *, access_token: str, meta_ad_set_id: str, daily_budget_cents: int
 ) -> None:

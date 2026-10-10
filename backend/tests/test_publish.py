@@ -448,7 +448,17 @@ def mock_services(monkeypatch: pytest.MonkeyPatch) -> dict[str, AsyncMock]:
         meta_service_module, "create_meta_video_ad_creative", create_video_creative
     )
 
+    resume_campaign = AsyncMock(return_value=None)
+    monkeypatch.setattr(meta_service_module, "resume_meta_campaign", resume_campaign)
+    resume_ad = AsyncMock(return_value=None)
+    monkeypatch.setattr(meta_service_module, "resume_meta_ad", resume_ad)
+    object_status = AsyncMock(return_value="ACTIVE")
+    monkeypatch.setattr(meta_service_module, "fetch_meta_object_status", object_status)
+
     return {
+        "resume_campaign": resume_campaign,
+        "resume_ad": resume_ad,
+        "object_status": object_status,
         "upload_video": upload_video,
         "wait_video": wait_video,
         "create_video_creative": create_video_creative,
@@ -1657,6 +1667,202 @@ def test_activate_succeeds_and_resumes_every_adset(
     assert body["status"] == "LIVE"
     assert body["pausedReason"] is None
     mock_services["resume_ad_set"].assert_awaited_once()
+
+
+async def _seed_extra_ads(campaign_id: str, count: int) -> list[str]:
+    """Add `count` more PAUSED ads (each with a Meta ad id) under the
+    campaign's ad set, as a multi-ad creative test would have after publish."""
+    seeder = Prisma()
+    await seeder.connect()
+    try:
+        ad_set = await seeder.adset.find_first(where={"campaignId": campaign_id})
+        assert ad_set is not None
+        ids = []
+        for n in range(count):
+            ad = await seeder.ad.create(
+                data={
+                    "adSetId": ad_set.id,
+                    "name": f"Extra {n}",
+                    "status": "PAUSED",
+                    "metaAdId": f"meta_extra_{n}",
+                }
+            )
+            ids.append(ad.id)
+        return ids
+    finally:
+        await seeder.disconnect()
+
+
+async def _ad_statuses(campaign_id: str) -> dict[str, str]:
+    seeder = Prisma()
+    await seeder.connect()
+    try:
+        ad_sets = await seeder.adset.find_many(where={"campaignId": campaign_id})
+        ads = await seeder.ad.find_many(
+            where={"adSetId": {"in": [a.id for a in ad_sets]}}
+        )
+        return {a.metaAdId or a.id: a.status for a in ads}
+    finally:
+        await seeder.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_activate_resumes_the_campaign_ad_sets_and_every_ad_then_reads_back(
+    client: TestClient, mock_services: dict[str, AsyncMock]
+) -> None:
+    """Published paused, then activated: the Meta campaign object, the ad
+    set and every ad are resumed, each is read back from Meta, and the
+    local rows go LIVE."""
+    business_id, campaign_id = _ready_campaign(client)
+    client.post(
+        f"/businesses/{business_id}/campaigns/{campaign_id}/publish",
+        json={"paused": True},
+    )
+    await _seed_extra_ads(campaign_id, 2)
+
+    response = client.post(
+        f"/businesses/{business_id}/campaigns/{campaign_id}/activate"
+    )
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "LIVE"
+    mock_services["resume_campaign"].assert_awaited_once_with(
+        access_token="long-token", meta_campaign_id="meta_campaign_1"
+    )
+    mock_services["resume_ad_set"].assert_awaited_once()
+    resumed_ads = {
+        c.kwargs["meta_ad_id"] for c in mock_services["resume_ad"].await_args_list
+    }
+    assert resumed_ads == {"meta_ad_1", "meta_extra_0", "meta_extra_1"}
+    read_back = {
+        c.kwargs["meta_object_id"]
+        for c in mock_services["object_status"].await_args_list
+    }
+    assert read_back == {
+        "meta_campaign_1",
+        "meta_adset_1",
+        "meta_ad_1",
+        "meta_extra_0",
+        "meta_extra_1",
+    }
+    assert set((await _ad_statuses(campaign_id)).values()) == {"LIVE"}
+
+
+@pytest.mark.asyncio
+async def test_activate_leaves_an_optimizer_paused_ad_paused(
+    client: TestClient, mock_services: dict[str, AsyncMock]
+) -> None:
+    """An ad with an APPLIED PAUSE_AD recommendation is not resumed, not read
+    back, and stays PAUSED locally; the others are activated."""
+    business_id, campaign_id = _ready_campaign(client)
+    client.post(
+        f"/businesses/{business_id}/campaigns/{campaign_id}/publish",
+        json={"paused": True},
+    )
+    extra_ids = await _seed_extra_ads(campaign_id, 2)
+    seeder = Prisma()
+    await seeder.connect()
+    await seeder.optimizationrecommendation.create(
+        data={
+            "campaignId": campaign_id,
+            "actionType": "PAUSE_AD",
+            "targetAdId": extra_ids[0],
+            "reasoning": "Weak creative",
+            "confidence": 0.9,
+            "risk": "LOW",
+            "requiresApproval": False,
+            "status": "APPLIED",
+        }
+    )
+    await seeder.disconnect()
+
+    response = client.post(
+        f"/businesses/{business_id}/campaigns/{campaign_id}/activate"
+    )
+
+    assert response.status_code == 200
+    resumed_ads = {
+        c.kwargs["meta_ad_id"] for c in mock_services["resume_ad"].await_args_list
+    }
+    assert resumed_ads == {"meta_ad_1", "meta_extra_1"}
+    read_back = {
+        c.kwargs["meta_object_id"]
+        for c in mock_services["object_status"].await_args_list
+    }
+    assert "meta_extra_0" not in read_back
+    statuses = await _ad_statuses(campaign_id)
+    assert statuses["meta_extra_0"] == "PAUSED"
+    assert statuses["meta_extra_1"] == "LIVE"
+    assert statuses["meta_ad_1"] == "LIVE"
+
+
+@pytest.mark.asyncio
+async def test_activate_a_single_ad_campaign_resumes_its_one_ad(
+    client: TestClient, mock_services: dict[str, AsyncMock]
+) -> None:
+    """The ordinary one-ad campaign: campaign, ad set and the single ad."""
+    business_id, campaign_id = _ready_campaign(client)
+    client.post(
+        f"/businesses/{business_id}/campaigns/{campaign_id}/publish",
+        json={"paused": True},
+    )
+
+    response = client.post(
+        f"/businesses/{business_id}/campaigns/{campaign_id}/activate"
+    )
+
+    assert response.status_code == 200
+    mock_services["resume_campaign"].assert_awaited_once()
+    mock_services["resume_ad_set"].assert_awaited_once()
+    mock_services["resume_ad"].assert_awaited_once()
+    assert mock_services["object_status"].await_count == 3
+    assert set((await _ad_statuses(campaign_id)).values()) == {"LIVE"}
+
+
+@pytest.mark.asyncio
+async def test_activate_fails_and_stays_paused_when_meta_does_not_confirm_active(
+    client: TestClient, mock_services: dict[str, AsyncMock]
+) -> None:
+    """If the read-back shows an object not ACTIVE, Activate 500s naming it,
+    and the campaign stays published-paused so it can be retried."""
+    business_id, campaign_id = _ready_campaign(client)
+    client.post(
+        f"/businesses/{business_id}/campaigns/{campaign_id}/publish",
+        json={"paused": True},
+    )
+    mock_services["object_status"].side_effect = lambda **kw: (
+        "PAUSED" if kw["meta_object_id"] == "meta_ad_1" else "ACTIVE"
+    )
+
+    response = client.post(
+        f"/businesses/{business_id}/campaigns/{campaign_id}/activate"
+    )
+
+    assert response.status_code == 500
+    assert "meta_ad_1 (PAUSED)" in response.json()["detail"]
+    campaign = client.get(f"/businesses/{business_id}/campaigns").json()[0]
+    assert campaign["status"] == "PAUSED"
+    assert campaign["pausedReason"] == "Published paused"
+    assert set((await _ad_statuses(campaign_id)).values()) == {"PAUSED"}
+
+
+@pytest.mark.asyncio
+async def test_activate_reports_an_unknown_status_when_meta_returns_none(
+    client: TestClient, mock_services: dict[str, AsyncMock]
+) -> None:
+    business_id, campaign_id = _ready_campaign(client)
+    client.post(
+        f"/businesses/{business_id}/campaigns/{campaign_id}/publish",
+        json={"paused": True},
+    )
+    mock_services["object_status"].return_value = ""
+
+    response = client.post(
+        f"/businesses/{business_id}/campaigns/{campaign_id}/activate"
+    )
+
+    assert response.status_code == 500
+    assert "(unknown)" in response.json()["detail"]
 
 
 def test_activate_500s_when_the_meta_call_fails(
