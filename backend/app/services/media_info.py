@@ -61,6 +61,17 @@ def classify_aspect(width: int, height: int) -> AspectClass:
     return "UNCLASSIFIED"
 
 
+def is_square(width: int | None, height: int | None) -> bool:
+    """Whether a width x height is 1:1, within ASPECT_TOLERANCE.
+
+    FEED covers both 1:1 and 4:5, so the optional Square asset of an ad needs
+    this exact check on top of the class.
+    """
+    if not width or not height or width <= 0 or height <= 0:
+        return False
+    return abs(width / height - 1) <= ASPECT_TOLERANCE
+
+
 def _boxes(data: bytes, start: int, end: int) -> Iterator[tuple[bytes, int, int]]:
     """Yield (type, payload_start, box_end) for each box in data[start:end]."""
     offset = start

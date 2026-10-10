@@ -86,6 +86,7 @@ from app.schemas.creative import (
 from app.schemas.product_image import MAX_VIDEO_BYTES, MAX_VIDEO_SECONDS
 from app.schemas.strategy import StrategyContent, primary_audience
 from app.services.brand_voice import brand_voice_lines
+from app.services.media_info import is_square
 from app.services.prompt_safety import quarantine
 from app.services.tool_use import ToolInputRecoveryError, parse_tool_input
 
@@ -386,13 +387,17 @@ def copy_problems(creative: Creative) -> list[str]:
 
 
 async def media_problems(creative: Creative) -> list[str]:
-    """Why a video creative's media shouldn't go live, or an empty list.
+    """Why an ad's media shouldn't go live, or an empty list.
 
-    The media half of the pre-publish guard (copy_problems is the copy half):
-    a SINGLE_VIDEO creative must still point at an existing product video that
-    has its thumbnail and is within the limits it was accepted under. Other
-    formats have nothing to check here (an image's own existence is checked
-    when its bytes are uploaded to Meta).
+    The media half of the pre-publish guard (copy_problems is the copy half).
+    A SINGLE_VIDEO ad's video must still exist, be a video, have its thumbnail
+    and be within the limits it was accepted under. An ad that also has a
+    Stories & Reels and/or a Square asset must keep a feed asset that is 1:1 or
+    4:5, a story asset that is 9:16 and a square asset that is exactly 1:1 (and
+    not the feed asset itself), every one still existing and the same media
+    type. A single-asset image ad has nothing to check here (its photo's
+    existence is checked when its bytes are uploaded to Meta), and neither does
+    a carousel.
 
     Args:
         creative: The creative about to be published.
@@ -400,22 +405,81 @@ async def media_problems(creative: Creative) -> list[str]:
     Returns:
         One human-readable problem per issue found.
     """
-    if creative.format != "SINGLE_VIDEO":
+    if creative.format == "CAROUSEL":
         return []
-    if creative.productImageId is None:
-        return ["no video is attached"]
-    video = await db.productimage.find_unique(where={"id": creative.productImageId})
-    if video is None:
-        return ["its video no longer exists — pick another video"]
-    if video.mediaType != "VIDEO":
-        return ["the attached file isn't a video"]
+    is_video = creative.format == "SINGLE_VIDEO"
+    extras = (creative.storyProductImageId, creative.squareProductImageId)
+    if not is_video and not any(extras):
+        return []
+
+    problems: list[str] = []
+    main = (
+        await db.productimage.find_unique(where={"id": creative.productImageId})
+        if creative.productImageId is not None
+        else None
+    )
+    if is_video:
+        if creative.productImageId is None:
+            return ["no video is attached"]
+        if main is None:
+            return ["its video no longer exists — pick another video"]
+        if main.mediaType != "VIDEO":
+            return ["the attached file isn't a video"]
+        problems += _video_file_problems(main, "its video")
+    elif main is None:
+        problems.append("its feed asset no longer exists — pick another")
+
+    media_type = "VIDEO" if is_video else "IMAGE"
+    if creative.storyProductImageId is not None:
+        story = await db.productimage.find_unique(
+            where={"id": creative.storyProductImageId}
+        )
+        if story is None:
+            problems.append(
+                "its Stories & Reels asset no longer exists — pick another or remove it"
+            )
+        elif story.mediaType != media_type:
+            problems.append(
+                "its feed and Stories & Reels assets must be the same media type"
+            )
+        else:
+            if story.aspectClass != "STORY":
+                problems.append("its Stories & Reels asset must be 9:16")
+            if is_video:
+                problems += _video_file_problems(story, "its Stories & Reels video")
+    if creative.squareProductImageId is not None:
+        square = await db.productimage.find_unique(
+            where={"id": creative.squareProductImageId}
+        )
+        if square is None:
+            problems.append(
+                "its Square asset no longer exists — pick another or remove it"
+            )
+        elif square.mediaType != media_type:
+            problems.append("its feed and Square assets must be the same media type")
+        else:
+            if not is_square(square.width, square.height):
+                problems.append("its Square asset must be 1:1")
+            if square.id == creative.productImageId:
+                problems.append(
+                    "its Square asset must be different from the feed asset"
+                )
+            if is_video:
+                problems += _video_file_problems(square, "its Square video")
+    if main is not None and any(extras) and main.aspectClass != "FEED":
+        problems.append("its feed asset must be 1:1 or 4:5")
+    return problems
+
+
+def _video_file_problems(video: PrismaProductImage, label: str) -> list[str]:
+    """Thumbnail and limit problems of one stored video."""
     problems: list[str] = []
     if video.thumbnailData is None:
-        problems.append("its video has no thumbnail")
+        problems.append(f"{label} has no thumbnail")
     if (video.durationSeconds or 0) > MAX_VIDEO_SECONDS:
-        problems.append(f"its video is longer than {MAX_VIDEO_SECONDS} seconds")
+        problems.append(f"{label} is longer than {MAX_VIDEO_SECONDS} seconds")
     if (video.sizeBytes or 0) > MAX_VIDEO_BYTES:
-        problems.append("its video is over the size limit")
+        problems.append(f"{label} is over the size limit")
     return problems
 
 
