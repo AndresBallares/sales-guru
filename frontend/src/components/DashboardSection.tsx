@@ -14,6 +14,7 @@ import { UNAVAILABLE, formatAsOf, formatInteger, formatMoney } from '../lib/dash
 import { CardHeading } from './CardHeading'
 import { ConfidenceFlag } from './ConfidenceFlag'
 import { Tier1Cards } from './Tier1Cards'
+import { Tier2Cards } from './Tier2Cards'
 
 // Local development only: Vite sets import.meta.env.DEV false in a production
 // build, so the sample switch never exists in what ships. (The backend also
@@ -230,7 +231,25 @@ export function DashboardSection({ businessId }: { businessId: string }) {
                     {shown.status === 'PAUSED' ? 'Last updated' : 'Updated'}{' '}
                     {formatAsOf(shown.asOf)}
                   </p>
-                  <Tier1Cards tier1={shown.tier1} />
+                  {/* With fewer than 10 purchases the sales numbers can't be
+                      judged, so how people are responding leads; once there are
+                      enough purchases the verdict goes back on top. */}
+                  {shown.tier2 && !shown.tier1.purchases.confidence.sufficient ? (
+                    <>
+                      <p className="dash-lead">
+                        Too early to judge sales — here’s how people are responding to your
+                        ads.
+                      </p>
+                      <Tier2Cards tier2={shown.tier2} />
+                      <h3 className="dash-section-heading">Sales so far</h3>
+                      <Tier1Cards tier1={shown.tier1} />
+                    </>
+                  ) : (
+                    <>
+                      <Tier1Cards tier1={shown.tier1} />
+                      {shown.tier2 && <Tier2Cards tier2={shown.tier2} />}
+                    </>
+                  )}
                 </>
               ) : shown.status === 'PAUSED' ? (
                 <div className="dash-empty">

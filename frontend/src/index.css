@@ -1363,3 +1363,50 @@ code {
   border-radius: 0.5rem;
   background: var(--surface);
 }
+
+.dash-section-heading {
+  margin: 1.5rem 0 0.25rem;
+  font-size: 1.05rem;
+}
+
+.dash-lead {
+  margin: 1rem 0 0;
+  font-weight: 600;
+}
+
+.dash-term-inline {
+  color: var(--text-secondary);
+  font-size: 0.75rem;
+}
+
+.dash-funnel {
+  list-style: none;
+  margin: 0.75rem 0;
+  padding: 0;
+  display: grid;
+  gap: 0.6rem;
+}
+
+.dash-funnel-step {
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+  background: var(--surface);
+}
+
+.dash-funnel-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  font-weight: 600;
+}
+
+.dash-funnel-count {
+  font-variant-numeric: tabular-nums;
+}
+
+.dash-funnel-drop {
+  margin: 0.15rem 0 0;
+  color: var(--text-secondary);
+  font-size: 0.85rem;
+}

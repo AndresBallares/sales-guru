@@ -1,4 +1,5 @@
 import type { DashboardConfidence } from '../lib/api'
+import { formatInteger } from '../lib/dashboardFormat'
 
 // Shown directly on the card, never in a tooltip: a number resting on little
 // data says so in plain words ("Based on 3 purchases — too early to judge"),
@@ -7,7 +8,7 @@ export function ConfidenceFlag({ confidence }: { confidence: DashboardConfidence
   if (confidence.sufficient) {
     return (
       <p className="dash-basis">
-        Based on {confidence.basis} {confidence.unit}
+        Based on {formatInteger(confidence.basis)} {confidence.unit}
       </p>
     )
   }

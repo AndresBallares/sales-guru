@@ -1,4 +1,4 @@
-import type { DashboardConfidence, DashboardTier1 } from '../lib/api'
+import type { DashboardConfidence, DashboardTier1, DashboardTier2 } from '../lib/api'
 
 export const thinConfidence = (basis: number, noun = 'purchases'): DashboardConfidence => ({
   sufficient: false,
@@ -36,6 +36,77 @@ export function makeTier1(overrides: Partial<DashboardTier1> = {}): DashboardTie
       position: 'above_breakeven',
       confidence: thinConfidence(3),
     },
+    ...overrides,
+  }
+}
+
+export const thinImpressions: DashboardConfidence = {
+  sufficient: false,
+  basis: 640,
+  threshold: 1000,
+  unit: 'impressions',
+  label: 'Based on 640 impressions — too early to judge',
+}
+
+export const enoughImpressions: DashboardConfidence = {
+  sufficient: true,
+  basis: 12400,
+  threshold: 1000,
+  unit: 'impressions',
+  label: null,
+}
+
+const thinAddToCarts: DashboardConfidence = {
+  sufficient: false,
+  basis: 4,
+  threshold: 5,
+  unit: 'add-to-carts',
+  label: 'Based on 4 add-to-carts — too early to judge',
+}
+
+const thinCheckouts: DashboardConfidence = {
+  sufficient: false,
+  basis: 3,
+  threshold: 5,
+  unit: 'checkouts',
+  label: 'Based on 3 checkouts — too early to judge',
+}
+
+// Link CTR 1.5% (typical), CPM $11.49 (within the typical range), thin on
+// add-to-carts and checkouts, plus a full funnel from 12,400 views to 3 sales.
+export function makeTier2(overrides: Partial<DashboardTier2> = {}): DashboardTier2 {
+  return {
+    linkCtr: {
+      value: 1.5,
+      band: 'typical',
+      weakBelow: 0.8,
+      typicalLow: 1.2,
+      typicalHigh: 1.5,
+      confidence: enoughImpressions,
+    },
+    cpm: {
+      value: 11.49,
+      benchmarkLow: 7.49,
+      benchmarkMedian: 9.36,
+      benchmarkHigh: 11.23,
+      zone: 'needs_attention',
+      confidence: enoughImpressions,
+    },
+    addToCart: {
+      count: 4,
+      rate: 3.2,
+      costPer: 35.6,
+      targetCostPer: null,
+      confidence: thinAddToCarts,
+    },
+    checkout: { count: 3, rate: 75, confidence: thinCheckouts },
+    funnel: [
+      { key: 'impressions', label: 'Impressions', count: 12400, rateFromPrevious: null, dropOffFromPrevious: null },
+      { key: 'link_clicks', label: 'Link clicks', count: 148, rateFromPrevious: 1.19, dropOffFromPrevious: 98.81 },
+      { key: 'add_to_cart', label: 'Add to cart', count: 4, rateFromPrevious: 2.7, dropOffFromPrevious: 97.3 },
+      { key: 'checkout', label: 'Checkout started', count: 3, rateFromPrevious: 75, dropOffFromPrevious: 25 },
+      { key: 'purchase', label: 'Purchases', count: 3, rateFromPrevious: 100, dropOffFromPrevious: 0 },
+    ],
     ...overrides,
   }
 }

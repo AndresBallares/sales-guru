@@ -2,7 +2,12 @@ import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import * as api from '../lib/api'
-import { makeTier1, thinConfidence } from '../test/dashboardFixtures'
+import {
+  enoughConfidence,
+  makeTier1,
+  makeTier2,
+  thinConfidence,
+} from '../test/dashboardFixtures'
 import { DashboardSection } from './DashboardSection'
 
 vi.mock('../lib/api', async (importOriginal) => {
@@ -247,6 +252,85 @@ describe('DashboardSection', () => {
     expect(costPerSale).toHaveTextContent('How much you paid in ads for each sale.')
     expect(strip.queryByRole('article', { name: 'Total spend' })).not.toBeInTheDocument()
     expect(strip.queryByRole('article', { name: 'Cost per purchase' })).not.toBeInTheDocument()
+  })
+
+  describe('what leads: early signals or the sales verdict', () => {
+    function enoughSales() {
+      const confidence = enoughConfidence(12)
+      return makeTier1({
+        purchases: { value: 12, confidence },
+        revenue: { value: 1800, confidence },
+      })
+    }
+
+    it('puts how people are responding above the sales cards under 10 purchases', async () => {
+      mockedApi.getCampaignDashboard.mockResolvedValue(
+        dashboard('c1', { tier2: makeTier2() }),
+      )
+
+      renderSection()
+
+      expect(
+        await screen.findByText(
+          'Too early to judge sales — here’s how people are responding to your ads.',
+        ),
+      ).toBeInTheDocument()
+      const signals = screen.getByRole('heading', { name: 'How people are responding' })
+      const sales = screen.getByLabelText('Campaign results')
+      expect(
+        signals.compareDocumentPosition(sales) & Node.DOCUMENT_POSITION_FOLLOWING,
+      ).toBeTruthy()
+      expect(screen.getByRole('heading', { name: 'Sales so far' })).toBeInTheDocument()
+      // The line introduces the early signals, so it comes before them.
+      const lead = screen.getByText(/Too early to judge sales/)
+      expect(
+        lead.compareDocumentPosition(signals) & Node.DOCUMENT_POSITION_FOLLOWING,
+      ).toBeTruthy()
+    })
+
+    it('puts the sales verdict back on top from 10 purchases', async () => {
+      mockedApi.getCampaignDashboard.mockResolvedValue(
+        dashboard('c1', { tier1: enoughSales(), tier2: makeTier2() }),
+      )
+
+      renderSection()
+
+      const signals = await screen.findByRole('heading', { name: 'How people are responding' })
+      const sales = screen.getByLabelText('Campaign results')
+      expect(
+        sales.compareDocumentPosition(signals) & Node.DOCUMENT_POSITION_FOLLOWING,
+      ).toBeTruthy()
+      expect(screen.queryByText(/Too early to judge sales/)).not.toBeInTheDocument()
+      expect(screen.queryByRole('heading', { name: 'Sales so far' })).not.toBeInTheDocument()
+    })
+
+    it('shows just the sales cards when there are no early signals to show', async () => {
+      mockedApi.getCampaignDashboard.mockResolvedValue(dashboard('c1', { tier2: null }))
+
+      renderSection()
+
+      await screen.findByLabelText('Campaign results')
+      expect(screen.queryByText(/Too early to judge sales/)).not.toBeInTheDocument()
+      expect(
+        screen.queryByRole('heading', { name: 'How people are responding' }),
+      ).not.toBeInTheDocument()
+    })
+
+    it('also shows the early signals first for a paused campaign with thin sales', async () => {
+      mockedApi.getCampaignDashboard.mockResolvedValue(
+        dashboard('c1', {
+          status: 'PAUSED',
+          pausedAt: '2026-10-10T14:00:00Z',
+          pausedReason: 'Manually paused',
+          tier2: makeTier2(),
+        }),
+      )
+
+      renderSection()
+
+      expect(await screen.findByText(/Too early to judge sales/)).toBeInTheDocument()
+      expect(screen.getByRole('note')).toHaveTextContent('Paused')
+    })
   })
 
   describe('empty states by status', () => {
