@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
+import { InstagramAccountForm } from './InstagramAccountForm'
 import { useSearchParams } from 'react-router-dom'
 import {
   ApiError,
@@ -283,6 +284,16 @@ export function MetaConnectionSection({
             Connected — ad account <strong>{connection.adAccountId}</strong>, Page{' '}
             <strong>{connection.pageId}</strong>.
           </p>
+
+          <details>
+            <summary>Instagram account</summary>
+            <InstagramAccountForm
+              businessId={businessId}
+              connection={connection}
+              onUpdated={setConnection}
+              showCheckAgain
+            />
+          </details>
 
           {connection.pixelId ? (
             <p>

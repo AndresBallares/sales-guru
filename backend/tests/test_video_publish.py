@@ -90,6 +90,35 @@ def test_a_video_test_publishes_paused_through_the_background_job(
     assert mock_services["create_ad"].await_count == 3
 
 
+@pytest.mark.parametrize(("linked", "expected"), [(True, "ig_venzi"), (False, None)])
+def test_video_creatives_carry_the_linked_instagram_account(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    mock_services: dict[str, AsyncMock],  # noqa: F811
+    linked: bool,
+    expected: str | None,
+) -> None:
+    """Every video creative gets the Page's Instagram account, or nothing when
+    none is linked (the publish still completes)."""
+    from app.api import meta as meta_api_module
+
+    if linked:
+        monkeypatch.setattr(
+            meta_api_module,
+            "fetch_page_instagram_account",
+            AsyncMock(return_value="ig_venzi"),
+        )
+    business_id, campaign_id, _, _ = _ready_video_test(client, monkeypatch)
+
+    _publish(client, business_id, campaign_id)
+    final = _wait_for(client, business_id, campaign_id, {"DONE", "FAILED"})
+
+    assert final["state"] == "DONE"
+    creatives = mock_services["create_video_creative"].await_args_list
+    assert len(creatives) == 3
+    assert {c.kwargs["instagram_user_id"] for c in creatives} == {expected}
+
+
 def test_one_video_reused_by_three_ads_is_uploaded_and_processed_once(
     client: TestClient,
     monkeypatch: pytest.MonkeyPatch,

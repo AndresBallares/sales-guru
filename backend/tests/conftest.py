@@ -113,6 +113,21 @@ async def _clean_database() -> AsyncIterator[None]:
     yield
 
 
+@pytest.fixture(autouse=True)
+def _no_real_instagram_lookup(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep finalize's Instagram lookup offline: "no Instagram account linked".
+
+    Tests that care override it (tests/test_meta.py's mock_meta_service).
+    """
+    from unittest.mock import AsyncMock
+
+    from app.api import meta as meta_api
+
+    monkeypatch.setattr(
+        meta_api, "fetch_page_instagram_account", AsyncMock(return_value=None)
+    )
+
+
 @pytest.fixture
 def client() -> Iterator[TestClient]:
     """Provide a FastAPI test client.

@@ -1,6 +1,9 @@
 """Schemas for the Meta Ads connection (PRD.md build step 6)."""
 
+import re
 from datetime import datetime
+
+from pydantic import field_validator
 
 from app.schemas.base import CamelCaseModel
 
@@ -51,6 +54,29 @@ class MetaPixelRequest(CamelCaseModel):
     pixel_id: str
 
 
+class MetaInstagramAccountRequest(CamelCaseModel):
+    """A hand-entered Instagram account id.
+
+    Null (or empty) goes back to the one found on the Page.
+    """
+
+    instagram_user_id: str | None = None
+
+    @field_validator("instagram_user_id")
+    @classmethod
+    def _numeric_or_empty(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        value = value.strip()
+        if not value:
+            return None
+        if not re.fullmatch(r"\d{5,30}", value):
+            raise ValueError(
+                "An Instagram account ID is a number, such as 17841400000000000"
+            )
+        return value
+
+
 class MetaConnectionResponse(CamelCaseModel):
     """Public-facing representation of a MetaConnection.
 
@@ -62,6 +88,12 @@ class MetaConnectionResponse(CamelCaseModel):
     meta_user_id: str
     ad_account_id: str | None
     page_id: str | None
+    # The Instagram account ads are published as: the hand-entered one if set,
+    # else the one found on the Page. None means none, so ads run on Facebook
+    # placements only.
+    instagram_user_id: str | None
+    instagram_user_id_discovered: str | None
+    instagram_user_id_manual: str | None
     pixel_id: str | None
     # True once the user explicitly dismissed the Pixel step for this
     # connection ("Skip for now") rather than never having gotten to it

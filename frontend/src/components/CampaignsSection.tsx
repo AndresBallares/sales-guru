@@ -55,6 +55,7 @@ import {
   type TargetLocation,
   type TestEvaluation,
 } from '../lib/api'
+import { InstagramNote } from './InstagramNote'
 import { clearPublishPaused, getPublishPaused, setPublishPaused } from '../lib/publishPaused'
 import { requiresDestinationUrl } from '../lib/urlValidation'
 import { AudienceForm } from './AudienceForm'
@@ -2044,6 +2045,7 @@ export function CampaignsSection({
                     className="campaign-block"
                     aria-label={`Publish ${campaign.name ?? campaign.id}`}
                   >
+                    <InstagramNote businessId={businessId} />
                     <label htmlFor={`publish-paused-${campaign.id}`}>
                       <input
                         id={`publish-paused-${campaign.id}`}

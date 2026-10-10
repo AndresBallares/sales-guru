@@ -48,7 +48,12 @@ from app.schemas.meta import MetaAdAccount, MetaPage, MetaPixel
 _GRAPH_VERSION = "v21.0"
 _GRAPH_BASE_URL = f"https://graph.facebook.com/{_GRAPH_VERSION}"
 _AUTH_DIALOG_URL = f"https://www.facebook.com/{_GRAPH_VERSION}/dialog/oauth"
-_SCOPES = "ads_management,ads_read,pages_show_list,business_management"
+# pages_read_engagement lets us read the chosen Page's linked Instagram account
+# (fetch_page_instagram_account). App Review must list it with the ads
+# permissions (see PRD.md).
+_SCOPES = (
+    "ads_management,ads_read,pages_show_list,business_management,pages_read_engagement"
+)
 
 # Fake-mode-only sentinel — see list_ad_accounts/list_ad_pixels below.
 _FAKE_TERMS_NOT_ACCEPTED_AD_ACCOUNT_ID = "act_fake_terms_not_accepted"
@@ -435,6 +440,97 @@ async def list_pages(access_token: str) -> list[MetaPage]:
         {"fields": "id,name", "access_token": access_token},
     )
     return [MetaPage.model_validate(item) for item in body.get("data", [])]
+
+
+async def fetch_page_instagram_account(access_token: str, page_id: str) -> str | None:
+    """Read the Instagram account linked to a Page. Read-only.
+
+    Meta exposes it on the Page as `instagram_business_account` (an Instagram
+    professional account connected to the Page) and, for accounts linked the
+    older way, `connected_instagram_account`. The first one present wins.
+
+    Args:
+        access_token: A valid Meta access token.
+        page_id: The Page chosen for the connection.
+
+    Returns:
+        The Instagram account id, or None when the Page has none linked.
+
+    Raises:
+        MetaConnectionError: If the call fails.
+    """
+    if get_settings().fake_meta_enabled:
+        return "fake_instagram_account"
+    body = await _get_json(
+        f"{_GRAPH_BASE_URL}/{page_id}",
+        {
+            "fields": "instagram_business_account{id},connected_instagram_account{id}",
+            "access_token": access_token,
+        },
+    )
+    for field in ("instagram_business_account", "connected_instagram_account"):
+        account = body.get(field)
+        if isinstance(account, dict) and account.get("id"):
+            return str(account["id"])
+    return None
+
+
+class InvalidInstagramAccountError(MetaConnectionError):
+    """Meta rejected an Instagram account id as an ad identity."""
+
+
+async def validate_instagram_account(
+    *,
+    access_token: str,
+    ad_account_id: str,
+    page_id: str,
+    instagram_user_id: str,
+) -> None:
+    """Check with Meta that an Instagram account id can be used on this ad account.
+
+    A validate-only creative create: Meta runs its full checks and creates
+    nothing (execution_options=validate_only). A plain GET of the id cannot
+    answer this: without instagram_basic Meta returns the same "does not
+    exist or missing permissions" for a real account as for a made-up one.
+
+    Args:
+        access_token: The business's Meta access token.
+        ad_account_id: The connected ad account.
+        page_id: The connected Page the creative would be posted as.
+        instagram_user_id: The Instagram account id to check.
+
+    Raises:
+        InvalidInstagramAccountError: Meta says the id is not a valid
+            Instagram account for ads.
+        MetaConnectionError: Any other failure (network, permissions).
+    """
+    if get_settings().fake_meta_enabled:
+        return
+    link_data = {
+        "message": "Instagram account check",
+        "link": f"https://www.facebook.com/{page_id}",
+        "call_to_action": {"type": "LEARN_MORE"},
+    }
+    try:
+        await _post_json(
+            f"{_GRAPH_BASE_URL}/{ad_account_id}/adcreatives",
+            {
+                "access_token": access_token,
+                "name": "Instagram account check",
+                "object_story_spec": json.dumps(
+                    {"page_id": page_id, "link_data": link_data}
+                ),
+                "instagram_user_id": instagram_user_id,
+                "execution_options": json.dumps(["validate_only"]),
+            },
+            timeout=_VIDEO_CREATIVE_TIMEOUT_SECONDS,
+        )
+    except MetaConnectionError as exc:
+        if exc.code == 100 and "instagram_user_id" in str(exc):
+            raise InvalidInstagramAccountError(
+                str(exc), code=exc.code, error_subcode=exc.error_subcode
+            ) from exc
+        raise
 
 
 async def list_ad_pixels(access_token: str, ad_account_id: str) -> list[MetaPixel]:
@@ -957,6 +1053,7 @@ async def create_meta_video_ad_creative(
     link: str,
     video_id: str,
     image_hash: str,
+    instagram_user_id: str | None = None,
 ) -> str:
     """Create a single-video ad creative (object_story_spec.video_data).
 
@@ -974,6 +1071,10 @@ async def create_meta_video_ad_creative(
         video_id: A processed video (upload_meta_video + wait_for_meta_video).
         image_hash: The uploaded thumbnail's hash; video_data requires a
             cover image.
+        instagram_user_id: The Page's linked Instagram account, sent as the
+            creative's instagram_user_id so the ad can run on Instagram as
+            that account. Omitted from the request when None (no Instagram
+            account linked).
 
     Returns:
         The new Meta ad creative id.
@@ -992,15 +1093,16 @@ async def create_meta_video_ad_creative(
     }
     if description:
         video_spec["link_description"] = description
+    payload = {
+        "access_token": access_token,
+        "name": name,
+        "object_story_spec": json.dumps({"page_id": page_id, "video_data": video_spec}),
+    }
+    if instagram_user_id:
+        payload["instagram_user_id"] = instagram_user_id
     body = await _post_json(
         f"{_GRAPH_BASE_URL}/{ad_account_id}/adcreatives",
-        {
-            "access_token": access_token,
-            "name": name,
-            "object_story_spec": json.dumps(
-                {"page_id": page_id, "video_data": video_spec}
-            ),
-        },
+        payload,
         # Meta checks the video while creating the creative; 5s was not enough.
         timeout=_VIDEO_CREATIVE_TIMEOUT_SECONDS,
     )
@@ -1020,6 +1122,7 @@ async def create_meta_ad_creative(
     cta: str,
     link: str,
     image_hash: str | None,
+    instagram_user_id: str | None = None,
 ) -> str:
     """Create an ad creative object on Meta, ready to attach to an Ad.
 
@@ -1044,6 +1147,10 @@ async def create_meta_ad_creative(
         link: The destination URL.
         image_hash: An already-uploaded image's hash (see
             upload_meta_ad_image), if one exists.
+        instagram_user_id: The Page's linked Instagram account, sent as the
+            creative's instagram_user_id so the ad can run on Instagram as
+            that account. Omitted from the request when None (no Instagram
+            account linked).
 
     Returns:
         The new Meta ad creative id.
@@ -1065,14 +1172,14 @@ async def create_meta_ad_creative(
         link_data["image_hash"] = image_hash
 
     object_story_spec = json.dumps({"page_id": page_id, "link_data": link_data})
-    body = await _post_json(
-        f"{_GRAPH_BASE_URL}/{ad_account_id}/adcreatives",
-        {
-            "access_token": access_token,
-            "name": name,
-            "object_story_spec": object_story_spec,
-        },
-    )
+    payload = {
+        "access_token": access_token,
+        "name": name,
+        "object_story_spec": object_story_spec,
+    }
+    if instagram_user_id:
+        payload["instagram_user_id"] = instagram_user_id
+    body = await _post_json(f"{_GRAPH_BASE_URL}/{ad_account_id}/adcreatives", payload)
     creative_id: str = body["id"]
     return creative_id
 
@@ -1103,6 +1210,7 @@ async def create_meta_carousel_ad_creative(
     cta: str,
     link: str,
     cards: list[CarouselCard],
+    instagram_user_id: str | None = None,
 ) -> str:
     """Create a CAROUSEL ad creative object on Meta (link_data.child_attachments).
 
@@ -1133,6 +1241,10 @@ async def create_meta_carousel_ad_creative(
         cards: Every card's already-uploaded image_hash plus its own
             headline/description/link, in display order — Meta renders
             child_attachments in list order, matching CreativeCard.position.
+        instagram_user_id: The Page's linked Instagram account, sent as the
+            creative's instagram_user_id so the ad can run on Instagram as
+            that account. Omitted from the request when None (no Instagram
+            account linked).
 
     Returns:
         The new Meta ad creative id.
@@ -1157,14 +1269,14 @@ async def create_meta_carousel_ad_creative(
         ],
     }
     object_story_spec = json.dumps({"page_id": page_id, "link_data": link_data})
-    body = await _post_json(
-        f"{_GRAPH_BASE_URL}/{ad_account_id}/adcreatives",
-        {
-            "access_token": access_token,
-            "name": name,
-            "object_story_spec": object_story_spec,
-        },
-    )
+    payload = {
+        "access_token": access_token,
+        "name": name,
+        "object_story_spec": object_story_spec,
+    }
+    if instagram_user_id:
+        payload["instagram_user_id"] = instagram_user_id
+    body = await _post_json(f"{_GRAPH_BASE_URL}/{ad_account_id}/adcreatives", payload)
     creative_id: str = body["id"]
     return creative_id
 

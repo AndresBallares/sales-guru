@@ -6,6 +6,7 @@ import { BusinessEditForm } from '../components/BusinessEditForm'
 import { CampaignsSection } from '../components/CampaignsSection'
 import { DeleteBusinessSection } from '../components/DeleteBusinessSection'
 import { MetaConnectionSection } from '../components/MetaConnectionSection'
+import { MetaSettingsSection } from '../components/MetaSettingsSection'
 import { ProductsSection } from '../components/ProductsSection'
 import {
   ApiError,
@@ -113,7 +114,10 @@ export function BusinessDetailPage() {
           ) : !metaSetupComplete ? (
             <MetaConnectionSection businessId={businessId} onSetupComplete={setMetaSetupComplete} />
           ) : (
-            <CampaignsSection businessId={businessId} />
+            <>
+              <CampaignsSection businessId={businessId} />
+              <MetaSettingsSection businessId={businessId} />
+            </>
           )}
           {/* Reachable from every step once a profile exists, not just
               once onboarding is fully complete — "editable later from
