@@ -23,6 +23,8 @@ from app.schemas.creative import (
     ReorderCreativeCardsRequest,
     SelectCreativeRequest,
     SetCreativeImageRequest,
+    SetSquareAssetRequest,
+    SetStoryAssetRequest,
 )
 from app.schemas.strategy import (
     MAX_CREATIVE_ANGLES,
@@ -36,6 +38,7 @@ from app.services.creative import (
     generate_creatives,
     is_creative_stale,
 )
+from app.services.media_info import is_square
 
 router = APIRouter(
     prefix="/businesses/{business_id}/campaigns/{campaign_id}/creatives",
@@ -73,6 +76,19 @@ _NO_PRODUCT_VIDEO = (
     "Add at least one product video before selecting a video ad to publish"
 )
 _VIDEO_GONE = "This ad's video no longer exists — pick another video"
+_FEED_ASSET_REQUIRED = (
+    "The feed asset must be 1:1 or 4:5 before this ad can have a Stories & "
+    "Reels version — pick a feed-shaped asset first"
+)
+_FEED_ASSET_OF_PAIR = (
+    "This ad also has a Stories & Reels version, so its feed asset must be 1:1 or 4:5"
+)
+_STORY_ASSET_SHAPE = "The Stories & Reels asset must be 9:16"
+_SQUARE_ASSET_SHAPE = "The Square asset must be exactly 1:1"
+_SQUARE_NOT_FEED = "The Square asset must be different from the feed asset"
+_FEED_NOT_SQUARE = (
+    "This ad's Square asset is that one — the feed asset must be a different asset"
+)
 _CREATIVE_PLAN_SINGLE_IMAGE_ONLY = (
     "A creative test plan uses single-image ads only for now"
 )
@@ -137,6 +153,32 @@ def _to_response(
                 if creative.format == "SINGLE_VIDEO" and creative.productImageId
                 else None
             ),
+            "storyAssetId": creative.storyProductImageId,
+            "storyImageUrl": (
+                None
+                if creative.storyProductImageId is None
+                else product_thumbnail_url(creative.storyProductImageId)
+                if creative.format == "SINGLE_VIDEO"
+                else product_image_url(creative.storyProductImageId)
+            ),
+            "squareAssetId": creative.squareProductImageId,
+            "squareImageUrl": (
+                None
+                if creative.squareProductImageId is None
+                else product_thumbnail_url(creative.squareProductImageId)
+                if creative.format == "SINGLE_VIDEO"
+                else product_image_url(creative.squareProductImageId)
+            ),
+            "squareVideoUrl": (
+                product_image_url(creative.squareProductImageId)
+                if creative.format == "SINGLE_VIDEO" and creative.squareProductImageId
+                else None
+            ),
+            "storyVideoUrl": (
+                product_image_url(creative.storyProductImageId)
+                if creative.format == "SINGLE_VIDEO" and creative.storyProductImageId
+                else None
+            ),
             "headline": creative.headline,
             "bodyText": creative.bodyText,
             "description": creative.description,
@@ -178,6 +220,45 @@ async def _list_creatives(campaign: Campaign) -> list[CreativeResponse]:
     product = await _current_product(campaign)
     business = await _current_business(campaign)
     return [_to_response(c, campaign, product, business) for c in creatives]
+
+
+async def _pick_assets(
+    product_id: str, media_type: str
+) -> tuple[ProductImage | None, ProductImage | None, ProductImage | None]:
+    """The product's preselected feed, story and square assets of a media type.
+
+    Used to preselect an ad's slots when it is generated. The story slot takes
+    the first 9:16 asset by position. The feed slot takes the first 4:5 asset,
+    else the first Feed-shaped (1:1 or 4:5) one. The square slot takes the first
+    exactly-1:1 asset that is not already the feed asset. Any may be None.
+    """
+    assets = await db.productimage.find_many(
+        where={"productId": product_id, "mediaType": media_type},
+        order={"position": "asc"},
+    )
+    feeds = [a for a in assets if a.aspectClass == "FEED"]
+    story = next((a for a in assets if a.aspectClass == "STORY"), None)
+    feed = next((a for a in feeds if not is_square(a.width, a.height)), None) or (
+        feeds[0] if feeds else None
+    )
+    square = next(
+        (a for a in feeds if is_square(a.width, a.height) and a is not feed), None
+    )
+    return feed, story, square
+
+
+def _check_feed_asset_for_extras(creative: Creative, feed: ProductImage) -> None:
+    """An ad with a story or square asset needs a Feed-shaped, distinct feed asset."""
+    if (creative.storyProductImageId or creative.squareProductImageId) and (
+        feed.aspectClass != "FEED"
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=_FEED_ASSET_OF_PAIR
+        )
+    if creative.squareProductImageId and feed.id == creative.squareProductImageId:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=_FEED_NOT_SQUARE
+        )
 
 
 def _video_input(video: ProductImage) -> VideoInput:
@@ -279,6 +360,9 @@ async def create_creatives(
     primary_image = None
     card_images = None
     video_row = None
+    story_row = None
+    square_row = None
+    photo_pair: tuple[ProductImage, ProductImage, ProductImage | None] | None = None
     video_input = None
     destination_url = None
     if creative_format == "CAROUSEL":
@@ -320,9 +404,21 @@ async def create_creatives(
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST, detail=_NEEDS_PRODUCT_VIDEO
             )
+        # A Feed + Story video pair is preselected when the product has both;
+        # otherwise the ad is single-asset exactly as before.
+        feed_video, story_video, square_video = (
+            await _pick_assets(product.id, "VIDEO")
+            if product is not None
+            else (None, None, None)
+        )
+        if feed_video is not None and story_video is not None:
+            video_row, story_row, square_row = feed_video, story_video, square_video
         video_input = _video_input(video_row)
     elif product is not None:
         primary_image = await get_primary_image(product.id)
+        feed_photo, story_photo, square_photo = await _pick_assets(product.id, "IMAGE")
+        if feed_photo is not None and story_photo is not None:
+            photo_pair = (feed_photo, story_photo, square_photo)
 
     try:
         variants = await generate_creatives(
@@ -377,6 +473,18 @@ async def create_creatives(
             "sourceUrl": source_url,
             "sourceBusinessDescription": business.description,
         }
+        if photo_pair is not None:
+            # Feed and Story photos are preselected as a pair when the product
+            # has both; otherwise the photo is attached at select, as before.
+            data["productImageId"] = photo_pair[0].id
+            data["imageUrl"] = product_image_url(photo_pair[0].id)
+            data["storyProductImageId"] = photo_pair[1].id
+            if photo_pair[2] is not None:
+                data["squareProductImageId"] = photo_pair[2].id
+        if story_row is not None:
+            data["storyProductImageId"] = story_row.id
+            if square_row is not None:
+                data["squareProductImageId"] = square_row.id
         if video_row is not None:
             # A video ad points at its product video through the same
             # productImageId an image ad uses for its photo (this field
@@ -582,6 +690,7 @@ async def select_creative(
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND, detail=_PRODUCT_IMAGE_NOT_FOUND
             )
+        _check_feed_asset_for_extras(creative, product_image)
         update_data["imageUrl"] = _media_url(product_image)
         update_data["productImageId"] = product_image.id
     elif (
@@ -740,12 +849,191 @@ async def set_creative_image(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail=_PRODUCT_IMAGE_NOT_FOUND
         )
+    _check_feed_asset_for_extras(creative, product_image)
     updated = await db.creative.update(
         where={"id": creative.id},
         data={
             "imageUrl": _media_url(product_image),
             "productImageId": product_image.id,
         },
+        include={"cards": {"order_by": {"position": "asc"}}},
+    )
+    assert updated is not None  # just fetched above, can't vanish mid-request
+    await _reopen_approval_if_selected(campaign, updated)
+
+    product = await _current_product(campaign)
+    business = await _current_business(campaign)
+    return _to_response(updated, campaign, product, business)
+
+
+@router.put("/{creative_id}/story-asset", response_model=CreativeResponse)
+async def set_creative_story_asset(
+    creative_id: str,
+    payload: SetStoryAssetRequest,
+    campaign: Campaign = Depends(get_owned_campaign),
+) -> CreativeResponse:
+    """Add, replace or remove an ad's Stories & Reels (9:16) asset.
+
+    The ad's main asset is its feed asset (1:1 or 4:5); this is the second
+    asset it shows in story and Reels placements. It must be the same media
+    type as the ad (a photo for an image ad, a video for a video ad). Never
+    changes whether the ad is selected; locked once the campaign is published;
+    on a selected ad of an approved campaign it sends the campaign back to
+    pending approval.
+
+    Args:
+        creative_id: The creative to change.
+        payload: The 9:16 asset to use, or null to remove the story asset.
+        campaign: The campaign, resolved and ownership-checked by
+            get_owned_campaign.
+
+    Returns:
+        The updated creative.
+
+    Raises:
+        HTTPException: 404 if the creative, or an asset of the right media
+            type on this campaign's product, doesn't exist; 400 if the
+            campaign is already published, the creative is a carousel, the
+            asset isn't 9:16, or the ad has no 1:1/4:5 feed asset.
+    """
+    creative = await _find_editable_creative(creative_id, campaign)
+    data: CreativeUpdateInput = {}
+    if payload.product_image_id is None:
+        data["storyProductImageId"] = None
+    else:
+        story = (
+            await db.productimage.find_first(
+                where={
+                    "id": payload.product_image_id,
+                    "productId": campaign.productId,
+                    "mediaType": _media_type_for(creative),
+                }
+            )
+            if campaign.productId is not None
+            else None
+        )
+        if story is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail=_PRODUCT_IMAGE_NOT_FOUND
+            )
+        if story.aspectClass != "STORY":
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST, detail=_STORY_ASSET_SHAPE
+            )
+        main = (
+            await db.productimage.find_unique(where={"id": creative.productImageId})
+            if creative.productImageId is not None
+            else None
+        )
+        if main is None and campaign.productId is not None:
+            # An image ad's photo is normally attached at select: attach the
+            # product's first feed-shaped photo now so the pair is complete.
+            feed, _, _ = await _pick_assets(
+                campaign.productId, _media_type_for(creative)
+            )
+            if feed is not None:
+                data["productImageId"] = feed.id
+                data["imageUrl"] = _media_url(feed)
+                main = feed
+        if main is None or main.aspectClass != "FEED":
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST, detail=_FEED_ASSET_REQUIRED
+            )
+        data["storyProductImageId"] = story.id
+    updated = await db.creative.update(
+        where={"id": creative.id},
+        data=data,
+        include={"cards": {"order_by": {"position": "asc"}}},
+    )
+    assert updated is not None  # just fetched above, can't vanish mid-request
+    await _reopen_approval_if_selected(campaign, updated)
+
+    product = await _current_product(campaign)
+    business = await _current_business(campaign)
+    return _to_response(updated, campaign, product, business)
+
+
+@router.put("/{creative_id}/square-asset", response_model=CreativeResponse)
+async def set_creative_square_asset(
+    creative_id: str,
+    payload: SetSquareAssetRequest,
+    campaign: Campaign = Depends(get_owned_campaign),
+) -> CreativeResponse:
+    """Add, replace or remove an ad's optional Square (1:1) asset.
+
+    When present it is the catch-all asset for every placement the feed and
+    story rules don't name (right column, Marketplace, search, Messenger,
+    Audience Network, ...); without it the feed asset is the catch-all. It must
+    be the same media type as the ad and a different asset from the feed asset.
+    Never changes whether the ad is selected; locked once the campaign is
+    published; on a selected ad of an approved campaign it sends the campaign
+    back to pending approval.
+
+    Args:
+        creative_id: The creative to change.
+        payload: The 1:1 asset to use, or null to remove the square asset.
+        campaign: The campaign, resolved and ownership-checked by
+            get_owned_campaign.
+
+    Returns:
+        The updated creative.
+
+    Raises:
+        HTTPException: 404 if the creative, or an asset of the right media
+            type on this campaign's product, doesn't exist; 400 if the
+            campaign is already published, the creative is a carousel, the
+            asset isn't exactly 1:1 or is the feed asset, or the ad has no
+            Feed-shaped main asset.
+    """
+    creative = await _find_editable_creative(creative_id, campaign)
+    data: CreativeUpdateInput = {}
+    if payload.product_image_id is None:
+        data["squareProductImageId"] = None
+    else:
+        square = (
+            await db.productimage.find_first(
+                where={
+                    "id": payload.product_image_id,
+                    "productId": campaign.productId,
+                    "mediaType": _media_type_for(creative),
+                }
+            )
+            if campaign.productId is not None
+            else None
+        )
+        if square is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail=_PRODUCT_IMAGE_NOT_FOUND
+            )
+        if not is_square(square.width, square.height):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST, detail=_SQUARE_ASSET_SHAPE
+            )
+        main = (
+            await db.productimage.find_unique(where={"id": creative.productImageId})
+            if creative.productImageId is not None
+            else None
+        )
+        if main is None and campaign.productId is not None:
+            feed, _, _ = await _pick_assets(
+                campaign.productId, _media_type_for(creative)
+            )
+            if feed is not None and feed.id != square.id:
+                data["productImageId"] = feed.id
+                data["imageUrl"] = _media_url(feed)
+                main = feed
+        if main is None or main.aspectClass != "FEED":
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST, detail=_FEED_ASSET_REQUIRED
+            )
+        if main.id == square.id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST, detail=_SQUARE_NOT_FEED
+            )
+        data["squareProductImageId"] = square.id
+    updated = await db.creative.update(
+        where={"id": creative.id},
+        data=data,
         include={"cards": {"order_by": {"position": "asc"}}},
     )
     assert updated is not None  # just fetched above, can't vanish mid-request

@@ -947,6 +947,17 @@ export interface Creative {
   imageUrl: string | null
   // A SINGLE_VIDEO ad's playable video (imageUrl is then its thumbnail).
   videoUrl?: string | null
+  // The ad's Stories & Reels (9:16) asset, when it has one: its id, what to show
+  // for it (the photo, or a video's thumbnail) and, for a video, its playable
+  // URL. imageUrl/videoUrl above are then the feed asset (1:1 or 4:5).
+  storyAssetId?: string | null
+  storyImageUrl?: string | null
+  storyVideoUrl?: string | null
+  // The ad's optional exactly-1:1 asset: the catch-all for every placement the
+  // feed and story assets don't cover. Same shape as the story fields.
+  squareAssetId?: string | null
+  squareImageUrl?: string | null
+  squareVideoUrl?: string | null
   format: CreativeFormat
   // Empty for a SINGLE_IMAGE creative; 2-10 cards, in position order, for
   // a CAROUSEL one.
@@ -998,6 +1009,32 @@ export function setCreativeImage(
 ): Promise<Creative> {
   return request<Creative>(
     `/businesses/${businessId}/campaigns/${campaignId}/creatives/${creativeId}/image`,
+    { method: 'PUT', body: JSON.stringify({ productImageId }) },
+  )
+}
+
+// Adds, replaces (or, with null, removes) an ad's Stories & Reels (9:16) asset.
+export function setCreativeStoryAsset(
+  businessId: string,
+  campaignId: string,
+  creativeId: string,
+  productImageId: string | null,
+): Promise<Creative> {
+  return request<Creative>(
+    `/businesses/${businessId}/campaigns/${campaignId}/creatives/${creativeId}/story-asset`,
+    { method: 'PUT', body: JSON.stringify({ productImageId }) },
+  )
+}
+
+// Adds, replaces (or, with null, removes) an ad's optional Square (1:1) asset.
+export function setCreativeSquareAsset(
+  businessId: string,
+  campaignId: string,
+  creativeId: string,
+  productImageId: string | null,
+): Promise<Creative> {
+  return request<Creative>(
+    `/businesses/${businessId}/campaigns/${campaignId}/creatives/${creativeId}/square-asset`,
     { method: 'PUT', body: JSON.stringify({ productImageId }) },
   )
 }

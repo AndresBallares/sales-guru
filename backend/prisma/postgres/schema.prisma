@@ -509,6 +509,18 @@ model Creative {
   // image upload (app/services/meta.py's upload_meta_ad_image) — imageUrl
   // alone (our own /product-images/{id} URL) isn't enough for that.
   productImageId            String?
+  // A second asset for the same ad: the Stories & Reels (9:16) version, shown in
+  // story and Reels placements while productImageId (the feed asset, 1:1 or 4:5)
+  // shows everywhere else. Same media type as productImageId (both photos or
+  // both videos), and a plain id like it, not a @relation. Null for every ad
+  // that publishes as a single asset, which is how all existing ads stay.
+  storyProductImageId       String?
+  // An optional third asset: the exactly-1:1 (square) version. When present it
+  // is the catch-all for every placement not named by the feed or story rules
+  // (right column, Marketplace, search, Messenger, Audience Network, ...); without
+  // it the feed asset is the catch-all. Same media type as productImageId, and a
+  // plain id like it. Null for every ad that has no square asset.
+  squareProductImageId      String?
   status                    String         @default("GENERATED")
   metaCreativeId            String?
   // Snapshot of the product this creative was generated from (PRD.md

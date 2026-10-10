@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type ChangeEvent, type FormEvent } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { CreativeEditor } from './CreativeEditor'
+import { ExtraAssetSlot } from './ExtraAssetSlot'
 import { onlyPhotos, PHOTOS_ONLY_HINT } from '../lib/media'
 import { describePublishStatus, PublishJobError, waitForPublishJob } from '../lib/publishJob'
 import {
@@ -1890,6 +1891,32 @@ export function CampaignsSection({
                             </div>
                             )
                           )}
+                          {selectedCreative.format === 'SINGLE_IMAGE' &&
+                            campaignProductId &&
+                            campaign.status !== 'LIVE' &&
+                            campaign.status !== 'PAUSED' && (
+                              <>
+                                {(['story', 'square'] as const).map((slot) => (
+                                  <ExtraAssetSlot
+                                    key={slot}
+                                    slot={slot}
+                                    businessId={businessId}
+                                    campaignId={campaign.id}
+                                    productId={campaignProductId}
+                                    creative={selectedCreative}
+                                    onUpdated={(updated) => {
+                                      setCreatives((prev) => ({
+                                        ...prev,
+                                        [campaign.id]: (prev[campaign.id] ?? []).map((x) =>
+                                          x.id === updated.id ? updated : x,
+                                        ),
+                                      }))
+                                      void refresh()
+                                    }}
+                                  />
+                                ))}
+                              </>
+                            )}
                           <SocialPostPreview
                             business={business}
                             creative={selectedCreative}

@@ -392,6 +392,27 @@ class SetCreativeImageRequest(CamelCaseModel):
     product_image_id: str
 
 
+class SetSquareAssetRequest(CamelCaseModel):
+    """Body for PUT .../creatives/{id}/square-asset.
+
+    product_image_id names the 1:1 photo or video to use as the ad's square
+    asset, or is null to remove it.
+    """
+
+    product_image_id: str | None = None
+
+
+class SetStoryAssetRequest(CamelCaseModel):
+    """Body for PUT .../creatives/{id}/story-asset.
+
+    product_image_id names the 9:16 photo or video to show in Stories and Reels,
+    or is null to remove the ad's story asset (it then publishes as a single
+    asset again).
+    """
+
+    product_image_id: str | None = None
+
+
 RegenerableField = Literal["headline", "bodyText", "description"]
 
 
@@ -446,6 +467,18 @@ class CreativeResponse(CamelCaseModel):
     # A SINGLE_VIDEO creative's playable video (imageUrl is its thumbnail);
     # None for every other format.
     video_url: str | None = None
+    # The ad's Stories & Reels (9:16) asset, when it has one: its id, what to
+    # show for it (the photo, or a video's thumbnail), and for a video its
+    # playable URL. All None for a single-asset ad. imageUrl/videoUrl above are
+    # the feed asset (1:1 or 4:5).
+    story_asset_id: str | None = None
+    story_image_url: str | None = None
+    story_video_url: str | None = None
+    # The ad's optional exactly-1:1 asset: the catch-all for placements the feed
+    # and story rules don't name. Same shape as the story fields above.
+    square_asset_id: str | None = None
+    square_image_url: str | None = None
+    square_video_url: str | None = None
     format: CreativeFormat
     # Empty for a SINGLE_IMAGE creative; 2-10 cards, in position order,
     # for a CAROUSEL one.

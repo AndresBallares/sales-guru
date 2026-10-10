@@ -554,9 +554,18 @@ async def _resolve_video_assets(
     """
     notify = report or (lambda _step, _percent: None)
     assets: dict[str, VideoAsset] = {}
-    for creative in creatives:
-        media_id = creative.productImageId
-        if creative.format != "SINGLE_VIDEO" or media_id in assets:
+    wanted = [
+        (creative, media_id)
+        for creative in creatives
+        if creative.format == "SINGLE_VIDEO"
+        for media_id in (
+            creative.productImageId,
+            creative.storyProductImageId,
+            creative.squareProductImageId,
+        )
+    ]
+    for creative, media_id in wanted:
+        if media_id is None or media_id in assets:
             continue
         video = (
             await db.productimage.find_unique(where={"id": media_id})
@@ -570,7 +579,7 @@ async def _resolve_video_assets(
             or video.thumbnailContentType is None
         ):
             raise MetaConnectionError(
-                f"The video for ad '{creative.headline}' no longer exists — "
+                f"A video for ad '{creative.headline}' no longer exists — "
                 "pick another video and publish again."
             )
         notify("Uploading video", None)
@@ -623,6 +632,68 @@ async def _create_video_meta_creative(
         link=destination_url,
         video_id=asset.video_id,
         image_hash=asset.image_hash,
+    )
+
+
+async def _create_pair_meta_creative(
+    creative: Creative,
+    *,
+    assets: dict[str, VideoAsset],
+    access_token: str,
+    ad_account_id: str,
+    page_id: str,
+    destination_url: str,
+) -> str:
+    """Create the one Meta creative for an ad with a story and/or square asset.
+
+    It uses asset_feed_spec: the feed asset plus the story asset, the square
+    asset, or both. Videos reuse the ones already processed by
+    _resolve_video_assets; photos are uploaded here (they are quick, and Meta
+    returns the same hash for the same file).
+    """
+    assert creative.productImageId is not None
+    assert creative.storyProductImageId or creative.squareProductImageId
+
+    async def placement_asset(media_id: str | None) -> meta.PlacementAsset | None:
+        if media_id is None:
+            return None
+        if creative.format == "SINGLE_VIDEO":
+            video = assets[media_id]
+            return meta.PlacementAsset(
+                video_id=video.video_id, thumbnail_hash=video.image_hash
+            )
+        photo = await db.productimage.find_unique(where={"id": media_id})
+        if photo is None:
+            raise MetaConnectionError(
+                f"A photo for ad '{creative.headline}' no longer exists — "
+                "pick another and publish again."
+            )
+        return meta.PlacementAsset(
+            image_hash=await meta.upload_meta_ad_image(
+                access_token=access_token,
+                ad_account_id=ad_account_id,
+                image_data=photo.data.decode(),
+                content_type=photo.contentType,
+            )
+        )
+
+    feed = await placement_asset(creative.productImageId)
+    assert feed is not None
+    story = await placement_asset(creative.storyProductImageId)
+    square = await placement_asset(creative.squareProductImageId)
+    return await meta.create_meta_placement_ad_creative(
+        access_token=access_token,
+        ad_account_id=ad_account_id,
+        page_id=page_id,
+        name=creative.headline,
+        headline=creative.headline,
+        body_text=creative.bodyText,
+        description=creative.description,
+        cta=creative.cta,
+        link=destination_url,
+        feed=feed,
+        story=story,
+        square=square,
     )
 
 
@@ -741,7 +812,18 @@ async def publish_campaign_to_meta(
         objective=campaign.objective,
         status=meta_status,
     )
-    if creative.format == "SINGLE_VIDEO":
+    if (
+        creative.storyProductImageId or creative.squareProductImageId
+    ) and creative.format != "CAROUSEL":
+        meta_creative_id = await _create_pair_meta_creative(
+            creative,
+            assets=video_assets,
+            access_token=connection.accessToken,
+            ad_account_id=ad_account_id,
+            page_id=connection.pageId,
+            destination_url=destination_url,
+        )
+    elif creative.format == "SINGLE_VIDEO":
         meta_creative_id = await _create_video_meta_creative(
             creative,
             assets=video_assets,
@@ -937,7 +1019,18 @@ async def _publish_creative_test_plan(
     )
 
     for creative in creatives:
-        if creative.format == "SINGLE_VIDEO":
+        if (
+            creative.storyProductImageId or creative.squareProductImageId
+        ) and creative.format != "CAROUSEL":
+            meta_creative_id = await _create_pair_meta_creative(
+                creative,
+                assets=video_assets,
+                access_token=access_token,
+                ad_account_id=ad_account_id,
+                page_id=connection.pageId,
+                destination_url=destination_url,
+            )
+        elif creative.format == "SINGLE_VIDEO":
             meta_creative_id = await _create_video_meta_creative(
                 creative,
                 assets=video_assets,

@@ -45,6 +45,7 @@ vi.mock('../lib/api', async (importOriginal) => {
     updateCampaign: vi.fn<typeof actual.updateCampaign>(),
     regenerateCreativeCopy: vi.fn<typeof actual.regenerateCreativeCopy>(),
     getPublishStatus: vi.fn<typeof actual.getPublishStatus>(),
+    setCreativeStoryAsset: vi.fn<typeof actual.setCreativeStoryAsset>(),
     setCreativeImage: vi.fn<typeof actual.setCreativeImage>(),
     listCampaigns: vi.fn<typeof actual.listCampaigns>(),
     getBusiness: vi.fn<typeof actual.getBusiness>(),
@@ -4736,5 +4737,93 @@ describe('CampaignsSection changing a video ad\'s video', () => {
     await screen.findByText('Headline A')
 
     expect(screen.getByRole('radio', { name: 'Single video' })).toBeChecked()
+  })
+})
+
+describe('CampaignsSection extra slots for a standalone image ad', () => {
+  const CAMPAIGN = {
+    id: 'camp-1',
+    name: null,
+    objective: 'SALES' as const,
+    status: 'PENDING_APPROVAL',
+    productId: 'prod-1',
+    audienceId: 'aud-1',
+    metaCampaignId: null,
+    eventVenueKey: null,
+    startDate: null,
+    endDate: null,
+    pausedReason: null,
+    dailySpendFlag: null,
+    needsDestinationUrl: false,
+  }
+
+  beforeEach(() => {
+    mockedApi.getStrategy.mockResolvedValue({
+      id: 'strat-1',
+      campaignId: 'camp-1',
+      createdAt: '2026-10-09T00:00:00Z',
+      content: FAKE_STRATEGY.content,
+    })
+    mockedApi.listProductImages.mockResolvedValue([])
+  })
+
+  it('shows the Stories & Reels and Square slots in the selected-ad view', async () => {
+    mockedApi.listCampaigns.mockResolvedValue([CAMPAIGN])
+    mockedApi.listCreatives.mockResolvedValue([
+      fakeCreative({ id: 'creative-1', status: 'SELECTED', imageUrl: 'http://localhost:8000/product-images/f1' }),
+    ])
+
+    renderCampaigns(<CampaignsSection businessId="biz-1" />)
+    await screen.findByRole('button', { name: 'Selected' })
+
+    expect(screen.getByRole('button', { name: 'Add Stories & Reels image' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Add Square image' })).toBeInTheDocument()
+  })
+
+  it('updates the ad when a story asset is added from the selected-ad view', async () => {
+    const withStory = fakeCreative({
+      id: 'creative-1',
+      status: 'SELECTED',
+      imageUrl: 'http://localhost:8000/product-images/f1',
+      storyAssetId: 's1',
+      storyImageUrl: 'http://localhost:8000/product-images/s1',
+    })
+    mockedApi.listCampaigns.mockResolvedValue([CAMPAIGN])
+    mockedApi.listCreatives.mockResolvedValueOnce([
+      fakeCreative({ id: 'creative-1', status: 'SELECTED', imageUrl: 'http://localhost:8000/product-images/f1' }),
+    ])
+    mockedApi.listCreatives.mockResolvedValue([withStory])
+    mockedApi.listProductImages.mockResolvedValue([
+      {
+        id: 's1',
+        url: 'http://localhost:8000/product-images/s1',
+        createdAt: '',
+        mediaType: 'IMAGE',
+        aspectClass: 'STORY',
+        width: 1080,
+        height: 1920,
+      },
+    ])
+    mockedApi.setCreativeStoryAsset.mockResolvedValue(withStory)
+    const user = userEvent.setup()
+
+    renderCampaigns(<CampaignsSection businessId="biz-1" />)
+    await user.click(await screen.findByRole('button', { name: 'Add Stories & Reels image' }))
+    await user.click(await screen.findByAltText('Stories & Reels option'))
+
+    expect(mockedApi.setCreativeStoryAsset).toHaveBeenCalledWith('biz-1', 'camp-1', 'creative-1', 's1')
+    expect(await screen.findByAltText('Stories & Reels asset')).toBeInTheDocument()
+  })
+
+  it.each(['LIVE', 'PAUSED'])('hides the extra slots once the campaign is %s', async (status) => {
+    mockedApi.listCampaigns.mockResolvedValue([{ ...CAMPAIGN, status }])
+    mockedApi.listCreatives.mockResolvedValue([
+      fakeCreative({ id: 'creative-1', status: 'SELECTED' }),
+    ])
+
+    renderCampaigns(<CampaignsSection businessId="biz-1" />)
+    await screen.findByRole('button', { name: 'Selected' })
+
+    expect(screen.queryByRole('button', { name: 'Add Stories & Reels image' })).not.toBeInTheDocument()
   })
 })

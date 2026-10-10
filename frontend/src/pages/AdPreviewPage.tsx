@@ -23,6 +23,7 @@ import {
 import { onlyPhotos, PHOTOS_ONLY_HINT } from '../lib/media'
 import { describePublishStatus, PublishJobError, waitForPublishJob } from '../lib/publishJob'
 import { CreativeEditor } from '../components/CreativeEditor'
+import { ExtraAssetSlot } from '../components/ExtraAssetSlot'
 import { SocialPostPreview } from '../components/SocialPostPreview'
 import { clearPublishPaused, getPublishPaused, setPublishPaused } from '../lib/publishPaused'
 
@@ -397,6 +398,23 @@ export function AdPreviewPage() {
               </div>
             )
           )}
+          {creative.format === 'SINGLE_IMAGE' &&
+            selectedCreatives.length <= 1 &&
+            campaign?.productId &&
+            businessId &&
+            campaignId &&
+            _PUBLISHABLE_STATUSES.includes(campaign.status) &&
+            (['story', 'square'] as const).map((slot) => (
+              <ExtraAssetSlot
+                key={slot}
+                slot={slot}
+                businessId={businessId}
+                campaignId={campaignId}
+                productId={campaign.productId as string}
+                creative={creative}
+                onUpdated={() => void refresh()}
+              />
+            ))}
 
           {canPublish && (
             <div>

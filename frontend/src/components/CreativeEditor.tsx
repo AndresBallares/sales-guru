@@ -12,6 +12,7 @@ import {
 import { onlyPhotos, PHOTOS_ONLY_HINT } from '../lib/media'
 import { useMediaIntake } from '../lib/useMediaIntake'
 import { BlackFrameFallback } from './BlackFrameFallback'
+import { ExtraAssetSlot } from './ExtraAssetSlot'
 import { MediaBadges } from './MediaBadges'
 
 const COPY_FIELDS: { field: RegenerableCopyField; label: string }[] = [
@@ -51,6 +52,11 @@ export function CreativeEditor({
   const [error, setError] = useState('')
 
   const isVideo = creative.format === 'SINGLE_VIDEO'
+  const isCarousel = creative.format === 'CAROUSEL'
+  // An ad with a Stories & Reels or Square version needs a Feed-shaped main asset
+  // that is not the square one.
+  const hasExtras = Boolean(creative.storyAssetId || creative.squareAssetId)
+
 
   async function attachImage(productImageId: string) {
     setError('')
@@ -83,7 +89,16 @@ export function CreativeEditor({
       const all = await listProductImages(businessId, productId)
       // A video ad swaps between the product's videos; a photo ad between its
       // photos. Never both: a video can't be an ad image, nor a photo a video.
-      setLibrary(isVideo ? all.filter((item) => item.mediaType === 'VIDEO') : onlyPhotos(all))
+      const ofType = isVideo ? all.filter((item) => item.mediaType === 'VIDEO') : onlyPhotos(all)
+      // Once the ad also has a Stories & Reels or Square version, its main asset
+      // must be the feed-shaped one (1:1 or 4:5), and not the square asset itself.
+      setLibrary(
+        hasExtras
+          ? ofType.filter(
+              (item) => item.aspectClass === 'FEED' && item.id !== creative.squareAssetId,
+            )
+          : ofType,
+      )
     } catch (err) {
       setError(
         err instanceof ApiError
@@ -142,6 +157,7 @@ export function CreativeEditor({
 
   return (
     <div className="creative-editor">
+      {!isCarousel && <h4>Feed (4:5)</h4>}
       {productId !== null && isVideo && (
         <div className="image-picker">
           <button type="button" aria-expanded={menuOpen} onClick={toggleVideoPicker}>
@@ -240,6 +256,26 @@ export function CreativeEditor({
             </div>
           )}
         </div>
+      )}
+      {!isCarousel && productId !== null && (
+        <>
+          <ExtraAssetSlot
+            slot="story"
+            businessId={businessId}
+            campaignId={campaignId}
+            productId={productId}
+            creative={creative}
+            onUpdated={onUpdated}
+          />
+          <ExtraAssetSlot
+            slot="square"
+            businessId={businessId}
+            campaignId={campaignId}
+            productId={productId}
+            creative={creative}
+            onUpdated={onUpdated}
+          />
+        </>
       )}
       {showCopyControls && (
         <div className="copy-regenerate">
