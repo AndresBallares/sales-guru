@@ -498,6 +498,62 @@ describe('AdPreviewPage', () => {
     expect(screen.queryByRole('button', { name: 'Upload Image' })).not.toBeInTheDocument()
   })
 
+  describe('a published campaign', () => {
+    const LOCKED = 'This campaign is already published. Create a new campaign to change its ads.'
+
+    // LIVE, PAUSED, and a pre-publish status an old bug could leave it in: all
+    // published, because they have a Meta id.
+    it.each(['LIVE', 'PAUSED', 'APPROVED', 'ADS_GENERATED'])(
+      'cannot be edited or published again from the ad page (%s)',
+      async (status) => {
+        mockedApi.listCampaigns.mockResolvedValue([
+          makeCampaign({ status, metaCampaignId: 'meta_campaign_1' }),
+        ])
+        mockedApi.listCreatives.mockResolvedValue([makeCreative({ status: 'SELECTED' })])
+
+        renderPage()
+
+        expect(await screen.findByText(LOCKED)).toBeInTheDocument()
+        expect(screen.queryByRole('button', { name: 'Change image' })).not.toBeInTheDocument()
+        expect(screen.queryByRole('button', { name: 'Upload Image' })).not.toBeInTheDocument()
+        expect(screen.queryByRole('button', { name: /Approve & Publish|Retry publish/ })).not.toBeInTheDocument()
+        expect(screen.queryByLabelText(/Publish paused/)).not.toBeInTheDocument()
+      },
+    )
+
+    it('has no carousel card controls', async () => {
+      mockedApi.listCampaigns.mockResolvedValue([
+        makeCampaign({ status: 'LIVE', metaCampaignId: 'meta_campaign_1' }),
+      ])
+      mockedApi.listCreatives.mockResolvedValue([
+        makeCreative({
+          status: 'SELECTED',
+          format: 'CAROUSEL',
+          cards: [
+            { id: 'card-1', position: 0, imageUrl: 'http://x/1', headline: 'Card 1', description: null, linkUrl: 'http://x' },
+            { id: 'card-2', position: 1, imageUrl: 'http://x/2', headline: 'Card 2', description: null, linkUrl: 'http://x' },
+          ],
+        }),
+      ])
+
+      renderPage()
+
+      expect(await screen.findByText(LOCKED)).toBeInTheDocument()
+      expect(screen.queryByRole('list', { name: 'Carousel cards' })).not.toBeInTheDocument()
+      expect(screen.queryByRole('button', { name: 'Move earlier' })).not.toBeInTheDocument()
+      expect(screen.queryByRole('button', { name: 'Remove' })).not.toBeInTheDocument()
+    })
+
+    it('keeps the ads editable for a campaign that is not published', async () => {
+      mockedApi.listCampaigns.mockResolvedValue([makeCampaign()])
+
+      renderPage()
+
+      expect(await screen.findByRole('button', { name: 'Approve & Publish' })).toBeInTheDocument()
+      expect(screen.queryByText(LOCKED)).not.toBeInTheDocument()
+    })
+  })
+
   describe('a CAROUSEL creative', () => {
     function makeCarouselCreative(overrides: Partial<api.Creative> = {}): api.Creative {
       return makeCreative({

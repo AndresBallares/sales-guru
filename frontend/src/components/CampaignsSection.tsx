@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type ChangeEvent, type FormEvent } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { ADS_LOCKED_NOTE, isPublished as isPublishedCampaign } from '../lib/publishedCampaign'
 import { CreativeEditor } from './CreativeEditor'
 import { ExtraAssetSlot } from './ExtraAssetSlot'
 import { onlyPhotos, PHOTOS_ONLY_HINT } from '../lib/media'
@@ -1043,9 +1044,9 @@ export function CampaignsSection({
             const approveError = approveErrors[campaign.id]
             const pauseError = pauseErrors[campaign.id]
             const activateError = activateErrors[campaign.id]
-            const canPublish = ['PENDING_APPROVAL', 'APPROVED', 'FAILED'].includes(
-              campaign.status,
-            )
+            const isPublished = isPublishedCampaign(campaign)
+            const canPublish =
+              !isPublished && ['PENDING_APPROVAL', 'APPROVED', 'FAILED'].includes(campaign.status)
             const isLive = campaign.status === 'LIVE'
             const isPaused = campaign.status === 'PAUSED'
             // Exact match with the backend's PUBLISHED_PAUSED_REASON
@@ -1197,16 +1198,20 @@ export function CampaignsSection({
                   <p>
                     Product: {currentProduct ? currentProduct.description : 'No product selected'}
                   </p>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setEditingProductForCampaignId(null)
-                      setReuseProductForCampaignId(null)
-                      setProductPickerId((prev) => (prev === campaign.id ? null : campaign.id))
-                    }}
-                  >
-                    {currentProduct ? 'Change product' : 'Attach a product'}
-                  </button>
+                  {isPublished ? (
+                    <p className="field-hint">{ADS_LOCKED_NOTE}</p>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setEditingProductForCampaignId(null)
+                        setReuseProductForCampaignId(null)
+                        setProductPickerId((prev) => (prev === campaign.id ? null : campaign.id))
+                      }}
+                    >
+                      {currentProduct ? 'Change product' : 'Attach a product'}
+                    </button>
+                  )}
                   {campaign.needsDestinationUrl && (
                     <p className="form-error" role="alert">
                       This product needs a destination link before you can publish a Sales or
@@ -1310,7 +1315,7 @@ export function CampaignsSection({
                     </p>
                   )}
                 </div>
-                {hasStaleCreatives && (
+                {hasStaleCreatives && !isPublished && (
                   <div
                     className="campaign-block"
                     aria-label={`Stale ads for ${campaign.name ?? campaign.id}`}
@@ -1770,6 +1775,10 @@ export function CampaignsSection({
                     className="campaign-block"
                     aria-label={`Ads for ${campaign.name ?? campaign.id}`}
                   >
+                    {isPublished ? (
+                      <p className="field-hint">{ADS_LOCKED_NOTE}</p>
+                    ) : (
+                      <>
                     <fieldset className="format-picker">
                       <legend>Ad format</legend>
                       <label>
@@ -1855,6 +1864,8 @@ export function CampaignsSection({
                             : 'Regenerate ads'
                           : 'Generate ads'}
                     </button>
+                      </>
+                    )}
                     {creativeError && (
                       <p className="form-error" role="alert">
                         {creativeError}
@@ -1955,8 +1966,7 @@ export function CampaignsSection({
                             // The same picker as the full ads list: this ad's video
                             // only, with the option to upload a new one. Locked once
                             // the campaign is published, like every other edit.
-                            campaign.status !== 'LIVE' &&
-                            campaign.status !== 'PAUSED' && (
+                            !isPublished && (
                             <CreativeEditor
                               businessId={businessId}
                               campaignId={campaign.id}
@@ -2057,8 +2067,7 @@ export function CampaignsSection({
                           )}
                           {selectedCreative.format === 'SINGLE_IMAGE' &&
                             campaignProductId &&
-                            campaign.status !== 'LIVE' &&
-                            campaign.status !== 'PAUSED' && (
+                            !isPublished && (
                               <>
                                 {(['story', 'square'] as const).map((slot) => (
                                   <ExtraAssetSlot
@@ -2086,15 +2095,17 @@ export function CampaignsSection({
                             creative={selectedCreative}
                             ctaLabel={ctaLabels[selectedCreative.cta] ?? selectedCreative.cta}
                           />
-                          <button
-                            type="button"
-                            className="link-button"
-                            onClick={() =>
-                              setShowAllCreatives((prev) => ({ ...prev, [campaign.id]: true }))
-                            }
-                          >
-                            Choose a different ad
-                          </button>
+                          {!isPublished && (
+                            <button
+                              type="button"
+                              className="link-button"
+                              onClick={() =>
+                                setShowAllCreatives((prev) => ({ ...prev, [campaign.id]: true }))
+                              }
+                            >
+                              Choose a different ad
+                            </button>
+                          )}
                         </div>
                       ) : (
                         <>
@@ -2170,8 +2181,7 @@ export function CampaignsSection({
                                 </p>
                               )}
                               {c.format !== 'CAROUSEL' &&
-                                campaign.status !== 'LIVE' &&
-                                campaign.status !== 'PAUSED' && (
+                                !isPublished && (
                                   <CreativeEditor
                                     businessId={businessId}
                                     campaignId={campaign.id}
@@ -2190,6 +2200,8 @@ export function CampaignsSection({
                                     }}
                                   />
                                 )}
+                              {!isPublished && (
+                                <>
                               {isCreativeTest ? (
                                 (c.status === 'SELECTED' || testAdCount < MAX_TEST_ADS) && (
                                   <button
@@ -2222,6 +2234,8 @@ export function CampaignsSection({
                                       ? 'Selecting…'
                                       : 'Select this ad'}
                                 </button>
+                              )}
+                                </>
                               )}
                             </li>
                           ))}

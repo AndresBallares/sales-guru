@@ -16,6 +16,7 @@ from prisma.types import CampaignUpdateInput
 from app.core.authz import get_owned_business, get_owned_campaign
 from app.core.db import db
 from app.core.meta_connection import get_meta_connection
+from app.core.published_guard import ALREADY_PUBLISHED, ensure_not_published
 from app.schemas.campaign import (
     CampaignCreateRequest,
     CampaignResponse,
@@ -390,6 +391,7 @@ async def update_campaign(
         HTTPException: 404 if product_id/audience_id is given but doesn't
             belong to this campaign's business.
     """
+    await ensure_not_published(campaign)
     await _validate_product(
         campaign.businessId,
         payload.product_id,
@@ -559,6 +561,7 @@ async def approve_campaign(
     Raises:
         HTTPException: 400 if no ad creative has been selected yet.
     """
+    await ensure_not_published(campaign, ALREADY_PUBLISHED)
     if campaign.status not in ("PENDING_APPROVAL", "APPROVED"):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST, detail=_NOT_READY_FOR_APPROVAL
@@ -614,6 +617,9 @@ async def publish_campaign(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT, detail=_ALREADY_PUBLISHING
         )
+    # A published campaign is never published again (that would create a second
+    # campaign on Meta), whatever status it is in.
+    await ensure_not_published(campaign, ALREADY_PUBLISHED)
     if campaign.status not in ("APPROVED", "FAILED"):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST, detail=_NOT_READY_FOR_PUBLISH

@@ -22,6 +22,7 @@ import {
 } from '../lib/api'
 import { onlyPhotos, PHOTOS_ONLY_HINT } from '../lib/media'
 import { describePublishStatus, PublishJobError, waitForPublishJob } from '../lib/publishJob'
+import { ADS_LOCKED_NOTE, isPublished } from '../lib/publishedCampaign'
 import { CreativeEditor } from '../components/CreativeEditor'
 import { ExtraAssetSlot } from '../components/ExtraAssetSlot'
 import { SocialPostPreview } from '../components/SocialPostPreview'
@@ -252,7 +253,9 @@ export function AdPreviewPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [campaign?.publishing])
 
-  const canPublish = campaign !== null && _PUBLISHABLE_STATUSES.includes(campaign.status)
+  const published = isPublished(campaign)
+  const canPublish =
+    campaign !== null && !published && _PUBLISHABLE_STATUSES.includes(campaign.status)
 
   return (
     <main className="business-detail">
@@ -295,7 +298,9 @@ export function AdPreviewPage() {
             />
           )}
 
-          {selectedCreatives.length > 1 ? null : creative.format === 'CAROUSEL' ? (
+          {published ? (
+            <p className="field-hint">{ADS_LOCKED_NOTE}</p>
+          ) : selectedCreatives.length > 1 ? null : creative.format === 'CAROUSEL' ? (
             <>
               <ul className="photo-manager" aria-label="Carousel cards">
                 {creative.cards.map((card, index) => (
@@ -400,6 +405,7 @@ export function AdPreviewPage() {
             )
           )}
           {creative.format === 'SINGLE_IMAGE' &&
+            !published &&
             selectedCreatives.length <= 1 &&
             campaign?.productId &&
             businessId &&
