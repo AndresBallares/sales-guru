@@ -1581,3 +1581,4 @@ export function getBusinessDashboard(
     `/businesses/${businessId}/dashboard${sample ? '?sample=true' : ''}`,
   )
 }
+// ci scope test
