@@ -21,6 +21,8 @@ vi.mock('../lib/api', async (importOriginal) => {
     listCampaigns: vi.fn<typeof actual.listCampaigns>(),
     getMetaConnection: vi.fn<typeof actual.getMetaConnection>(),
     getBrandProfile: vi.fn<typeof actual.getBrandProfile>(),
+    getBusinessDashboard: vi.fn<typeof actual.getBusinessDashboard>(),
+    getCampaignDashboard: vi.fn<typeof actual.getCampaignDashboard>(),
   }
 })
 const mockedApi = vi.mocked(api)
@@ -140,6 +142,22 @@ beforeEach(() => {
     new api.ApiError(404, 'Meta connection not found'),
   )
   mockedApi.getBrandProfile.mockResolvedValue(brandProfile)
+  mockedApi.getBusinessDashboard.mockResolvedValue({
+    activeCampaigns: 0,
+    totalSpend: 0,
+    purchases: null,
+    revenue: null,
+    costPerPurchase: null,
+    confidence: {
+      sufficient: false,
+      basis: 0,
+      threshold: 10,
+      unit: 'purchases',
+      label: 'Based on 0 purchases — too early to judge',
+    },
+    campaigns: [],
+    isSample: false,
+  })
 })
 
 function renderPage() {
@@ -304,6 +322,24 @@ describe('BusinessDetailPage', () => {
     expect(
       await screen.findByRole('button', { name: 'Edit brand profile' }),
     ).toBeInTheDocument()
+    // The results dashboard sits above the campaign list (an unpublished
+    // campaign has no results, so it shows its empty state).
+    const results = screen.getByRole('heading', { name: 'Results' })
+    expect(await screen.findByText(/No published campaigns yet/)).toBeInTheDocument()
+    expect(
+      results.compareDocumentPosition(screen.getByText('Sales — Draft')) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy()
+  })
+
+  it('does not show the results dashboard while onboarding is still in progress', async () => {
+    mockedApi.listCampaigns.mockResolvedValue([])
+
+    renderPage()
+
+    await screen.findByRole('heading', { name: 'Create a campaign' })
+    expect(screen.queryByRole('heading', { name: 'Results' })).not.toBeInTheDocument()
+    expect(mockedApi.getBusinessDashboard).not.toHaveBeenCalled()
   })
 
   it("shows the business's industry label on the detail page", async () => {

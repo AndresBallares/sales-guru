@@ -126,6 +126,8 @@ class CampaignResponse(CamelCaseModel):
     start_date: datetime | None
     end_date: datetime | None
     paused_reason: str | None
+    # When a LIVE campaign was paused; None for one published paused (it never ran).
+    paused_at: datetime | None = None
     daily_spend_flag: str | None
     # A Pixel-health warning (e.g. the Purchase event may not be firing).
     pixel_warning: str | None = None

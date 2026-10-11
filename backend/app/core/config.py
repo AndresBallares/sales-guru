@@ -86,6 +86,15 @@ class Settings(BaseSettings):
             e2e run needs no real ANTHROPIC_API_KEY and never depends on
             live model output. Off by default; also covered by
             _forbid_in_production below.
+        dashboard_sample_enabled: Local-development switch (env var
+            `DASHBOARD_SAMPLE_DATA`, 2026-10-10) that lets the campaign
+            dashboard endpoints serve in-memory sample numbers on request
+            (`?sample=true`, app/services/dashboard_sample.py) so the page
+            can be seen populated before any real campaign has results.
+            Separate from fake_meta_enabled on purpose: that one fakes every
+            real Meta call, which a dev server using a real Meta connection
+            can't have on. Off by default; _forbid_in_production below makes
+            it impossible to boot a deployment with it on.
     """
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
@@ -107,6 +116,9 @@ class Settings(BaseSettings):
     url_reachability_check_enabled: bool = False
     fake_meta_enabled: bool = Field(default=False, validation_alias="FAKE_META")
     fake_llm_enabled: bool = Field(default=False, validation_alias="FAKE_LLM")
+    dashboard_sample_enabled: bool = Field(
+        default=False, validation_alias="DASHBOARD_SAMPLE_DATA"
+    )
     # A SALES product priced at or above this optimizes for AddToCart
     # instead of Purchase (CREATIVE_TEST_PLAN, decided once at creation —
     # a high-ticket product rarely produces enough purchases to learn from).
@@ -149,7 +161,8 @@ class Settings(BaseSettings):
             self, unchanged, when the combination is safe.
 
         Raises:
-            ValueError: If fake_meta_enabled or fake_llm_enabled is True
+            ValueError: If fake_meta_enabled, fake_llm_enabled or
+                dashboard_sample_enabled is True
                 and environment is "production".
         """
         if self.fake_meta_enabled and self.environment == "production":
@@ -159,6 +172,11 @@ class Settings(BaseSettings):
         if self.fake_llm_enabled and self.environment == "production":
             raise ValueError(
                 "FAKE_LLM must never be enabled when ENVIRONMENT=production"
+            )
+        if self.dashboard_sample_enabled and self.environment == "production":
+            raise ValueError(
+                "DASHBOARD_SAMPLE_DATA must never be enabled when "
+                "ENVIRONMENT=production"
             )
         return self
 

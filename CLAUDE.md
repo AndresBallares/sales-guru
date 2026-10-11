@@ -124,6 +124,8 @@ path the rule above requires explicit confirmation for).
   `npm run lint && npx tsc -b && npm run test:coverage` before considering
   frontend work done; run `npm run test:e2e` too for anything touching a
   user-facing flow.
+- **After switching branches**, rebuild `dist/` and regenerate the Prisma
+  client before running e2e; stale builds cause false failures.
 - **Schema changes**: always `uv run prisma migrate dev --name <desc>`, never
   `prisma db push` — see README.md's Database schema changes section for why.
 - **Destructive commands** (`prisma db push --force-reset`, `prisma migrate

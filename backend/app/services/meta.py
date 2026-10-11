@@ -1362,6 +1362,14 @@ class CampaignInsights(NamedTuple):
     # spend / add_to_cart: the creative test's primary metric. None when
     # there are no add-to-carts to divide by (unavailable, never zero).
     cost_per_add_to_cart: float | None = None
+    # Meta's inline_link_click fields: clicks through to the destination
+    # only, unlike `clicks`/`ctr` above, which count every tap (likes,
+    # shares, profile visits). link_ctr is Meta's percentage (1.5 == 1.5%).
+    # None when Meta omits them — never zero.
+    link_clicks: int | None = None
+    link_ctr: float | None = None
+    # The pixel's checkout-start count (_INITIATED_CHECKOUT_ACTION_TYPES).
+    initiated_checkout: int | None = None
 
 
 # Meta's own action_type values for the funnel steps the extended metric
@@ -1372,28 +1380,50 @@ class CampaignInsights(NamedTuple):
 # real testing catches" note).
 _LANDING_PAGE_VIEW_ACTION_TYPES = frozenset({"landing_page_view"})
 _ADD_TO_CART_ACTION_TYPES = frozenset({"add_to_cart", "omni_add_to_cart"})
+_INITIATED_CHECKOUT_ACTION_TYPES = frozenset(
+    {
+        "initiate_checkout",
+        "omni_initiated_checkout",
+        "offsite_conversion.fb_pixel_initiate_checkout",
+    }
+)
 _PURCHASE_ACTION_TYPES = frozenset(
     {"purchase", "omni_purchase", "offsite_conversion.fb_pixel_purchase"}
 )
 
 
 def _sum_actions(actions: list[dict[str, str]], action_types: frozenset[str]) -> int:
-    """Sum the "value" of every action row whose action_type is in the given set."""
-    return sum(
-        int(action["value"])
-        for action in actions
-        if action.get("action_type") in action_types
+    """Count one funnel event from Meta's actions list: the largest matching alias.
+
+    Meta reports a single event under several action types at once (a
+    purchase shows up as "purchase", "omni_purchase" and
+    "offsite_conversion.fb_pixel_purchase", each carrying the same count), so
+    adding the matching rows together would count one sale two or three times.
+    The largest alias is the complete count (the omni_ rows are Meta's
+    roll-up across channels) and equals the sum whenever only one alias is
+    present.
+    """
+    return max(
+        (
+            int(action["value"])
+            for action in actions
+            if action.get("action_type") in action_types
+        ),
+        default=0,
     )
 
 
 def _sum_action_values(
     action_values: list[dict[str, str]], action_types: frozenset[str]
 ) -> float:
-    """Sum the "value" of every action_values row whose action_type matches."""
-    return sum(
-        float(action["value"])
-        for action in action_values
-        if action.get("action_type") in action_types
+    """Largest matching alias of an action_values list (see _sum_actions)."""
+    return max(
+        (
+            float(action["value"])
+            for action in action_values
+            if action.get("action_type") in action_types
+        ),
+        default=0.0,
     )
 
 
@@ -1439,7 +1469,8 @@ async def _fetch_insights(
         f"{_GRAPH_BASE_URL}/{meta_object_id}/insights",
         {
             "fields": (
-                "impressions,reach,spend,clicks,cpm,ctr,cpc,actions,action_values"
+                "impressions,reach,spend,clicks,cpm,ctr,cpc,"
+                "inline_link_clicks,inline_link_click_ctr,actions,action_values"
             ),
             "access_token": access_token,
         },
@@ -1459,6 +1490,7 @@ async def _fetch_insights(
     add_to_cart = _sum_actions(actions, _ADD_TO_CART_ACTION_TYPES)
     purchases = _sum_actions(actions, _PURCHASE_ACTION_TYPES)
     purchase_value = _sum_action_values(action_values, _PURCHASE_ACTION_TYPES)
+    initiated_checkout = _sum_actions(actions, _INITIATED_CHECKOUT_ACTION_TYPES)
 
     return CampaignInsights(
         impressions=int(row.get("impressions", 0)),
@@ -1480,6 +1512,15 @@ async def _fetch_insights(
         purchase_value=purchase_value if action_values else None,
         roas=(purchase_value / spend) if spend and action_values else None,
         purchases=purchases if actions else None,
+        link_clicks=(
+            int(row["inline_link_clicks"]) if "inline_link_clicks" in row else None
+        ),
+        link_ctr=(
+            float(row["inline_link_click_ctr"])
+            if "inline_link_click_ctr" in row
+            else None
+        ),
+        initiated_checkout=initiated_checkout if actions else None,
     )
 
 
@@ -1839,6 +1880,59 @@ async def update_meta_ad_set_bid(
     await _post_json(
         f"{_GRAPH_BASE_URL}/{meta_ad_set_id}",
         {"access_token": access_token, "bid_amount": str(bid_amount_cents)},
+    )
+
+
+class MetaDeliveryStatus(NamedTuple):
+    """What Meta says a campaign and its ad sets are doing right now.
+
+    These are Meta's effective_status values ("ACTIVE", "PAUSED",
+    "CAMPAIGN_PAUSED", "ADSET_PAUSED", "DELETED", "IN_PROCESS", ...), kept as
+    Meta reports them; app/services/campaign_status_sync.py decides what they
+    mean.
+    """
+
+    campaign_status: str
+    ad_set_statuses: list[str]
+
+
+async def fetch_meta_delivery_status(
+    *, access_token: str, meta_campaign_id: str
+) -> MetaDeliveryStatus | None:
+    """Read a campaign's and its ad sets' effective status from Meta.
+
+    Read-only: two GETs (the campaign, then its ad sets), nothing is changed on
+    Meta. The app pauses at the ad set level while leaving the campaign object
+    itself alone, and Ads Manager lets a user pause at the campaign, ad set or
+    ad level, so both levels are read.
+
+    Args:
+        access_token: The business's Meta access token.
+        meta_campaign_id: The Meta campaign id (Campaign.metaCampaignId).
+
+    Returns:
+        The statuses, or None in fake mode (there is no real Meta state to
+        read, so nothing should be inferred from it).
+
+    Raises:
+        MetaConnectionError: If a call fails (including a campaign Meta no
+            longer has).
+    """
+    if get_settings().fake_meta_enabled:
+        return None
+    campaign = await _get_json(
+        f"{_GRAPH_BASE_URL}/{meta_campaign_id}",
+        {"fields": "effective_status", "access_token": access_token},
+    )
+    ad_sets = await _get_json(
+        f"{_GRAPH_BASE_URL}/{meta_campaign_id}/adsets",
+        {"fields": "effective_status", "limit": "100", "access_token": access_token},
+    )
+    return MetaDeliveryStatus(
+        campaign_status=str(campaign.get("effective_status", "")),
+        ad_set_statuses=[
+            str(row.get("effective_status", "")) for row in ad_sets.get("data", [])
+        ],
     )
 
 

@@ -35,4 +35,10 @@ class MetricResponse(CamelCaseModel):
     cac: float | None
     purchase_value: float | None
     roas: float | None
+    # Link-specific numbers (Meta's inline_link_click fields) and the pixel's
+    # checkout-start count; None = unavailable, including snapshots taken
+    # before these were collected.
+    link_clicks: int | None
+    link_ctr: float | None
+    initiated_checkout: int | None
     fetched_at: datetime

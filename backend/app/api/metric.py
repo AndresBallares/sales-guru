@@ -8,6 +8,7 @@ from app.core.db import db
 from app.core.meta_connection import get_meta_connection
 from app.schemas.metric import MetricResponse
 from app.services.meta import MetaConnectionError, fetch_campaign_insights
+from app.services.optimization_jobs import metric_create_data
 
 router = APIRouter(
     prefix="/businesses/{business_id}/campaigns/{campaign_id}/metrics",
@@ -46,6 +47,9 @@ def _to_response(metric: Metric) -> MetricResponse:
         cac=metric.cac,
         purchase_value=metric.purchaseValue,
         roas=metric.roas,
+        link_clicks=metric.linkClicks,
+        link_ctr=metric.linkCtr,
+        initiated_checkout=metric.initiatedCheckout,
         fetched_at=metric.fetchedAt,
     )
 
@@ -96,24 +100,7 @@ async def refresh_metrics(
         ) from exc
 
     metric = await db.metric.create(
-        data={
-            "campaignId": campaign.id,
-            "impressions": insights.impressions,
-            "clicks": insights.clicks,
-            "spend": insights.spend,
-            "conversions": insights.conversions,
-            "reach": insights.reach,
-            "cpm": insights.cpm,
-            "ctr": insights.ctr,
-            "cpc": insights.cpc,
-            "landingPageViews": insights.landing_page_views,
-            "addToCart": insights.add_to_cart,
-            "addToCartRate": insights.add_to_cart_rate,
-            "conversionRate": insights.conversion_rate,
-            "cac": insights.cac,
-            "purchaseValue": insights.purchase_value,
-            "roas": insights.roas,
-        }
+        data=metric_create_data(campaign_id=campaign.id, insights=insights)
     )
     return _to_response(metric)
 

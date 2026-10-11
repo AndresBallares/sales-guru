@@ -3,6 +3,7 @@ import { Link, useParams } from 'react-router-dom'
 import { AudiencesSection } from '../components/AudiencesSection'
 import { BrandProfileSection } from '../components/BrandProfileSection'
 import { CampaignsSection } from '../components/CampaignsSection'
+import { DashboardSection } from '../components/DashboardSection'
 import { MetaConnectionSection } from '../components/MetaConnectionSection'
 import { MetaSettingsSection } from '../components/MetaSettingsSection'
 import { ProductsSection } from '../components/ProductsSection'
@@ -90,6 +91,9 @@ export function BusinessDetailPage() {
             <MetaConnectionSection businessId={businessId} onSetupComplete={setMetaSetupComplete} />
           ) : (
             <>
+              {/* Results first, then the campaign list: once onboarding is
+                  done this page is where you check how the ads are doing. */}
+              <DashboardSection businessId={businessId} />
               <CampaignsSection businessId={businessId} />
               <MetaSettingsSection businessId={businessId} />
             </>

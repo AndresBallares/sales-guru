@@ -34,6 +34,7 @@ from app.schemas.strategy import (
 )
 from app.services import geo as geo_module
 from app.services import meta as meta_service_module
+from app.services import optimization_jobs
 from app.services import strategist as strategist_module
 from app.services.benchmarks import JEWELRY_META_BENCHMARKS
 from app.services.event_venues import EVENT_VENUES
@@ -454,6 +455,18 @@ def mock_services(monkeypatch: pytest.MonkeyPatch) -> dict[str, AsyncMock]:
     monkeypatch.setattr(meta_service_module, "resume_meta_ad", resume_ad)
     object_status = AsyncMock(return_value="ACTIVE")
     monkeypatch.setattr(meta_service_module, "fetch_meta_object_status", object_status)
+
+    # Pausing takes a final metrics snapshot (optimization_jobs); keep it off the
+    # real Meta API.
+    monkeypatch.setattr(
+        optimization_jobs,
+        "fetch_campaign_insights",
+        AsyncMock(
+            return_value=meta_service_module.CampaignInsights(
+                impressions=100, clicks=5, spend=2.0, conversions=0
+            )
+        ),
+    )
 
     return {
         "resume_campaign": resume_campaign,
@@ -1519,6 +1532,8 @@ async def test_publish_paused_creates_everything_paused_on_meta(
     assert body["status"] == "PAUSED"
     assert body["pausedReason"] == "Published paused"
     assert body["metaCampaignId"] == "meta_campaign_1"
+    # It was published paused, so it never ran: there is no moment it was paused.
+    assert body["pausedAt"] is None
 
     _, campaign_kwargs = mock_services["create_campaign"].call_args
     assert campaign_kwargs["status"] == "PAUSED"
@@ -1779,6 +1794,7 @@ def test_activate_succeeds_and_resumes_every_adset(
     body = response.json()
     assert body["status"] == "LIVE"
     assert body["pausedReason"] is None
+    assert body["pausedAt"] is None
     mock_services["resume_ad_set"].assert_awaited_once()
 
 
@@ -2069,6 +2085,8 @@ async def test_pause_succeeds_and_pauses_every_adset_in_a_test_plan_campaign(
     body = response.json()
     assert body["status"] == "PAUSED"
     assert body["pausedReason"] == "Manually paused"
+    # Pausing a live campaign records when.
+    assert body["pausedAt"] is not None
     assert mock_services["pause_ad_set"].await_count == 2
     paused_ids = {
         c.kwargs["meta_ad_set_id"] for c in mock_services["pause_ad_set"].call_args_list

@@ -54,7 +54,11 @@ from app.services import optimization_jobs
 from app.services import optimizer as optimizer_module
 from app.services import strategist as strategist_module
 from app.services.benchmarks import JEWELRY_META_BENCHMARKS
-from app.services.meta import CampaignInsights, MetaConnectionError
+from app.services.meta import (
+    CampaignInsights,
+    MetaConnectionError,
+    MetaDeliveryStatus,
+)
 from app.services.retargeting import RetargetingNotBuiltError
 from fastapi.testclient import TestClient
 from prisma import Base64, Prisma
@@ -228,7 +232,9 @@ def _connect_meta(client: TestClient, business_id: str) -> None:
     )
 
 
-def _publish_campaign(client: TestClient, business_id: str) -> str:
+def _publish_campaign(
+    client: TestClient, business_id: str, *, paused: bool = False
+) -> str:
     """Build and publish one campaign under an already Meta-connected business.
 
     Auto-creates a default product/audience — every campaign needs both
@@ -266,7 +272,10 @@ def _publish_campaign(client: TestClient, business_id: str) -> str:
         f"/creatives/{creatives[0]['id']}/select"
     )
     client.post(f"/businesses/{business_id}/campaigns/{campaign_id}/approve")
-    client.post(f"/businesses/{business_id}/campaigns/{campaign_id}/publish")
+    client.post(
+        f"/businesses/{business_id}/campaigns/{campaign_id}/publish",
+        json={"paused": paused},
+    )
     return campaign_id
 
 
@@ -415,7 +424,11 @@ def mock_services(monkeypatch: pytest.MonkeyPatch) -> dict[str, AsyncMock]:
         )
     )
     monkeypatch.setattr(optimization_jobs, "fetch_campaign_insights", insights)
-    return {"insights": insights, "pause_ad_set": pause_ad_set}
+    # The status sync reads Meta; by default there is nothing to read (None),
+    # so a campaign's status is left as it is.
+    delivery = AsyncMock(return_value=None)
+    monkeypatch.setattr(meta_service_module, "fetch_meta_delivery_status", delivery)
+    return {"insights": insights, "pause_ad_set": pause_ad_set, "delivery": delivery}
 
 
 # --- collect_metrics_for_all_live_campaigns ---------------------------------
@@ -3445,3 +3458,366 @@ async def test_approving_the_carousel_experiment_creates_a_draft_campaign(
     assert new.status == "READY"
     assert new.metaCampaignId is None  # a draft: nothing created on Meta
     assert new.name is not None and "carousel experiment" in new.name
+
+
+def test_metric_create_data_carries_the_link_and_checkout_fields() -> None:
+    """The collector stores link clicks, link CTR and checkouts on every snapshot."""
+    data = optimization_jobs.metric_create_data(
+        campaign_id="camp-1",
+        insights=CampaignInsights(
+            impressions=1000,
+            clicks=80,
+            spend=10.0,
+            conversions=0,
+            link_clicks=30,
+            link_ctr=3.0,
+            initiated_checkout=2,
+        ),
+    )
+
+    assert data["linkClicks"] == 30
+    assert data["linkCtr"] == 3.0
+    assert data["initiatedCheckout"] == 2
+
+
+# --- final snapshot when a campaign is paused --------------------------------------
+
+
+async def _ad_set_statuses(campaign_id: str) -> list[str]:
+    seeder = Prisma()
+    await seeder.connect()
+    try:
+        rows = await seeder.adset.find_many(where={"campaignId": campaign_id})
+        return sorted(r.status for r in rows)
+    finally:
+        await seeder.disconnect()
+
+
+def test_pausing_a_campaign_from_the_app_takes_a_final_snapshot(
+    client: TestClient, mock_services: dict[str, AsyncMock]
+) -> None:
+    """Collection only runs for LIVE campaigns, so the numbers at the moment of
+    the pause are captured once more, after spend has stopped."""
+    business_id, campaign_id = _live_campaign(client)
+    mock_services["insights"].return_value = CampaignInsights(
+        impressions=2000, clicks=80, spend=31.0, conversions=2, purchases=2
+    )
+
+    response = client.post(f"/businesses/{business_id}/campaigns/{campaign_id}/pause")
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "PAUSED"
+    rows = _run(client, _metric_rows, campaign_id)
+    assert len(rows) == 1
+    assert rows[0].spend == 31.0
+    assert rows[0].purchases == 2
+
+
+def test_a_failing_final_snapshot_never_undoes_the_pause(
+    client: TestClient, mock_services: dict[str, AsyncMock]
+) -> None:
+    business_id, campaign_id = _live_campaign(client)
+    mock_services["insights"].side_effect = MetaConnectionError("Meta is down")
+
+    response = client.post(f"/businesses/{business_id}/campaigns/{campaign_id}/pause")
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "PAUSED"
+    assert _run(client, _metric_rows, campaign_id) == []
+
+
+def test_an_unexpected_error_in_the_final_snapshot_never_undoes_the_pause(
+    client: TestClient, mock_services: dict[str, AsyncMock]
+) -> None:
+    business_id, campaign_id = _live_campaign(client)
+    mock_services["insights"].side_effect = RuntimeError("unexpected")
+
+    response = client.post(f"/businesses/{business_id}/campaigns/{campaign_id}/pause")
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "PAUSED"
+
+
+@pytest.mark.asyncio
+async def test_pausing_a_creative_test_also_captures_each_ads_final_numbers(
+    client: TestClient,
+    mock_services: dict[str, AsyncMock],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    campaign_id, ad_ids = await _creative_plan_campaign_with_ads(client)
+    ad_insights = AsyncMock(
+        return_value=CampaignInsights(
+            impressions=300, clicks=10, spend=30.0, conversions=1, add_to_cart=3
+        )
+    )
+    monkeypatch.setattr(optimization_jobs, "fetch_ad_insights", ad_insights)
+    business_id = client.get("/businesses").json()[0]["id"]
+
+    response = client.post(f"/businesses/{business_id}/campaigns/{campaign_id}/pause")
+
+    assert response.status_code == 200
+    rows = await _metric_rows(campaign_id)
+    assert sorted(r.adId for r in rows if r.adId is not None) == sorted(ad_ids)
+    assert len([r for r in rows if r.adId is None]) == 1
+
+
+def test_the_duration_elapsed_pause_takes_a_final_snapshot(
+    client: TestClient, mock_services: dict[str, AsyncMock]
+) -> None:
+    business_id, campaign_id = _live_campaign(client)
+    _run(client, _set_end_date, campaign_id, datetime.now(UTC) - timedelta(days=1))
+
+    _run(client, optimization_jobs.pause_expired_campaigns)
+
+    assert _campaign_status(client, business_id, campaign_id)["status"] == "PAUSED"
+    assert len(_run(client, _metric_rows, campaign_id)) == 1
+
+
+def test_the_spend_breaker_captures_its_final_snapshot_before_evaluating(
+    client: TestClient,
+    mock_services: dict[str, AsyncMock],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The breaker's own pause also gets a final snapshot (one per variant for a
+    TEST_PLAN), taken before the auto-evaluation reads the numbers."""
+    monkeypatch.setattr(
+        meta_service_module,
+        "create_meta_ad_set",
+        AsyncMock(side_effect=["meta_adset_a", "meta_adset_b"]),
+    )
+    ad_set_insights = AsyncMock(
+        side_effect=[
+            # The regular collection...
+            CampaignInsights(impressions=100, clicks=50, spend=600.0, conversions=10),
+            CampaignInsights(impressions=100, clicks=50, spend=600.0, conversions=10),
+            # ...and the final snapshot taken right after the pause.
+            CampaignInsights(impressions=120, clicks=60, spend=640.0, conversions=11),
+            CampaignInsights(impressions=120, clicks=60, spend=640.0, conversions=11),
+        ]
+    )
+    monkeypatch.setattr(optimization_jobs, "fetch_ad_set_insights", ad_set_insights)
+    evaluate = AsyncMock(return_value=_VALID_TEST_EVALUATION)
+    monkeypatch.setattr(optimizer_module, "evaluate_test_plan", evaluate)
+    _signed_up_client(client)
+    business_id = _create_business(client)
+    _connect_meta(client, business_id)
+    campaign_id = _publish_test_plan_campaign(client, business_id, monkeypatch)
+
+    _run(client, optimization_jobs.collect_metrics_for_all_live_campaigns)
+
+    assert _campaign_status(client, business_id, campaign_id)["status"] == "PAUSED"
+    rows = _run(client, _metric_rows, campaign_id)
+    assert sorted(r.spend for r in rows) == [600.0, 600.0, 640.0, 640.0]
+    assert ad_set_insights.await_count == 4
+    evaluate.assert_awaited_once()
+
+
+# --- status sync with Meta ----------------------------------------------------------
+
+
+def _paused_in_meta() -> MetaDeliveryStatus:
+    return MetaDeliveryStatus("ACTIVE", ["PAUSED"])
+
+
+def test_a_campaign_paused_in_ads_manager_becomes_paused_in_the_app(
+    client: TestClient, mock_services: dict[str, AsyncMock]
+) -> None:
+    """The case we saw with Rings: paused directly in Ads Manager, still LIVE here."""
+    business_id, campaign_id = _live_campaign(client)
+    mock_services["delivery"].return_value = _paused_in_meta()
+    before = datetime.now(UTC)
+
+    _run(client, optimization_jobs.collect_metrics_for_all_live_campaigns)
+
+    campaign = _run(client, _fetch_campaign, campaign_id)
+    assert campaign.status == "PAUSED"
+    assert campaign.pausedReason == "Paused in Meta Ads Manager"
+    assert campaign.pausedAt is not None
+    assert campaign.pausedAt >= before - timedelta(seconds=1)
+    assert _run(client, _ad_set_statuses, campaign_id) == ["PAUSED"]
+    body = _campaign_status(client, business_id, campaign_id)
+    assert body["status"] == "PAUSED"
+    assert body["pausedAt"] is not None
+
+
+def test_detecting_a_pause_takes_a_final_snapshot_and_stops_regular_collection(
+    client: TestClient, mock_services: dict[str, AsyncMock]
+) -> None:
+    _, campaign_id = _live_campaign(client)
+    mock_services["delivery"].return_value = _paused_in_meta()
+    mock_services["insights"].return_value = CampaignInsights(
+        impressions=500, clicks=20, spend=7.5, conversions=1
+    )
+
+    _run(client, optimization_jobs.collect_metrics_for_all_live_campaigns)
+
+    rows = _run(client, _metric_rows, campaign_id)
+    # Exactly one: the final snapshot. The now-paused campaign is not collected
+    # again by the same cycle.
+    assert len(rows) == 1
+    assert rows[0].spend == 7.5
+
+
+def test_a_campaign_paused_at_the_campaign_level_in_meta_also_becomes_paused(
+    client: TestClient, mock_services: dict[str, AsyncMock]
+) -> None:
+    _, campaign_id = _live_campaign(client)
+    mock_services["delivery"].return_value = MetaDeliveryStatus(
+        "PAUSED", ["CAMPAIGN_PAUSED"]
+    )
+
+    _run(client, optimization_jobs.collect_metrics_for_all_live_campaigns)
+
+    assert _run(client, _fetch_campaign, campaign_id).status == "PAUSED"
+
+
+def test_a_campaign_running_in_meta_is_left_alone(
+    client: TestClient, mock_services: dict[str, AsyncMock]
+) -> None:
+    _, campaign_id = _live_campaign(client)
+    mock_services["delivery"].return_value = MetaDeliveryStatus("ACTIVE", ["ACTIVE"])
+
+    _run(client, optimization_jobs.collect_metrics_for_all_live_campaigns)
+
+    campaign = _run(client, _fetch_campaign, campaign_id)
+    assert campaign.status == "LIVE"
+    assert campaign.pausedAt is None
+    assert len(_run(client, _metric_rows, campaign_id)) == 1
+
+
+def test_one_active_ad_set_means_the_campaign_is_still_running(
+    client: TestClient, mock_services: dict[str, AsyncMock]
+) -> None:
+    _, campaign_id = _live_campaign(client)
+    mock_services["delivery"].return_value = MetaDeliveryStatus(
+        "ACTIVE", ["PAUSED", "ACTIVE"]
+    )
+
+    _run(client, optimization_jobs.collect_metrics_for_all_live_campaigns)
+
+    assert _run(client, _fetch_campaign, campaign_id).status == "LIVE"
+
+
+def test_a_campaign_switched_back_on_in_ads_manager_becomes_live_and_is_collected(
+    client: TestClient, mock_services: dict[str, AsyncMock]
+) -> None:
+    business_id, campaign_id = _live_campaign(client)
+    client.post(f"/businesses/{business_id}/campaigns/{campaign_id}/pause")
+    assert _run(client, _fetch_campaign, campaign_id).pausedAt is not None
+    mock_services["delivery"].return_value = MetaDeliveryStatus("ACTIVE", ["ACTIVE"])
+
+    _run(client, optimization_jobs.collect_metrics_for_all_live_campaigns)
+
+    campaign = _run(client, _fetch_campaign, campaign_id)
+    assert campaign.status == "LIVE"
+    assert campaign.pausedReason is None
+    assert campaign.pausedAt is None
+    assert _run(client, _ad_set_statuses, campaign_id) == ["LIVE"]
+    # The final snapshot from the pause, plus this cycle's regular collection.
+    assert len(_run(client, _metric_rows, campaign_id)) == 2
+
+
+def test_a_campaign_published_paused_and_switched_on_in_ads_manager_becomes_live(
+    client: TestClient, mock_services: dict[str, AsyncMock]
+) -> None:
+    _signed_up_client(client)
+    business_id = _create_business(client)
+    _connect_meta(client, business_id)
+    campaign_id = _publish_campaign(client, business_id, paused=True)
+    assert _run(client, _fetch_campaign, campaign_id).status == "PAUSED"
+    mock_services["delivery"].return_value = MetaDeliveryStatus("ACTIVE", ["ACTIVE"])
+
+    _run(client, optimization_jobs.collect_metrics_for_all_live_campaigns)
+
+    campaign = _run(client, _fetch_campaign, campaign_id)
+    assert campaign.status == "LIVE"
+    assert campaign.pausedReason is None
+
+
+def test_a_campaign_still_paused_in_meta_keeps_its_pause_details(
+    client: TestClient, mock_services: dict[str, AsyncMock]
+) -> None:
+    business_id, campaign_id = _live_campaign(client)
+    client.post(f"/businesses/{business_id}/campaigns/{campaign_id}/pause")
+    paused = _run(client, _fetch_campaign, campaign_id)
+    mock_services["delivery"].return_value = _paused_in_meta()
+
+    _run(client, optimization_jobs.collect_metrics_for_all_live_campaigns)
+
+    after = _run(client, _fetch_campaign, campaign_id)
+    assert after.status == "PAUSED"
+    assert after.pausedAt == paused.pausedAt
+    assert after.pausedReason == "Manually paused"
+    # No second final snapshot: only the one taken when the app paused it.
+    assert len(_run(client, _metric_rows, campaign_id)) == 1
+
+
+@pytest.mark.parametrize(
+    "unclear",
+    [
+        None,
+        MetaDeliveryStatus("DELETED", []),
+        MetaDeliveryStatus("ARCHIVED", ["ARCHIVED"]),
+        MetaDeliveryStatus("IN_PROCESS", ["ACTIVE"]),
+        MetaDeliveryStatus("WITH_ISSUES", ["ACTIVE"]),
+        MetaDeliveryStatus("ACTIVE", []),
+        MetaDeliveryStatus("ACTIVE", ["WITH_ISSUES"]),
+    ],
+)
+def test_an_unreadable_or_unclear_meta_status_changes_nothing(
+    client: TestClient,
+    mock_services: dict[str, AsyncMock],
+    unclear: MetaDeliveryStatus | None,
+) -> None:
+    _, campaign_id = _live_campaign(client)
+    mock_services["delivery"].return_value = unclear
+
+    _run(client, optimization_jobs.collect_metrics_for_all_live_campaigns)
+
+    assert _run(client, _fetch_campaign, campaign_id).status == "LIVE"
+
+
+def test_a_meta_error_reading_one_campaign_does_not_block_the_others(
+    client: TestClient, mock_services: dict[str, AsyncMock]
+) -> None:
+    _signed_up_client(client)
+    business_id = _create_business(client)
+    _connect_meta(client, business_id)
+    first = _publish_campaign(client, business_id)
+    second = _publish_campaign(client, business_id)
+    mock_services["delivery"].side_effect = [
+        MetaConnectionError("Meta is down"),
+        _paused_in_meta(),
+    ]
+
+    _run(client, optimization_jobs.collect_metrics_for_all_live_campaigns)
+
+    statuses = sorted(_run(client, _fetch_campaign, c).status for c in (first, second))
+    assert statuses == ["LIVE", "PAUSED"]
+
+
+def test_a_failing_status_sync_never_stops_the_regular_collection(
+    client: TestClient, mock_services: dict[str, AsyncMock]
+) -> None:
+    _, campaign_id = _live_campaign(client)
+    mock_services["delivery"].side_effect = RuntimeError("unexpected")
+
+    _run(client, optimization_jobs.collect_metrics_for_all_live_campaigns)
+
+    assert len(_run(client, _metric_rows, campaign_id)) == 1
+
+
+def test_the_status_sync_asks_meta_about_each_published_campaign(
+    client: TestClient, mock_services: dict[str, AsyncMock]
+) -> None:
+    _live_campaign(client)
+    mock_services["delivery"].return_value = MetaDeliveryStatus("ACTIVE", ["ACTIVE"])
+
+    _run(client, optimization_jobs.collect_metrics_for_all_live_campaigns)
+
+    mock_services["delivery"].assert_awaited_once()
+    await_args = mock_services["delivery"].await_args
+    assert await_args is not None
+    kwargs = await_args.kwargs
+    assert kwargs["meta_campaign_id"] == "meta_campaign_1"
+    assert kwargs["access_token"] == "long-token"

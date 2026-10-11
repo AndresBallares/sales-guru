@@ -3084,3 +3084,282 @@ async def test_validate_instagram_account_is_a_no_op_in_fake_mode(
     fake_meta_mode: None,
 ) -> None:
     await _instagram_check()
+
+
+@pytest.mark.asyncio
+async def test_fetch_insights_requests_and_parses_link_clicks_and_link_ctr(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Link clicks and link CTR are Meta's own inline_link_click fields, not the
+    all-clicks `clicks`/`ctr` (which count likes, shares and other taps too)."""
+    client = _mock_client_returning(
+        monkeypatch,
+        _FakeResponse(
+            {
+                "data": [
+                    {
+                        "impressions": "2000",
+                        "clicks": "90",
+                        "ctr": "4.5",
+                        "inline_link_clicks": "30",
+                        "inline_link_click_ctr": "1.5",
+                        "spend": "12.50",
+                    }
+                ]
+            }
+        ),
+    )
+
+    insights = await meta.fetch_campaign_insights(
+        access_token="token", meta_campaign_id="campaign_123"
+    )
+
+    _url, params = client.calls[0]
+    assert "inline_link_clicks" in params["fields"]
+    assert "inline_link_click_ctr" in params["fields"]
+    assert insights.link_clicks == 30
+    assert insights.link_ctr == 1.5
+    # The all-clicks numbers are untouched.
+    assert insights.clicks == 90
+    assert insights.ctr == 4.5
+
+
+@pytest.mark.asyncio
+async def test_fetch_insights_link_fields_are_none_when_meta_omits_them(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Unavailable is None, never zero."""
+    _mock_client_returning(
+        monkeypatch,
+        _FakeResponse(
+            {"data": [{"impressions": "10", "clicks": "1", "spend": "1.00"}]}
+        ),
+    )
+
+    insights = await meta.fetch_campaign_insights(
+        access_token="token", meta_campaign_id="campaign_123"
+    )
+
+    assert insights.link_clicks is None
+    assert insights.link_ctr is None
+    assert insights.initiated_checkout is None
+
+
+@pytest.mark.asyncio
+async def test_fetch_insights_parses_initiated_checkout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _mock_client_returning(
+        monkeypatch,
+        _FakeResponse(
+            {
+                "data": [
+                    {
+                        "impressions": "1000",
+                        "clicks": "100",
+                        "spend": "12.50",
+                        "actions": [
+                            {"action_type": "initiate_checkout", "value": "4"},
+                        ],
+                    }
+                ]
+            }
+        ),
+    )
+
+    insights = await meta.fetch_campaign_insights(
+        access_token="token", meta_campaign_id="campaign_123"
+    )
+
+    assert insights.initiated_checkout == 4
+
+
+@pytest.mark.asyncio
+async def test_fetch_insights_does_not_double_count_overlapping_action_types(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Meta reports one event under several aliases (purchase, omni_purchase,
+    offsite_conversion.fb_pixel_purchase all carry the same 2 sales), so the
+    funnel counts take the largest alias, never the sum of them."""
+    same = [
+        {"action_type": "purchase", "value": "2"},
+        {"action_type": "omni_purchase", "value": "2"},
+        {"action_type": "offsite_conversion.fb_pixel_purchase", "value": "2"},
+        {"action_type": "add_to_cart", "value": "5"},
+        {"action_type": "omni_add_to_cart", "value": "5"},
+        {"action_type": "initiate_checkout", "value": "3"},
+        {"action_type": "omni_initiated_checkout", "value": "3"},
+        {"action_type": "offsite_conversion.fb_pixel_initiate_checkout", "value": "3"},
+    ]
+    _mock_client_returning(
+        monkeypatch,
+        _FakeResponse(
+            {
+                "data": [
+                    {
+                        "impressions": "1000",
+                        "clicks": "100",
+                        "spend": "100.00",
+                        "actions": same,
+                        "action_values": [
+                            {"action_type": "purchase", "value": "420.00"},
+                            {"action_type": "omni_purchase", "value": "420.00"},
+                            {
+                                "action_type": "offsite_conversion.fb_pixel_purchase",
+                                "value": "420.00",
+                            },
+                        ],
+                    }
+                ]
+            }
+        ),
+    )
+
+    insights = await meta.fetch_campaign_insights(
+        access_token="token", meta_campaign_id="campaign_123"
+    )
+
+    assert insights.purchases == 2
+    assert insights.purchase_value == 420.0
+    assert insights.add_to_cart == 5
+    assert insights.initiated_checkout == 3
+    assert insights.cac == 50.0
+    assert insights.roas == 4.2
+    assert insights.cost_per_add_to_cart == 20.0
+
+
+@pytest.mark.asyncio
+async def test_fetch_insights_revenue_takes_the_largest_alias_not_the_sum(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Revenue (and so ROAS) is deduplicated like the counts: when the aliases
+    disagree, the largest is the complete figure; they are never added."""
+    _mock_client_returning(
+        monkeypatch,
+        _FakeResponse(
+            {
+                "data": [
+                    {
+                        "impressions": "1000",
+                        "clicks": "100",
+                        "spend": "100.00",
+                        "actions": [
+                            {"action_type": "purchase", "value": "2"},
+                            {"action_type": "omni_purchase", "value": "3"},
+                        ],
+                        "action_values": [
+                            {"action_type": "purchase", "value": "300.00"},
+                            {"action_type": "omni_purchase", "value": "450.00"},
+                        ],
+                    }
+                ]
+            }
+        ),
+    )
+
+    insights = await meta.fetch_campaign_insights(
+        access_token="token", meta_campaign_id="campaign_123"
+    )
+
+    assert insights.purchases == 3
+    assert insights.purchase_value == 450.0
+    assert insights.roas == 4.5
+
+
+@pytest.mark.asyncio
+async def test_fetch_meta_delivery_status_reads_the_campaign_and_its_ad_sets(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Two GETs, one per level, and nothing else: the status sync is read-only."""
+    responses = [
+        _FakeResponse({"effective_status": "ACTIVE", "id": "campaign_123"}),
+        _FakeResponse(
+            {
+                "data": [
+                    {"effective_status": "PAUSED", "id": "a1"},
+                    {"effective_status": "ACTIVE", "id": "a2"},
+                ]
+            }
+        ),
+    ]
+    client = _FakeAsyncClient(response=None)
+
+    async def get(url: str, params: dict[str, str]) -> _FakeResponse:
+        client.calls.append((url, params))
+        return responses[len(client.calls) - 1]
+
+    async def post(*_args: object, **_kwargs: object) -> _FakeResponse:
+        raise AssertionError("reading a campaign's status must never write to Meta")
+
+    monkeypatch.setattr(client, "get", get)
+    monkeypatch.setattr(client, "post", post)
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **_kwargs: client)
+
+    status = await meta.fetch_meta_delivery_status(
+        access_token="token", meta_campaign_id="campaign_123"
+    )
+
+    assert status == meta.MetaDeliveryStatus("ACTIVE", ["PAUSED", "ACTIVE"])
+    assert [url for url, _params in client.calls] == [
+        "https://graph.facebook.com/v21.0/campaign_123",
+        "https://graph.facebook.com/v21.0/campaign_123/adsets",
+    ]
+    assert all(params["fields"] == "effective_status" for _url, params in client.calls)
+
+
+@pytest.mark.asyncio
+async def test_fetch_meta_delivery_status_with_no_ad_sets(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = _FakeAsyncClient(response=None)
+    responses = [
+        _FakeResponse({"effective_status": "PAUSED"}),
+        _FakeResponse({"data": []}),
+    ]
+
+    async def get(url: str, params: dict[str, str]) -> _FakeResponse:
+        client.calls.append((url, params))
+        return responses[len(client.calls) - 1]
+
+    monkeypatch.setattr(client, "get", get)
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **_kwargs: client)
+
+    status = await meta.fetch_meta_delivery_status(
+        access_token="token", meta_campaign_id="campaign_123"
+    )
+
+    assert status == meta.MetaDeliveryStatus("PAUSED", [])
+
+
+@pytest.mark.asyncio
+async def test_fetch_meta_delivery_status_raises_when_meta_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A campaign Meta no longer has (or any API failure) surfaces as the usual
+    MetaConnectionError, which the sync logs and skips."""
+    _mock_client_returning(
+        monkeypatch,
+        _FakeResponse({"error": {"message": "Unsupported get request"}}, is_error=True),
+    )
+
+    with pytest.raises(meta.MetaConnectionError):
+        await meta.fetch_meta_delivery_status(
+            access_token="token", meta_campaign_id="gone"
+        )
+
+
+@pytest.mark.asyncio
+async def test_fetch_meta_delivery_status_is_none_in_fake_mode(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """There is no real Meta state to read, so nothing may be inferred from it."""
+    monkeypatch.setenv("FAKE_META", "true")
+    get_settings.cache_clear()
+    try:
+        status = await meta.fetch_meta_delivery_status(
+            access_token="token", meta_campaign_id="campaign_123"
+        )
+    finally:
+        get_settings.cache_clear()
+
+    assert status is None
