@@ -309,6 +309,67 @@ def test_create_strategy_404s_for_another_users_campaign(client: TestClient) -> 
     assert response.status_code == 404
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", ["STRATEGY_GENERATED", "LIVE", "PAUSED", "ARCHIVED"])
+async def test_create_strategy_is_refused_for_a_published_campaign_and_changes_nothing(
+    client: TestClient, mock_generate_strategy: AsyncMock, status: str
+) -> None:
+    """A published campaign's strategy is what its ads were built from, and
+    regenerating it used to reset the campaign's status (to "Strategy generated")
+    while it was still on Meta — whatever its status is now."""
+    _signed_up_client(client)
+    business_id = _create_business(client)
+    campaign_id = _create_campaign(client, business_id)
+    first = client.post(
+        f"/businesses/{business_id}/campaigns/{campaign_id}/strategy",
+        json={"hasPriorAdvertisingExperience": True},
+    )
+    assert first.status_code == 201
+    mock_generate_strategy.reset_mock()
+    seeder = Prisma()
+    await seeder.connect()
+    await seeder.campaign.update(
+        where={"id": campaign_id},
+        data={"status": status, "metaCampaignId": "meta_campaign_1"},
+    )
+    stored_before = await seeder.strategy.find_unique(where={"campaignId": campaign_id})
+
+    response = client.post(
+        f"/businesses/{business_id}/campaigns/{campaign_id}/strategy",
+        json={"hasPriorAdvertisingExperience": True},
+    )
+
+    assert response.status_code == 400
+    assert "already published" in response.json()["detail"]
+    assert "Create a new campaign" in response.json()["detail"]
+    mock_generate_strategy.assert_not_awaited()
+    campaign = await seeder.campaign.find_unique(where={"id": campaign_id})
+    stored_after = await seeder.strategy.find_unique(where={"campaignId": campaign_id})
+    await seeder.disconnect()
+    assert campaign is not None and campaign.status == status  # not reset
+    assert stored_before is not None and stored_after is not None
+    assert stored_after.id == stored_before.id  # the strategy was not replaced
+
+
+def test_create_strategy_still_regenerates_for_an_unpublished_campaign(
+    client: TestClient, mock_generate_strategy: AsyncMock
+) -> None:
+    """The guard is only for published campaigns: a draft can be regenerated."""
+    _signed_up_client(client)
+    business_id = _create_business(client)
+    campaign_id = _create_campaign(client, business_id)
+    url = f"/businesses/{business_id}/campaigns/{campaign_id}/strategy"
+    assert (
+        client.post(url, json={"hasPriorAdvertisingExperience": True}).status_code
+        == 201
+    )
+
+    again = client.post(url, json={"hasPriorAdvertisingExperience": True})
+
+    assert again.status_code == 201
+    assert mock_generate_strategy.await_count == 2
+
+
 def test_create_strategy_428s_without_a_product_and_audience(
     client: TestClient,
 ) -> None:

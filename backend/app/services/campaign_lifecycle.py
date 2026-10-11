@@ -19,6 +19,7 @@ from app.services.optimization_jobs import pause_campaign_and_capture
 logger = logging.getLogger(__name__)
 
 ARCHIVED_REASON = "Archived"
+RESTORED_REASON = "Restored from archive"
 
 
 class CampaignHasDeliveredError(Exception):
@@ -31,6 +32,10 @@ class CampaignNeverDeliveredError(Exception):
 
 class CampaignNotPublishedError(Exception):
     """The campaign was never published, so there is nothing to archive."""
+
+
+class CampaignNotArchivedError(Exception):
+    """Only an archived campaign can be restored."""
 
 
 class MetaConnectionMissingError(Exception):
@@ -210,6 +215,37 @@ async def archive_campaign(
     updated = await db.campaign.update(
         where={"id": campaign.id},
         data={"status": "ARCHIVED", "pausedReason": reason},
+    )
+    assert updated is not None  # just read, can't vanish mid-request
+    return updated
+
+
+async def restore_campaign(campaign: Campaign) -> Campaign:
+    """Bring an archived campaign back as PAUSED, locally only.
+
+    Nothing is sent to Meta: archiving left the campaign paused there, so it is
+    still paused. As PAUSED it is back in the campaign list and in the Meta
+    status sync, which reads Meta each cycle and flips it to LIVE if it is in fact
+    running there (and collection of its results then resumes). Its metrics,
+    recommendations and evaluations were never touched. The pause details are kept,
+    except the plain "Archived" reason, which no longer applies.
+
+    Args:
+        campaign: The campaign to restore.
+
+    Returns:
+        The campaign, now PAUSED.
+
+    Raises:
+        CampaignNotArchivedError: It is not archived.
+    """
+    if campaign.status != "ARCHIVED":
+        raise CampaignNotArchivedError
+    reason = campaign.pausedReason
+    if reason in (None, ARCHIVED_REASON):
+        reason = RESTORED_REASON
+    updated = await db.campaign.update(
+        where={"id": campaign.id}, data={"status": "PAUSED", "pausedReason": reason}
     )
     assert updated is not None  # just read, can't vanish mid-request
     return updated

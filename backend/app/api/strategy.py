@@ -35,6 +35,10 @@ router = APIRouter(
 )
 
 _STRATEGY_NOT_FOUND = "Strategy not found"
+_ALREADY_PUBLISHED = (
+    "This campaign is already published, so its strategy can't be regenerated. "
+    "Create a new campaign to try a different strategy."
+)
 _CAMPAIGN_NOT_READY = (
     "Add a product and an audience to this campaign before generating a strategy"
 )
@@ -101,7 +105,9 @@ async def create_strategy(
         The newly generated strategy.
 
     Raises:
-        HTTPException: 428 if the campaign has no product and audience
+        HTTPException: 400 if the campaign is already published (its strategy is
+            fixed; create a new campaign instead). 428 if the campaign has no
+            product and audience
             attached yet (app/services/campaign_readiness.py), or if
             plan-type can't be determined yet (no real Meta history,
             business hasn't answered the one-time question, and this
@@ -109,6 +115,14 @@ async def create_strategy(
             the user and resubmit with an answer. 500 if the Strategist
             Agent isn't configured or the LLM call fails.
     """
+    # A published campaign's strategy is what its ads were built from; regenerating
+    # it would also reset the campaign's status (to "Strategy generated") while it
+    # is still on Meta.
+    if campaign.metaCampaignId is not None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=_ALREADY_PUBLISHED
+        )
+
     if not is_ready(campaign):
         raise HTTPException(
             status_code=status.HTTP_428_PRECONDITION_REQUIRED,
