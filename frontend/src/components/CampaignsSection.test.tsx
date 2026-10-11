@@ -72,6 +72,7 @@ vi.mock('../lib/api', async (importOriginal) => {
     activateCampaign: vi.fn<typeof actual.activateCampaign>(),
     deleteCampaign: vi.fn<typeof actual.deleteCampaign>(),
     archiveCampaign: vi.fn<typeof actual.archiveCampaign>(),
+    restoreCampaign: vi.fn<typeof actual.restoreCampaign>(),
     listMetrics: vi.fn<typeof actual.listMetrics>(),
     refreshMetrics: vi.fn<typeof actual.refreshMetrics>(),
     createRecommendation: vi.fn<typeof actual.createRecommendation>(),
@@ -3317,6 +3318,55 @@ describe('CampaignsSection', () => {
         expect(screen.queryByText(/Old test/)).not.toBeInTheDocument()
       })
 
+      it('restores an archived campaign as paused and brings it back into the list', async () => {
+        mockedApi.listCampaigns.mockResolvedValue([archived])
+        mockedApi.restoreCampaign.mockResolvedValue({
+          ...archived,
+          status: 'PAUSED',
+          pausedReason: 'Restored from archive',
+        })
+        const user = userEvent.setup()
+
+        renderCampaigns(<CampaignsSection businessId="biz-1" />)
+        await user.click(await screen.findByLabelText(/Show archived \(1\)/))
+        await user.click(screen.getByRole('button', { name: 'Restore campaign' }))
+
+        expect(mockedApi.restoreCampaign).toHaveBeenCalledWith('biz-1', 'camp-old')
+        // No longer archived: the toggle is gone and the campaign is a normal row.
+        await waitFor(() =>
+          expect(screen.queryByLabelText(/Show archived/)).not.toBeInTheDocument(),
+        )
+        expect(screen.getByText(/Old test — Sales — Paused/)).toBeInTheDocument()
+        expect(screen.queryByRole('button', { name: 'Restore campaign' })).not.toBeInTheDocument()
+      })
+
+      it('shows why a restore failed and keeps the campaign archived', async () => {
+        mockedApi.listCampaigns.mockResolvedValue([archived])
+        mockedApi.restoreCampaign.mockRejectedValue(
+          new api.ApiError(400, 'Only an archived campaign can be restored'),
+        )
+        const user = userEvent.setup()
+
+        renderCampaigns(<CampaignsSection businessId="biz-1" />)
+        await user.click(await screen.findByLabelText(/Show archived \(1\)/))
+        await user.click(screen.getByRole('button', { name: 'Restore campaign' }))
+
+        expect(await screen.findByRole('alert')).toHaveTextContent('Only an archived campaign')
+        expect(screen.getByRole('button', { name: 'Restore campaign' })).toBeInTheDocument()
+      })
+
+      it('falls back to a generic message for a non-ApiError restore failure', async () => {
+        mockedApi.listCampaigns.mockResolvedValue([archived])
+        mockedApi.restoreCampaign.mockRejectedValue(new Error('network down'))
+        const user = userEvent.setup()
+
+        renderCampaigns(<CampaignsSection businessId="biz-1" />)
+        await user.click(await screen.findByLabelText(/Show archived \(1\)/))
+        await user.click(screen.getByRole('button', { name: 'Restore campaign' }))
+
+        expect(await screen.findByRole('alert')).toHaveTextContent('Could not restore campaign.')
+      })
+
       it('has no toggle when nothing is archived', async () => {
         mockedApi.listCampaigns.mockResolvedValue([draftCampaignFixture])
 
@@ -3325,6 +3375,39 @@ describe('CampaignsSection', () => {
 
         expect(screen.queryByLabelText(/Show archived/)).not.toBeInTheDocument()
       })
+    })
+  })
+
+  describe('regenerating a strategy', () => {
+    it('explains that a published campaign’s strategy is fixed instead of offering to regenerate it', async () => {
+      mockedApi.listCampaigns.mockResolvedValue([
+        {
+          ...draftCampaignFixture,
+          status: 'STRATEGY_GENERATED',
+          metaCampaignId: 'meta_campaign_1',
+        },
+      ])
+      mockedApi.getStrategy.mockResolvedValue(FAKE_STRATEGY)
+
+      renderCampaigns(<CampaignsSection businessId="biz-1" />)
+      expect(
+        await screen.findByText(/This campaign is already published, so its strategy can't be regenerated/),
+      ).toBeInTheDocument()
+      expect(screen.getByText(/Create a new campaign to try a different strategy/)).toBeInTheDocument()
+      expect(screen.queryByRole('button', { name: 'Regenerate strategy' })).not.toBeInTheDocument()
+      expect(screen.queryByRole('button', { name: 'Generate strategy' })).not.toBeInTheDocument()
+    })
+
+    it('still offers Regenerate strategy for a campaign that is not published', async () => {
+      mockedApi.listCampaigns.mockResolvedValue([
+        { ...draftCampaignFixture, status: 'STRATEGY_GENERATED', metaCampaignId: null },
+      ])
+      mockedApi.getStrategy.mockResolvedValue(FAKE_STRATEGY)
+
+      renderCampaigns(<CampaignsSection businessId="biz-1" />)
+
+      expect(await screen.findByRole('button', { name: 'Regenerate strategy' })).toBeInTheDocument()
+      expect(screen.queryByText(/already published, so its strategy/)).not.toBeInTheDocument()
     })
   })
 

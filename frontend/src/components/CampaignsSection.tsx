@@ -23,6 +23,7 @@ import {
   getBusiness,
   getOptions,
   getStrategy,
+  restoreCampaign,
   listAudiences,
   listCampaigns,
   listCreatives,
@@ -223,6 +224,8 @@ export function CampaignsSection({
   // delivered (its results hadn't been collected yet): Archive is offered instead.
   const [deliveredOverride, setDeliveredOverride] = useState<Record<string, boolean>>({})
   const [showArchived, setShowArchived] = useState(false)
+  const [restoringId, setRestoringId] = useState<string | null>(null)
+  const [restoreErrors, setRestoreErrors] = useState<Record<string, string>>({})
 
   const [metrics, setMetrics] = useState<Record<string, Metric[]>>({})
   const [refreshingMetricsId, setRefreshingMetricsId] = useState<string | null>(null)
@@ -837,6 +840,27 @@ export function CampaignsSection({
     }
   }
 
+  // Restore brings an archived campaign back as paused. Nothing is sent to Meta.
+  async function handleRestore(campaignId: string) {
+    setRestoringId(campaignId)
+    setRestoreErrors((prev) => ({ ...prev, [campaignId]: '' }))
+    try {
+      const restored = await restoreCampaign(businessId, campaignId)
+      setCampaigns((prev) => {
+        const next = prev.map((c) => (c.id === campaignId ? restored : c))
+        onCampaignsChange?.(next)
+        return next
+      })
+    } catch (err) {
+      setRestoreErrors((prev) => ({
+        ...prev,
+        [campaignId]: err instanceof ApiError ? err.message : 'Could not restore campaign.',
+      }))
+    } finally {
+      setRestoringId(null)
+    }
+  }
+
   async function handleRefreshMetrics(campaignId: string) {
     setRefreshingMetricsId(campaignId)
     setMetricErrors((prev) => ({ ...prev, [campaignId]: '' }))
@@ -999,6 +1023,16 @@ export function CampaignsSection({
                   <p className="field-hint">
                     Paused on Meta and hidden from your list. Its results are kept.
                   </p>
+                  <button
+                    type="button"
+                    onClick={() => void handleRestore(campaign.id)}
+                    disabled={restoringId === campaign.id}
+                  >
+                    {restoringId === campaign.id ? 'Restoring…' : 'Restore campaign'}
+                  </button>
+                  {restoreErrors[campaign.id] && (
+                    <p role="alert">{restoreErrors[campaign.id]}</p>
+                  )}
                 </li>
               )
             }
@@ -1447,17 +1481,24 @@ export function CampaignsSection({
                           </p>
                         </fieldset>
                       )}
-                    <button
-                      type="button"
-                      onClick={() => handleGenerateStrategy(campaign.id)}
-                      disabled={generatingId === campaign.id}
-                    >
-                      {generatingId === campaign.id
-                        ? 'Generating…'
-                        : strategy
-                          ? 'Regenerate strategy'
-                          : 'Generate strategy'}
-                    </button>
+                    {campaign.metaCampaignId !== null ? (
+                      <p className="field-hint">
+                        This campaign is already published, so its strategy can't be regenerated.
+                        Create a new campaign to try a different strategy.
+                      </p>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => handleGenerateStrategy(campaign.id)}
+                        disabled={generatingId === campaign.id}
+                      >
+                        {generatingId === campaign.id
+                          ? 'Generating…'
+                          : strategy
+                            ? 'Regenerate strategy'
+                            : 'Generate strategy'}
+                      </button>
+                    )}
                     {strategyError && (
                       <p className="form-error" role="alert">
                         {strategyError}

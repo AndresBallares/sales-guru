@@ -84,6 +84,7 @@ _HAS_DELIVERED = (
 )
 _NEVER_DELIVERED = "This campaign never ran, so there is nothing to archive — delete it"
 _NOT_PUBLISHED = "This campaign was never published, so there is nothing to archive"
+_NOT_ARCHIVED = "Only an archived campaign can be restored"
 _META_NOT_CONNECTED_TO_CLEAN_UP = (
     "Reconnect Meta Ads so this campaign can be removed from Meta Ads Manager too"
 )
@@ -505,6 +506,35 @@ async def archive_campaign(
             ),
         ) from exc
     return await _to_response(archived)
+
+
+@router.post("/{campaign_id}/restore", response_model=CampaignResponse)
+async def restore_campaign(
+    campaign: Campaign = Depends(get_owned_campaign),
+) -> CampaignResponse:
+    """Restore an archived campaign as PAUSED, without touching Meta.
+
+    It comes back into the campaign list and the Meta status sync (which flips it
+    to LIVE if it is running on Meta, after which its results are collected
+    again). Nothing is sent to Meta, and its history was never touched.
+
+    Args:
+        campaign: The campaign, resolved and ownership-checked by
+            get_owned_campaign.
+
+    Returns:
+        The campaign, now PAUSED.
+
+    Raises:
+        HTTPException: 400 if the campaign is not archived.
+    """
+    try:
+        restored = await campaign_lifecycle.restore_campaign(campaign)
+    except campaign_lifecycle.CampaignNotArchivedError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=_NOT_ARCHIVED
+        ) from exc
+    return await _to_response(restored)
 
 
 @router.post("/{campaign_id}/approve", response_model=CampaignResponse)

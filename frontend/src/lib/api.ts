@@ -663,6 +663,13 @@ export function archiveCampaign(businessId: string, campaignId: string): Promise
   })
 }
 
+// Brings an archived campaign back as paused, locally only (nothing is sent to Meta).
+export function restoreCampaign(businessId: string, campaignId: string): Promise<Campaign> {
+  return request<Campaign>(`/businesses/${businessId}/campaigns/${campaignId}/restore`, {
+    method: 'POST',
+  })
+}
+
 export function deleteCampaign(businessId: string, campaignId: string): Promise<void> {
   return request<void>(`/businesses/${businessId}/campaigns/${campaignId}`, {
     method: 'DELETE',

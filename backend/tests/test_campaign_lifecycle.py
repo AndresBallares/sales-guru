@@ -544,3 +544,185 @@ async def test_a_delivered_campaign_reports_has_delivered_and_a_fresh_one_does_n
     await _seed_metric(campaign_id, spend=0.0, purchases=1)
     delivered = client.get(f"/businesses/{business_id}/campaigns").json()[0]
     assert delivered["hasDelivered"] is True
+
+
+# ── Restore: an archived campaign comes back, locally only ───
+
+
+async def _archived_campaign(
+    client: TestClient, *, live: bool = True
+) -> tuple[str, str]:
+    """A published campaign that delivered and has been archived."""
+    business_id, campaign_id = _publish(client)
+    await _seed_metric(campaign_id, spend=40.0, purchases=2)
+    if not live:
+        assert client.post(_url(business_id, campaign_id, "/pause")).status_code == 200
+    assert client.post(_url(business_id, campaign_id, "/archive")).status_code == 200
+    return business_id, campaign_id
+
+
+@pytest.mark.asyncio
+async def test_restoring_an_archived_campaign_pauses_it_locally_without_touching_meta(
+    client: TestClient,
+    meta_calls: dict[str, AsyncMock],
+    mock_services: dict[str, AsyncMock],  # noqa: F811
+) -> None:
+    business_id, campaign_id = await _archived_campaign(client)
+    for mock in (*mock_services.values(), *meta_calls.values()):
+        mock.reset_mock()
+    before = await _counts(campaign_id)
+
+    response = client.post(_url(business_id, campaign_id, "/restore"))
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "PAUSED"
+    assert body["pausedReason"] == "Restored from archive"
+    assert body["hasDelivered"] is True
+    # Nothing at all was sent to Meta.
+    for name in ("pause_ad_set", "resume_ad_set", "resume_campaign", "resume_ad"):
+        mock_services[name].assert_not_awaited()
+    meta_calls["delete"].assert_not_awaited()
+    meta_calls["insights"].assert_not_awaited()
+    # Its history is as it was, and it is back in the list.
+    assert await _counts(campaign_id) == before
+    listed = client.get(f"/businesses/{business_id}/campaigns").json()
+    assert next(c for c in listed if c["id"] == campaign_id)["status"] == "PAUSED"
+
+
+@pytest.mark.asyncio
+async def test_restoring_keeps_the_reason_the_campaign_was_paused_for(
+    client: TestClient,
+    meta_calls: dict[str, AsyncMock],
+    mock_services: dict[str, AsyncMock],  # noqa: F811
+) -> None:
+    """Only the plain "Archived" reason stops applying; an earlier reason is kept."""
+    business_id, campaign_id = await _archived_campaign(client, live=False)
+
+    response = client.post(_url(business_id, campaign_id, "/restore"))
+
+    assert response.status_code == 200
+    assert response.json()["pausedReason"] == "Manually paused"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", ["LIVE", "PAUSED", "APPROVED"])
+async def test_only_an_archived_campaign_can_be_restored(
+    client: TestClient,
+    meta_calls: dict[str, AsyncMock],
+    mock_services: dict[str, AsyncMock],  # noqa: F811
+    status: str,
+) -> None:
+    business_id, campaign_id = _publish(client, paused=(status == "PAUSED"))
+    if status == "APPROVED":
+        seeder = Prisma()
+        await seeder.connect()
+        await seeder.campaign.update(
+            where={"id": campaign_id}, data={"status": "APPROVED"}
+        )
+        await seeder.disconnect()
+    before = await _campaign_row(campaign_id)
+
+    response = client.post(_url(business_id, campaign_id, "/restore"))
+
+    assert response.status_code == 400
+    assert "archived" in response.json()["detail"]
+    after = await _campaign_row(campaign_id)
+    assert before is not None and after is not None and after.status == before.status
+
+
+@pytest.mark.asyncio
+async def test_restore_requires_a_session_and_an_owned_campaign(
+    client: TestClient,
+    meta_calls: dict[str, AsyncMock],
+    mock_services: dict[str, AsyncMock],  # noqa: F811
+) -> None:
+    assert client.post("/businesses/x/campaigns/y/restore").status_code == 401
+    business_id, _ = _ready_campaign(client)
+    assert (
+        client.post(_url(business_id, "does-not-exist", "/restore")).status_code == 404
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_restored_campaign_can_be_archived_again(
+    client: TestClient,
+    meta_calls: dict[str, AsyncMock],
+    mock_services: dict[str, AsyncMock],  # noqa: F811
+) -> None:
+    business_id, campaign_id = await _archived_campaign(client)
+    assert client.post(_url(business_id, campaign_id, "/restore")).status_code == 200
+
+    again = client.post(_url(business_id, campaign_id, "/archive"))
+
+    assert again.status_code == 200
+    assert again.json()["status"] == "ARCHIVED"
+
+
+@pytest.mark.asyncio
+async def test_a_restored_campaign_is_not_activatable_as_if_it_were_never_published(
+    client: TestClient,
+    meta_calls: dict[str, AsyncMock],
+    mock_services: dict[str, AsyncMock],  # noqa: F811
+) -> None:
+    business_id, campaign_id = await _archived_campaign(client)
+    client.post(_url(business_id, campaign_id, "/restore"))
+
+    assert client.post(_url(business_id, campaign_id, "/activate")).status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_the_meta_status_sync_and_collection_pick_a_restored_campaign_up_again(
+    client: TestClient,
+    meta_calls: dict[str, AsyncMock],
+    mock_services: dict[str, AsyncMock],  # noqa: F811
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Restored as PAUSED it is read from Meta every cycle: running there, it
+    becomes LIVE and its results are collected again."""
+    business_id, campaign_id = await _archived_campaign(client)
+    assert client.post(_url(business_id, campaign_id, "/restore")).status_code == 200
+    delivery = AsyncMock(
+        return_value=meta_service_module.MetaDeliveryStatus("ACTIVE", ["ACTIVE"])
+    )
+    monkeypatch.setattr(meta_service_module, "fetch_meta_delivery_status", delivery)
+    insights = AsyncMock(
+        return_value=CampaignInsights(impressions=1, clicks=1, spend=1.0, conversions=0)
+    )
+    monkeypatch.setattr(optimization_jobs, "fetch_campaign_insights", insights)
+    assert client.portal is not None
+    metrics_before = (await _counts(campaign_id))["metrics"]
+
+    client.portal.call(optimization_jobs.collect_metrics_for_all_live_campaigns)
+
+    delivery.assert_awaited()
+    row = await _campaign_row(campaign_id)
+    assert row is not None and row.status == "LIVE"
+    insights.assert_awaited()
+    assert (await _counts(campaign_id))["metrics"] == metrics_before + 1
+
+
+@pytest.mark.asyncio
+async def test_a_restored_campaign_that_is_paused_on_meta_stays_paused(
+    client: TestClient,
+    meta_calls: dict[str, AsyncMock],
+    mock_services: dict[str, AsyncMock],  # noqa: F811
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    business_id, campaign_id = await _archived_campaign(client)
+    assert client.post(_url(business_id, campaign_id, "/restore")).status_code == 200
+    delivery = AsyncMock(
+        return_value=meta_service_module.MetaDeliveryStatus("PAUSED", ["PAUSED"])
+    )
+    monkeypatch.setattr(meta_service_module, "fetch_meta_delivery_status", delivery)
+    insights = AsyncMock(
+        return_value=CampaignInsights(impressions=1, clicks=1, spend=1.0, conversions=0)
+    )
+    monkeypatch.setattr(optimization_jobs, "fetch_campaign_insights", insights)
+    assert client.portal is not None
+
+    client.portal.call(optimization_jobs.collect_metrics_for_all_live_campaigns)
+
+    row = await _campaign_row(campaign_id)
+    assert row is not None and row.status == "PAUSED"
+    insights.assert_not_awaited()
