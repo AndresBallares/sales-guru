@@ -680,6 +680,13 @@ describe('AdPreviewPage', () => {
       mockedApi.publishCampaign.mockResolvedValue(
         makeCampaign({ status: 'APPROVED', publishing: true }),
       )
+      // The third status call waits on a gate the test opens, so the "55%"
+      // state holds for as long as the assertions need instead of racing the
+      // poller (which moves on every 30ms).
+      let finishJob: () => void = () => {}
+      const jobGate = new Promise<void>((resolve) => {
+        finishJob = resolve
+      })
       mockedApi.getPublishStatus
         .mockResolvedValueOnce({ state: 'PROCESSING', step: 'Uploading video' })
         .mockResolvedValueOnce({
@@ -688,14 +695,25 @@ describe('AdPreviewPage', () => {
           progress: 55,
           elapsedSeconds: 20,
         })
-        .mockResolvedValueOnce({ state: 'DONE' })
+        .mockImplementationOnce(async () => {
+          await jobGate
+          return { state: 'DONE' }
+        })
       const user = userEvent.setup()
 
       renderPage()
       await user.click(await screen.findByRole('button', { name: 'Approve & Publish' }))
 
-      expect(await screen.findByRole('button', { name: /Processing video… 55%/ })).toBeDisabled()
+      // Wait for the disabled state explicitly: the button reads "Processing
+      // video… 55%" and cannot be clicked again.
+      await waitFor(() =>
+        expect(screen.getByRole('button', { name: /Processing video… 55%/ })).toBeDisabled(),
+      )
       await waitFor(() => expect(mockedApi.getPublishStatus).toHaveBeenCalledTimes(3))
+      expect(screen.getByRole('button', { name: /Processing video… 55%/ })).toBeDisabled()
+
+      finishJob()
+
       await waitFor(() =>
         expect(screen.queryByText(/Processing video/)).not.toBeInTheDocument(),
       )
