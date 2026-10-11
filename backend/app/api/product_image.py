@@ -18,6 +18,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile, stat
 from fastapi.responses import Response
 from prisma import Base64
 from prisma.models import Product, ProductImage
+from prisma.types import CreativeCardWhereInput, CreativeWhereInput
 
 from app.core.authz import get_owned_product
 from app.core.config import get_settings
@@ -48,6 +49,7 @@ router = APIRouter(
 )
 serve_router = APIRouter(tags=["product-images"])
 
+_UNTITLED_CAMPAIGN = "Untitled campaign"
 _UNSUPPORTED_CONTENT_TYPE = (
     "Unsupported file type — use a JPEG or PNG photo, or an MP4/MOV/M4V video"
 )
@@ -397,28 +399,82 @@ async def list_product_images(
     return [_to_response(i) for i in images]
 
 
+async def _published_campaigns_using(image_id: str) -> list[str]:
+    """Names of the campaigns whose published ads use this photo or video.
+
+    An ad uses it when its creative (one linked to an ad that exists, so the campaign
+    is published, whatever its status now) names it as the feed, Stories or Square
+    asset, or as a carousel card's image. A creative that never became an ad (an
+    unselected draft) doesn't count.
+
+    Args:
+        image_id: The photo or video to look up.
+
+    Returns:
+        The distinct campaign names, sorted ("Untitled campaign" for an unnamed one).
+    """
+    creative_where: CreativeWhereInput = {
+        "NOT": [{"adId": None}],
+        "OR": [
+            {"productImageId": image_id},
+            {"storyProductImageId": image_id},
+            {"squareProductImageId": image_id},
+        ],
+    }
+    creatives = await db.creative.find_many(
+        where=creative_where, include={"campaign": True}
+    )
+    card_where: CreativeCardWhereInput = {
+        "productImageId": image_id,
+        "creative": {"is": {"NOT": [{"adId": None}]}},
+    }
+    cards = await db.creativecard.find_many(
+        where=card_where, include={"creative": {"include": {"campaign": True}}}
+    )
+    campaigns = [c.campaign for c in creatives] + [
+        card.creative.campaign for card in cards if card.creative is not None
+    ]
+    return sorted({c.name or _UNTITLED_CAMPAIGN for c in campaigns if c is not None})
+
+
 @router.delete("/{image_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_product_image(
     image_id: str,
     product: Product = Depends(get_owned_product),
 ) -> None:
-    """Delete one of a product's uploaded photos.
+    """Delete one of a product's uploaded photos or videos.
+
+    Refused while a published ad uses it: the ad lives on Meta and its local record
+    shows this media, so deleting it would leave the app unable to show what is
+    running. The message names the campaigns that use it.
 
     Args:
-        image_id: The image to delete.
+        image_id: The image (or video) to delete.
         product: The parent product, resolved and ownership-checked by
             get_owned_product.
 
     Raises:
-        HTTPException: 404 if no such image exists on this product.
+        HTTPException: 404 if no such image exists on this product; 409 if a
+            published ad uses it.
     """
-    deleted = await db.productimage.delete_many(
+    media = await db.productimage.find_first(
         where={"id": image_id, "productId": product.id}
     )
-    if deleted == 0:
+    if media is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail=_IMAGE_NOT_FOUND
         )
+    used_by = await _published_campaigns_using(image_id)
+    if used_by:
+        noun = "video" if media.mediaType == "VIDEO" else "photo"
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                f"This {noun} is used by a published ad and can't be deleted. "
+                f"Used by: {', '.join(used_by)}."
+            ),
+        )
+    await db.productimage.delete_many(where={"id": image_id, "productId": product.id})
 
 
 async def _publicly_visible_media(image_id: str) -> ProductImage:
