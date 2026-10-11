@@ -3378,6 +3378,75 @@ describe('CampaignsSection', () => {
     })
   })
 
+  describe('a published campaign cannot change its ads', () => {
+    const LOCKED = 'This campaign is already published. Create a new campaign to change its ads.'
+
+    function ads(overrides: Partial<api.Creative> = {}): api.Creative[] {
+      return [
+        fakeCreative({ id: 'c1', headline: 'Ad one', status: 'SELECTED', ...overrides }),
+        fakeCreative({ id: 'c2', headline: 'Ad two', status: 'GENERATED', ...overrides }),
+      ]
+    }
+
+    // LIVE, PAUSED, and the pre-publish statuses an old bug could leave a published
+    // campaign in: all published, because they have a Meta id.
+    it.each(['LIVE', 'PAUSED', 'ADS_GENERATED', 'PENDING_APPROVAL', 'APPROVED', 'STRATEGY_GENERATED'])(
+      'offers no way to change, regenerate, replace or republish the ads (%s)',
+      async (status) => {
+        mockedApi.listCampaigns.mockResolvedValue([
+          {
+            ...draftCampaignFixture,
+            status,
+            metaCampaignId: 'meta_campaign_1',
+            pausedReason: status === 'PAUSED' ? 'Manually paused' : null,
+          },
+        ])
+        mockedApi.getStrategy.mockResolvedValue(FAKE_STRATEGY)
+        mockedApi.listCreatives.mockResolvedValue(ads())
+
+        renderCampaigns(<CampaignsSection businessId="biz-1" />)
+        await screen.findByText(/Ad one/)
+
+        expect(screen.queryByRole('button', { name: /Regenerate|Generate ads/ })).not.toBeInTheDocument()
+        expect(screen.queryByRole('button', { name: /Change product|Attach a product/ })).not.toBeInTheDocument()
+        expect(screen.queryByRole('button', { name: 'Choose a different ad' })).not.toBeInTheDocument()
+        expect(screen.queryByRole('button', { name: /Select this ad|Add to test|Remove from test/ })).not.toBeInTheDocument()
+        expect(screen.queryByRole('button', { name: /Approve & Publish|Retry publish/ })).not.toBeInTheDocument()
+        expect(screen.queryByText('Ad format')).not.toBeInTheDocument()
+        expect(screen.getAllByText(LOCKED).length).toBeGreaterThan(0)
+      },
+    )
+
+    it('does not nudge a published campaign to regenerate stale ads', async () => {
+      mockedApi.listCampaigns.mockResolvedValue([
+        { ...draftCampaignFixture, status: 'LIVE', metaCampaignId: 'meta_campaign_1' },
+      ])
+      mockedApi.getStrategy.mockResolvedValue(FAKE_STRATEGY)
+      mockedApi.listCreatives.mockResolvedValue(ads({ isStale: true }))
+
+      renderCampaigns(<CampaignsSection businessId="biz-1" />)
+      await screen.findByText(/Ad one/)
+
+      expect(screen.queryByText(/generated from an older version of the product/)).not.toBeInTheDocument()
+    })
+
+    it('still offers all of it for a campaign that is not published', async () => {
+      mockedApi.listCampaigns.mockResolvedValue([
+        { ...draftCampaignFixture, status: 'ADS_GENERATED', metaCampaignId: null },
+      ])
+      mockedApi.getStrategy.mockResolvedValue(FAKE_STRATEGY)
+      mockedApi.listCreatives.mockResolvedValue(ads({ isStale: true }))
+
+      renderCampaigns(<CampaignsSection businessId="biz-1" />)
+      await screen.findByText(/Ad one/)
+
+      expect(screen.getAllByRole('button', { name: /Regenerate/ }).length).toBeGreaterThan(0)
+      expect(screen.getByText('Ad format')).toBeInTheDocument()
+      expect(screen.getByText(/generated from an older version of the product/)).toBeInTheDocument()
+      expect(screen.queryByText(LOCKED)).not.toBeInTheDocument()
+    })
+  })
+
   describe('regenerating a strategy', () => {
     it('explains that a published campaign’s strategy is fixed instead of offering to regenerate it', async () => {
       mockedApi.listCampaigns.mockResolvedValue([
@@ -4425,7 +4494,9 @@ describe('CampaignsSection creative test (CREATIVE_TEST_PLAN)', () => {
   })
 
   it('does not offer ad editing once the test is published', async () => {
-    mockedApi.listCampaigns.mockResolvedValue([{ ...CAMPAIGN, status: 'PAUSED' }])
+    mockedApi.listCampaigns.mockResolvedValue([
+      { ...CAMPAIGN, status: 'PAUSED', metaCampaignId: 'meta_campaign_1' },
+    ])
     mockedApi.listCreatives.mockResolvedValue(
       fourCreatives(['creative-1', 'creative-2', 'creative-3']),
     )
@@ -4964,7 +5035,9 @@ describe('CampaignsSection changing a video ad\'s video', () => {
   })
 
   it.each(['LIVE', 'PAUSED'])('cannot change a video once the campaign is %s', async (status) => {
-    mockedApi.listCampaigns.mockResolvedValue([{ ...CAMPAIGN, status }])
+    mockedApi.listCampaigns.mockResolvedValue([
+      { ...CAMPAIGN, status, metaCampaignId: 'meta_campaign_1' },
+    ])
     mockedApi.listCreatives.mockResolvedValue([video('creative-1', 'Headline A', 'SELECTED')])
 
     renderCampaigns(<CampaignsSection businessId="biz-1" />)
@@ -5076,7 +5149,9 @@ describe('CampaignsSection extra slots for a standalone image ad', () => {
   })
 
   it.each(['LIVE', 'PAUSED'])('hides the extra slots once the campaign is %s', async (status) => {
-    mockedApi.listCampaigns.mockResolvedValue([{ ...CAMPAIGN, status }])
+    mockedApi.listCampaigns.mockResolvedValue([
+      { ...CAMPAIGN, status, metaCampaignId: 'meta_campaign_1' },
+    ])
     mockedApi.listCreatives.mockResolvedValue([
       fakeCreative({ id: 'creative-1', status: 'SELECTED' }),
     ])

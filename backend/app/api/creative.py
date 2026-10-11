@@ -13,6 +13,7 @@ from app.api.product_image import (
 )
 from app.core.authz import get_owned_campaign
 from app.core.db import db
+from app.core.published_guard import ensure_not_published
 from app.schemas.creative import (
     MAX_CAROUSEL_CARDS,
     MIN_CAROUSEL_CARDS,
@@ -96,7 +97,6 @@ _NOT_A_CREATIVE_TEST_PLAN = (
     "Only a creative test plan lets you add or remove ads from the test"
 )
 _TEST_FULL = "A creative test runs at most {max} ads — remove one before adding another"
-_TEST_ALREADY_PUBLISHED = "This campaign is already published, so its ads can't change"
 _CARD_NOT_FOUND = "Card not found"
 _CAROUSEL_EDIT_UNSUPPORTED = (
     "A carousel's images and copy are set per card — regenerate the carousel "
@@ -318,9 +318,12 @@ async def create_creatives(
         HTTPException: 400 if the campaign has no strategy yet, or (for
             CAROUSEL) the campaign has no product, its product has fewer
             than MIN_CAROUSEL_CARDS photos, or neither the product nor
-            the business has a URL to link every card to; 500 if the
-            Creative Agent isn't configured or the LLM call fails.
+            the business has a URL to link every card to, or the campaign is
+            already published (replacing its ads would delete the creative
+            rows behind the ads that exist on Meta); 500 if the Creative Agent
+            isn't configured or the LLM call fails.
     """
+    await _check_ads_can_change(campaign)
     strategy = await db.strategy.find_unique(where={"campaignId": campaign.id})
     if strategy is None:
         raise HTTPException(
@@ -541,14 +544,13 @@ async def _is_creative_test_plan(campaign: Campaign) -> bool:
     return plan.plan_type == "CREATIVE_TEST_PLAN"
 
 
-async def _check_creative_test_can_change(campaign: Campaign) -> None:
-    """A published creative test's ads are fixed — refuse changes to them."""
-    current = await db.campaign.find_unique(where={"id": campaign.id})
-    if current is not None and current.status in ("LIVE", "PAUSED", "ARCHIVED"):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=_TEST_ALREADY_PUBLISHED,
-        )
+async def _check_ads_can_change(campaign: Campaign) -> None:
+    """A published campaign's ads are fixed — refuse changes to them.
+
+    Published means it has a Meta campaign id, in any status; see
+    app/core/published_guard.py.
+    """
+    await ensure_not_published(campaign)
 
 
 async def _sync_creative_test_status(campaign: Campaign) -> None:
@@ -627,6 +629,7 @@ async def select_creative(
             since generating a strategy already requires readiness, but
             checked here too rather than trusted transitively.
     """
+    await _check_ads_can_change(campaign)
     creative = await db.creative.find_first(
         where={"id": creative_id, "campaignId": campaign.id}
     )
@@ -650,7 +653,6 @@ async def select_creative(
 
     is_creative_plan = await _is_creative_test_plan(campaign)
     if is_creative_plan:
-        await _check_creative_test_can_change(campaign)
         selected_count = await db.creative.count(
             where={"campaignId": campaign.id, "status": "SELECTED"}
         )
@@ -748,6 +750,7 @@ async def deselect_creative(
             if the campaign isn't a creative test plan or is already
             published.
     """
+    await _check_ads_can_change(campaign)
     creative = await db.creative.find_first(
         where={"id": creative_id, "campaignId": campaign.id}
     )
@@ -760,7 +763,6 @@ async def deselect_creative(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=_NOT_A_CREATIVE_TEST_PLAN,
         )
-    await _check_creative_test_can_change(campaign)
 
     updated = await db.creative.update(
         where={"id": creative.id},
@@ -800,7 +802,7 @@ async def _find_editable_creative(creative_id: str, campaign: Campaign) -> Creat
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail=_CREATIVE_NOT_FOUND
         )
-    await _check_creative_test_can_change(campaign)
+    await _check_ads_can_change(campaign)
     if creative.format == "CAROUSEL":
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST, detail=_CAROUSEL_EDIT_UNSUPPORTED
@@ -1155,6 +1157,7 @@ async def _find_carousel_creative(creative_id: str, campaign: Campaign) -> Creat
         HTTPException: 404 if no such creative exists on this campaign, 400
             if it exists but isn't a CAROUSEL creative.
     """
+    await _check_ads_can_change(campaign)
     creative = await db.creative.find_first(
         where={"id": creative_id, "campaignId": campaign.id},
         include={"cards": {"order_by": {"position": "asc"}}},
