@@ -12,6 +12,7 @@ import {
 import { onlyPhotos, PHOTOS_ONLY_HINT } from '../lib/media'
 import { useMediaIntake } from '../lib/useMediaIntake'
 import { BlackFrameFallback } from './BlackFrameFallback'
+import { DifferentItemsNote } from './DifferentItemsNote'
 import { ExtraAssetSlot } from './ExtraAssetSlot'
 import { MediaBadges } from './MediaBadges'
 
@@ -275,6 +276,7 @@ export function CreativeEditor({
             creative={creative}
             onUpdated={onUpdated}
           />
+          <DifferentItemsNote creative={creative} />
         </>
       )}
       {showCopyControls && (
