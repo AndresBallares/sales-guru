@@ -75,3 +75,4 @@ export function isValidDestinationUrl(raw: string): boolean {
   }
   return hostname.includes('.')
 }
+// ci scope test
