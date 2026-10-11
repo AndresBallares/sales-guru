@@ -3746,3 +3746,163 @@ async def test_the_placement_creative_sends_instagram_user_id_only_when_linked(
     assert data.get("instagram_user_id") == expected
     assert "instagram_user_id" not in json.loads(data["asset_feed_spec"])
     assert "instagram" not in data["object_story_spec"]
+
+
+# --- Deleting a Meta object ----------------------------------------------------
+
+
+class _ScriptedClient:
+    """An httpx.AsyncClient stand-in that answers GET and DELETE from a script."""
+
+    def __init__(self, script: list[Any]) -> None:
+        self.script = list(script)
+        self.calls: list[tuple[str, str, dict[str, str]]] = []
+
+    async def __aenter__(self) -> "_ScriptedClient":
+        return self
+
+    async def __aexit__(self, *_args: object) -> bool:
+        return False
+
+    def _answer(self, method: str, url: str, params: dict[str, str]) -> Any:
+        self.calls.append((method, url, params))
+        step = self.script.pop(0)
+        if isinstance(step, Exception):
+            raise step
+        return step
+
+    async def get(self, url: str, params: dict[str, str]) -> Any:
+        return self._answer("GET", url, params)
+
+    async def delete(self, url: str, params: dict[str, str]) -> Any:
+        return self._answer("DELETE", url, params)
+
+
+def _scripted(monkeypatch: pytest.MonkeyPatch, script: list[Any]) -> _ScriptedClient:
+    client = _ScriptedClient(script)
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **_kwargs: client)
+    return client
+
+
+def _not_found() -> _FakeResponse:
+    return _FakeResponse(
+        {
+            "error": {
+                "message": "Object does not exist, cannot be loaded due to missing "
+                "permissions",
+                "code": 100,
+                "error_subcode": 33,
+            }
+        }
+    )
+
+
+async def _delete_object() -> bool:
+    return await meta.delete_meta_object(
+        access_token="token", ad_account_id="act_1", meta_object_id="camp_9"
+    )
+
+
+@pytest.mark.asyncio
+async def test_delete_meta_object_deletes_an_existing_object(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = _scripted(
+        monkeypatch,
+        [
+            _FakeResponse({"id": "camp_9", "status": "ARCHIVED"}),
+            _FakeResponse({"success": True}),
+        ],
+    )
+
+    assert await _delete_object() is True
+
+    assert [(m, u) for m, u, _ in client.calls] == [
+        ("GET", "https://graph.facebook.com/v21.0/camp_9"),
+        ("DELETE", "https://graph.facebook.com/v21.0/camp_9"),
+    ]
+    assert client.calls[1][2] == {"access_token": "token"}
+
+
+@pytest.mark.asyncio
+async def test_delete_meta_object_skips_one_already_deleted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = _scripted(
+        monkeypatch, [_FakeResponse({"id": "camp_9", "status": "DELETED"})]
+    )
+
+    assert await _delete_object() is False
+    assert [m for m, _, _ in client.calls] == ["GET"]
+
+
+@pytest.mark.asyncio
+async def test_delete_meta_object_calls_an_object_gone_when_the_account_is_readable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Meta cannot find it, yet the ad account itself reads fine: it is gone."""
+    client = _scripted(monkeypatch, [_not_found(), _FakeResponse({"id": "act_1"})])
+
+    assert await _delete_object() is False
+    assert client.calls[1][1] == "https://graph.facebook.com/v21.0/act_1"
+
+
+@pytest.mark.asyncio
+async def test_delete_meta_object_does_not_mistake_a_permission_problem_for_gone(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """If the ad account is unreadable too, "not found" really means "not allowed"."""
+    _scripted(monkeypatch, [_not_found(), _not_found()])
+
+    with pytest.raises(meta.MetaConnectionError):
+        await _delete_object()
+
+
+@pytest.mark.asyncio
+async def test_delete_meta_object_raises_on_any_other_read_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _scripted(
+        monkeypatch,
+        [_FakeResponse({"error": {"message": "Invalid OAuth token", "code": 190}})],
+    )
+
+    with pytest.raises(meta.MetaConnectionError, match="Invalid OAuth token"):
+        await _delete_object()
+
+
+@pytest.mark.asyncio
+async def test_delete_meta_object_raises_when_meta_refuses_the_delete(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _scripted(
+        monkeypatch,
+        [
+            _FakeResponse({"id": "camp_9", "status": "ACTIVE"}),
+            _FakeResponse({"error": {"message": "Creative in use", "code": 100}}),
+        ],
+    )
+
+    with pytest.raises(meta.MetaConnectionError, match="Creative in use"):
+        await _delete_object()
+
+
+@pytest.mark.asyncio
+async def test_delete_meta_object_reports_a_network_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _scripted(
+        monkeypatch,
+        [
+            _FakeResponse({"id": "camp_9", "status": "ACTIVE"}),
+            httpx.ConnectError("boom"),
+        ],
+    )
+
+    with pytest.raises(meta.MetaConnectionError, match="Meta API call failed"):
+        await _delete_object()
+
+
+@pytest.mark.asyncio
+async def test_delete_meta_object_is_a_no_op_in_fake_mode(fake_meta_mode: None) -> None:
+    assert await _delete_object() is True

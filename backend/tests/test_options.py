@@ -140,6 +140,7 @@ def test_get_options_campaign_statuses(client: TestClient) -> None:
         {"value": "APPROVED", "label": "Approved"},
         {"value": "LIVE", "label": "Live"},
         {"value": "PAUSED", "label": "Paused"},
+        {"value": "ARCHIVED", "label": "Archived"},
         {"value": "FAILED", "label": "Failed"},
     ]
 

@@ -29,7 +29,7 @@ from app.schemas.strategy import (
     MIN_CREATIVE_ANGLES,
     StrategyContentAdapter,
 )
-from app.services import publish_jobs
+from app.services import campaign_lifecycle, publish_jobs
 from app.services.campaign_readiness import advance_to_ready_if_complete, is_ready
 from app.services.creative import copy_problems, is_creative_stale, media_problems
 from app.services.event_venues import EVENT_VENUES, default_event_window
@@ -78,9 +78,14 @@ _VIDEO_TEST_VIDEOS_ONLY = (
     "This is a video test: every ad in it must be a video, so other formats "
     "can't be mixed in"
 )
-_ALREADY_PUBLISHED = (
-    "This campaign has already been published and can't be deleted — its "
-    "data is used to optimize future campaigns"
+_HAS_DELIVERED = (
+    "This campaign has delivered, so it can't be deleted — archive it to keep its "
+    "results"
+)
+_NEVER_DELIVERED = "This campaign never ran, so there is nothing to archive — delete it"
+_NOT_PUBLISHED = "This campaign was never published, so there is nothing to archive"
+_META_NOT_CONNECTED_TO_CLEAN_UP = (
+    "Reconnect Meta Ads so this campaign can be removed from Meta Ads Manager too"
 )
 _META_NOT_CONNECTED = (
     "Connect Meta Ads and select an ad account and Page before publishing"
@@ -151,6 +156,7 @@ async def _to_response(campaign: Campaign) -> CampaignResponse:
         daily_spend_flag=campaign.dailySpendFlag,
         pixel_warning=campaign.pixelWarning,
         needs_destination_url=await _needs_destination_url(campaign),
+        has_delivered=await campaign_lifecycle.has_delivered(campaign.id),
     )
 
 
@@ -412,38 +418,93 @@ async def update_campaign(
 async def delete_campaign(
     campaign: Campaign = Depends(get_owned_campaign),
 ) -> None:
-    """Delete a campaign that has never been published to Meta.
+    """Delete a campaign that never delivered, on Meta and locally.
 
-    Blocked once the campaign has ever gone LIVE (metaCampaignId set) —
-    from that point on it can carry real performance data
-    (Metric/OptimizationRecommendation/TestEvaluation rows, written only
-    for LIVE campaigns by app/services/optimization_jobs.py) that the
-    Optimizer uses to inform future campaigns, so silently erasing it
-    would throw that history away. A campaign that never published has
-    none of those rows yet, so this one check is sufficient — no need to
-    separately delete AdSet/Metric/etc. rows below, only its own
-    Strategy/Creative rows (regenerable, never load-bearing on their own).
+    Allowed when there are no results to lose: no snapshot with spend or
+    purchases, and none on Meta's own insights. The campaign, its ad sets, ads
+    and creatives are deleted on Meta first (a campaign that was never
+    published has nothing there), then every local row is removed in one
+    transaction. If a Meta call fails nothing local is touched, so the delete
+    can simply be retried. A campaign that has delivered is archived instead
+    (POST .../archive), which keeps its results.
 
     Args:
         campaign: The campaign, resolved and ownership-checked by
             get_owned_campaign.
 
     Raises:
-        HTTPException: 400 if the campaign has ever been published.
+        HTTPException: 409 if the campaign has delivered; 400 if it has objects
+            on Meta but the business has no Meta connection; 500 if a Meta call
+            fails (nothing is deleted locally).
     """
-    if campaign.metaCampaignId is not None:
+    connection = await get_meta_connection(campaign.businessId)
+    try:
+        await campaign_lifecycle.delete_campaign(campaign, connection)
+    except campaign_lifecycle.CampaignHasDeliveredError as exc:
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, detail=_ALREADY_PUBLISHED
-        )
+            status_code=status.HTTP_409_CONFLICT, detail=_HAS_DELIVERED
+        ) from exc
+    except campaign_lifecycle.MetaConnectionMissingError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=_META_NOT_CONNECTED_TO_CLEAN_UP,
+        ) from exc
+    except MetaConnectionError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=(
+                f"Could not delete the campaign on Meta, so nothing was removed: {exc}"
+            ),
+        ) from exc
 
-    # A carousel Creative's CreativeCard rows reference it with no cascade,
-    # so they have to go first or the Creative delete fails on the foreign key.
-    await db.creativecard.delete_many(
-        where={"creative": {"is": {"campaignId": campaign.id}}}
-    )
-    await db.creative.delete_many(where={"campaignId": campaign.id})
-    await db.strategy.delete_many(where={"campaignId": campaign.id})
-    await db.campaign.delete(where={"id": campaign.id})
+
+@router.post("/{campaign_id}/archive", response_model=CampaignResponse)
+async def archive_campaign(
+    campaign: Campaign = Depends(get_owned_campaign),
+) -> CampaignResponse:
+    """Archive a campaign that has delivered: pause it if live, hide it, keep it.
+
+    A live campaign is paused on Meta first (with its final snapshot). Its
+    metrics, recommendations and evaluations are all kept, so the Optimizer and
+    the dashboard history are unaffected. Archiving an archived campaign is a
+    no-op.
+
+    Args:
+        campaign: The campaign, resolved and ownership-checked by
+            get_owned_campaign.
+
+    Returns:
+        The campaign, now ARCHIVED.
+
+    Raises:
+        HTTPException: 400 if it was never published or never ran (delete it
+            instead), or is live with no Meta connection; 500 if pausing on Meta
+            fails (the campaign is unchanged).
+    """
+    connection = await get_meta_connection(campaign.businessId)
+    try:
+        archived = await campaign_lifecycle.archive_campaign(campaign, connection)
+    except campaign_lifecycle.CampaignNotPublishedError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=_NOT_PUBLISHED
+        ) from exc
+    except campaign_lifecycle.CampaignNeverDeliveredError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=_NEVER_DELIVERED
+        ) from exc
+    except campaign_lifecycle.MetaConnectionMissingError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=_META_NOT_CONNECTED_TO_PAUSE,
+        ) from exc
+    except MetaConnectionError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=(
+                f"Could not pause the campaign on Meta, so it was not archived: {exc}"
+            ),
+        ) from exc
+    return await _to_response(archived)
 
 
 @router.post("/{campaign_id}/approve", response_model=CampaignResponse)

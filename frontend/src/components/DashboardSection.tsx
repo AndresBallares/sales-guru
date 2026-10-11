@@ -220,16 +220,19 @@ export function DashboardSection({ businessId }: { businessId: string }) {
 
               {shown.hasData && shown.tier1 ? (
                 <>
-                  {shown.status === 'PAUSED' && (
+                  {(shown.status === 'PAUSED' || shown.status === 'ARCHIVED') && (
                     <p className="dash-paused" role="note">
-                      <strong>Paused</strong>
+                      <strong>{shown.status === 'ARCHIVED' ? 'Archived' : 'Paused'}</strong>
                       {shown.pausedAt && <> on {formatAsOf(shown.pausedAt)}</>}
                       {shown.pausedReason && <> — {shown.pausedReason}</>}. These are its last
-                      numbers; a paused campaign isn’t updated.
+                      numbers; {shown.status === 'ARCHIVED' ? 'an archived' : 'a paused'} campaign
+                      isn’t updated.
                     </p>
                   )}
                   <p className="dash-sub">
-                    {shown.status === 'PAUSED' ? 'Last updated' : 'Updated'}{' '}
+                    {shown.status === 'PAUSED' || shown.status === 'ARCHIVED'
+                      ? 'Last updated'
+                      : 'Updated'}{' '}
                     {formatAsOf(shown.asOf)}
                   </p>
                   {/* With fewer than 10 purchases the sales numbers can't be

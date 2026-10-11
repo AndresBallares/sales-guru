@@ -40,6 +40,7 @@ CampaignStatus = Literal[
     "APPROVED",
     "LIVE",
     "PAUSED",
+    "ARCHIVED",
     "FAILED",
 ]
 
@@ -55,6 +56,7 @@ CAMPAIGN_STATUS_LABELS: dict[CampaignStatus, str] = {
     "APPROVED": "Approved",
     "LIVE": "Live",
     "PAUSED": "Paused",
+    "ARCHIVED": "Archived",
     "FAILED": "Failed",
 }
 
@@ -139,6 +141,10 @@ class CampaignResponse(CamelCaseModel):
     # frontend surfaces the warning instead, since the swap itself always
     # succeeds.
     needs_destination_url: bool
+    # True once the campaign has results (a snapshot with spend or a purchase).
+    # Decides the action offered: a campaign that has delivered is archived (its
+    # results are kept), one that never did is deleted.
+    has_delivered: bool = False
 
 
 class PublishStatusResponse(CamelCaseModel):

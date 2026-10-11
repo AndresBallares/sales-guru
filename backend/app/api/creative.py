@@ -544,7 +544,7 @@ async def _is_creative_test_plan(campaign: Campaign) -> bool:
 async def _check_creative_test_can_change(campaign: Campaign) -> None:
     """A published creative test's ads are fixed — refuse changes to them."""
     current = await db.campaign.find_unique(where={"id": campaign.id})
-    if current is not None and current.status in ("LIVE", "PAUSED"):
+    if current is not None and current.status in ("LIVE", "PAUSED", "ARCHIVED"):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=_TEST_ALREADY_PUBLISHED,

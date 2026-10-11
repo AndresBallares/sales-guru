@@ -71,6 +71,7 @@ vi.mock('../lib/api', async (importOriginal) => {
     pauseCampaign: vi.fn<typeof actual.pauseCampaign>(),
     activateCampaign: vi.fn<typeof actual.activateCampaign>(),
     deleteCampaign: vi.fn<typeof actual.deleteCampaign>(),
+    archiveCampaign: vi.fn<typeof actual.archiveCampaign>(),
     listMetrics: vi.fn<typeof actual.listMetrics>(),
     refreshMetrics: vi.fn<typeof actual.refreshMetrics>(),
     createRecommendation: vi.fn<typeof actual.createRecommendation>(),
@@ -365,6 +366,7 @@ const ALL_OPTIONS: api.OptionsResponse = {
     { value: 'APPROVED', label: 'Approved' },
     { value: 'LIVE', label: 'Live' },
     { value: 'PAUSED', label: 'Paused' },
+    { value: 'ARCHIVED', label: 'Archived' },
     { value: 'FAILED', label: 'Failed' },
   ],
   ctas: [
@@ -3086,69 +3088,244 @@ describe('CampaignsSection', () => {
     expect(screen.queryByText(/Daily spend above/)).not.toBeInTheDocument()
   })
 
-  it('deletes a never-published campaign and drops it from the list', async () => {
-    mockedApi.listCampaigns.mockResolvedValue([draftCampaignFixture])
-    mockedApi.deleteCampaign.mockResolvedValue(undefined)
-    const user = userEvent.setup()
+  describe('deleting and archiving', () => {
+    const DELETE_PUBLISHED_TEXT =
+      'This removes the campaign from Sales Guru and from Meta Ads Manager. It never ran, so no results are lost.'
+    const ARCHIVE_TEXT = 'This pauses the campaign on Meta and hides it here. Its results are kept.'
 
-    renderCampaigns(<CampaignsSection businessId="biz-1" />)
-    await screen.findByRole('button', { name: 'Delete campaign' })
+    // Published but never delivered (the "Venus" shape).
+    const publishedNeverRan: api.Campaign = {
+      ...draftCampaignFixture,
+      status: 'PAUSED',
+      metaCampaignId: 'meta_campaign_1',
+      pausedReason: 'Published paused',
+      hasDelivered: false,
+    }
+    const delivered: api.Campaign = {
+      ...draftCampaignFixture,
+      status: 'LIVE',
+      metaCampaignId: 'meta_campaign_1',
+      hasDelivered: true,
+    }
 
-    await user.click(screen.getByRole('button', { name: 'Delete campaign' }))
+    it('asks before deleting a never-published campaign, then drops it from the list', async () => {
+      mockedApi.listCampaigns.mockResolvedValue([draftCampaignFixture])
+      mockedApi.deleteCampaign.mockResolvedValue(undefined)
+      const user = userEvent.setup()
 
-    expect(mockedApi.deleteCampaign).toHaveBeenCalledWith('biz-1', 'camp-1')
-    await waitFor(() =>
-      expect(screen.queryByRole('button', { name: 'Delete campaign' })).not.toBeInTheDocument(),
-    )
-  })
+      renderCampaigns(<CampaignsSection businessId="biz-1" />)
+      await user.click(await screen.findByRole('button', { name: 'Delete campaign' }))
 
-  it('shows an error if deleting fails', async () => {
-    mockedApi.listCampaigns.mockResolvedValue([draftCampaignFixture])
-    mockedApi.deleteCampaign.mockRejectedValue(
-      new api.ApiError(400, "This campaign has already been published and can't be deleted"),
-    )
-    const user = userEvent.setup()
+      expect(mockedApi.deleteCampaign).not.toHaveBeenCalled()
+      const dialog = screen.getByRole('alertdialog', { name: 'Delete this campaign?' })
+      expect(dialog).toHaveTextContent(
+        'This removes the campaign from Sales Guru. It never ran, so no results are lost.',
+      )
+      await user.click(within(dialog).getByRole('button', { name: 'Delete campaign' }))
 
-    renderCampaigns(<CampaignsSection businessId="biz-1" />)
-    await screen.findByRole('button', { name: 'Delete campaign' })
+      expect(mockedApi.deleteCampaign).toHaveBeenCalledWith('biz-1', 'camp-1')
+      await waitFor(() =>
+        expect(screen.queryByRole('button', { name: 'Delete campaign' })).not.toBeInTheDocument(),
+      )
+    })
 
-    await user.click(screen.getByRole('button', { name: 'Delete campaign' }))
+    it('says it also removes a published, never-run campaign from Meta Ads Manager', async () => {
+      mockedApi.listCampaigns.mockResolvedValue([publishedNeverRan])
+      mockedApi.deleteCampaign.mockResolvedValue(undefined)
+      const user = userEvent.setup()
 
-    expect(await screen.findByRole('alert')).toHaveTextContent(
-      "This campaign has already been published and can't be deleted",
-    )
-    expect(screen.getByRole('button', { name: 'Delete campaign' })).toBeInTheDocument()
-  })
+      renderCampaigns(<CampaignsSection businessId="biz-1" />)
+      await user.click(await screen.findByRole('button', { name: 'Delete campaign' }))
 
-  it('falls back to a generic message for a non-ApiError delete failure', async () => {
-    mockedApi.listCampaigns.mockResolvedValue([draftCampaignFixture])
-    mockedApi.deleteCampaign.mockRejectedValue(new Error('network down'))
-    const user = userEvent.setup()
+      const dialog = screen.getByRole('alertdialog', { name: 'Delete this campaign?' })
+      expect(dialog).toHaveTextContent(DELETE_PUBLISHED_TEXT)
+      await user.click(within(dialog).getByRole('button', { name: 'Delete campaign' }))
 
-    renderCampaigns(<CampaignsSection businessId="biz-1" />)
-    await screen.findByRole('button', { name: 'Delete campaign' })
+      await waitFor(() =>
+        expect(mockedApi.deleteCampaign).toHaveBeenCalledWith('biz-1', 'camp-1'),
+      )
+    })
 
-    await user.click(screen.getByRole('button', { name: 'Delete campaign' }))
+    it('does nothing when the delete confirmation is cancelled', async () => {
+      mockedApi.listCampaigns.mockResolvedValue([publishedNeverRan])
+      const user = userEvent.setup()
 
-    expect(await screen.findByRole('alert')).toHaveTextContent('Could not delete campaign.')
-  })
+      renderCampaigns(<CampaignsSection businessId="biz-1" />)
+      await user.click(await screen.findByRole('button', { name: 'Delete campaign' }))
+      await user.click(screen.getByRole('button', { name: 'Cancel' }))
 
-  it('hides the delete button for a published campaign and explains why', async () => {
-    mockedApi.listCampaigns.mockResolvedValue([
-      {
-        ...draftCampaignFixture,
-        status: 'LIVE',
-        metaCampaignId: 'meta_campaign_1',
-      },
-    ])
+      expect(mockedApi.deleteCampaign).not.toHaveBeenCalled()
+      expect(screen.getByRole('button', { name: 'Delete campaign' })).toBeInTheDocument()
+      expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
+    })
 
-    renderCampaigns(<CampaignsSection businessId="biz-1" />)
-    await screen.findByText(/Live on Meta/)
+    it('shows why a delete failed and keeps the campaign', async () => {
+      mockedApi.listCampaigns.mockResolvedValue([publishedNeverRan])
+      mockedApi.deleteCampaign.mockRejectedValue(
+        new api.ApiError(
+          500,
+          'Could not delete the campaign on Meta, so nothing was removed: Meta says no',
+        ),
+      )
+      const user = userEvent.setup()
 
-    expect(screen.queryByRole('button', { name: 'Delete campaign' })).not.toBeInTheDocument()
-    expect(
-      screen.getByText(/This campaign has been published, so it can't be deleted/),
-    ).toBeInTheDocument()
+      renderCampaigns(<CampaignsSection businessId="biz-1" />)
+      await user.click(await screen.findByRole('button', { name: 'Delete campaign' }))
+      await user.click(
+        within(screen.getByRole('alertdialog')).getByRole('button', { name: 'Delete campaign' }),
+      )
+
+      expect(await screen.findByRole('alert')).toHaveTextContent('nothing was removed')
+      expect(screen.getByRole('button', { name: 'Delete campaign' })).toBeInTheDocument()
+      expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
+    })
+
+    it('falls back to a generic message for a non-ApiError delete failure', async () => {
+      mockedApi.listCampaigns.mockResolvedValue([draftCampaignFixture])
+      mockedApi.deleteCampaign.mockRejectedValue(new Error('network down'))
+      const user = userEvent.setup()
+
+      renderCampaigns(<CampaignsSection businessId="biz-1" />)
+      await user.click(await screen.findByRole('button', { name: 'Delete campaign' }))
+      await user.click(
+        within(screen.getByRole('alertdialog')).getByRole('button', { name: 'Delete campaign' }),
+      )
+
+      expect(await screen.findByRole('alert')).toHaveTextContent('Could not delete campaign.')
+    })
+
+    it('offers Archive instead when the server says the campaign has delivered', async () => {
+      mockedApi.listCampaigns.mockResolvedValue([publishedNeverRan])
+      mockedApi.deleteCampaign.mockRejectedValue(
+        new api.ApiError(409, "This campaign has delivered, so it can't be deleted — archive it to keep its results"),
+      )
+      const user = userEvent.setup()
+
+      renderCampaigns(<CampaignsSection businessId="biz-1" />)
+      await user.click(await screen.findByRole('button', { name: 'Delete campaign' }))
+      await user.click(
+        within(screen.getByRole('alertdialog')).getByRole('button', { name: 'Delete campaign' }),
+      )
+
+      expect(await screen.findByRole('alert')).toHaveTextContent('has delivered')
+      expect(screen.getByRole('button', { name: 'Archive campaign' })).toBeInTheDocument()
+      expect(screen.queryByRole('button', { name: 'Delete campaign' })).not.toBeInTheDocument()
+    })
+
+    it('offers Archive, not Delete, for a campaign that has delivered', async () => {
+      mockedApi.listCampaigns.mockResolvedValue([delivered])
+
+      renderCampaigns(<CampaignsSection businessId="biz-1" />)
+      await screen.findByText(/Live on Meta/)
+
+      expect(screen.getByRole('button', { name: 'Archive campaign' })).toBeInTheDocument()
+      expect(screen.queryByRole('button', { name: 'Delete campaign' })).not.toBeInTheDocument()
+    })
+
+    it('archives after confirming, then hides the campaign from the list', async () => {
+      mockedApi.listCampaigns.mockResolvedValue([delivered])
+      mockedApi.archiveCampaign.mockResolvedValue({ ...delivered, status: 'ARCHIVED' })
+      const user = userEvent.setup()
+
+      renderCampaigns(<CampaignsSection businessId="biz-1" />)
+      await user.click(await screen.findByRole('button', { name: 'Archive campaign' }))
+
+      const dialog = screen.getByRole('alertdialog', { name: 'Archive this campaign?' })
+      expect(dialog).toHaveTextContent(ARCHIVE_TEXT)
+      expect(mockedApi.archiveCampaign).not.toHaveBeenCalled()
+      await user.click(within(dialog).getByRole('button', { name: 'Archive campaign' }))
+
+      expect(mockedApi.archiveCampaign).toHaveBeenCalledWith('biz-1', 'camp-1')
+      await waitFor(() =>
+        expect(screen.queryByRole('button', { name: 'Archive campaign' })).not.toBeInTheDocument(),
+      )
+      expect(screen.queryByText(/Live on Meta/)).not.toBeInTheDocument()
+      expect(screen.getByLabelText(/Show archived \(1\)/)).not.toBeChecked()
+    })
+
+    it('does nothing when the archive confirmation is cancelled', async () => {
+      mockedApi.listCampaigns.mockResolvedValue([delivered])
+      const user = userEvent.setup()
+
+      renderCampaigns(<CampaignsSection businessId="biz-1" />)
+      await user.click(await screen.findByRole('button', { name: 'Archive campaign' }))
+      await user.click(screen.getByRole('button', { name: 'Cancel' }))
+
+      expect(mockedApi.archiveCampaign).not.toHaveBeenCalled()
+      expect(screen.getByRole('button', { name: 'Archive campaign' })).toBeInTheDocument()
+    })
+
+    it('shows why an archive failed and leaves the campaign as it was', async () => {
+      mockedApi.listCampaigns.mockResolvedValue([delivered])
+      mockedApi.archiveCampaign.mockRejectedValue(
+        new api.ApiError(500, 'Could not pause the campaign on Meta, so it was not archived: Meta says no'),
+      )
+      const user = userEvent.setup()
+
+      renderCampaigns(<CampaignsSection businessId="biz-1" />)
+      await user.click(await screen.findByRole('button', { name: 'Archive campaign' }))
+      await user.click(
+        within(screen.getByRole('alertdialog')).getByRole('button', { name: 'Archive campaign' }),
+      )
+
+      expect(await screen.findByRole('alert')).toHaveTextContent('was not archived')
+      expect(screen.getByText(/Live on Meta/)).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: 'Archive campaign' })).toBeInTheDocument()
+    })
+
+    it('falls back to a generic message for a non-ApiError archive failure', async () => {
+      mockedApi.listCampaigns.mockResolvedValue([delivered])
+      mockedApi.archiveCampaign.mockRejectedValue(new Error('network down'))
+      const user = userEvent.setup()
+
+      renderCampaigns(<CampaignsSection businessId="biz-1" />)
+      await user.click(await screen.findByRole('button', { name: 'Archive campaign' }))
+      await user.click(
+        within(screen.getByRole('alertdialog')).getByRole('button', { name: 'Archive campaign' }),
+      )
+
+      expect(await screen.findByRole('alert')).toHaveTextContent('Could not archive campaign.')
+    })
+
+    describe('Show archived', () => {
+      const archived: api.Campaign = {
+        ...delivered,
+        id: 'camp-old',
+        name: 'Old test',
+        status: 'ARCHIVED',
+      }
+
+      it('hides archived campaigns by default and shows them on request', async () => {
+        mockedApi.listCampaigns.mockResolvedValue([draftCampaignFixture, archived])
+        const user = userEvent.setup()
+
+        renderCampaigns(<CampaignsSection businessId="biz-1" />)
+        await screen.findByRole('button', { name: 'Delete campaign' })
+
+        expect(screen.queryByText(/Old test/)).not.toBeInTheDocument()
+        await user.click(screen.getByLabelText(/Show archived \(1\)/))
+
+        expect(screen.getByText(/Old test — Sales — Archived/)).toBeInTheDocument()
+        expect(
+          screen.getByText('Paused on Meta and hidden from your list. Its results are kept.'),
+        ).toBeInTheDocument()
+        // An archived campaign has no actions of its own.
+        expect(screen.getAllByRole('button', { name: 'Delete campaign' })).toHaveLength(1)
+        expect(screen.queryByRole('button', { name: 'Archive campaign' })).not.toBeInTheDocument()
+
+        await user.click(screen.getByLabelText(/Show archived \(1\)/))
+        expect(screen.queryByText(/Old test/)).not.toBeInTheDocument()
+      })
+
+      it('has no toggle when nothing is archived', async () => {
+        mockedApi.listCampaigns.mockResolvedValue([draftCampaignFixture])
+
+        renderCampaigns(<CampaignsSection businessId="biz-1" />)
+        await screen.findByRole('button', { name: 'Delete campaign' })
+
+        expect(screen.queryByLabelText(/Show archived/)).not.toBeInTheDocument()
+      })
+    })
   })
 
   it('retries publishing a failed campaign without re-approving', async () => {

@@ -16,6 +16,7 @@ import {
   type PublishStatus,
   type StrategyMode,
   type TestFormat,
+  archiveCampaign,
   createTestEvaluation,
   deleteCampaign,
   getBrandProfile,
@@ -212,6 +213,16 @@ export function CampaignsSection({
   const [activateErrors, setActivateErrors] = useState<Record<string, string>>({})
   const [deletingId, setDeletingId] = useState<string | null>(null)
   const [deleteErrors, setDeleteErrors] = useState<Record<string, string>>({})
+  const [archivingId, setArchivingId] = useState<string | null>(null)
+  const [archiveErrors, setArchiveErrors] = useState<Record<string, string>>({})
+  // Which campaign is waiting on the delete/archive confirmation, and which.
+  const [confirmingAction, setConfirmingAction] = useState<
+    Record<string, 'delete' | 'archive' | undefined>
+  >({})
+  // A campaign the server refused to delete because it turned out to have
+  // delivered (its results hadn't been collected yet): Archive is offered instead.
+  const [deliveredOverride, setDeliveredOverride] = useState<Record<string, boolean>>({})
+  const [showArchived, setShowArchived] = useState(false)
 
   const [metrics, setMetrics] = useState<Record<string, Metric[]>>({})
   const [refreshingMetricsId, setRefreshingMetricsId] = useState<string | null>(null)
@@ -776,27 +787,53 @@ export function CampaignsSection({
     }
   }
 
-  // No confirmation dialog here, same reasoning as handlePause above —
-  // this is itself the explicit action, and the backend already blocks
-  // it outright once the campaign has ever gone live (metaCampaignId
-  // set), so there's no valuable data this could silently destroy.
+  // Delete is for a campaign that never delivered: the server removes it on Meta
+  // first and then locally, and refuses (409) if it has results, in which case
+  // Archive is offered instead. Both go through a confirmation.
   async function handleDelete(campaignId: string) {
     setDeletingId(campaignId)
     setDeleteErrors((prev) => ({ ...prev, [campaignId]: '' }))
     try {
       await deleteCampaign(businessId, campaignId)
+      setConfirmingAction((prev) => ({ ...prev, [campaignId]: undefined }))
       setCampaigns((prev) => {
         const next = prev.filter((c) => c.id !== campaignId)
         onCampaignsChange?.(next)
         return next
       })
     } catch (err) {
+      if (err instanceof ApiError && err.status === 409) {
+        setDeliveredOverride((prev) => ({ ...prev, [campaignId]: true }))
+      }
+      setConfirmingAction((prev) => ({ ...prev, [campaignId]: undefined }))
       setDeleteErrors((prev) => ({
         ...prev,
         [campaignId]: err instanceof ApiError ? err.message : 'Could not delete campaign.',
       }))
     } finally {
       setDeletingId(null)
+    }
+  }
+
+  async function handleArchive(campaignId: string) {
+    setArchivingId(campaignId)
+    setArchiveErrors((prev) => ({ ...prev, [campaignId]: '' }))
+    try {
+      const archived = await archiveCampaign(businessId, campaignId)
+      setConfirmingAction((prev) => ({ ...prev, [campaignId]: undefined }))
+      setCampaigns((prev) => {
+        const next = prev.map((c) => (c.id === campaignId ? archived : c))
+        onCampaignsChange?.(next)
+        return next
+      })
+    } catch (err) {
+      setConfirmingAction((prev) => ({ ...prev, [campaignId]: undefined }))
+      setArchiveErrors((prev) => ({
+        ...prev,
+        [campaignId]: err instanceof ApiError ? err.message : 'Could not archive campaign.',
+      }))
+    } finally {
+      setArchivingId(null)
     }
   }
 
@@ -903,6 +940,11 @@ export function CampaignsSection({
   const ctaLabels = toLabelMap(options?.ctas ?? [])
   const actionLabels = toLabelMap(options?.actionTypes ?? [])
   const eventVenueOptions = options?.eventVenues ?? []
+  // Archived campaigns are hidden unless "Show archived" is on.
+  const archivedCount = campaigns.filter((c) => c.status === 'ARCHIVED').length
+  const visibleCampaigns = showArchived
+    ? campaigns
+    : campaigns.filter((c) => c.status !== 'ARCHIVED')
 
   return (
     <>
@@ -936,8 +978,30 @@ export function CampaignsSection({
             }}
           />
         )}
+        {archivedCount > 0 && (
+          <label className="show-archived">
+            <input
+              type="checkbox"
+              checked={showArchived}
+              onChange={(event) => setShowArchived(event.target.checked)}
+            />{' '}
+            Show archived ({archivedCount})
+          </label>
+        )}
         <ul>
-          {campaigns.map((campaign) => {
+          {visibleCampaigns.map((campaign) => {
+            if (campaign.status === 'ARCHIVED') {
+              return (
+                <li key={campaign.id} className="campaign-archived">
+                  {campaign.name ? `${campaign.name} — ` : ''}
+                  {objectiveLabels[campaign.objective] ?? campaign.objective} —{' '}
+                  {statusLabels[campaign.status] ?? campaign.status}
+                  <p className="field-hint">
+                    Paused on Meta and hidden from your list. Its results are kept.
+                  </p>
+                </li>
+              )
+            }
             const strategy = strategies[campaign.id]
             const strategyError = strategyErrors[campaign.id]
             const campaignCreatives = creatives[campaign.id] ?? []
@@ -1017,22 +1081,80 @@ export function CampaignsSection({
                     )}
                   </p>
                 )}
-                {campaign.metaCampaignId === null ? (
+                {confirmingAction[campaign.id] === 'delete' ? (
+                  <div role="alertdialog" aria-label="Delete this campaign?" className="confirm-panel">
+                    <p>
+                      {campaign.metaCampaignId === null
+                        ? 'This removes the campaign from Sales Guru. It never ran, so no results are lost.'
+                        : 'This removes the campaign from Sales Guru and from Meta Ads Manager. It never ran, so no results are lost.'}
+                    </p>
+                    <div className="button-row">
+                      <button
+                        type="button"
+                        onClick={() => void handleDelete(campaign.id)}
+                        disabled={deletingId === campaign.id}
+                      >
+                        {deletingId === campaign.id ? 'Deleting…' : 'Delete campaign'}
+                      </button>
+                      <button
+                        type="button"
+                        className="link-button"
+                        onClick={() =>
+                          setConfirmingAction((prev) => ({ ...prev, [campaign.id]: undefined }))
+                        }
+                        disabled={deletingId === campaign.id}
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  </div>
+                ) : confirmingAction[campaign.id] === 'archive' ? (
+                  <div role="alertdialog" aria-label="Archive this campaign?" className="confirm-panel">
+                    <p>This pauses the campaign on Meta and hides it here. Its results are kept.</p>
+                    <div className="button-row">
+                      <button
+                        type="button"
+                        onClick={() => void handleArchive(campaign.id)}
+                        disabled={archivingId === campaign.id}
+                      >
+                        {archivingId === campaign.id ? 'Archiving…' : 'Archive campaign'}
+                      </button>
+                      <button
+                        type="button"
+                        className="link-button"
+                        onClick={() =>
+                          setConfirmingAction((prev) => ({ ...prev, [campaign.id]: undefined }))
+                        }
+                        disabled={archivingId === campaign.id}
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  </div>
+                ) : campaign.hasDelivered || deliveredOverride[campaign.id] ? (
                   <button
                     type="button"
-                    onClick={() => void handleDelete(campaign.id)}
-                    disabled={deletingId === campaign.id}
+                    onClick={() =>
+                      setConfirmingAction((prev) => ({ ...prev, [campaign.id]: 'archive' }))
+                    }
                   >
-                    {deletingId === campaign.id ? 'Deleting…' : 'Delete campaign'}
+                    Archive campaign
                   </button>
                 ) : (
-                  <p>
-                    This campaign has been published, so it can't be deleted — its results
-                    are used to optimize future campaigns.
-                  </p>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setConfirmingAction((prev) => ({ ...prev, [campaign.id]: 'delete' }))
+                    }
+                  >
+                    Delete campaign
+                  </button>
                 )}
                 {deleteErrors[campaign.id] && (
                   <p role="alert">{deleteErrors[campaign.id]}</p>
+                )}
+                {archiveErrors[campaign.id] && (
+                  <p role="alert">{archiveErrors[campaign.id]}</p>
                 )}
                 <div
                   className="campaign-block"
