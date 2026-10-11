@@ -320,6 +320,30 @@ describe('ProductForm — edit mode live photo management', () => {
     await waitFor(() => expect(screen.queryByRole('img')).not.toBeInTheDocument())
   })
 
+  it('says which campaign uses a photo a published ad needs, and keeps the photo', async () => {
+    mockedApi.listProductImages.mockResolvedValue([
+      { id: 'img-1', url: 'http://localhost:8000/product-images/img-1', createdAt: '2026-09-01T00:00:00Z' },
+    ])
+    mockedApi.deleteProductImage.mockRejectedValue(
+      new api.ApiError(
+        409,
+        "This photo is used by a published ad and can't be deleted. Used by: Rings, Spring rings.",
+      ),
+    )
+    const user = userEvent.setup()
+    render(<ProductForm businessId="biz-1" product={product} onSaved={vi.fn<(product: api.Product) => void>()} />)
+    await screen.findByRole('img')
+
+    await user.click(screen.getByRole('button', { name: 'Remove' }))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      "This photo is used by a published ad and can't be deleted. Used by: Rings, Spring rings.",
+    )
+    // The photo is still there, and can be tried again.
+    expect(screen.getByRole('img')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Remove' })).toBeEnabled()
+  })
+
   it('falls back to a generic message for a non-ApiError delete failure', async () => {
     mockedApi.listProductImages.mockResolvedValue([
       { id: 'img-1', url: 'http://localhost:8000/product-images/img-1', createdAt: '2026-09-01T00:00:00Z' },
