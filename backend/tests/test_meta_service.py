@@ -3716,3 +3716,33 @@ def test_every_asset_of_an_ad_must_share_one_media_type() -> None:
             story=meta.PlacementAsset(image_hash="b"),
             square=meta.PlacementAsset(video_id="v", thumbnail_hash="t"),
         )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("linked", "expected"), [("ig_venzi", "ig_venzi"), (None, None)]
+)
+async def test_the_placement_creative_sends_instagram_user_id_only_when_linked(
+    monkeypatch: pytest.MonkeyPatch, linked: str | None, expected: str | None
+) -> None:
+    client = _mock_client_returning(monkeypatch, _FakeResponse({"id": "creative_pair"}))
+
+    await meta.create_meta_placement_ad_creative(
+        access_token="token",
+        ad_account_id="act_1",
+        page_id="page_1",
+        name="Ad name",
+        headline="Handmade rings",
+        body_text="A ring made for you.",
+        description=None,
+        cta="SHOP_NOW",
+        link="https://acme.example/ring",
+        feed=meta.PlacementAsset(image_hash="feed_hash"),
+        story=meta.PlacementAsset(image_hash="story_hash"),
+        instagram_user_id=linked,
+    )
+
+    _, data = client.calls[0]
+    assert data.get("instagram_user_id") == expected
+    assert "instagram_user_id" not in json.loads(data["asset_feed_spec"])
+    assert "instagram" not in data["object_story_spec"]

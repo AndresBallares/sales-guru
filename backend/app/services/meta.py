@@ -1181,6 +1181,7 @@ async def create_meta_placement_ad_creative(
     feed: PlacementAsset,
     story: PlacementAsset | None = None,
     square: PlacementAsset | None = None,
+    instagram_user_id: str | None = None,
 ) -> str:
     """Create one ad creative with a feed asset plus a story and/or square asset.
 
@@ -1200,6 +1201,9 @@ async def create_meta_placement_ad_creative(
         feed: The feed asset (1:1 or 4:5).
         story: The Stories & Reels asset (9:16), the same media type.
         square: The optional exactly-1:1 asset, the same media type.
+        instagram_user_id: The Page's linked Instagram account, sent as the
+            creative's instagram_user_id so the ad can run on Instagram as that
+            account. Omitted from the request when None.
 
     Returns:
         The new Meta ad creative id.
@@ -1221,14 +1225,17 @@ async def create_meta_placement_ad_creative(
     )
     if get_settings().fake_meta_enabled:
         return f"fake_creative_{uuid4().hex[:12]}"
+    payload = {
+        "access_token": access_token,
+        "name": name,
+        "object_story_spec": json.dumps({"page_id": page_id}),
+        "asset_feed_spec": json.dumps(spec),
+    }
+    if instagram_user_id:
+        payload["instagram_user_id"] = instagram_user_id
     body = await _post_json(
         f"{_GRAPH_BASE_URL}/{ad_account_id}/adcreatives",
-        {
-            "access_token": access_token,
-            "name": name,
-            "object_story_spec": json.dumps({"page_id": page_id}),
-            "asset_feed_spec": json.dumps(spec),
-        },
+        payload,
         # Meta checks the assets while creating the creative; 5s was not enough.
         timeout=_VIDEO_CREATIVE_TIMEOUT_SECONDS,
     )

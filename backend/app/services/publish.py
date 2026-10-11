@@ -646,6 +646,7 @@ async def _create_pair_meta_creative(
     ad_account_id: str,
     page_id: str,
     destination_url: str,
+    instagram_user_id: str | None,
 ) -> str:
     """Create the one Meta creative for an ad with a story and/or square asset.
 
@@ -697,6 +698,7 @@ async def _create_pair_meta_creative(
         feed=feed,
         story=story,
         square=square,
+        instagram_user_id=instagram_user_id,
     )
 
 
@@ -825,6 +827,7 @@ async def publish_campaign_to_meta(
             ad_account_id=ad_account_id,
             page_id=connection.pageId,
             destination_url=destination_url,
+            instagram_user_id=effective_instagram_user_id(connection),
         )
     elif creative.format == "SINGLE_VIDEO":
         meta_creative_id = await _create_video_meta_creative(
@@ -1035,6 +1038,7 @@ async def _publish_creative_test_plan(
                 ad_account_id=ad_account_id,
                 page_id=connection.pageId,
                 destination_url=destination_url,
+                instagram_user_id=effective_instagram_user_id(connection),
             )
         elif creative.format == "SINGLE_VIDEO":
             meta_creative_id = await _create_video_meta_creative(

@@ -11,6 +11,7 @@ from typing import Any
 from unittest.mock import AsyncMock
 
 import pytest
+from app.api import meta as meta_api_module
 from app.services.meta import MetaConnectionError
 from fastapi.testclient import TestClient
 from prisma import Prisma
@@ -378,6 +379,57 @@ async def seed_dims(media_id: str, width: int, height: int) -> None:
         )
     finally:
         await seeder.disconnect()
+
+
+# ── The Page's Instagram account goes out on the placement creative ────
+
+
+def _link_instagram(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        meta_api_module,
+        "fetch_page_instagram_account",
+        AsyncMock(return_value="ig_venzi"),
+    )
+
+
+@pytest.mark.parametrize(("linked", "expected"), [(True, "ig_venzi"), (False, None)])
+def test_every_pair_creative_of_a_creative_test_carries_the_instagram_account(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    mock_services: dict[str, AsyncMock],  # noqa: F811
+    linked: bool,
+    expected: str | None,
+) -> None:
+    if linked:
+        _link_instagram(monkeypatch)
+    _hash_by_bytes(mock_services["upload_ad_image"])
+    setup = _ready_pair(client, monkeypatch, THREE_PHOTOS, "SINGLE_IMAGE")
+
+    response = _publish(client, setup)
+
+    assert response.status_code == 200
+    calls = mock_services["create_placement_creative"].await_args_list
+    assert len(calls) == 3
+    assert {c.kwargs["instagram_user_id"] for c in calls} == {expected}
+
+
+def test_a_video_pair_creative_carries_the_instagram_account_too(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    mock_services: dict[str, AsyncMock],  # noqa: F811
+) -> None:
+    _link_instagram(monkeypatch)
+    mock_services["upload_video"].side_effect = ["meta_video_feed", "meta_video_story"]
+    _hash_by_bytes(mock_services["upload_ad_image"])
+    setup = _ready_pair(client, monkeypatch, VIDEOS_FEED_STORY, "SINGLE_VIDEO")
+
+    _publish(client, setup)
+    final = _wait_done(client, setup)
+
+    assert final["state"] == "DONE"
+    calls = mock_services["create_placement_creative"].await_args_list
+    assert len(calls) == 3
+    assert {c.kwargs["instagram_user_id"] for c in calls} == {"ig_venzi"}
 
 
 def test_an_image_ad_with_three_assets_publishes_one_creative_with_all_three(
