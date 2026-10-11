@@ -655,6 +655,182 @@ def test_reconnecting_clears_the_manual_account_too(client: TestClient) -> None:
     assert body["instagramUserId"] is None
 
 
+def _start_reconnect(client: TestClient, business_id: str) -> str:
+    response = client.get(f"/businesses/{business_id}/meta/reconnect")
+    assert response.status_code == 200
+    return str(response.json()["authorizationUrl"].rsplit("/", 1)[-1])
+
+
+def _finish_oauth(client: TestClient, state_id: str) -> str:
+    """Hit the OAuth callback; return where the browser is sent back to."""
+    response = client.get(
+        "/meta/callback",
+        params={"code": "some-code", "state": state_id},
+        follow_redirects=False,
+    )
+    return str(response.headers["location"])
+
+
+def _rotate_token(mock_meta_service: dict[str, AsyncMock | Mock]) -> None:
+    mock_meta_service["long_lived"].return_value = (
+        "rotated-token",
+        datetime.now(UTC) + timedelta(days=60),
+    )
+    mock_meta_service["user_id"].return_value = "meta-user-2"
+
+
+def test_reconnect_requires_a_session(client: TestClient) -> None:
+    assert client.get("/businesses/some-id/meta/reconnect").status_code == 401
+
+
+def test_reconnect_404s_without_a_connection(client: TestClient) -> None:
+    """Nothing to reconnect: the first connection uses /connect."""
+    _signed_up_client(client)
+    business_id = _create_business(client)
+
+    assert client.get(f"/businesses/{business_id}/meta/reconnect").status_code == 404
+
+
+def test_reconnect_returns_the_same_authorization_dialog(client: TestClient) -> None:
+    business_id = _connected_and_finalized(client)
+
+    response = client.get(f"/businesses/{business_id}/meta/reconnect")
+
+    assert response.status_code == 200
+    assert response.json()["authorizationUrl"].startswith("https://meta.example/")
+
+
+def test_reconnect_rotates_the_token_and_keeps_the_connection_settings(
+    client: TestClient, mock_meta_service: dict[str, AsyncMock | Mock]
+) -> None:
+    """Same ad account, Page, Pixel and hand-entered Instagram account; only the
+    token and Meta user change."""
+    business_id = _connected_and_finalized(client)
+    assert (
+        client.post(
+            f"/businesses/{business_id}/meta/pixel", json={"pixelId": "pixel_1"}
+        ).status_code
+        == 200
+    )
+    _set_manual(client, business_id, MANUAL_IG)
+    _rotate_token(mock_meta_service)
+
+    location = _finish_oauth(client, _start_reconnect(client, business_id))
+
+    assert location.endswith(f"/businesses/{business_id}?meta=reconnected")
+    body = client.get(f"/businesses/{business_id}/meta").json()
+    assert body["metaUserId"] == "meta-user-2"
+    assert body["adAccountId"] == "act_1"
+    assert body["pageId"] == "page_1"
+    assert body["pixelId"] == "pixel_1"
+    assert body["instagramUserIdManual"] == MANUAL_IG
+    # The new token is the one now used for Meta calls.
+    client.get(f"/businesses/{business_id}/meta/pages")
+    mock_meta_service["pages"].assert_awaited_with("rotated-token")
+
+
+def test_reconnect_discovers_the_pages_instagram_account_again(
+    client: TestClient, mock_meta_service: dict[str, AsyncMock | Mock]
+) -> None:
+    """The case this is for: a connection made without the permission to read
+    the Instagram account picks it up once reconnected."""
+    mock_meta_service["instagram"].return_value = None
+    business_id = _connected_and_finalized(client)
+    assert (
+        client.get(f"/businesses/{business_id}/meta").json()["instagramUserId"] is None
+    )
+    mock_meta_service["instagram"].return_value = "ig_found"
+    _rotate_token(mock_meta_service)
+
+    _finish_oauth(client, _start_reconnect(client, business_id))
+
+    body = client.get(f"/businesses/{business_id}/meta").json()
+    assert body["instagramUserIdDiscovered"] == "ig_found"
+    assert body["instagramUserId"] == "ig_found"
+    mock_meta_service["instagram"].assert_awaited_with("rotated-token", "page_1")
+
+
+def test_reconnect_keeps_the_old_instagram_account_when_discovery_fails(
+    client: TestClient, mock_meta_service: dict[str, AsyncMock | Mock]
+) -> None:
+    from app.services.meta import MetaConnectionError
+
+    business_id = _connected_and_finalized(client)
+    mock_meta_service["instagram"].side_effect = MetaConnectionError("boom")
+    _rotate_token(mock_meta_service)
+
+    location = _finish_oauth(client, _start_reconnect(client, business_id))
+
+    assert location.endswith("?meta=reconnected")
+    body = client.get(f"/businesses/{business_id}/meta").json()
+    assert body["instagramUserIdDiscovered"] == "ig_1"
+    assert body["pageId"] == "page_1"
+
+
+def test_reconnect_with_a_login_that_cannot_see_the_page_asks_for_a_new_one(
+    client: TestClient, mock_meta_service: dict[str, AsyncMock | Mock]
+) -> None:
+    """A different Meta login without access to the stored Page: the ad account
+    and Page are cleared (and the Instagram settings tied to them) so the
+    existing picker runs again, rather than publishing as a Page it cannot use."""
+    business_id = _connected_and_finalized(client)
+    _set_manual(client, business_id, MANUAL_IG)
+    mock_meta_service["pages"].return_value = [MetaPage(id="other_page", name="Other")]
+    _rotate_token(mock_meta_service)
+
+    location = _finish_oauth(client, _start_reconnect(client, business_id))
+
+    assert location.endswith("?meta=reconnected_choose_page")
+    body = client.get(f"/businesses/{business_id}/meta").json()
+    assert body["metaUserId"] == "meta-user-2"
+    assert body["adAccountId"] is None
+    assert body["pageId"] is None
+    assert body["instagramUserId"] is None
+    assert body["instagramUserIdManual"] is None
+
+
+def test_reconnect_keeps_everything_when_the_page_list_cannot_be_read(
+    client: TestClient, mock_meta_service: dict[str, AsyncMock | Mock]
+) -> None:
+    from app.services.meta import MetaConnectionError
+
+    business_id = _connected_and_finalized(client)
+    mock_meta_service["pages"].side_effect = MetaConnectionError("down")
+    _rotate_token(mock_meta_service)
+
+    location = _finish_oauth(client, _start_reconnect(client, business_id))
+
+    assert location.endswith("?meta=reconnected")
+    body = client.get(f"/businesses/{business_id}/meta").json()
+    assert body["pageId"] == "page_1"
+    assert body["adAccountId"] == "act_1"
+
+
+def test_a_reconnect_for_a_connection_deleted_meanwhile_connects_fresh(
+    client: TestClient,
+) -> None:
+    business_id = _connected_and_finalized(client)
+    state_id = _start_reconnect(client, business_id)
+    assert client.delete(f"/businesses/{business_id}/meta").status_code == 204
+
+    location = _finish_oauth(client, state_id)
+
+    assert location.endswith("?meta=connected")
+    body = client.get(f"/businesses/{business_id}/meta").json()
+    assert body["pageId"] is None
+
+
+def test_a_first_connect_still_resets_the_settings(client: TestClient) -> None:
+    """Only a reconnect keeps them; a plain /connect round-trip still starts over."""
+    business_id = _connected_and_finalized(client)
+
+    _connect(client, business_id)
+
+    body = client.get(f"/businesses/{business_id}/meta").json()
+    assert body["pageId"] is None
+    assert body["adAccountId"] is None
+
+
 def test_get_pixels_requires_a_session(client: TestClient) -> None:
     """Listing Pixels with no session cookie returns 401."""
     response = client.get("/businesses/some-id/meta/pixels")

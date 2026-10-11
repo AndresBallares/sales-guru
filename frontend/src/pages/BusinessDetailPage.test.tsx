@@ -160,9 +160,9 @@ beforeEach(() => {
   })
 })
 
-function renderPage() {
+function renderPage(entry = '/businesses/biz-1') {
   render(
-    <MemoryRouter initialEntries={['/businesses/biz-1']}>
+    <MemoryRouter initialEntries={[entry]}>
       <AuthProvider>
         <Routes>
           <Route path="/businesses/:businessId" element={<BusinessDetailPage />} />
@@ -340,6 +340,54 @@ describe('BusinessDetailPage', () => {
     await screen.findByRole('heading', { name: 'Create a campaign' })
     expect(screen.queryByRole('heading', { name: 'Results' })).not.toBeInTheDocument()
     expect(mockedApi.getBusinessDashboard).not.toHaveBeenCalled()
+  })
+
+  it('shows the reconnect confirmation after Meta setup has stripped ?meta= from the URL', async () => {
+    mockedApi.listCampaigns.mockResolvedValue([draftCampaign])
+    mockedApi.listProducts.mockResolvedValue([
+      {
+        id: 'prod-1',
+        description: 'Handmade leather wallets',
+        price: 49.99,
+        margin: null,
+        features: null,
+        benefits: null,
+        primaryImageUrl: null,
+        url: null,
+      },
+    ])
+    mockedApi.listAudiences.mockResolvedValue([
+      {
+        id: 'aud-1',
+        description: 'Busy professionals, 30-55',
+        ageMin: 30,
+        ageMax: 55,
+        location: null,
+        interests: null,
+        problem: null,
+        desire: null,
+      },
+    ])
+    mockedApi.getMetaConnection.mockResolvedValue({
+      id: 'conn-1',
+      businessId: 'biz-1',
+      metaUserId: 'meta-user-1',
+      adAccountId: 'act_1',
+      pageId: 'page_1',
+      instagramUserId: 'ig_1',
+      instagramUserIdDiscovered: 'ig_1',
+      instagramUserIdManual: null,
+      pixelId: 'pixel_1',
+      pixelSkipped: false,
+      tokenExpiresAt: '2026-10-01T00:00:00Z',
+      createdAt: '2026-08-08T00:00:00Z',
+    })
+
+    renderPage('/businesses/biz-1?meta=reconnected')
+
+    expect(
+      await screen.findByText(/Meta reconnected — the connection now has the current permissions/),
+    ).toBeInTheDocument()
   })
 
   it("shows the business's industry label on the detail page", async () => {

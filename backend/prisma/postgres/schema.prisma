@@ -341,6 +341,10 @@ model MetaConnection {
 model MetaOAuthState {
   id         String   @id @default(cuid())
   businessId String
+  // True when the OAuth round-trip was started from "Reconnect Meta" on an
+  // already-connected business: the callback then rotates the token and keeps
+  // the ad account, Page, Pixel and Instagram settings instead of resetting them.
+  reconnect  Boolean  @default(false)
   createdAt  DateTime @default(now())
 }
 
