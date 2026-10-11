@@ -173,6 +173,33 @@ describe('DashboardSection', () => {
     )
   })
 
+  it('reloads the picker when the campaign list changes, dropping a deleted campaign', async () => {
+    mockedApi.listCampaigns.mockResolvedValue([campaign('venus'), campaign('rings')])
+    const { rerender } = render(<DashboardSection businessId="biz-1" refreshKey={0} />)
+    const picker = await screen.findByLabelText('Campaign')
+    expect(within(picker).getAllByRole('option')).toHaveLength(2)
+    expect(mockedApi.listCampaigns).toHaveBeenCalledTimes(1)
+
+    // The campaign was deleted in the list below.
+    mockedApi.listCampaigns.mockResolvedValue([campaign('rings')])
+    rerender(<DashboardSection businessId="biz-1" refreshKey={1} />)
+
+    await waitFor(() =>
+      expect(within(screen.getByLabelText('Campaign')).getAllByRole('option')).toHaveLength(1),
+    )
+    expect(screen.getByLabelText('Campaign')).toHaveValue('rings')
+    expect(mockedApi.listCampaigns).toHaveBeenCalledTimes(2)
+  })
+
+  it('does not reload when the key stays the same', async () => {
+    const { rerender } = render(<DashboardSection businessId="biz-1" refreshKey={3} />)
+    await screen.findByLabelText('Campaign')
+
+    rerender(<DashboardSection businessId="biz-1" refreshKey={3} />)
+
+    expect(mockedApi.listCampaigns).toHaveBeenCalledTimes(1)
+  })
+
   it('shows the picked campaign’s Tier 1 cards', async () => {
     renderSection()
 

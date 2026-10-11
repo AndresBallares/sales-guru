@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { Link, useParams, useSearchParams } from 'react-router-dom'
 import { AudiencesSection } from '../components/AudiencesSection'
 import { BrandProfileSection } from '../components/BrandProfileSection'
@@ -43,6 +43,18 @@ export function BusinessDetailPage() {
   const [products, setProducts] = useState<Product[] | null>(null)
   const [audiences, setAudiences] = useState<Audience[] | null>(null)
   const [metaSetupComplete, setMetaSetupComplete] = useState(false)
+  // Bumped when the set of campaigns (or one's status) changes after the first load, so
+  // the Results section reloads its picker instead of listing a deleted campaign.
+  const [resultsRevision, setResultsRevision] = useState(0)
+  const campaignsSignature = useRef<string | null>(null)
+  const handleCampaignsChanged = useCallback((list: Campaign[]) => {
+    const signature = list.map((c) => `${c.id}:${c.status}`).join('|')
+    // The first report is the initial load, which Results has already fetched.
+    if (campaignsSignature.current !== null && campaignsSignature.current !== signature) {
+      setResultsRevision((revision) => revision + 1)
+    }
+    campaignsSignature.current = signature
+  }, [])
 
   useEffect(() => {
     if (!businessId) {
@@ -97,8 +109,8 @@ export function BusinessDetailPage() {
             <>
               {/* Results first, then the campaign list: once onboarding is
                   done this page is where you check how the ads are doing. */}
-              <DashboardSection businessId={businessId} />
-              <CampaignsSection businessId={businessId} />
+              <DashboardSection businessId={businessId} refreshKey={resultsRevision} />
+              <CampaignsSection businessId={businessId} onCampaignsChange={handleCampaignsChanged} />
               <MetaSettingsSection businessId={businessId} outcome={metaOutcome} />
             </>
           )}

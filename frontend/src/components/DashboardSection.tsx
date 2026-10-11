@@ -31,7 +31,15 @@ function errorMessage(err: unknown, fallback: string): string {
   return err instanceof ApiError ? err.message : fallback
 }
 
-export function DashboardSection({ businessId }: { businessId: string }) {
+export function DashboardSection({
+  businessId,
+  refreshKey,
+}: {
+  businessId: string
+  // Changes when the campaign list does (a delete, an archive, a new campaign), so the
+  // picker and the numbers reload instead of showing a campaign that is gone.
+  refreshKey?: number
+}) {
   const [sample, setSample] = useState(false)
   const [campaigns, setCampaigns] = useState<Campaign[] | null>(null)
   const [summary, setSummary] = useState<BusinessDashboardSummary | null>(null)
@@ -68,7 +76,7 @@ export function DashboardSection({ businessId }: { businessId: string }) {
     return () => {
       current = false
     }
-  }, [businessId, sample])
+  }, [businessId, sample, refreshKey])
 
   // Real results only exist for a published campaign; the sample preview can
   // use any campaign (it never reads its stored numbers).
