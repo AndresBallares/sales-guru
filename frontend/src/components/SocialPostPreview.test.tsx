@@ -177,4 +177,184 @@ describe('SocialPostPreview', () => {
       expect(screen.getByRole('button', { name: 'Play video' })).toBeInTheDocument()
     })
   })
+
+  describe('an ad with a Stories & Reels asset', () => {
+    const pair = makeCreative({
+      imageUrl: 'http://localhost:8000/product-images/feed',
+      storyAssetId: 'story',
+      storyImageUrl: 'http://localhost:8000/product-images/story',
+    })
+
+    it('shows the feed asset first with a Feed / Story toggle', () => {
+      render(<SocialPostPreview business={business} creative={pair} ctaLabel="Shop Now" />)
+
+      expect(screen.getByRole('button', { name: 'Feed' })).toHaveAttribute('aria-pressed', 'true')
+      expect(screen.getByRole('button', { name: 'Story' })).toHaveAttribute('aria-pressed', 'false')
+      expect(screen.getByRole('img', { name: 'A great headline' })).toHaveAttribute(
+        'src',
+        'http://localhost:8000/product-images/feed',
+      )
+    })
+
+    it('shows the story asset full-screen 9:16 with the covered-area overlays', async () => {
+      const user = userEvent.setup()
+      const { container } = render(
+        <SocialPostPreview business={business} creative={pair} ctaLabel="Shop Now" />,
+      )
+
+      await user.click(screen.getByRole('button', { name: 'Story' }))
+
+      expect(screen.getByRole('button', { name: 'Story' })).toHaveAttribute('aria-pressed', 'true')
+      expect(screen.getByRole('img', { name: 'Stories & Reels preview' })).toHaveAttribute(
+        'src',
+        'http://localhost:8000/product-images/story',
+      )
+      expect(container.querySelector('.story-frame')).not.toBeNull()
+      // Top ~14% and bottom ~20% are where Meta's Stories UI covers the content.
+      expect(container.querySelector('.story-safe-top')).toHaveStyle({ height: '14%' })
+      expect(container.querySelector('.story-safe-bottom')).toHaveStyle({ height: '20%' })
+      expect(screen.getByText('Covered by the Stories UI')).toBeInTheDocument()
+      // The feed post chrome is not part of a story preview.
+      expect(screen.queryByText('A great headline')).not.toBeInTheDocument()
+    })
+
+    it('switches back to the feed view', async () => {
+      const user = userEvent.setup()
+      render(<SocialPostPreview business={business} creative={pair} ctaLabel="Shop Now" />)
+      await user.click(screen.getByRole('button', { name: 'Story' }))
+
+      await user.click(screen.getByRole('button', { name: 'Feed' }))
+
+      expect(screen.getByText('A great headline')).toBeInTheDocument()
+    })
+
+    it('plays a story video on click', async () => {
+      const user = userEvent.setup()
+      const videoPair = makeCreative({
+        format: 'SINGLE_VIDEO',
+        imageUrl: 'http://localhost:8000/product-images/f/thumbnail',
+        videoUrl: 'http://localhost:8000/product-images/f',
+        storyAssetId: 's',
+        storyImageUrl: 'http://localhost:8000/product-images/s/thumbnail',
+        storyVideoUrl: 'http://localhost:8000/product-images/s',
+      })
+      const { container } = render(
+        <SocialPostPreview business={business} creative={videoPair} ctaLabel="Shop Now" />,
+      )
+
+      await user.click(screen.getByRole('button', { name: 'Story' }))
+      expect(container.querySelector('video')).toBeNull()
+      await user.click(screen.getByRole('button', { name: 'Play video' }))
+
+      expect(container.querySelector('video')).toHaveAttribute(
+        'src',
+        'http://localhost:8000/product-images/s',
+      )
+    })
+
+    it('has no toggle for a single-asset ad', () => {
+      render(
+        <SocialPostPreview business={business} creative={makeCreative()} ctaLabel="Shop Now" />,
+      )
+
+      expect(screen.queryByRole('button', { name: 'Story' })).not.toBeInTheDocument()
+    })
+
+    it('has no toggle for a carousel', () => {
+      render(
+        <SocialPostPreview
+          business={business}
+          creative={makeCreative({ format: 'CAROUSEL', storyAssetId: 'x', storyImageUrl: 'y' })}
+          ctaLabel="Shop Now"
+        />,
+      )
+
+      expect(screen.queryByRole('button', { name: 'Story' })).not.toBeInTheDocument()
+    })
+  })
+
+  describe('an ad with a Square (1:1) asset', () => {
+    const all = makeCreative({
+      imageUrl: 'http://localhost:8000/product-images/feed',
+      storyAssetId: 'story',
+      storyImageUrl: 'http://localhost:8000/product-images/story',
+      squareAssetId: 'square',
+      squareImageUrl: 'http://localhost:8000/product-images/square',
+    })
+
+    it('adds a Square view to the toggle, after Feed and Story', () => {
+      render(<SocialPostPreview business={business} creative={all} ctaLabel="Shop Now" />)
+
+      const labels = screen
+        .getAllByRole('button')
+        .map((button) => button.textContent)
+        .filter((text) => ['Feed', 'Story', 'Square'].includes(text ?? ''))
+      expect(labels).toEqual(['Feed', 'Story', 'Square'])
+    })
+
+    it('shows the square asset in a 1:1 frame, with no story overlays', async () => {
+      const user = userEvent.setup()
+      const { container } = render(
+        <SocialPostPreview business={business} creative={all} ctaLabel="Shop Now" />,
+      )
+
+      await user.click(screen.getByRole('button', { name: 'Square' }))
+
+      expect(screen.getByRole('button', { name: 'Square' })).toHaveAttribute('aria-pressed', 'true')
+      expect(screen.getByRole('img', { name: 'Square preview' })).toHaveAttribute(
+        'src',
+        'http://localhost:8000/product-images/square',
+      )
+      expect(container.querySelector('.square-frame')).not.toBeNull()
+      expect(container.querySelector('.story-safe')).toBeNull()
+      expect(screen.getByText(/right column, Marketplace, search/)).toBeInTheDocument()
+    })
+
+    it('offers Square without Story for a feed + square ad', () => {
+      const noStory = makeCreative({
+        imageUrl: 'http://localhost:8000/product-images/feed',
+        squareAssetId: 'square',
+        squareImageUrl: 'http://localhost:8000/product-images/square',
+      })
+      render(<SocialPostPreview business={business} creative={noStory} ctaLabel="Shop Now" />)
+
+      expect(screen.getByRole('button', { name: 'Square' })).toBeInTheDocument()
+      expect(screen.queryByRole('button', { name: 'Story' })).not.toBeInTheDocument()
+    })
+
+    it('plays a square video on click', async () => {
+      const user = userEvent.setup()
+      const videoAll = makeCreative({
+        format: 'SINGLE_VIDEO',
+        imageUrl: 'http://localhost:8000/product-images/f/thumbnail',
+        videoUrl: 'http://localhost:8000/product-images/f',
+        squareAssetId: 'q',
+        squareImageUrl: 'http://localhost:8000/product-images/q/thumbnail',
+        squareVideoUrl: 'http://localhost:8000/product-images/q',
+      })
+      const { container } = render(
+        <SocialPostPreview business={business} creative={videoAll} ctaLabel="Shop Now" />,
+      )
+
+      await user.click(screen.getByRole('button', { name: 'Square' }))
+      await user.click(screen.getByRole('button', { name: 'Play video' }))
+
+      expect(container.querySelector('video')).toHaveAttribute(
+        'src',
+        'http://localhost:8000/product-images/q',
+      )
+    })
+
+    it('has no Square view for a carousel', () => {
+      render(
+        <SocialPostPreview
+          business={business}
+          creative={makeCreative({ format: 'CAROUSEL', squareAssetId: 'x', squareImageUrl: 'y' })}
+          ctaLabel="Shop Now"
+        />,
+      )
+
+      expect(screen.queryByRole('button', { name: 'Square' })).not.toBeInTheDocument()
+    })
+  })
 })

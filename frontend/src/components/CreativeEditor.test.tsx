@@ -11,6 +11,8 @@ vi.mock('../lib/api', async (importOriginal) => {
     ...actual,
     setCreativeImage: vi.fn<typeof actual.setCreativeImage>(),
     regenerateCreativeCopy: vi.fn<typeof actual.regenerateCreativeCopy>(),
+    setCreativeStoryAsset: vi.fn<typeof actual.setCreativeStoryAsset>(),
+    setCreativeSquareAsset: vi.fn<typeof actual.setCreativeSquareAsset>(),
     listProductImages: vi.fn<typeof actual.listProductImages>(),
     uploadProductImage: vi.fn<typeof actual.uploadProductImage>(),
   }
@@ -550,6 +552,587 @@ describe('CreativeEditor', () => {
       expect(
         screen.queryByRole('button', { name: 'Regenerate headline' }),
       ).not.toBeInTheDocument()
+    })
+  })
+
+  describe('the Feed and Stories & Reels slots', () => {
+    const imageAd = { ...creative, format: 'SINGLE_IMAGE', imageUrl: '/product-images/f1' } as api.Creative
+    const withStory = {
+      ...imageAd,
+      storyAssetId: 's1',
+      storyImageUrl: '/product-images/s1',
+    } as api.Creative
+    const videoAd = {
+      ...creative,
+      format: 'SINGLE_VIDEO',
+      imageUrl: '/product-images/vf/thumbnail',
+    } as api.Creative
+
+    const photo = (id: string, aspectClass: api.ProductImage['aspectClass']): api.ProductImage => ({
+      id,
+      url: `/product-images/${id}`,
+      createdAt: '',
+      mediaType: 'IMAGE',
+      aspectClass,
+    })
+    const video = (id: string, aspectClass: api.ProductImage['aspectClass']): api.ProductImage => ({
+      id,
+      url: `/product-images/${id}`,
+      thumbnailUrl: `/product-images/${id}/thumbnail`,
+      createdAt: '',
+      mediaType: 'VIDEO',
+      durationSeconds: 8,
+      aspectClass,
+    })
+    const library = [
+      photo('f1', 'FEED'),
+      photo('f2', 'FEED'),
+      photo('s1', 'STORY'),
+      photo('odd', 'UNCLASSIFIED'),
+      video('vf', 'FEED'),
+      video('vs', 'STORY'),
+    ]
+
+    function renderEditor(ad: api.Creative, onUpdated = vi.fn<(c: api.Creative) => void>()) {
+      render(
+        <CreativeEditor
+          businessId="b1"
+          campaignId="c1"
+          productId="prod1"
+          creative={ad}
+          onUpdated={onUpdated}
+        />,
+      )
+      return onUpdated
+    }
+
+    beforeEach(() => {
+      vi.mocked(api.listProductImages).mockResolvedValue(library)
+      mockedMedia.readVideoInfo.mockResolvedValue({
+        width: 1080,
+        height: 1920,
+        durationSeconds: 8,
+        thumbnail: new File(['t'], 'thumbnail.jpg', { type: 'image/jpeg' }),
+      })
+    })
+
+    it('labels both slots', () => {
+      renderEditor(imageAd)
+
+      expect(screen.getByRole('heading', { name: 'Feed (4:5)' })).toBeInTheDocument()
+      expect(screen.getByRole('heading', { name: 'Stories & Reels (9:16)' })).toBeInTheDocument()
+    })
+
+    it('has no slots for a carousel', () => {
+      renderEditor({ ...creative, format: 'CAROUSEL' } as api.Creative)
+
+      expect(screen.queryByRole('heading', { name: /Stories & Reels/ })).not.toBeInTheDocument()
+    })
+
+    it('adds a Stories & Reels photo, listing only 9:16 photos', async () => {
+      const updated = { ...imageAd, storyAssetId: 's1' } as api.Creative
+      vi.mocked(api.setCreativeStoryAsset).mockResolvedValue(updated)
+      const onUpdated = renderEditor(imageAd)
+
+      await userEvent.click(screen.getByRole('button', { name: 'Add Stories & Reels image' }))
+      const options = await screen.findAllByAltText('Stories & Reels option')
+
+      expect(options).toHaveLength(1) // not the feed photos, not the 3:2 one
+      expect(options[0]).toHaveAttribute('src', '/product-images/s1')
+      await userEvent.click(options[0])
+      await waitFor(() => expect(onUpdated).toHaveBeenCalledWith(updated))
+      expect(api.setCreativeStoryAsset).toHaveBeenCalledWith('b1', 'c1', 'cr1', 's1')
+    })
+
+    it('opens with nothing to pick, and offers to upload a 9:16 photo', async () => {
+      vi.mocked(api.listProductImages).mockResolvedValue([photo('f1', 'FEED')])
+      renderEditor(imageAd)
+
+      await userEvent.click(screen.getByRole('button', { name: 'Add Stories & Reels image' }))
+
+      expect(await screen.findByText(/No 9:16 photos on this product yet/)).toBeInTheDocument()
+      expect(screen.getByLabelText('Upload a 9:16 photo')).toBeInTheDocument()
+    })
+
+    it('uploads a 9:16 photo and sets it as the story asset', async () => {
+      const uploaded = { ...photo('new', 'STORY') }
+      const updated = { ...imageAd, storyAssetId: 'new' } as api.Creative
+      vi.mocked(api.uploadProductImage).mockResolvedValue(uploaded)
+      vi.mocked(api.setCreativeStoryAsset).mockResolvedValue(updated)
+      const onUpdated = renderEditor(imageAd)
+      const file = new File(['p'], 'story.jpg', { type: 'image/jpeg' })
+
+      await userEvent.click(screen.getByRole('button', { name: 'Add Stories & Reels image' }))
+      await userEvent.upload(await screen.findByLabelText('Upload a 9:16 photo'), file)
+
+      await waitFor(() => expect(onUpdated).toHaveBeenCalledWith(updated))
+      expect(api.uploadProductImage).toHaveBeenCalledWith('b1', 'prod1', file)
+      expect(api.setCreativeStoryAsset).toHaveBeenCalledWith('b1', 'c1', 'cr1', 'new')
+    })
+
+    it('refuses an uploaded photo that is not 9:16 instead of assigning it', async () => {
+      vi.mocked(api.uploadProductImage).mockResolvedValue(photo('sq', 'FEED'))
+      const onUpdated = renderEditor(imageAd)
+
+      await userEvent.click(screen.getByRole('button', { name: 'Add Stories & Reels image' }))
+      await userEvent.upload(
+        await screen.findByLabelText('Upload a 9:16 photo'),
+        new File(['p'], 'square.jpg', { type: 'image/jpeg' }),
+      )
+
+      expect(await screen.findByRole('alert')).toHaveTextContent('isn’t 9:16')
+      expect(api.setCreativeStoryAsset).not.toHaveBeenCalled()
+      expect(onUpdated).not.toHaveBeenCalled()
+    })
+
+    it('shows the current story asset, and can change or remove it', async () => {
+      const removed = { ...withStory, storyAssetId: null, storyImageUrl: null } as api.Creative
+      vi.mocked(api.setCreativeStoryAsset).mockResolvedValue(removed)
+      const onUpdated = renderEditor(withStory)
+
+      expect(screen.getByAltText('Stories & Reels asset')).toHaveAttribute(
+        'src',
+        '/product-images/s1',
+      )
+      expect(screen.getByRole('button', { name: 'Change Stories & Reels image' })).toBeInTheDocument()
+      await userEvent.click(screen.getByRole('button', { name: 'Remove Stories & Reels version' }))
+
+      await waitFor(() => expect(onUpdated).toHaveBeenCalledWith(removed))
+      expect(api.setCreativeStoryAsset).toHaveBeenCalledWith('b1', 'c1', 'cr1', null)
+    })
+
+    it('shows why a story change failed', async () => {
+      vi.mocked(api.setCreativeStoryAsset).mockRejectedValue(
+        new api.ApiError(400, 'This campaign is already published, so its ads can\'t change'),
+      )
+      const onUpdated = renderEditor(imageAd)
+
+      await userEvent.click(screen.getByRole('button', { name: 'Add Stories & Reels image' }))
+      await userEvent.click((await screen.findAllByAltText('Stories & Reels option'))[0])
+
+      expect(await screen.findByRole('alert')).toHaveTextContent('already published')
+      expect(onUpdated).not.toHaveBeenCalled()
+    })
+
+    it('limits the feed picker to 1:1 and 4:5 once the ad has a story asset', async () => {
+      renderEditor(withStory)
+
+      await userEvent.click(screen.getByRole('button', { name: 'Change image' }))
+      await userEvent.click(screen.getByRole('button', { name: 'Choose from library' }))
+
+      expect(await screen.findAllByAltText('Product option')).toHaveLength(2)
+    })
+
+    it('leaves the feed picker unfiltered for a single-asset ad', async () => {
+      renderEditor(imageAd)
+
+      await userEvent.click(screen.getByRole('button', { name: 'Change image' }))
+      await userEvent.click(screen.getByRole('button', { name: 'Choose from library' }))
+
+      expect(await screen.findAllByAltText('Product option')).toHaveLength(4)
+    })
+
+    it('adds a Stories & Reels video, listing only 9:16 videos', async () => {
+      const updated = { ...videoAd, storyAssetId: 'vs' } as api.Creative
+      vi.mocked(api.setCreativeStoryAsset).mockResolvedValue(updated)
+      const onUpdated = renderEditor(videoAd)
+
+      await userEvent.click(screen.getByRole('button', { name: 'Add Stories & Reels video' }))
+      const options = await screen.findAllByAltText('Stories & Reels option')
+
+      expect(options).toHaveLength(1)
+      expect(options[0]).toHaveAttribute('src', '/product-images/vs/thumbnail')
+      expect(screen.getByText('Story 9:16')).toBeInTheDocument()
+      await userEvent.click(options[0])
+      await waitFor(() => expect(onUpdated).toHaveBeenCalledWith(updated))
+      expect(api.setCreativeStoryAsset).toHaveBeenCalledWith('b1', 'c1', 'cr1', 'vs')
+    })
+
+    it('uploads a 9:16 video through the shared intake and sets it as the story asset', async () => {
+      const file = new File([new Uint8Array(8)], 'story.mov', { type: 'video/quicktime' })
+      const uploaded = video('vnew', 'STORY')
+      const updated = { ...videoAd, storyAssetId: 'vnew' } as api.Creative
+      vi.mocked(api.uploadProductImage).mockResolvedValue(uploaded)
+      vi.mocked(api.setCreativeStoryAsset).mockResolvedValue(updated)
+      const onUpdated = renderEditor(videoAd)
+
+      await userEvent.click(screen.getByRole('button', { name: 'Add Stories & Reels video' }))
+      await userEvent.upload(await screen.findByLabelText('Upload a 9:16 video'), file)
+
+      await waitFor(() => expect(onUpdated).toHaveBeenCalledWith(updated))
+      expect(api.uploadProductImage).toHaveBeenCalledWith(
+        'b1',
+        'prod1',
+        file,
+        expect.any(File),
+      )
+      expect(api.setCreativeStoryAsset).toHaveBeenCalledWith('b1', 'c1', 'cr1', 'vnew')
+    })
+
+    it('refuses an uploaded video that is not 9:16', async () => {
+      vi.mocked(api.uploadProductImage).mockResolvedValue(video('vsq', 'FEED'))
+      renderEditor(videoAd)
+
+      await userEvent.click(screen.getByRole('button', { name: 'Add Stories & Reels video' }))
+      await userEvent.upload(
+        await screen.findByLabelText('Upload a 9:16 video'),
+        new File([new Uint8Array(8)], 'sq.mov', { type: 'video/quicktime' }),
+      )
+
+      expect(await screen.findByRole('alert')).toHaveTextContent('isn’t 9:16')
+      expect(api.setCreativeStoryAsset).not.toHaveBeenCalled()
+    })
+
+    it('offers the black-frame fallback for a story video too', async () => {
+      mockedMedia.readVideoInfo.mockRejectedValue(
+        new media.BlackThumbnailError({ width: 1080, height: 1920, durationSeconds: 8 }),
+      )
+      renderEditor(videoAd)
+
+      await userEvent.click(screen.getByRole('button', { name: 'Add Stories & Reels video' }))
+      await userEvent.upload(
+        await screen.findByLabelText('Upload a 9:16 video'),
+        new File([new Uint8Array(8)], 'story.mov', { type: 'video/quicktime' }),
+      )
+
+      expect(await screen.findByLabelText('Upload a thumbnail image')).toBeInTheDocument()
+    })
+
+    it('still opens, with an error, when the story library cannot load', async () => {
+      vi.mocked(api.listProductImages).mockRejectedValue(new api.ApiError(500, 'library down'))
+      renderEditor(imageAd)
+
+      await userEvent.click(screen.getByRole('button', { name: 'Add Stories & Reels image' }))
+
+      expect(await screen.findByRole('alert')).toHaveTextContent('library down')
+      expect(screen.getByLabelText('Upload a 9:16 photo')).toBeInTheDocument()
+    })
+
+    it('falls back to a generic message when the library fails unexpectedly', async () => {
+      vi.mocked(api.listProductImages).mockRejectedValue(new Error('x'))
+      renderEditor(imageAd)
+
+      await userEvent.click(screen.getByRole('button', { name: 'Add Stories & Reels image' }))
+
+      expect(await screen.findByRole('alert')).toHaveTextContent('Could not load the library.')
+    })
+
+    it('shows why a story photo upload failed, with a generic fallback', async () => {
+      vi.mocked(api.uploadProductImage).mockRejectedValueOnce(
+        new api.ApiError(400, 'Image is smaller than the 600px minimum'),
+      )
+      renderEditor(imageAd)
+      await userEvent.click(screen.getByRole('button', { name: 'Add Stories & Reels image' }))
+      const input = await screen.findByLabelText('Upload a 9:16 photo')
+      const file = new File(['p'], 'story.jpg', { type: 'image/jpeg' })
+
+      await userEvent.upload(input, file)
+      expect(await screen.findByRole('alert')).toHaveTextContent('600px minimum')
+
+      vi.mocked(api.uploadProductImage).mockRejectedValueOnce(new Error('x'))
+      await userEvent.upload(input, file)
+      await waitFor(() =>
+        expect(screen.getByRole('alert')).toHaveTextContent('Could not upload image.'),
+      )
+      expect(api.setCreativeStoryAsset).not.toHaveBeenCalled()
+    })
+
+    it('falls back to a generic message when removing the story version fails unexpectedly', async () => {
+      vi.mocked(api.setCreativeStoryAsset).mockRejectedValue(new Error('x'))
+      renderEditor(withStory)
+
+      await userEvent.click(screen.getByRole('button', { name: 'Remove Stories & Reels version' }))
+
+      expect(await screen.findByRole('alert')).toHaveTextContent(
+        'Could not change the Stories & Reels version.',
+      )
+    })
+
+    it('uploads and assigns a story video once a manual thumbnail is supplied', async () => {
+      mockedMedia.readVideoInfo.mockRejectedValue(
+        new media.BlackThumbnailError({ width: 1080, height: 1920, durationSeconds: 8 }),
+      )
+      const file = new File([new Uint8Array(8)], 'story.mov', { type: 'video/quicktime' })
+      const manual = new File(['m'], 'cover.jpg', { type: 'image/jpeg' })
+      const updated = { ...videoAd, storyAssetId: 'vnew' } as api.Creative
+      vi.mocked(api.uploadProductImage).mockResolvedValue(video('vnew', 'STORY'))
+      vi.mocked(api.setCreativeStoryAsset).mockResolvedValue(updated)
+      const onUpdated = renderEditor(videoAd)
+
+      await userEvent.click(screen.getByRole('button', { name: 'Add Stories & Reels video' }))
+      await userEvent.upload(await screen.findByLabelText('Upload a 9:16 video'), file)
+      await userEvent.upload(await screen.findByLabelText('Upload a thumbnail image'), manual)
+
+      await waitFor(() => expect(onUpdated).toHaveBeenCalledWith(updated))
+      expect(api.uploadProductImage).toHaveBeenCalledWith('b1', 'prod1', file, manual)
+    })
+
+    it('closes the story picker when its button is pressed again', async () => {
+      renderEditor(imageAd)
+      await userEvent.click(screen.getByRole('button', { name: 'Add Stories & Reels image' }))
+      await screen.findByLabelText('Upload a 9:16 photo')
+
+      await userEvent.click(screen.getByRole('button', { name: 'Add Stories & Reels image' }))
+
+      expect(screen.queryByLabelText('Upload a 9:16 photo')).not.toBeInTheDocument()
+    })
+
+    it('does nothing when the file picker is dismissed without a file', async () => {
+      renderEditor(imageAd)
+      await userEvent.click(screen.getByRole('button', { name: 'Add Stories & Reels image' }))
+      const input = await screen.findByLabelText('Upload a 9:16 photo')
+
+      input.dispatchEvent(new Event('change', { bubbles: true }))
+
+      expect(api.uploadProductImage).not.toHaveBeenCalled()
+    })
+  })
+
+  describe('the optional Square (1:1) slot', () => {
+    const feedAd = {
+      ...creative,
+      format: 'SINGLE_IMAGE',
+      imageUrl: '/product-images/f1',
+    } as api.Creative
+    const withSquare = {
+      ...feedAd,
+      squareAssetId: 'q1',
+      squareImageUrl: '/product-images/q1',
+    } as api.Creative
+    const videoAd = {
+      ...creative,
+      format: 'SINGLE_VIDEO',
+      imageUrl: '/product-images/vf/thumbnail',
+    } as api.Creative
+
+    const photo = (
+      id: string,
+      aspectClass: api.ProductImage['aspectClass'],
+      width: number,
+      height: number,
+    ): api.ProductImage => ({
+      id,
+      url: `/product-images/${id}`,
+      createdAt: '',
+      mediaType: 'IMAGE',
+      aspectClass,
+      width,
+      height,
+    })
+    const video = (id: string, width: number, height: number): api.ProductImage => ({
+      id,
+      url: `/product-images/${id}`,
+      thumbnailUrl: `/product-images/${id}/thumbnail`,
+      createdAt: '',
+      mediaType: 'VIDEO',
+      durationSeconds: 8,
+      aspectClass: width === height || width / height > 0.7 ? 'FEED' : 'STORY',
+      width,
+      height,
+    })
+    const library = [
+      photo('f1', 'FEED', 1080, 1350),
+      photo('q1', 'FEED', 1080, 1080),
+      photo('s1', 'STORY', 1080, 1920),
+      video('vf', 1080, 1350),
+      video('vq', 1080, 1080),
+      video('vs', 1080, 1920),
+    ]
+
+    function renderEditor(ad: api.Creative, onUpdated = vi.fn<(c: api.Creative) => void>()) {
+      render(
+        <CreativeEditor
+          businessId="b1"
+          campaignId="c1"
+          productId="prod1"
+          creative={ad}
+          onUpdated={onUpdated}
+        />,
+      )
+      return onUpdated
+    }
+
+    beforeEach(() => {
+      vi.mocked(api.listProductImages).mockResolvedValue(library)
+      mockedMedia.readVideoInfo.mockResolvedValue({
+        width: 1080,
+        height: 1080,
+        durationSeconds: 8,
+        thumbnail: new File(['t'], 'thumbnail.jpg', { type: 'image/jpeg' }),
+      })
+    })
+
+    it('labels the third slot as optional', () => {
+      renderEditor(feedAd)
+
+      expect(
+        screen.getByRole('heading', { name: 'Square (1:1) — optional' }),
+      ).toBeInTheDocument()
+    })
+
+    it('has no square slot for a carousel', () => {
+      renderEditor({ ...creative, format: 'CAROUSEL' } as api.Creative)
+
+      expect(screen.queryByRole('heading', { name: /Square/ })).not.toBeInTheDocument()
+    })
+
+    it('adds a square photo, listing only exactly-1:1 photos', async () => {
+      const updated = { ...feedAd, squareAssetId: 'q1' } as api.Creative
+      vi.mocked(api.setCreativeSquareAsset).mockResolvedValue(updated)
+      const onUpdated = renderEditor(feedAd)
+
+      await userEvent.click(screen.getByRole('button', { name: 'Add Square image' }))
+      const options = await screen.findAllByAltText('Square option')
+
+      expect(options).toHaveLength(1) // not the 4:5, the 9:16 or any video
+      expect(options[0]).toHaveAttribute('src', '/product-images/q1')
+      await userEvent.click(options[0])
+      await waitFor(() => expect(onUpdated).toHaveBeenCalledWith(updated))
+      expect(api.setCreativeSquareAsset).toHaveBeenCalledWith('b1', 'c1', 'cr1', 'q1')
+      expect(api.setCreativeStoryAsset).not.toHaveBeenCalled()
+    })
+
+    it('opens with nothing to pick and offers to upload a 1:1 photo', async () => {
+      vi.mocked(api.listProductImages).mockResolvedValue([photo('f1', 'FEED', 1080, 1350)])
+      renderEditor(feedAd)
+
+      await userEvent.click(screen.getByRole('button', { name: 'Add Square image' }))
+
+      expect(await screen.findByText(/No 1:1 photos on this product yet/)).toBeInTheDocument()
+      expect(screen.getByLabelText('Upload a 1:1 photo')).toBeInTheDocument()
+    })
+
+    it('uploads a 1:1 photo and sets it as the square asset', async () => {
+      const uploaded = photo('qnew', 'FEED', 1080, 1080)
+      const updated = { ...feedAd, squareAssetId: 'qnew' } as api.Creative
+      vi.mocked(api.uploadProductImage).mockResolvedValue(uploaded)
+      vi.mocked(api.setCreativeSquareAsset).mockResolvedValue(updated)
+      const onUpdated = renderEditor(feedAd)
+      const file = new File(['p'], 'square.jpg', { type: 'image/jpeg' })
+
+      await userEvent.click(screen.getByRole('button', { name: 'Add Square image' }))
+      await userEvent.upload(await screen.findByLabelText('Upload a 1:1 photo'), file)
+
+      await waitFor(() => expect(onUpdated).toHaveBeenCalledWith(updated))
+      expect(api.uploadProductImage).toHaveBeenCalledWith('b1', 'prod1', file)
+      expect(api.setCreativeSquareAsset).toHaveBeenCalledWith('b1', 'c1', 'cr1', 'qnew')
+    })
+
+    it('refuses an uploaded photo that is not 1:1 instead of assigning it', async () => {
+      vi.mocked(api.uploadProductImage).mockResolvedValue(photo('p', 'FEED', 1080, 1350))
+      const onUpdated = renderEditor(feedAd)
+
+      await userEvent.click(screen.getByRole('button', { name: 'Add Square image' }))
+      await userEvent.upload(
+        await screen.findByLabelText('Upload a 1:1 photo'),
+        new File(['p'], 'tall.jpg', { type: 'image/jpeg' }),
+      )
+
+      expect(await screen.findByRole('alert')).toHaveTextContent('isn’t 1:1')
+      expect(api.setCreativeSquareAsset).not.toHaveBeenCalled()
+      expect(onUpdated).not.toHaveBeenCalled()
+    })
+
+    it('shows the current square asset and can change or remove it', async () => {
+      const removed = { ...withSquare, squareAssetId: null, squareImageUrl: null } as api.Creative
+      vi.mocked(api.setCreativeSquareAsset).mockResolvedValue(removed)
+      const onUpdated = renderEditor(withSquare)
+
+      expect(screen.getByAltText('Square asset')).toHaveAttribute('src', '/product-images/q1')
+      expect(screen.getByRole('button', { name: 'Change Square image' })).toBeInTheDocument()
+      await userEvent.click(screen.getByRole('button', { name: 'Remove Square asset' }))
+
+      await waitFor(() => expect(onUpdated).toHaveBeenCalledWith(removed))
+      expect(api.setCreativeSquareAsset).toHaveBeenCalledWith('b1', 'c1', 'cr1', null)
+    })
+
+    it('shows why a square change failed, with a generic fallback', async () => {
+      vi.mocked(api.setCreativeSquareAsset).mockRejectedValueOnce(
+        new api.ApiError(400, 'The Square asset must be exactly 1:1'),
+      )
+      renderEditor(withSquare)
+      await userEvent.click(screen.getByRole('button', { name: 'Remove Square asset' }))
+      expect(await screen.findByRole('alert')).toHaveTextContent('exactly 1:1')
+
+      vi.mocked(api.setCreativeSquareAsset).mockRejectedValueOnce(new Error('x'))
+      await userEvent.click(screen.getByRole('button', { name: 'Remove Square asset' }))
+      await waitFor(() =>
+        expect(screen.getByRole('alert')).toHaveTextContent('Could not change the Square asset.'),
+      )
+    })
+
+    it('limits the feed picker to Feed-shaped assets other than the square asset', async () => {
+      renderEditor(withSquare)
+
+      await userEvent.click(screen.getByRole('button', { name: 'Change image' }))
+      await userEvent.click(screen.getByRole('button', { name: 'Choose from library' }))
+
+      // f1 only: q1 is the square asset, s1 is 9:16
+      expect(await screen.findAllByAltText('Product option')).toHaveLength(1)
+    })
+
+    it('adds a square video, listing only 1:1 videos with their badges', async () => {
+      const updated = { ...videoAd, squareAssetId: 'vq' } as api.Creative
+      vi.mocked(api.setCreativeSquareAsset).mockResolvedValue(updated)
+      const onUpdated = renderEditor(videoAd)
+
+      await userEvent.click(screen.getByRole('button', { name: 'Add Square video' }))
+      const options = await screen.findAllByAltText('Square option')
+
+      expect(options).toHaveLength(1)
+      expect(options[0]).toHaveAttribute('src', '/product-images/vq/thumbnail')
+      expect(screen.getByText('Feed 1:1 / 4:5')).toBeInTheDocument()
+      await userEvent.click(options[0])
+      await waitFor(() => expect(onUpdated).toHaveBeenCalledWith(updated))
+      expect(api.setCreativeSquareAsset).toHaveBeenCalledWith('b1', 'c1', 'cr1', 'vq')
+    })
+
+    it('uploads a 1:1 video through the shared intake and sets it as the square asset', async () => {
+      const file = new File([new Uint8Array(8)], 'sq.mov', { type: 'video/quicktime' })
+      const updated = { ...videoAd, squareAssetId: 'vnew' } as api.Creative
+      vi.mocked(api.uploadProductImage).mockResolvedValue(video('vnew', 1080, 1080))
+      vi.mocked(api.setCreativeSquareAsset).mockResolvedValue(updated)
+      const onUpdated = renderEditor(videoAd)
+
+      await userEvent.click(screen.getByRole('button', { name: 'Add Square video' }))
+      await userEvent.upload(await screen.findByLabelText('Upload a 1:1 video'), file)
+
+      await waitFor(() => expect(onUpdated).toHaveBeenCalledWith(updated))
+      expect(api.uploadProductImage).toHaveBeenCalledWith('b1', 'prod1', file, expect.any(File))
+      expect(api.setCreativeSquareAsset).toHaveBeenCalledWith('b1', 'c1', 'cr1', 'vnew')
+    })
+
+    it('refuses an uploaded video that is not 1:1', async () => {
+      vi.mocked(api.uploadProductImage).mockResolvedValue(video('vt', 1080, 1350))
+      renderEditor(videoAd)
+
+      await userEvent.click(screen.getByRole('button', { name: 'Add Square video' }))
+      await userEvent.upload(
+        await screen.findByLabelText('Upload a 1:1 video'),
+        new File([new Uint8Array(8)], 'tall.mov', { type: 'video/quicktime' }),
+      )
+
+      expect(await screen.findByRole('alert')).toHaveTextContent('isn’t 1:1')
+      expect(api.setCreativeSquareAsset).not.toHaveBeenCalled()
+    })
+
+    it('keeps the story and square slots independent', async () => {
+      const withBoth = {
+        ...feedAd,
+        storyAssetId: 's1',
+        storyImageUrl: '/product-images/s1',
+        squareAssetId: 'q1',
+        squareImageUrl: '/product-images/q1',
+      } as api.Creative
+      vi.mocked(api.setCreativeSquareAsset).mockResolvedValue(withBoth)
+      renderEditor(withBoth)
+
+      expect(screen.getByAltText('Stories & Reels asset')).toBeInTheDocument()
+      expect(screen.getByAltText('Square asset')).toBeInTheDocument()
+      await userEvent.click(screen.getByRole('button', { name: 'Remove Square asset' }))
+
+      await waitFor(() => expect(api.setCreativeSquareAsset).toHaveBeenCalled())
+      expect(api.setCreativeStoryAsset).not.toHaveBeenCalled()
     })
   })
 })

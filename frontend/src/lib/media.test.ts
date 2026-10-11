@@ -5,6 +5,7 @@ import {
   captureTimes,
   classifyAspect,
   formatDuration,
+  isSquare,
   isVideoFile,
   MAX_VIDEO_BYTES,
   normalizeVideoFile,
@@ -440,5 +441,22 @@ describe('readVideoInfo', () => {
 
     expect(error.message).toMatch(/black/i)
     expect(error.message).not.toBe(UNREADABLE_VIDEO_ERROR)
+  })
+})
+
+describe('isSquare', () => {
+  it.each([
+    [1080, 1080, true],
+    [1080, 1100, true], // within the 3% tolerance
+    [1080, 1350, false], // 4:5 is Feed-shaped but not square
+    [1080, 1920, false],
+    [0, 100, false],
+  ])('%i x %i is square: %s', (width, height, expected) => {
+    expect(isSquare(width, height)).toBe(expected)
+  })
+
+  it('is false for unmeasured media', () => {
+    expect(isSquare(null, null)).toBe(false)
+    expect(isSquare(undefined, 1080)).toBe(false)
   })
 })
