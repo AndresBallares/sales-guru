@@ -108,9 +108,19 @@ path the rule above requires explicit confirmation for).
 - **TDD**: write the failing test first, then implement. Both packages gate
   on ≥90% coverage (`pytest` / `vitest --coverage` enforce this directly —
   see README.md).
-- **Run only one test suite at a time; all pytest runs share ./test.db.** Two
-  concurrent runs (or a run during a pre-commit hook) collide on that SQLite file
-  and stall; stop dev servers and wait for hooks before starting another run.
+- **Run test suites in the foreground, one at a time — never in the background
+  or at low priority.** A background pytest run hangs waiting on the Prisma
+  engine (it sat idle for over an hour at nice 5; the same file passed in 3
+  seconds in the foreground). Suites also share ./test.db, so two concurrent runs
+  (or a run during a pre-commit hook) collide on that SQLite file and stall: stop
+  dev servers and wait for hooks before starting another run. If a backend run
+  would exceed the tool's time limit, split it into chunks (a few test files per
+  `uv run pytest <files> --no-cov` call) and run the chunks one after another.
+- **While building, run only the tests for the files you changed.** Run the full
+  backend, frontend, and e2e suites once, before opening a PR. CI is the full
+  gate before merge.
+- **Minimum test coverage is 90% for both backend and frontend, enforced in CI.**
+  Never lower a coverage threshold.
 - **Before pushing to a branch with an open PR, check the PR's state.** If it's
   merged, open a new branch off main instead (`gh pr view <n> --json state`). A
   merged PR's head stops updating, so a push there looks like GitHub lag but
