@@ -15,6 +15,7 @@ from datetime import UTC, datetime, timedelta
 from fastapi import APIRouter, Cookie, Depends, HTTPException, status
 from fastapi.responses import RedirectResponse
 from prisma.models import Business, MetaConnection
+from prisma.types import MetaConnectionUpdateInput
 
 from app.core.authz import get_owned_business
 from app.core.config import get_settings
@@ -133,6 +134,41 @@ async def connect(
         HTTPException: 500 if the Meta app isn't configured.
     """
     oauth_state = await db.metaoauthstate.create(data={"businessId": business.id})
+    try:
+        url = build_authorization_url(oauth_state.id)
+    except MetaConnectionError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)
+        ) from exc
+    return MetaConnectResponse(authorization_url=url)
+
+
+@router.get("/reconnect", response_model=MetaConnectResponse)
+async def reconnect(
+    business: Business = Depends(get_owned_business),
+) -> MetaConnectResponse:
+    """Start a Meta OAuth round-trip for an already-connected business.
+
+    Same dialog and scopes as connect, but marked as a reconnect: the callback
+    then rotates the access token and keeps the ad account, Page, Pixel and
+    Instagram settings (discovering the Instagram account again), instead of
+    resetting them as a first connection does.
+
+    Args:
+        business: The business, resolved and ownership-checked by
+            get_owned_business.
+
+    Returns:
+        The authorization URL to navigate the browser to.
+
+    Raises:
+        HTTPException: 404 if the business has no Meta connection yet (use
+            connect); 500 if the Meta app isn't configured.
+    """
+    await _require_connection(business.id)
+    oauth_state = await db.metaoauthstate.create(
+        data={"businessId": business.id, "reconnect": True}
+    )
     try:
         url = build_authorization_url(oauth_state.id)
     except MetaConnectionError as exc:
@@ -568,6 +604,67 @@ async def _user_owns_business(user_id: str, business_id: str) -> bool:
     )
 
 
+async def _apply_reconnect(
+    connection: MetaConnection,
+    access_token: str,
+    encrypted_access_token: str,
+    meta_user_id: str,
+    expires_at: datetime,
+) -> str:
+    """Rotate the token on an existing connection, keeping its settings.
+
+    The ad account, Page, Pixel and hand-entered Instagram account stay; the
+    Instagram account on the Page is discovered again with the new token (a
+    failed read keeps the old value). If the stored Page is no longer among the
+    Pages the signed-in Meta user can see (a different login, or access
+    removed), the ad account and Page are cleared so the user picks again.
+
+    Args:
+        connection: The business's existing MetaConnection.
+        access_token: The new long-lived token, in plaintext.
+        encrypted_access_token: The same token, encrypted for storage.
+        meta_user_id: The Meta user who just signed in.
+        expires_at: When the new token expires.
+
+    Returns:
+        The `?meta=` outcome: "reconnected", or "reconnected_choose_page" when
+        the stored Page is gone.
+    """
+    data: MetaConnectionUpdateInput = {
+        "metaUserId": meta_user_id,
+        "accessToken": encrypted_access_token,
+        "tokenExpiresAt": expires_at,
+    }
+    outcome = "reconnected"
+    if connection.pageId is not None:
+        try:
+            pages = await list_pages(access_token)
+        except MetaConnectionError:
+            pages = None
+        if pages is not None and connection.pageId not in {page.id for page in pages}:
+            data.update(
+                {
+                    "adAccountId": None,
+                    "pageId": None,
+                    "instagramUserId": None,
+                    "instagramUserIdManual": None,
+                }
+            )
+            outcome = "reconnected_choose_page"
+        else:
+            try:
+                data["instagramUserId"] = await fetch_page_instagram_account(
+                    access_token, connection.pageId
+                )
+            except MetaConnectionError:
+                logger.warning(
+                    "Could not read the Instagram account for Page %s on reconnect",
+                    connection.pageId,
+                )
+    await db.metaconnection.update(where={"id": connection.id}, data=data)
+    return outcome
+
+
 @callback_router.get("/meta/callback", include_in_schema=False)
 async def meta_callback(
     code: str | None = None,
@@ -625,6 +722,13 @@ async def meta_callback(
         return _redirect(business_id, "error")
 
     encrypted_access_token = encrypt_token(access_token)
+    existing = await db.metaconnection.find_unique(where={"businessId": business_id})
+    if oauth_state.reconnect and existing is not None:
+        outcome = await _apply_reconnect(
+            existing, access_token, encrypted_access_token, meta_user_id, expires_at
+        )
+        return _redirect(business_id, outcome)
+
     await db.metaconnection.upsert(
         where={"businessId": business_id},
         data={

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Link, useParams } from 'react-router-dom'
+import { Link, useParams, useSearchParams } from 'react-router-dom'
 import { AudiencesSection } from '../components/AudiencesSection'
 import { BrandProfileSection } from '../components/BrandProfileSection'
 import { BusinessEditForm } from '../components/BusinessEditForm'
@@ -22,6 +22,10 @@ import {
 
 export function BusinessDetailPage() {
   const { businessId } = useParams<{ businessId: string }>()
+  const [searchParams] = useSearchParams()
+  // What the Meta OAuth round-trip came back with (?meta=...). Read once here:
+  // the Meta setup step strips it from the URL as soon as it mounts.
+  const [metaOutcome] = useState(() => searchParams.get('meta'))
 
   const [business, setBusiness] = useState<Business | null>(null)
   const [businessError, setBusinessError] = useState<string | null>(null)
@@ -116,7 +120,7 @@ export function BusinessDetailPage() {
           ) : (
             <>
               <CampaignsSection businessId={businessId} />
-              <MetaSettingsSection businessId={businessId} />
+              <MetaSettingsSection businessId={businessId} outcome={metaOutcome} />
             </>
           )}
           {/* Reachable from every step once a profile exists, not just

@@ -214,6 +214,12 @@ export function MetaConnectionSection({
     <section>
       <h2>Meta Ads</h2>
       {metaStatus === 'connected' && <p>Meta account connected — choose an ad account and Page below.</p>}
+      {metaStatus === 'reconnected_choose_page' && (
+        <p>
+          Meta reconnected, but that login can't see the Page used before — choose an ad account and
+          Page below.
+        </p>
+      )}
       {metaStatus === 'error' && (
         <p className="form-error" role="alert">
           Could not connect to Meta. Please try again.

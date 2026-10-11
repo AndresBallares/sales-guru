@@ -341,6 +341,16 @@ describe('MetaConnectionSection', () => {
     ).toBeInTheDocument()
   })
 
+  it('asks for a Page again when a reconnect could not keep the old one', async () => {
+    mockedApi.getMetaConnection.mockResolvedValue(PENDING_CONNECTION)
+    mockedApi.listMetaAdAccounts.mockResolvedValue([])
+    mockedApi.listMetaPages.mockResolvedValue([])
+
+    renderSection('/businesses/biz-1?meta=reconnected_choose_page')
+
+    expect(await screen.findByText(/can't see the Page used before/)).toBeInTheDocument()
+  })
+
   it('shows an error banner when returning from a failed OAuth flow', async () => {
     mockedApi.getMetaConnection.mockRejectedValue(
       new api.ApiError(404, 'Meta connection not found'),

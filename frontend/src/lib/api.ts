@@ -1101,6 +1101,13 @@ export function connectMeta(businessId: string): Promise<MetaConnectResponse> {
   return request<MetaConnectResponse>(`/businesses/${businessId}/meta/connect`)
 }
 
+// Starts Meta OAuth again for an already-connected business: same scopes, token
+// rotated, ad account / Page / Pixel kept (the server reads the Instagram
+// account again). Navigate the browser to the returned URL.
+export function reconnectMeta(businessId: string): Promise<MetaConnectResponse> {
+  return request<MetaConnectResponse>(`/businesses/${businessId}/meta/reconnect`)
+}
+
 export function getMetaConnection(businessId: string): Promise<MetaConnection> {
   return request<MetaConnection>(`/businesses/${businessId}/meta`)
 }
