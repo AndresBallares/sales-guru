@@ -249,6 +249,9 @@ export interface Campaign {
   // True while a background (video) publish is running, so a reload mid-publish
   // still shows "Processing video…".
   publishing?: boolean
+  // True once the campaign has results (a snapshot with spend or a purchase): it is
+  // then archived (results kept) rather than deleted.
+  hasDelivered?: boolean
 }
 
 export interface CampaignCreateInput {
@@ -648,6 +651,14 @@ export function pauseCampaign(businessId: string, campaignId: string): Promise<C
 // app/services/publish.py's activate_campaign).
 export function activateCampaign(businessId: string, campaignId: string): Promise<Campaign> {
   return request<Campaign>(`/businesses/${businessId}/campaigns/${campaignId}/activate`, {
+    method: 'POST',
+  })
+}
+
+// Archives a campaign that has delivered: paused on Meta if live, hidden from the
+// list by default, results kept.
+export function archiveCampaign(businessId: string, campaignId: string): Promise<Campaign> {
+  return request<Campaign>(`/businesses/${businessId}/campaigns/${campaignId}/archive`, {
     method: 'POST',
   })
 }

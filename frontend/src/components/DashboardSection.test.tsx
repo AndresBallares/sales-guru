@@ -444,6 +444,25 @@ describe('DashboardSection', () => {
       expect(screen.queryByText(/hasn’t run yet/)).not.toBeInTheDocument()
     })
 
+    it('keeps showing the history of an archived campaign, labelled as archived', async () => {
+      mockedApi.getCampaignDashboard.mockResolvedValue(
+        dashboard('c1', {
+          status: 'ARCHIVED',
+          pausedAt: '2026-10-10T14:00:00Z',
+          pausedReason: 'Archived',
+        }),
+      )
+
+      renderSection()
+
+      const note = await screen.findByRole('note')
+      expect(note).toHaveTextContent('Archived')
+      expect(note).toHaveTextContent(/on Oct 10/)
+      expect(note).toHaveTextContent('an archived campaign isn’t updated')
+      expect(screen.getByLabelText('Campaign results')).toHaveTextContent('$142.50')
+      expect(screen.getByText(/Last updated Oct 10/)).toBeInTheDocument()
+    })
+
     it('still labels a paused campaign when the time it was paused is unknown', async () => {
       mockedApi.getCampaignDashboard.mockResolvedValue(
         dashboard('c1', { status: 'PAUSED', pausedAt: null, pausedReason: null }),

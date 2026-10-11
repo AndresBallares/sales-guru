@@ -254,6 +254,34 @@ async def _get_json(url: str, params: dict[str, str]) -> dict[str, Any]:
     return body
 
 
+async def _delete_json(url: str, params: dict[str, str]) -> dict[str, Any]:
+    """DELETE a Graph API object and return its parsed JSON body.
+
+    Args:
+        url: The full Graph API object URL.
+        params: Query parameters (the access token).
+
+    Returns:
+        The parsed JSON response body (Meta answers {"success": true}).
+
+    Raises:
+        MetaConnectionError: On a network failure, a non-2xx response, or
+            a response body containing Meta's own {"error": ...} shape.
+    """
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.delete(url, params=params)
+    except httpx.HTTPError as exc:
+        raise MetaConnectionError(
+            f"Meta API call failed: {str(exc) or type(exc).__name__}"
+        ) from exc
+
+    body: dict[str, Any] = response.json()
+    if response.is_error or "error" in body:
+        _raise_for_meta_error(url, body, response)
+    return body
+
+
 async def _post_json(
     url: str, data: dict[str, str], *, timeout: float | None = None
 ) -> dict[str, Any]:
@@ -2039,6 +2067,59 @@ async def fetch_meta_object_status(*, access_token: str, meta_object_id: str) ->
         {"access_token": access_token, "fields": "status"},
     )
     return str(body.get("status", ""))
+
+
+# Meta's "(#100) ... Object with ID does not exist, cannot be loaded due to
+# missing permissions" subcode. It means "gone" and "not allowed to see it" alike,
+# so delete_meta_object only believes it after checking the ad account is visible.
+OBJECT_NOT_FOUND_SUBCODE = 33
+
+
+async def delete_meta_object(
+    *, access_token: str, ad_account_id: str, meta_object_id: str
+) -> bool:
+    """Delete a campaign, ad set, ad or ad creative on Meta.
+
+    Safe to repeat: an object that is already gone counts as deleted. "Gone" is
+    either Meta reporting its status as DELETED, or Meta saying it cannot find it
+    while the ad account itself is still readable (so the token is fine and the
+    object really is absent, not merely hidden by a permission problem).
+
+    Args:
+        access_token: The business's Meta access token.
+        ad_account_id: The connected ad account (checked when an object cannot
+            be found).
+        meta_object_id: The Meta id of the object to delete.
+
+    Returns:
+        True if this call deleted it, False if it was already gone.
+
+    Raises:
+        MetaConnectionError: If Meta refuses or the call fails (for example a
+            creative still used by an ad, or a permission problem).
+    """
+    if get_settings().fake_meta_enabled:
+        return True
+    try:
+        current = await _get_json(
+            f"{_GRAPH_BASE_URL}/{meta_object_id}",
+            {"fields": "id,status", "access_token": access_token},
+        )
+    except MetaConnectionError as exc:
+        if exc.error_subcode != OBJECT_NOT_FOUND_SUBCODE:
+            raise
+        # Either gone or hidden: it is only gone if the account is readable.
+        await _get_json(
+            f"{_GRAPH_BASE_URL}/{ad_account_id}",
+            {"fields": "id", "access_token": access_token},
+        )
+        return False
+    if current.get("status") == "DELETED":
+        return False
+    await _delete_json(
+        f"{_GRAPH_BASE_URL}/{meta_object_id}", {"access_token": access_token}
+    )
+    return True
 
 
 async def update_meta_ad_set_budget(

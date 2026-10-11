@@ -593,8 +593,8 @@ def assemble_campaign(
     # "no results yet", not a campaign with $0 of results.
     if totals is not None and totals.impressions == 0 and totals.spend == 0:
         totals = None
-    # Only a paused campaign has a pause to describe.
-    is_paused = status == "PAUSED"
+    # Only a paused (or archived: paused on archive) campaign has a pause to describe.
+    is_paused = status in ("PAUSED", "ARCHIVED")
     base = {
         "campaign_id": campaign_id,
         "campaign_name": name,

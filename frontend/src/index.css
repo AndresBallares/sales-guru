@@ -1564,3 +1564,23 @@ code {
   height: 100%;
   object-fit: cover;
 }
+
+/* ---------- Campaign delete / archive ---------- */
+
+.confirm-panel {
+  margin: 0.5rem 0;
+  padding: 0.6rem 0.9rem;
+  border: 1px solid var(--border-strong);
+  border-radius: 0.5rem;
+  background: var(--surface);
+}
+
+.show-archived {
+  display: block;
+  margin: 0.5rem 0;
+  font-size: 0.85rem;
+}
+
+.campaign-archived {
+  opacity: 0.75;
+}
