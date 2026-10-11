@@ -10,6 +10,8 @@ import {
   type Business,
   type Option,
 } from '../lib/api'
+import { DeleteBusinessSection } from '../components/DeleteBusinessSection'
+import { EditBusinessSection } from '../components/EditBusinessSection'
 import { validateImageFile } from '../lib/imageValidation'
 
 // Mirrors the backend's own cap (app/schemas/business.py) — description is
@@ -342,9 +344,19 @@ export function DashboardPage() {
               {formError}
             </p>
           )}
-          <button type="submit" disabled={submitting}>
-            {submitting ? 'Creating…' : 'Create business'}
-          </button>
+          <div className="button-row">
+            <button type="submit" disabled={submitting}>
+              {submitting ? 'Creating…' : 'Create business'}
+            </button>
+            <DeleteBusinessSection
+              businesses={businesses}
+              onDeleted={() => void refreshBusinesses()}
+            />
+            <EditBusinessSection
+              businesses={businesses}
+              onSaved={() => void refreshBusinesses()}
+            />
+          </div>
         </form>
       </section>
     </main>

@@ -54,21 +54,27 @@ test('deleting a business is blocked while a campaign is live, and succeeds once
   await expect(page.getByRole('heading', { name: 'Acme Widgets' })).toBeVisible()
   await expect(page.getByText(/Live on Meta/)).toBeVisible()
 
-  // Blocked: the campaign is still LIVE.
+  // Delete lives next to "Create business" on the dashboard. Blocked while
+  // the campaign is still LIVE.
+  await page.getByRole('link', { name: '← Back to dashboard' }).click()
+  await expect(page.getByRole('heading', { name: 'Your businesses' })).toBeVisible()
   await page.getByRole('button', { name: 'Delete business' }).click()
-  await page.getByLabel(/Acme Widgets/).fill('Acme Widgets')
+  // The only business is preselected, so just type its name.
+  await page.getByLabel(/Type/).fill('Acme Widgets')
   const deleteButton = page.getByRole('button', { name: 'Permanently delete business' })
   await expect(deleteButton).toBeEnabled()
   await deleteButton.click()
   await expect(
     page.getByText('Pause or end it before deleting this business.'),
   ).toBeVisible()
-  // Still here — not navigated away by the failed attempt.
-  await expect(page.getByRole('heading', { name: 'Acme Widgets' })).toBeVisible()
+  // Still here — the failed attempt didn't remove it.
+  await expect(page.getByRole('link', { name: 'Acme Widgets' })).toBeVisible()
 
-  // End the campaign, then the same confirmed delete goes through.
-  // Wait for the pause itself to succeed and the LIVE state to go away
-  // (the Pause button is gone) before trying the delete again.
+  // End the campaign on the business page, then the same confirmed delete
+  // goes through. Wait for the pause itself to succeed and the LIVE state to
+  // go away (the Pause button is gone) before trying the delete again.
+  await page.getByRole('link', { name: 'Acme Widgets' }).click()
+  await expect(page.getByText(/Live on Meta/)).toBeVisible()
   const paused = page.waitForResponse(
     (response) =>
       response.request().method() === 'POST' &&
@@ -80,7 +86,10 @@ test('deleting a business is blocked while a campaign is live, and succeeds once
   await expect(page.getByRole('button', { name: 'Pause campaign' })).toHaveCount(0)
   await expect(page.getByText(/Live on Meta/)).not.toBeVisible()
 
+  await page.getByRole('link', { name: '← Back to dashboard' }).click()
+  await page.getByRole('button', { name: 'Delete business' }).click()
+  await page.getByLabel(/Type/).fill('Acme Widgets')
   await deleteButton.click()
-  await expect(page.getByRole('heading', { name: 'Your businesses' })).toBeVisible()
+  await expect(page.getByText(/No businesses yet/)).toBeVisible()
   await expect(page.getByRole('link', { name: 'Acme Widgets' })).not.toBeVisible()
 })

@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
@@ -18,6 +18,9 @@ vi.mock('../lib/api', async (importOriginal) => {
     createBusiness: vi.fn<typeof actual.createBusiness>(),
     listBusinesses: vi.fn<typeof actual.listBusinesses>(),
     uploadBusinessLogo: vi.fn<typeof actual.uploadBusinessLogo>(),
+    deleteBusiness: vi.fn<typeof actual.deleteBusiness>(),
+    updateBusiness: vi.fn<typeof actual.updateBusiness>(),
+    listCampaigns: vi.fn<typeof actual.listCampaigns>(),
   }
 })
 const mockedApi = vi.mocked(api)
@@ -443,5 +446,449 @@ describe('DashboardPage', () => {
     await user.click(screen.getByRole('button', { name: 'Log out' }))
 
     await waitFor(() => expect(mockedApi.logout).toHaveBeenCalled())
+  })
+
+  describe('delete business', () => {
+    const acme: api.Business = {
+      id: 'biz-1',
+      name: 'Acme Widgets',
+      website: null,
+      industry: null,
+      location: null,
+      logoUrl: null,
+      description: null,
+    }
+    const globex: api.Business = { ...acme, id: 'biz-2', name: 'Globex' }
+
+    it('puts Delete business in the same row as Create business', async () => {
+      mockedApi.listBusinesses.mockResolvedValue([acme])
+
+      renderDashboard()
+      await screen.findByText('Acme Widgets')
+
+      const create = screen.getByRole('button', { name: 'Create business' })
+      const del = screen.getByRole('button', { name: 'Delete business' })
+      expect(del.parentElement).toBe(create.parentElement)
+    })
+
+    it('says there is nothing to delete when there are no businesses', async () => {
+      mockedApi.listBusinesses.mockResolvedValue([])
+      const user = userEvent.setup()
+
+      renderDashboard()
+      await screen.findByText(/No businesses yet/)
+      await user.click(screen.getByRole('button', { name: 'Delete business' }))
+
+      expect(screen.getByText('You have no businesses to delete.')).toBeInTheDocument()
+      expect(screen.queryByLabelText('Business to delete')).not.toBeInTheDocument()
+    })
+
+    it('preselects the only business and needs its exact name before enabling delete', async () => {
+      mockedApi.listBusinesses.mockResolvedValue([acme])
+      mockedApi.listCampaigns.mockResolvedValue([])
+      const user = userEvent.setup()
+
+      renderDashboard()
+      await screen.findByText('Acme Widgets')
+      await user.click(screen.getByRole('button', { name: 'Delete business' }))
+
+      const confirm = await screen.findByRole('button', { name: 'Permanently delete business' })
+      expect(confirm).toBeDisabled()
+      const nameField = await screen.findByLabelText(/Type/)
+      await user.type(nameField, 'wrong name')
+      expect(confirm).toBeDisabled()
+      await user.clear(nameField)
+      await user.type(nameField, 'Acme Widgets')
+      expect(confirm).toBeEnabled()
+      expect(mockedApi.deleteBusiness).not.toHaveBeenCalled()
+    })
+
+    it('picks up a lone business that finishes loading after the panel was opened', async () => {
+      let finishLoading: (list: api.Business[]) => void = () => {}
+      mockedApi.listBusinesses.mockReturnValue(
+        new Promise<api.Business[]>((resolve) => {
+          finishLoading = resolve
+        }),
+      )
+      mockedApi.listCampaigns.mockResolvedValue([])
+      const user = userEvent.setup()
+
+      renderDashboard()
+      await user.click(screen.getByRole('button', { name: 'Delete business' }))
+      expect(screen.getByText('You have no businesses to delete.')).toBeInTheDocument()
+
+      finishLoading([acme])
+
+      expect(await screen.findByLabelText(/Type/)).toBeInTheDocument()
+      expect(screen.queryByText('You have no businesses to delete.')).not.toBeInTheDocument()
+    })
+
+    it('asks which business when there are several, then deletes it and refreshes the list', async () => {
+      mockedApi.listBusinesses
+        .mockResolvedValueOnce([acme, globex])
+        .mockResolvedValueOnce([acme])
+      mockedApi.listCampaigns.mockResolvedValue([])
+      mockedApi.deleteBusiness.mockResolvedValue(undefined)
+      const user = userEvent.setup()
+
+      renderDashboard()
+      await screen.findByText('Globex')
+      await user.click(screen.getByRole('button', { name: 'Delete business' }))
+      // Nothing to confirm until one is picked.
+      expect(screen.queryByLabelText(/Type/)).not.toBeInTheDocument()
+      expect(screen.getByRole('button', { name: 'Permanently delete business' })).toBeDisabled()
+
+      await user.selectOptions(screen.getByLabelText('Business to delete'), 'biz-2')
+      await user.type(await screen.findByLabelText(/Type/), 'Globex')
+      await user.click(screen.getByRole('button', { name: 'Permanently delete business' }))
+
+      await waitFor(() => expect(mockedApi.deleteBusiness).toHaveBeenCalledWith('biz-2'))
+      await waitFor(() => expect(screen.queryByText('Globex')).not.toBeInTheDocument())
+      expect(screen.getByText('Acme Widgets')).toBeInTheDocument()
+      // Panel closed again.
+      expect(
+        screen.queryByRole('button', { name: 'Permanently delete business' }),
+      ).not.toBeInTheDocument()
+    })
+
+    it('shows the 409 message and keeps the business when a campaign is live', async () => {
+      mockedApi.listBusinesses.mockResolvedValue([acme])
+      mockedApi.listCampaigns.mockResolvedValue([])
+      mockedApi.deleteBusiness.mockRejectedValue(
+        new api.ApiError(409, 'Pause or end it before deleting this business.'),
+      )
+      const user = userEvent.setup()
+
+      renderDashboard()
+      await screen.findByText('Acme Widgets')
+      await user.click(screen.getByRole('button', { name: 'Delete business' }))
+      await user.type(await screen.findByLabelText(/Type/), 'Acme Widgets')
+      await user.click(screen.getByRole('button', { name: 'Permanently delete business' }))
+
+      expect(await screen.findByRole('alert')).toHaveTextContent(
+        'Pause or end it before deleting this business.',
+      )
+      expect(screen.getByRole('link', { name: 'Acme Widgets' })).toBeInTheDocument()
+    })
+
+    it('falls back to a generic message when the delete fails unexpectedly', async () => {
+      mockedApi.listBusinesses.mockResolvedValue([acme])
+      mockedApi.listCampaigns.mockResolvedValue([])
+      mockedApi.deleteBusiness.mockRejectedValue(new Error('boom'))
+      const user = userEvent.setup()
+
+      renderDashboard()
+      await screen.findByText('Acme Widgets')
+      await user.click(screen.getByRole('button', { name: 'Delete business' }))
+      await user.type(await screen.findByLabelText(/Type/), 'Acme Widgets')
+      await user.click(screen.getByRole('button', { name: 'Permanently delete business' }))
+
+      expect(await screen.findByRole('alert')).toHaveTextContent('Could not delete business.')
+    })
+
+    it('notes that Meta campaigns remain paused only when one was ever published', async () => {
+      mockedApi.listBusinesses.mockResolvedValue([acme, globex])
+      mockedApi.listCampaigns.mockImplementation(async (id) =>
+        id === 'biz-1' ? [{ metaCampaignId: 'meta-1' } as api.Campaign] : [],
+      )
+      const user = userEvent.setup()
+
+      renderDashboard()
+      await screen.findByText('Globex')
+      await user.click(screen.getByRole('button', { name: 'Delete business' }))
+
+      await user.selectOptions(screen.getByLabelText('Business to delete'), 'biz-1')
+      expect(
+        await screen.findByText(/they'll remain \(paused\) in your Meta account/),
+      ).toBeInTheDocument()
+
+      await user.selectOptions(screen.getByLabelText('Business to delete'), 'biz-2')
+      await screen.findByLabelText(/Type/)
+      expect(screen.queryByText(/remain \(paused\)/)).not.toBeInTheDocument()
+    })
+
+    it('still works when the campaign lookup fails, and cancel closes the panel', async () => {
+      mockedApi.listBusinesses.mockResolvedValue([acme])
+      mockedApi.listCampaigns.mockRejectedValue(new Error('offline'))
+      const user = userEvent.setup()
+
+      renderDashboard()
+      await screen.findByText('Acme Widgets')
+      await user.click(screen.getByRole('button', { name: 'Delete business' }))
+      await screen.findByLabelText(/Type/)
+      await user.click(screen.getByRole('button', { name: 'Cancel' }))
+
+      expect(
+        screen.queryByRole('button', { name: 'Permanently delete business' }),
+      ).not.toBeInTheDocument()
+      expect(mockedApi.deleteBusiness).not.toHaveBeenCalled()
+    })
+  })
+
+  describe('edit business', () => {
+    const acme: api.Business = {
+      id: 'biz-1',
+      name: 'Acme Widgets',
+      website: null,
+      industry: null,
+      location: null,
+      logoUrl: null,
+      description: null,
+    }
+    const globex: api.Business = { ...acme, id: 'biz-2', name: 'Globex' }
+
+    async function openEditPanel(user: ReturnType<typeof userEvent.setup>) {
+      await user.click(screen.getByRole('button', { name: 'Edit business' }))
+      return within(await screen.findByRole('region', { name: 'Edit business' }))
+    }
+
+    it('puts Edit business right after Delete business in the same row', async () => {
+      mockedApi.listBusinesses.mockResolvedValue([acme])
+
+      renderDashboard()
+      await screen.findByText('Acme Widgets')
+
+      const del = screen.getByRole('button', { name: 'Delete business' })
+      const edit = screen.getByRole('button', { name: 'Edit business' })
+      expect(edit.parentElement).toBe(del.parentElement)
+      expect(del.nextElementSibling).toBe(edit)
+    })
+
+    it('says there is nothing to edit when there are no businesses', async () => {
+      mockedApi.listBusinesses.mockResolvedValue([])
+      const user = userEvent.setup()
+
+      renderDashboard()
+      await screen.findByText(/No businesses yet/)
+      const panel = await openEditPanel(user)
+
+      expect(panel.getByText('You have no businesses to edit.')).toBeInTheDocument()
+      await user.click(panel.getByRole('button', { name: 'Cancel' }))
+      expect(screen.queryByRole('region', { name: 'Edit business' })).not.toBeInTheDocument()
+    })
+
+    it('preselects the only business and saves an edit, then refreshes the list', async () => {
+      mockedApi.listBusinesses
+        .mockResolvedValueOnce([acme])
+        .mockResolvedValueOnce([{ ...acme, name: 'Acme Inc' }])
+      mockedApi.updateBusiness.mockResolvedValue({ ...acme, name: 'Acme Inc' })
+      const user = userEvent.setup()
+
+      renderDashboard()
+      await screen.findByText('Acme Widgets')
+      const panel = await openEditPanel(user)
+
+      const nameField = await panel.findByLabelText('Name')
+      expect(nameField).toHaveValue('Acme Widgets')
+      await user.clear(nameField)
+      await user.type(nameField, 'Acme Inc')
+      await user.type(panel.getByLabelText(/About your business/), 'Family-run since 1985')
+      await user.click(panel.getByRole('button', { name: 'Save' }))
+
+      await waitFor(() =>
+        expect(mockedApi.updateBusiness).toHaveBeenCalledWith('biz-1', {
+          name: 'Acme Inc',
+          website: null,
+          location: null,
+          description: 'Family-run since 1985',
+        }),
+      )
+      expect(await screen.findByRole('link', { name: 'Acme Inc' })).toBeInTheDocument()
+      expect(screen.queryByRole('region', { name: 'Edit business' })).not.toBeInTheDocument()
+    })
+
+    it('asks which business when there are several and edits the one picked', async () => {
+      mockedApi.listBusinesses.mockResolvedValue([acme, globex])
+      mockedApi.updateBusiness.mockResolvedValue({ ...globex, industry: 'FASHION_JEWELRY' })
+      const user = userEvent.setup()
+
+      renderDashboard()
+      await screen.findByText('Globex')
+      const panel = await openEditPanel(user)
+      // No form until one is picked.
+      expect(panel.queryByLabelText('Name')).not.toBeInTheDocument()
+
+      await user.selectOptions(panel.getByLabelText('Business to edit'), 'biz-2')
+      const select = await panel.findByLabelText('Industry')
+      expect(select).toBeRequired()
+      for (const option of INDUSTRY_OPTIONS) {
+        expect(panel.getByRole('option', { name: option.label })).toBeInTheDocument()
+      }
+      await user.selectOptions(select, 'FASHION_JEWELRY')
+      await user.click(panel.getByRole('button', { name: 'Save' }))
+
+      await waitFor(() =>
+        expect(mockedApi.updateBusiness).toHaveBeenCalledWith('biz-2', {
+          name: 'Globex',
+          website: null,
+          industry: 'FASHION_JEWELRY',
+          location: null,
+          description: null,
+        }),
+      )
+    })
+
+    it('picks up a lone business that finishes loading after the panel was opened', async () => {
+      let finishLoading: (list: api.Business[]) => void = () => {}
+      mockedApi.listBusinesses.mockReturnValue(
+        new Promise<api.Business[]>((resolve) => {
+          finishLoading = resolve
+        }),
+      )
+      const user = userEvent.setup()
+
+      renderDashboard()
+      const panel = await openEditPanel(user)
+      expect(panel.getByText('You have no businesses to edit.')).toBeInTheDocument()
+
+      finishLoading([acme])
+
+      expect(await panel.findByLabelText('Name')).toHaveValue('Acme Widgets')
+    })
+
+    it('edits website and location', async () => {
+      mockedApi.listBusinesses.mockResolvedValue([acme])
+      mockedApi.updateBusiness.mockResolvedValue({
+        ...acme,
+        website: 'https://acme.example',
+        location: 'CDMX',
+      })
+      const user = userEvent.setup()
+
+      renderDashboard()
+      await screen.findByText('Acme Widgets')
+      const panel = await openEditPanel(user)
+      await user.type(await panel.findByLabelText('Website'), 'https://acme.example')
+      await user.type(panel.getByLabelText('Location'), 'CDMX')
+      await user.click(panel.getByRole('button', { name: 'Save' }))
+
+      await waitFor(() =>
+        expect(mockedApi.updateBusiness).toHaveBeenCalledWith('biz-1', {
+          name: 'Acme Widgets',
+          website: 'https://acme.example',
+          location: 'CDMX',
+          description: null,
+        }),
+      )
+    })
+
+    it('uploads a new logo on save', async () => {
+      mockedApi.listBusinesses.mockResolvedValue([acme])
+      mockedApi.updateBusiness.mockResolvedValue(acme)
+      mockedApi.uploadBusinessLogo.mockResolvedValue({
+        ...acme,
+        logoUrl: 'https://backend.example/business-logos/biz-1',
+      })
+      const user = userEvent.setup()
+
+      renderDashboard()
+      await screen.findByText('Acme Widgets')
+      const panel = await openEditPanel(user)
+      await panel.findByLabelText('Name')
+      const file = new File(['logo-bytes'], 'logo.png', { type: 'image/png' })
+      await user.upload(document.getElementById('business-logo') as HTMLInputElement, file)
+      await user.click(panel.getByRole('button', { name: 'Save' }))
+
+      await waitFor(() =>
+        expect(mockedApi.uploadBusinessLogo).toHaveBeenCalledWith('biz-1', file),
+      )
+    })
+
+    it('rejects an oversized logo file', async () => {
+      mockedApi.listBusinesses.mockResolvedValue([acme])
+      const user = userEvent.setup()
+
+      renderDashboard()
+      await screen.findByText('Acme Widgets')
+      const panel = await openEditPanel(user)
+      await panel.findByLabelText('Name')
+      const oversized = new File([new Uint8Array(8 * 1024 * 1024 + 1)], 'logo.png', {
+        type: 'image/png',
+      })
+      await user.upload(document.getElementById('business-logo') as HTMLInputElement, oversized)
+
+      expect(await panel.findByRole('alert')).toHaveTextContent(/exceeds the 8MB limit/i)
+      expect(mockedApi.uploadBusinessLogo).not.toHaveBeenCalled()
+    })
+
+    it('stages a dropped logo file', async () => {
+      mockedApi.listBusinesses.mockResolvedValue([acme])
+      const user = userEvent.setup()
+
+      renderDashboard()
+      await screen.findByText('Acme Widgets')
+      const panel = await openEditPanel(user)
+      await panel.findByLabelText('Name')
+      const dropzone = panel.getByText('Add logo').closest('label') as HTMLLabelElement
+      const file = new File(['logo-bytes'], 'logo.png', { type: 'image/png' })
+
+      fireEvent.dragOver(dropzone, { dataTransfer: { files: [file] } })
+      fireEvent.dragLeave(dropzone)
+      fireEvent.drop(dropzone, { dataTransfer: { files: [file] } })
+
+      expect(await panel.findByAltText('Business logo')).toBeInTheDocument()
+    })
+
+    it('replaces an already-saved logo via the change-logo button', async () => {
+      mockedApi.listBusinesses.mockResolvedValue([
+        { ...acme, logoUrl: 'https://backend.example/business-logos/biz-1' },
+      ])
+      mockedApi.updateBusiness.mockResolvedValue(acme)
+      mockedApi.uploadBusinessLogo.mockResolvedValue(acme)
+      const user = userEvent.setup()
+
+      renderDashboard()
+      await screen.findByText('Acme Widgets')
+      const panel = await openEditPanel(user)
+      await user.click(await panel.findByRole('button', { name: 'Change logo' }))
+      const file = new File(['logo-bytes-2'], 'logo2.png', { type: 'image/png' })
+      await user.upload(document.getElementById('business-logo') as HTMLInputElement, file)
+      await user.click(panel.getByRole('button', { name: 'Save' }))
+
+      await waitFor(() =>
+        expect(mockedApi.uploadBusinessLogo).toHaveBeenCalledWith('biz-1', file),
+      )
+    })
+
+    it('cancels an edit without saving', async () => {
+      mockedApi.listBusinesses.mockResolvedValue([acme])
+      const user = userEvent.setup()
+
+      renderDashboard()
+      await screen.findByText('Acme Widgets')
+      const panel = await openEditPanel(user)
+      await user.type(await panel.findByLabelText('Name'), ' extra text')
+      await user.click(panel.getByRole('button', { name: 'Cancel' }))
+
+      expect(mockedApi.updateBusiness).not.toHaveBeenCalled()
+      expect(screen.queryByRole('region', { name: 'Edit business' })).not.toBeInTheDocument()
+      expect(screen.getByRole('link', { name: 'Acme Widgets' })).toBeInTheDocument()
+    })
+
+    it('cancels from the picker before a business is chosen', async () => {
+      mockedApi.listBusinesses.mockResolvedValue([acme, globex])
+      const user = userEvent.setup()
+
+      renderDashboard()
+      await screen.findByText('Globex')
+      const panel = await openEditPanel(user)
+      await user.click(panel.getByRole('button', { name: 'Cancel' }))
+
+      expect(screen.queryByRole('region', { name: 'Edit business' })).not.toBeInTheDocument()
+    })
+
+    it('surfaces a backend error inline on the edit form', async () => {
+      mockedApi.listBusinesses.mockResolvedValue([acme])
+      mockedApi.updateBusiness.mockRejectedValue(new api.ApiError(422, 'Name is required'))
+      const user = userEvent.setup()
+
+      renderDashboard()
+      await screen.findByText('Acme Widgets')
+      const panel = await openEditPanel(user)
+      await panel.findByLabelText('Name')
+      await user.click(panel.getByRole('button', { name: 'Save' }))
+
+      expect(await panel.findByRole('alert')).toHaveTextContent('Name is required')
+    })
   })
 })
