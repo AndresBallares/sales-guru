@@ -229,3 +229,4 @@ already has data (run them once per database, in order):
 
 Enforced as LF via `.gitattributes` — this is automatic on `git add`/`git
 commit`, no action needed on your part beyond a normal git workflow.
+<!-- ci scope test -->
