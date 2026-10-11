@@ -32,8 +32,8 @@ jobs:
       pull-requests: read
       contents: read
     outputs:
-      backend: ${{ steps.filter.outputs.backend }}
-      frontend: ${{ steps.filter.outputs.frontend }}
+      backend: ${{ steps.decide.outputs.backend }}
+      frontend: ${{ steps.decide.outputs.frontend }}
     steps:
       - uses: actions/checkout@v4
       - uses: dorny/paths-filter@v3
@@ -44,7 +44,59 @@ jobs:
               - 'backend/**'
             frontend:
               - 'frontend/**'
-              - 'backend/**'
+            # Files whose change can break either side, so both suites run:
+            # the API client + its types (frontend/src/lib/api.ts mirrors the
+            # backend schemas), CI/hook/deploy config, and root tooling.
+            shared:
+              - 'frontend/src/lib/api.ts'
+              - '.github/**'
+              - '.pre-commit-config.yaml'
+              - 'scripts/**'
+              - 'Makefile'
+              - 'render.yaml'
+              - '.gitattributes'
+              - 'package.json'
+              - 'package-lock.json'
+              - 'pyproject.toml'
+              - 'uv.lock'
+
+      # Prisma schemas/migrations and backend/pyproject.toml/uv.lock live under
+      # backend/**, so they already count as backend changes. frontend-ci also
+      # runs on every backend change (see the note above this job).
+      - name: Decide which suites run, and why
+        id: decide
+        env:
+          BACKEND: ${{ steps.filter.outputs.backend }}
+          FRONTEND: ${{ steps.filter.outputs.frontend }}
+          SHARED: ${{ steps.filter.outputs.shared }}
+        run: |
+          set -euo pipefail
+          run_backend=false
+          run_frontend=false
+          reasons=()
+          if [ "$BACKEND" = "true" ]; then
+            run_backend=true; run_frontend=true
+            reasons+=("backend/** changed -> backend-ci + frontend-ci (e2e integration)")
+          fi
+          if [ "$FRONTEND" = "true" ]; then
+            run_frontend=true
+            reasons+=("frontend/** changed -> frontend-ci")
+          fi
+          if [ "$SHARED" = "true" ]; then
+            run_backend=true; run_frontend=true
+            reasons+=("shared file changed (api.ts, workflows, hooks, root config) -> backend-ci + frontend-ci")
+          fi
+          if [ ${#reasons[@]} -eq 0 ]; then
+            reasons+=("no backend, frontend or shared files changed (docs-only) -> backend-ci and frontend-ci intentionally skipped")
+          fi
+          echo "backend=$run_backend" >> "$GITHUB_OUTPUT"
+          echo "frontend=$run_frontend" >> "$GITHUB_OUTPUT"
+          {
+            echo "### CI scope"
+            echo "- backend-ci: **$run_backend**"
+            echo "- frontend-ci: **$run_frontend**"
+            for r in "${reasons[@]}"; do echo "- $r"; done
+          } | tee -a "$GITHUB_STEP_SUMMARY"
 
   # Backstop for the local commit-msg hook (scripts/check-no-ai-coauthor.sh)
   # — catches commits pushed with --no-verify or from a machine that never
@@ -206,36 +258,33 @@ jobs:
     if: always()
     needs: [changes, commit-message-check, backend-ci, frontend-ci]
     runs-on: ubuntu-latest
+    env:
+      CHANGES: ${{ needs.changes.result }}
+      COMMIT: ${{ needs.commit-message-check.result }}
+      BACKEND: ${{ needs.backend-ci.result }}
+      FRONTEND: ${{ needs.frontend-ci.result }}
+      RUN_BACKEND: ${{ needs.changes.outputs.backend }}
+      RUN_FRONTEND: ${{ needs.changes.outputs.frontend }}
     steps:
-      - name: Verify no required job failed
+      - name: Verify every required job passed or was intentionally skipped
         run: |
-          changes_result="${{ needs.changes.result }}"
-          commit_result="${{ needs.commit-message-check.result }}"
-          backend_result="${{ needs.backend-ci.result }}"
-          frontend_result="${{ needs.frontend-ci.result }}"
-          echo "changes: $changes_result"
-          echo "commit-message-check: $commit_result"
-          echo "backend-ci: $backend_result"
-          echo "frontend-ci: $frontend_result"
-          # changes is never legitimately "skipped" (nothing skips it), so
-          # unlike backend-ci/frontend-ci below, any non-success here is a
-          # real problem — most importantly, a failure here is exactly what
-          # silently skips backend-ci/frontend-ci without failing them, which
-          # is what let a broken changes job report an all-green PR before.
-          if [[ "$changes_result" != "success" ]]; then
-            echo "changes did not pass" >&2
-            exit 1
-          fi
-          if [[ "$commit_result" == "failure" || "$commit_result" == "cancelled" ]]; then
-            echo "commit-message-check did not pass" >&2
-            exit 1
-          fi
-          if [[ "$backend_result" == "failure" || "$backend_result" == "cancelled" ]]; then
-            echo "backend-ci did not pass" >&2
-            exit 1
-          fi
-          if [[ "$frontend_result" == "failure" || "$frontend_result" == "cancelled" ]]; then
-            echo "frontend-ci did not pass" >&2
-            exit 1
-          fi
-          echo "All required checks passed (or were correctly skipped)."
+          fail=0
+          # expect <name> <actual> <should-run>: a job that should run must
+          # have succeeded; one that should not run must be "skipped".
+          # Anything else (failure, cancelled, missing/skipped-by-accident,
+          # or a broken changes job) fails the gate.
+          expect() {
+            name="$1"; actual="$2"; should_run="$3"
+            if [ "$should_run" = "true" ]; then want=success; else want=skipped; fi
+            echo "$name: $actual (expected $want)"
+            if [ "$actual" != "$want" ]; then
+              echo "::error::$name was $actual, expected $want" >&2
+              fail=1
+            fi
+          }
+          expect changes "$CHANGES" true
+          expect commit-message-check "$COMMIT" true
+          expect backend-ci "$BACKEND" "${RUN_BACKEND:-true}"
+          expect frontend-ci "$FRONTEND" "${RUN_FRONTEND:-true}"
+          if [ "$fail" -ne 0 ]; then exit 1; fi
+          echo "All required checks passed (or were intentionally skipped per the changes job)."
