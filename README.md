@@ -85,7 +85,10 @@ uv tool install pre-commit      # if you don't already have pre-commit
 pre-commit install              # installs both the pre-commit and commit-msg hooks
 ```
 
-Pre-commit runs the same lint/type/test checks as CI, plus one commit-message
+Pre-commit runs the fast checks only: lint, format, type checks, and the tests
+related to the staged files (typically under 30 seconds). The full backend and
+frontend suites, the 90% coverage gates and Playwright e2e run in CI, where
+`ci-status` is a required check on `main`. It also runs one commit-message
 check: no `Co-Authored-By: Claude ...` trailer is allowed (rejected by
 `scripts/check-no-ai-coauthor.sh`) — commit messages in this repo don't
 attribute authorship to Claude/Anthropic.
