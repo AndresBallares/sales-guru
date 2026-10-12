@@ -13,10 +13,14 @@ export default defineConfig({
     exclude: ['node_modules', 'dist', 'e2e'],
     coverage: {
       provider: 'v8',
+      // Vitest 4 has no default `include`: without this, a source file no test
+      // imports is silently left out of the report instead of counting as 0%.
+      include: ['src/**/*.{ts,tsx}'],
       reporter: ['text', 'html', 'lcov'],
       exclude: [
         'node_modules/',
         'src/test/',
+        'src/**/*.test.{ts,tsx}',
         'src/main.tsx',
         'e2e/',
         '**/*.d.ts',

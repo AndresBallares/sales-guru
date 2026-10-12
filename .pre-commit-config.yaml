@@ -1,7 +1,7 @@
-# Pre-commit hooks mirror the CI checks (.github/workflows/ci.yml) so a
-# failure can never reach a pushed branch. Full Playwright e2e is
-# intentionally excluded here (too slow for commit-time) — it stays
-# CI-only.
+# Pre-commit runs the fast checks: lint, format, type checks, and only the
+# tests related to the staged files. The full backend/frontend suites, the
+# 90% coverage gates and Playwright e2e are CI-only — ci-status is a required
+# check on main, so nothing merges without them (see .github/workflows/ci.yml).
 #
 # Every hook except the co-author check is pinned to the pre-commit stage: with
 # no `stages:`, a hook is also registered for commit-msg, where no files are
@@ -79,13 +79,15 @@ repos:
         files: ^backend/.*\.py$
         pass_filenames: false
 
-      - id: backend-pytest
+      # Only the tests related to the staged files run at commit time — the
+      # full suite plus the 90% coverage gate is CI's job (ci-status is a
+      # required check on main), and takes ~9 minutes.
+      - id: backend-related-tests
         stages: [pre-commit]
-        name: backend · pytest (coverage >=90%)
-        entry: bash -c 'cd backend && uv run pytest'
+        name: backend · pytest (tests related to staged files)
+        entry: scripts/related-backend-tests.py
         language: system
-        files: ^backend/.*\.py$
-        pass_filenames: false
+        files: ^backend/(app|tests)/.*\.py$
 
       - id: frontend-oxlint
         stages: [pre-commit]
@@ -105,8 +107,7 @@ repos:
 
       - id: frontend-vitest
         stages: [pre-commit]
-        name: frontend · vitest (coverage >=90%)
-        entry: bash -c 'cd frontend && npm run test:coverage'
+        name: frontend · vitest (tests related to staged files)
+        entry: bash -c 'cd frontend && npx vitest related --run --passWithNoTests "${@#frontend/}"' --
         language: system
-        files: ^frontend/.*\.(ts|tsx)$
-        pass_filenames: false
+        files: ^frontend/src/.*\.(ts|tsx)$
