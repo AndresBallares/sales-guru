@@ -2,7 +2,9 @@ import { useCallback, useEffect, useRef, useState, type ChangeEvent, type FormEv
 import { useNavigate } from 'react-router-dom'
 import { ADS_LOCKED_NOTE, isPublished as isPublishedCampaign } from '../lib/publishedCampaign'
 import { CreativeEditor } from './CreativeEditor'
+import { ActionRow } from './ActionRow'
 import { ExtraAssetSlot } from './ExtraAssetSlot'
+import { ArchiveIcon, ImageIcon, StatusIcon, TrashIcon, VideoIcon } from './icons'
 import { onlyPhotos, PHOTOS_ONLY_HINT } from '../lib/media'
 import { describePublishStatus, PublishJobError, waitForPublishJob } from '../lib/publishJob'
 import {
@@ -75,6 +77,12 @@ function formatLocations(locations: TargetLocation[]): string {
 
 // A creative test (CREATIVE_TEST_PLAN) publishes 3-4 ads in one ad set — kept
 // in step with the backend's MIN/MAX_CREATIVE_ANGLES (app/schemas/strategy.py).
+const FORMAT_TAG_LABELS: Record<string, string> = {
+  SINGLE_IMAGE: 'Image ad',
+  SINGLE_VIDEO: 'Video ad',
+  CAROUSEL: 'Carousel ad',
+}
+
 const MIN_TEST_ADS = 3
 const MAX_TEST_ADS = 4
 
@@ -103,6 +111,8 @@ export function CampaignsSection({
   // 3.5) — whether the business has filled in a brand profile at all,
   // not the profile's content.
   const [hasBrandProfile, setHasBrandProfile] = useState(false)
+  // The profile's price positioning, shown as a tag on a campaign card.
+  const [brandPricePositioning, setBrandPricePositioning] = useState<string | null>(null)
   const [products, setProducts] = useState<Product[]>([])
   const [audiences, setAudiences] = useState<Audience[]>([])
   const [loading, setLoading] = useState(true)
@@ -271,8 +281,14 @@ export function CampaignsSection({
       // label below (PRD.md §5 step 3.5). A 404 (no profile yet) is the
       // expected default state, not a failure to surface.
       getBrandProfile(businessId)
-        .then(() => setHasBrandProfile(true))
-        .catch(() => setHasBrandProfile(false))
+        .then((profile) => {
+          setHasBrandProfile(true)
+          setBrandPricePositioning(profile.pricePositioning)
+        })
+        .catch(() => {
+          setHasBrandProfile(false)
+          setBrandPricePositioning(null)
+        })
 
       // Strategies aren't included on the campaign list itself — fetch each
       // already-generated one so a page reload still shows it, not just a
@@ -1085,19 +1101,55 @@ export function CampaignsSection({
             const currentProduct = products.find((p) => p.id === campaignProductId)
             const hasStaleCreatives = campaignCreatives.some((c) => c.isStale)
             return (
-              <li key={campaign.id}>
-                {currentProduct?.primaryImageUrl && (
-                  <img
-                    src={currentProduct.primaryImageUrl}
-                    alt={currentProduct.description}
-                    width={40}
-                    height={40}
-                    className="campaign-thumb"
-                  />
-                )}
-                {campaign.name ? `${campaign.name} — ` : ''}
-                {objectiveLabels[campaign.objective] ?? campaign.objective} —{' '}
-                {statusLabels[campaign.status] ?? campaign.status}
+              <li key={campaign.id} className="campaign-card">
+                <div className="campaign-card-header">
+                  {currentProduct?.primaryImageUrl && (
+                    <img
+                      src={currentProduct.primaryImageUrl}
+                      alt={currentProduct.description}
+                      width={72}
+                      height={72}
+                      className="campaign-thumb"
+                    />
+                  )}
+                  <div className="campaign-card-heading">
+                    <h3 className="campaign-card-title">
+                      {campaign.name ? `${campaign.name} — ` : ''}
+                      {objectiveLabels[campaign.objective] ?? campaign.objective} —{' '}
+                      {statusLabels[campaign.status] ?? campaign.status}
+                    </h3>
+                    <span className="status-pill" data-status={campaign.status}>
+                      <StatusIcon status={campaign.status} />
+                      {statusLabels[campaign.status] ?? campaign.status}
+                    </span>
+                  </div>
+                  {!confirmingAction[campaign.id] &&
+                    (campaign.hasDelivered || deliveredOverride[campaign.id] ? (
+                      <button
+                        type="button"
+                        className="campaign-card-action"
+                        aria-label="Archive campaign"
+                        onClick={() =>
+                          setConfirmingAction((prev) => ({ ...prev, [campaign.id]: 'archive' }))
+                        }
+                      >
+                        <ArchiveIcon />
+                        Archive
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        className="campaign-card-action"
+                        aria-label="Delete campaign"
+                        onClick={() =>
+                          setConfirmingAction((prev) => ({ ...prev, [campaign.id]: 'delete' }))
+                        }
+                      >
+                        <TrashIcon />
+                        Delete
+                      </button>
+                    ))}
+                </div>
                 {campaign.eventVenueKey && (
                   <p>
                     Event:{' '}
@@ -1166,25 +1218,7 @@ export function CampaignsSection({
                       </button>
                     </div>
                   </div>
-                ) : campaign.hasDelivered || deliveredOverride[campaign.id] ? (
-                  <button
-                    type="button"
-                    onClick={() =>
-                      setConfirmingAction((prev) => ({ ...prev, [campaign.id]: 'archive' }))
-                    }
-                  >
-                    Archive campaign
-                  </button>
-                ) : (
-                  <button
-                    type="button"
-                    onClick={() =>
-                      setConfirmingAction((prev) => ({ ...prev, [campaign.id]: 'delete' }))
-                    }
-                  >
-                    Delete campaign
-                  </button>
-                )}
+                ) : null}
                 {deleteErrors[campaign.id] && (
                   <p role="alert">{deleteErrors[campaign.id]}</p>
                 )}
@@ -1195,7 +1229,7 @@ export function CampaignsSection({
                   className="campaign-block"
                   aria-label={`Product for ${campaign.name ?? campaign.id}`}
                 >
-                  <p>
+                  <p className="campaign-description">
                     Product: {currentProduct ? currentProduct.description : 'No product selected'}
                   </p>
                   {isPublished ? (
@@ -1873,10 +1907,22 @@ export function CampaignsSection({
                     )}
                     {campaignCreatives.length > 0 &&
                       (selectedCreative && !showAllCreatives[campaign.id] && !isCreativeTest ? (
-                        <div aria-label={`Selected ad for ${campaign.name ?? campaign.id}`}>
-                          <button type="button" disabled>
-                            Selected
-                          </button>
+                        <div
+                          className="ad-selected"
+                          aria-label={`Selected ad for ${campaign.name ?? campaign.id}`}
+                        >
+                          <div className="ad-selected-grid">
+                            <div className="ad-selected-preview">
+                              <SocialPostPreview
+                              business={business}
+                              creative={selectedCreative}
+                              ctaLabel={ctaLabels[selectedCreative.cta] ?? selectedCreative.cta}
+                          />
+                            </div>
+                            <div className="ad-selected-actions">
+                            <button type="button" className="selected-chip" disabled>
+                              Selected
+                            </button>
                           {selectedCreative.format === 'CAROUSEL' ? (
                             <>
                               <ul className="photo-manager" aria-label="Carousel cards">
@@ -1966,13 +2012,18 @@ export function CampaignsSection({
                             // The same picker as the full ads list: this ad's video
                             // only, with the option to upload a new one. Locked once
                             // the campaign is published, like every other edit.
-                            !isPublished && (
+                            isPublished ? (
+                              <ActionRow primary disabled icon={<VideoIcon />} onClick={() => {}}>
+                                Change video
+                              </ActionRow>
+                            ) : (
                             <CreativeEditor
                               businessId={businessId}
                               campaignId={campaign.id}
                               productId={campaignProductId ?? null}
                               creative={selectedCreative}
                               showCopyControls={false}
+                              rowStyle
                               onUpdated={(updated) => {
                                 setCreatives((prev) => ({
                                   ...prev,
@@ -1987,12 +2038,14 @@ export function CampaignsSection({
                           ) : (
                             campaignProductId && (
                             <div className="image-picker">
-                              <button
-                                type="button"
+                              <ActionRow
+                                primary
+                                icon={<ImageIcon />}
+                                disabled={isPublished}
                                 onClick={() => handleToggleImageMenu(selectedCreative.id)}
                               >
                                 {selectedCreative.imageUrl ? 'Change image' : 'Upload Image'}
-                              </button>
+                              </ActionRow>
                               {imageMenuId === selectedCreative.id && (
                                 <div className="image-menu">
                                   <label htmlFor={`creative-image-upload-${selectedCreative.id}`}>
@@ -2066,8 +2119,7 @@ export function CampaignsSection({
                             )
                           )}
                           {selectedCreative.format === 'SINGLE_IMAGE' &&
-                            campaignProductId &&
-                            !isPublished && (
+                            campaignProductId && (
                               <>
                                 {(['story', 'square'] as const).map((slot) => (
                                   <ExtraAssetSlot
@@ -2077,6 +2129,7 @@ export function CampaignsSection({
                                     campaignId={campaign.id}
                                     productId={campaignProductId}
                                     creative={selectedCreative}
+                                    locked={isPublished}
                                     onUpdated={(updated) => {
                                       setCreatives((prev) => ({
                                         ...prev,
@@ -2090,11 +2143,30 @@ export function CampaignsSection({
                                 ))}
                               </>
                             )}
-                          <SocialPostPreview
-                            business={business}
-                            creative={selectedCreative}
-                            ctaLabel={ctaLabels[selectedCreative.cta] ?? selectedCreative.cta}
-                          />
+                          <div className="card-divider" />
+                          <p className="card-tags-label">Tags</p>
+                          <ul className="card-tags" aria-label="Tags">
+                            {[
+                              business?.industry
+                                ? (options?.industries.find((o) => o.value === business.industry)
+                                    ?.label ?? business.industry)
+                                : null,
+                              brandPricePositioning
+                                ? (options?.pricePositionings.find(
+                                    (o) => o.value === brandPricePositioning,
+                                  )?.label ?? brandPricePositioning)
+                                : null,
+                              FORMAT_TAG_LABELS[selectedCreative.format] ?? null,
+                            ]
+                              .filter((tag): tag is string => tag !== null)
+                              .map((tag) => (
+                                <li key={tag} className="card-tag">
+                                  {tag}
+                                </li>
+                              ))}
+                          </ul>
+                            </div>
+                          </div>
                           {!isPublished && (
                             <button
                               type="button"

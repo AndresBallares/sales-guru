@@ -1,4 +1,6 @@
 import { useState, type ChangeEvent } from 'react'
+import { ActionRow } from './ActionRow'
+import { ImageIcon, VideoIcon } from './icons'
 import {
   ApiError,
   listProductImages,
@@ -31,6 +33,9 @@ interface CreativeEditorProps {
   // The copy-regeneration buttons; a view that only needs to change the ad's
   // image or video turns them off.
   showCopyControls?: boolean
+  // Renders the change-image / change-video control as a campaign-card action
+  // row instead of a plain button; behavior is identical.
+  rowStyle?: boolean
 }
 
 // Per-ad edit controls shown while the user reviews generated ads: swap the
@@ -44,6 +49,7 @@ export function CreativeEditor({
   creative,
   onUpdated,
   showCopyControls = true,
+  rowStyle = false,
 }: CreativeEditorProps) {
   const [menuOpen, setMenuOpen] = useState(false)
   const [library, setLibrary] = useState<ProductImage[] | null>(null)
@@ -161,9 +167,20 @@ export function CreativeEditor({
       {!isCarousel && <h4>Feed (4:5)</h4>}
       {productId !== null && isVideo && (
         <div className="image-picker">
-          <button type="button" aria-expanded={menuOpen} onClick={toggleVideoPicker}>
-            Change video
-          </button>
+          {rowStyle ? (
+            <ActionRow
+              primary
+              icon={<VideoIcon />}
+              expanded={menuOpen}
+              onClick={toggleVideoPicker}
+            >
+              Change video
+            </ActionRow>
+          ) : (
+            <button type="button" aria-expanded={menuOpen} onClick={toggleVideoPicker}>
+              Change video
+            </button>
+          )}
           {menuOpen && (
             <div aria-label="Choose a video for this ad">
               {loadingLibrary && <p>Loading videos…</p>}
@@ -220,9 +237,15 @@ export function CreativeEditor({
       )}
       {productId !== null && !isVideo && (
         <div className="image-picker">
-          <button type="button" onClick={() => setMenuOpen((open) => !open)}>
-            {creative.imageUrl ? 'Change image' : 'Upload Image'}
-          </button>
+          {rowStyle ? (
+            <ActionRow primary icon={<ImageIcon />} onClick={() => setMenuOpen((open) => !open)}>
+              {creative.imageUrl ? 'Change image' : 'Upload Image'}
+            </ActionRow>
+          ) : (
+            <button type="button" onClick={() => setMenuOpen((open) => !open)}>
+              {creative.imageUrl ? 'Change image' : 'Upload Image'}
+            </button>
+          )}
           {menuOpen && (
             <div className="image-menu">
               <label htmlFor={`edit-image-upload-${creative.id}`}>Upload from computer</label>

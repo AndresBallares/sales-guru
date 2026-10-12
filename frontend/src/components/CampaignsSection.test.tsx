@@ -6,6 +6,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { CampaignsSection } from './CampaignsSection'
 import * as api from '../lib/api'
 import * as media from '../lib/media'
+import { ADS_LOCKED_NOTE } from '../lib/publishedCampaign'
 
 // Selecting a creative navigates to its dedicated ad-preview page
 // (useNavigate), which needs a Router in scope even though nothing here
@@ -2843,7 +2844,8 @@ describe('CampaignsSection', () => {
 
     renderCampaigns(<CampaignsSection businessId="biz-1" />)
 
-    expect(await screen.findByText('Paused')).toBeInTheDocument()
+    // The status pill and the paused-status block both say "Paused".
+    expect((await screen.findAllByText('Paused')).length).toBeGreaterThan(0)
   })
 
   it('publishes with paused=false when the "Publish paused" checkbox is unchecked', async () => {
@@ -5034,7 +5036,7 @@ describe('CampaignsSection changing a video ad\'s video', () => {
     expect(screen.getByLabelText('Upload a new video')).toBeInTheDocument()
   })
 
-  it.each(['LIVE', 'PAUSED'])('cannot change a video once the campaign is %s', async (status) => {
+  it.each(['LIVE', 'PAUSED'])('shows Change video disabled once the campaign is %s', async (status) => {
     mockedApi.listCampaigns.mockResolvedValue([
       { ...CAMPAIGN, status, metaCampaignId: 'meta_campaign_1' },
     ])
@@ -5043,7 +5045,8 @@ describe('CampaignsSection changing a video ad\'s video', () => {
     renderCampaigns(<CampaignsSection businessId="biz-1" />)
     await screen.findByText('Headline A')
 
-    expect(screen.queryByRole('button', { name: 'Change video' })).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Change video' })).toBeDisabled()
+    expect(screen.getAllByText(ADS_LOCKED_NOTE).length).toBeGreaterThan(0)
   })
 
   it('refreshes the campaign after a change so approval can drop back to pending', async () => {
@@ -5148,7 +5151,7 @@ describe('CampaignsSection extra slots for a standalone image ad', () => {
     expect(await screen.findByAltText('Stories & Reels asset')).toBeInTheDocument()
   })
 
-  it.each(['LIVE', 'PAUSED'])('hides the extra slots once the campaign is %s', async (status) => {
+  it.each(['LIVE', 'PAUSED'])('shows the extra slots disabled once the campaign is %s', async (status) => {
     mockedApi.listCampaigns.mockResolvedValue([
       { ...CAMPAIGN, status, metaCampaignId: 'meta_campaign_1' },
     ])
@@ -5159,6 +5162,95 @@ describe('CampaignsSection extra slots for a standalone image ad', () => {
     renderCampaigns(<CampaignsSection businessId="biz-1" />)
     await screen.findByRole('button', { name: 'Selected' })
 
-    expect(screen.queryByRole('button', { name: 'Add Stories & Reels image' })).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Add Stories & Reels image' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Add Square image' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Upload Image' })).toBeDisabled()
+    expect(screen.getAllByText(ADS_LOCKED_NOTE).length).toBeGreaterThan(0)
+  })
+})
+
+describe('CampaignsSection card layout', () => {
+  const CAMPAIGN = {
+    id: 'camp-1',
+    name: 'Placement pair test',
+    objective: 'SALES' as const,
+    status: 'PAUSED',
+    productId: 'prod-1',
+    audienceId: 'aud-1',
+    metaCampaignId: null,
+    eventVenueKey: null,
+    startDate: null,
+    endDate: null,
+    pausedReason: null,
+    dailySpendFlag: null,
+    needsDestinationUrl: false,
+    hasDelivered: false,
+  }
+
+  it('shows the title as a heading with a status pill under it', async () => {
+    mockedApi.listCampaigns.mockResolvedValue([CAMPAIGN])
+
+    renderCampaigns(<CampaignsSection businessId="biz-1" />)
+
+    expect(
+      await screen.findByRole('heading', { name: 'Placement pair test — Sales — Paused' }),
+    ).toBeInTheDocument()
+    expect(document.querySelector('.status-pill')).toHaveTextContent('Paused')
+  })
+
+  it('shows a short Delete button for a never-delivered campaign and Archive for a delivered one', async () => {
+    mockedApi.listCampaigns.mockResolvedValue([
+      CAMPAIGN,
+      { ...CAMPAIGN, id: 'camp-2', name: 'Delivered one', hasDelivered: true },
+    ])
+
+    renderCampaigns(<CampaignsSection businessId="biz-1" />)
+
+    expect(await screen.findByRole('button', { name: 'Delete campaign' })).toHaveTextContent(
+      'Delete',
+    )
+    expect(screen.getByRole('button', { name: 'Archive campaign' })).toHaveTextContent('Archive')
+  })
+
+  it('shows industry, price positioning and ad format as tags next to the selected ad', async () => {
+    mockedApi.getOptions.mockResolvedValue({
+      ...ALL_OPTIONS,
+      industries: [{ value: 'FASHION_JEWELRY', label: 'Fashion / Jewelry' }],
+      pricePositionings: [{ value: 'PREMIUM', label: 'Premium' }],
+    })
+    mockedApi.getBusiness.mockResolvedValue({
+      id: 'biz-1',
+      name: 'Acme Jewelry',
+      website: null,
+      industry: 'FASHION_JEWELRY',
+      location: null,
+      logoUrl: null,
+      description: null,
+    })
+    mockedApi.getBrandProfile.mockResolvedValue({
+      pricePositioning: 'PREMIUM',
+    } as api.BrandProfile)
+    mockedApi.getStrategy.mockResolvedValue({
+      id: 'strat-1',
+      campaignId: 'camp-1',
+      createdAt: '2026-10-09T00:00:00Z',
+      content: FAKE_STRATEGY.content,
+    })
+    mockedApi.listProductImages.mockResolvedValue([])
+    mockedApi.listCampaigns.mockResolvedValue([{ ...CAMPAIGN, status: 'PENDING_APPROVAL' }])
+    mockedApi.listCreatives.mockResolvedValue([
+      fakeCreative({ id: 'creative-1', status: 'SELECTED', imageUrl: 'http://localhost:8000/f1' }),
+    ])
+
+    renderCampaigns(<CampaignsSection businessId="biz-1" />)
+
+    const tags = await screen.findByRole('list', { name: 'Tags' })
+    await waitFor(() =>
+      expect(within(tags).getAllByRole('listitem').map((li) => li.textContent)).toEqual([
+        'Fashion / Jewelry',
+        'Premium',
+        'Image ad',
+      ]),
+    )
   })
 })

@@ -10,7 +10,9 @@ import {
 } from '../lib/api'
 import { isSquare } from '../lib/media'
 import { useMediaIntake } from '../lib/useMediaIntake'
+import { ActionRow } from './ActionRow'
 import { BlackFrameFallback } from './BlackFrameFallback'
+import { SquareIcon, StoryIcon } from './icons'
 import { MediaBadges } from './MediaBadges'
 
 export type ExtraSlotKind = 'story' | 'square'
@@ -57,6 +59,8 @@ interface ExtraAssetSlotProps {
   productId: string
   creative: Creative
   onUpdated: (creative: Creative) => void
+  // A published campaign's ads are fixed: the row is shown but can't be used.
+  locked?: boolean
 }
 
 // One optional extra asset of an ad: its Stories & Reels (9:16) version or its
@@ -70,6 +74,7 @@ export function ExtraAssetSlot({
   productId,
   creative,
   onUpdated,
+  locked = false,
 }: ExtraAssetSlotProps) {
   const config = ROLES[slot]
   const isVideo = creative.format === 'SINGLE_VIDEO'
@@ -159,21 +164,26 @@ export function ExtraAssetSlot({
 
   return (
     <div className="story-slot">
-      <h4>{config.heading}</h4>
-      {assetId && imageUrl && (
-        <img
-          src={imageUrl}
-          alt={config.currentAlt}
-          width={config.thumb.width}
-          height={config.thumb.height}
-          style={{ objectFit: 'cover' }}
-        />
-      )}
-      <button type="button" aria-expanded={open} onClick={() => void toggle()}>
+      <h4 className="visually-hidden">{config.heading}</h4>
+      <ActionRow
+        icon={
+          assetId && imageUrl ? (
+            <img src={imageUrl} alt={config.currentAlt} width={36} height={36} />
+          ) : slot === 'story' ? (
+            <StoryIcon />
+          ) : (
+            <SquareIcon />
+          )
+        }
+        hint={config.heading}
+        disabled={locked}
+        expanded={open}
+        onClick={() => void toggle()}
+      >
         {assetId ? `Change ${config.name} ${noun}` : `Add ${config.name} ${noun}`}
-      </button>
-      {assetId && (
-        <button type="button" onClick={() => void assign(null)}>
+      </ActionRow>
+      {assetId && !locked && (
+        <button type="button" className="link-button" onClick={() => void assign(null)}>
           {config.removeLabel}
         </button>
       )}
