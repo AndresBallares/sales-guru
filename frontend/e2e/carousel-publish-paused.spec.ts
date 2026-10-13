@@ -50,7 +50,7 @@ test('publishes a carousel ad paused, with all three cards intact', async ({ pag
   await expect(page.getByRole('alert')).not.toBeVisible()
 
   await expect(page.getByText('Paused — activate in Sales Guru or Ads Manager')).toBeVisible()
-  await expect(page.getByRole('list', { name: 'Carousel cards' }).getByRole('listitem')).toHaveCount(3)
+  await expect(page.getByRole('list', { name: 'Carousel slides' }).getByRole('listitem')).toHaveCount(3)
 
   // Regression coverage for the TEST_PLAN duplicate-Creative bug fixed
   // alongside this spec (backend/app/services/publish.py,

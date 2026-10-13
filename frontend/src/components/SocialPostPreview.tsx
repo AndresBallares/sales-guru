@@ -10,10 +10,14 @@ function FeedPost({
   business,
   creative,
   ctaLabel,
+  activeCard,
 }: {
   business?: Business | null
   creative: Creative
   ctaLabel: string
+  // A carousel's slide to show on its own, full width (the carousel editor's
+  // large preview); without it the whole carousel scrolls side by side.
+  activeCard?: number
 }) {
   return (
     <div className="social-post" aria-label="Ad preview">
@@ -32,8 +36,17 @@ function FeedPost({
       </div>
       <p className="social-post-body">{creative.bodyText}</p>
       {creative.format === 'CAROUSEL' ? (
-        <ul className="social-post-carousel">
-          {creative.cards.map((card) => (
+        <ul
+          className={
+            activeCard === undefined
+              ? 'social-post-carousel'
+              : 'social-post-carousel social-post-carousel-single'
+          }
+        >
+          {(activeCard === undefined
+            ? creative.cards
+            : creative.cards.slice(activeCard, activeCard + 1)
+          ).map((card) => (
             <li className="social-post-carousel-card" key={card.id}>
               <div className="social-post-carousel-image-frame">
                 <img
@@ -214,6 +227,7 @@ export function SocialPostPreview(props: {
   business?: Business | null
   creative: Creative
   ctaLabel: string
+  activeCard?: number
 }) {
   const [view, setView] = useState<'feed' | 'story' | 'square'>('feed')
   const isCarousel = props.creative.format === 'CAROUSEL'

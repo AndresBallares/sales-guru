@@ -2,7 +2,22 @@ import { useCallback, useEffect, useRef, useState, type ChangeEvent, type FormEv
 import { useNavigate } from 'react-router-dom'
 import { ADS_LOCKED_NOTE, isPublished as isPublishedCampaign } from '../lib/publishedCampaign'
 import { CreativeEditor } from './CreativeEditor'
+import { ActionRow } from './ActionRow'
 import { ExtraAssetSlot } from './ExtraAssetSlot'
+import { CardToolbar, type ToolbarAction } from './CardToolbar'
+import { CarouselEditor } from './CarouselEditor'
+import {
+  ArchiveIcon,
+  ImageIcon,
+  PackageIcon,
+  RefreshIcon,
+  StatusIcon,
+  StrategyIcon,
+  TrashIcon,
+  VideoIcon,
+  VoiceIcon,
+} from './icons'
+import { PublishFooter } from './PublishFooter'
 import { onlyPhotos, PHOTOS_ONLY_HINT } from '../lib/media'
 import { describePublishStatus, PublishJobError, waitForPublishJob } from '../lib/publishJob'
 import {
@@ -75,6 +90,12 @@ function formatLocations(locations: TargetLocation[]): string {
 
 // A creative test (CREATIVE_TEST_PLAN) publishes 3-4 ads in one ad set — kept
 // in step with the backend's MIN/MAX_CREATIVE_ANGLES (app/schemas/strategy.py).
+const FORMAT_TAG_LABELS: Record<string, string> = {
+  SINGLE_IMAGE: 'Image ad',
+  SINGLE_VIDEO: 'Video ad',
+  CAROUSEL: 'Carousel ad',
+}
+
 const MIN_TEST_ADS = 3
 const MAX_TEST_ADS = 4
 
@@ -103,6 +124,8 @@ export function CampaignsSection({
   // 3.5) — whether the business has filled in a brand profile at all,
   // not the profile's content.
   const [hasBrandProfile, setHasBrandProfile] = useState(false)
+  // The profile's price positioning, shown as a tag on a campaign card.
+  const [brandPricePositioning, setBrandPricePositioning] = useState<string | null>(null)
   const [products, setProducts] = useState<Product[]>([])
   const [audiences, setAudiences] = useState<Audience[]>([])
   const [loading, setLoading] = useState(true)
@@ -271,8 +294,14 @@ export function CampaignsSection({
       // label below (PRD.md §5 step 3.5). A 404 (no profile yet) is the
       // expected default state, not a failure to surface.
       getBrandProfile(businessId)
-        .then(() => setHasBrandProfile(true))
-        .catch(() => setHasBrandProfile(false))
+        .then((profile) => {
+          setHasBrandProfile(true)
+          setBrandPricePositioning(profile.pricePositioning)
+        })
+        .catch(() => {
+          setHasBrandProfile(false)
+          setBrandPricePositioning(null)
+        })
 
       // Strategies aren't included on the campaign list itself — fetch each
       // already-generated one so a page reload still shows it, not just a
@@ -1084,20 +1113,232 @@ export function CampaignsSection({
             const campaignProductId = campaign.productId
             const currentProduct = products.find((p) => p.id === campaignProductId)
             const hasStaleCreatives = campaignCreatives.some((c) => c.isStale)
+            const strategyControls =
+              campaign.status !== 'DRAFT' ? (
+                <>
+                    {campaign.metaCampaignId !== null ? (
+                      <p className="field-hint">
+                        This campaign is already published, so its strategy can't be regenerated.
+                        Create a new campaign to try a different strategy.
+                      </p>
+                    ) : (
+                      // With a strategy already, Regenerate strategy lives in the
+                      // card's editing toolbar instead.
+                      !strategy && (
+                        <button
+                          type="button"
+                          onClick={() => handleGenerateStrategy(campaign.id)}
+                          disabled={generatingId === campaign.id}
+                        >
+                          {generatingId === campaign.id ? 'Generating…' : 'Generate strategy'}
+                        </button>
+                      )
+                    )}
+                    {strategyError && (
+                      <p className="form-error" role="alert">
+                        {strategyError}
+                      </p>
+                    )}
+                    {needsAdExperienceAnswerId === campaign.id && (
+                      <fieldset>
+                        <legend>Has this business run advertising campaigns before?</legend>
+                        <div className="button-row">
+                          <button
+                            type="button"
+                            onClick={() => handleGenerateStrategy(campaign.id, true)}
+                            disabled={generatingId === campaign.id}
+                          >
+                            Yes
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleGenerateStrategy(campaign.id, false)}
+                            disabled={generatingId === campaign.id}
+                          >
+                            No
+                          </button>
+                        </div>
+                      </fieldset>
+                    )}
+                </>
+              ) : null
+            const formatPicker = !isPublished ? (
+              <>
+                    <fieldset className="format-picker segmented">
+                      <legend className="visually-hidden">Ad format</legend>
+                      <label>
+                        <input
+                          type="radio"
+                          name={`creative-format-${campaign.id}`}
+                          checked={effectiveFormat === 'SINGLE_IMAGE'}
+                          disabled={isCreativeTest}
+                          onChange={() =>
+                            setCreativeFormat((prev) => ({ ...prev, [campaign.id]: 'SINGLE_IMAGE' }))
+                          }
+                        />
+                        Single image
+                      </label>
+                      <label>
+                        <input
+                          type="radio"
+                          name={`creative-format-${campaign.id}`}
+                          checked={effectiveFormat === 'SINGLE_VIDEO'}
+                          disabled={isCreativeTest}
+                          onChange={() =>
+                            setCreativeFormat((prev) => ({ ...prev, [campaign.id]: 'SINGLE_VIDEO' }))
+                          }
+                        />
+                        Single video
+                      </label>
+                      <label>
+                        <input
+                          type="radio"
+                          name={`creative-format-${campaign.id}`}
+                          checked={effectiveFormat === 'CAROUSEL'}
+                          disabled={isCreativeTest}
+                          onChange={() => {
+                            setCreativeFormat((prev) => ({ ...prev, [campaign.id]: 'CAROUSEL' }))
+                            if (campaignProductId && !productImages[campaignProductId]) {
+                              void listProductImages(businessId, campaignProductId).then(
+                                (images) =>
+                                  setProductImages((prev) => ({
+                                    ...prev,
+                                    [campaignProductId]: onlyPhotos(images),
+                                  })),
+                              )
+                            }
+                          }}
+                        />
+                        Carousel
+                      </label>
+                    </fieldset>
+              </>
+            ) : null
+            const formatHints = !isPublished ? (
+              <>
+                    {isCreativeTest && planFormat === 'SINGLE_VIDEO' && (
+                      <p className="field-hint">
+                        This is a video test: every ad is a video, so any difference in results
+                        comes from the message, not the format. Pick the video for each ad below;
+                        one video can back all of them.
+                      </p>
+                    )}
+                    {isCreativeTest && planFormat !== 'SINGLE_VIDEO' && (
+                      <p className="field-hint">
+                        Carousel isn&apos;t part of Test #1. The first test compares single-image ads
+                        so any difference in results comes from the creative, not the format.
+                        Once it has run, a carousel is a good next experiment, or start a standard
+                        campaign now.
+                      </p>
+                    )}
+                    {creativeFormat[campaign.id] === 'CAROUSEL' &&
+                      campaignProductId &&
+                      (productImages[campaignProductId]?.length ?? 0) > MAX_CAROUSEL_CARDS && (
+                        <p className="field-hint">
+                          Using the first {MAX_CAROUSEL_CARDS} of{' '}
+                          {productImages[campaignProductId]?.length} photos — reorder product
+                          photos to change which are included.
+                        </p>
+                      )}
+              </>
+            ) : null
+            const adsBusy = generatingCreativesId === campaign.id
+            const strategyBusy = generatingId === campaign.id
+            const pausedChoice = publishPaused[campaign.id] ?? getPublishPaused(campaign.id)
+            const isPublishing = approvingId === campaign.id || campaign.id in publishStatuses
+            const editingActions: ToolbarAction[] = []
+            if (!isPublished) {
+              editingActions.push({
+                key: 'product',
+                label: currentProduct ? 'Change product' : 'Attach a product',
+                icon: <PackageIcon />,
+                expanded: productPickerId === campaign.id,
+                onClick: () => {
+                  setEditingProductForCampaignId(null)
+                  setReuseProductForCampaignId(null)
+                  setProductPickerId((prev) => (prev === campaign.id ? null : campaign.id))
+                },
+              })
+            }
+            if (strategy && !isPublished) {
+              // One ad-regeneration action: with a brand profile the backend applies
+              // the brand voice to every generation, so the same button just says so.
+              const hasAds = campaignCreatives.length > 0
+              editingActions.push({
+                key: 'ads',
+                label: adsBusy
+                  ? 'Generating ads…'
+                  : hasAds
+                    ? hasBrandProfile
+                      ? 'Regenerate with brand voice'
+                      : 'Regenerate ads'
+                    : 'Generate ads',
+                icon: hasAds && hasBrandProfile ? <VoiceIcon /> : <RefreshIcon />,
+                busy: adsBusy,
+                disabled: adsBusy,
+                onClick: () => void handleGenerateCreatives(campaign.id),
+              })
+              if (campaign.status !== 'DRAFT') {
+                editingActions.push({
+                  key: 'strategy',
+                  label: strategyBusy ? 'Generating strategy…' : 'Regenerate strategy',
+                  icon: <StrategyIcon />,
+                  busy: strategyBusy,
+                  disabled: strategyBusy,
+                  onClick: () => void handleGenerateStrategy(campaign.id),
+                })
+              }
+            }
             return (
-              <li key={campaign.id}>
-                {currentProduct?.primaryImageUrl && (
-                  <img
-                    src={currentProduct.primaryImageUrl}
-                    alt={currentProduct.description}
-                    width={40}
-                    height={40}
-                    className="campaign-thumb"
-                  />
-                )}
-                {campaign.name ? `${campaign.name} — ` : ''}
-                {objectiveLabels[campaign.objective] ?? campaign.objective} —{' '}
-                {statusLabels[campaign.status] ?? campaign.status}
+              <li key={campaign.id} className="campaign-card">
+                <div className="campaign-card-header">
+                  {currentProduct?.primaryImageUrl && (
+                    <img
+                      src={currentProduct.primaryImageUrl}
+                      alt={currentProduct.description}
+                      width={72}
+                      height={72}
+                      className="campaign-thumb"
+                    />
+                  )}
+                  <div className="campaign-card-heading">
+                    <h3 className="campaign-card-title">
+                      {campaign.name ? `${campaign.name} — ` : ''}
+                      {objectiveLabels[campaign.objective] ?? campaign.objective} —{' '}
+                      {statusLabels[campaign.status] ?? campaign.status}
+                    </h3>
+                    <span className="status-pill" data-status={campaign.status}>
+                      <StatusIcon status={campaign.status} />
+                      {statusLabels[campaign.status] ?? campaign.status}
+                    </span>
+                  </div>
+                  {!confirmingAction[campaign.id] &&
+                    (campaign.hasDelivered || deliveredOverride[campaign.id] ? (
+                      <button
+                        type="button"
+                        className="campaign-card-action"
+                        aria-label="Archive campaign"
+                        onClick={() =>
+                          setConfirmingAction((prev) => ({ ...prev, [campaign.id]: 'archive' }))
+                        }
+                      >
+                        <ArchiveIcon />
+                        Archive
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        className="campaign-card-action"
+                        aria-label="Delete campaign"
+                        onClick={() =>
+                          setConfirmingAction((prev) => ({ ...prev, [campaign.id]: 'delete' }))
+                        }
+                      >
+                        <TrashIcon />
+                        Delete
+                      </button>
+                    ))}
+                </div>
                 {campaign.eventVenueKey && (
                   <p>
                     Event:{' '}
@@ -1166,25 +1407,7 @@ export function CampaignsSection({
                       </button>
                     </div>
                   </div>
-                ) : campaign.hasDelivered || deliveredOverride[campaign.id] ? (
-                  <button
-                    type="button"
-                    onClick={() =>
-                      setConfirmingAction((prev) => ({ ...prev, [campaign.id]: 'archive' }))
-                    }
-                  >
-                    Archive campaign
-                  </button>
-                ) : (
-                  <button
-                    type="button"
-                    onClick={() =>
-                      setConfirmingAction((prev) => ({ ...prev, [campaign.id]: 'delete' }))
-                    }
-                  >
-                    Delete campaign
-                  </button>
-                )}
+                ) : null}
                 {deleteErrors[campaign.id] && (
                   <p role="alert">{deleteErrors[campaign.id]}</p>
                 )}
@@ -1195,23 +1418,10 @@ export function CampaignsSection({
                   className="campaign-block"
                   aria-label={`Product for ${campaign.name ?? campaign.id}`}
                 >
-                  <p>
+                  <p className="campaign-description">
                     Product: {currentProduct ? currentProduct.description : 'No product selected'}
                   </p>
-                  {isPublished ? (
-                    <p className="field-hint">{ADS_LOCKED_NOTE}</p>
-                  ) : (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setEditingProductForCampaignId(null)
-                        setReuseProductForCampaignId(null)
-                        setProductPickerId((prev) => (prev === campaign.id ? null : campaign.id))
-                      }}
-                    >
-                      {currentProduct ? 'Change product' : 'Attach a product'}
-                    </button>
-                  )}
+                  {isPublished && <p className="field-hint">{ADS_LOCKED_NOTE}</p>}
                   {campaign.needsDestinationUrl && (
                     <p className="form-error" role="alert">
                       This product needs a destination link before you can publish a Sales or
@@ -1228,110 +1438,7 @@ export function CampaignsSection({
                       </button>
                     </p>
                   )}
-                  {productPickerId === campaign.id &&
-                    (editingProductForCampaignId === campaign.id && currentProduct ? (
-                      <ProductForm
-                        businessId={businessId}
-                        product={currentProduct}
-                        onSaved={() => {
-                          setEditingProductForCampaignId(null)
-                          setProductPickerId(null)
-                          void refresh()
-                        }}
-                        onCancel={() => setEditingProductForCampaignId(null)}
-                      />
-                    ) : reuseProductForCampaignId === campaign.id ? (
-                      <div className="button-row">
-                        <select
-                          aria-label="Change product"
-                          value={pickProductId[campaign.id] ?? ''}
-                          onChange={(event) =>
-                            setPickProductId((prev) => ({
-                              ...prev,
-                              [campaign.id]: event.target.value,
-                            }))
-                          }
-                        >
-                          <option value="">Choose a product…</option>
-                          {products.map((product) => (
-                            <option key={product.id} value={product.id}>
-                              {product.description}
-                            </option>
-                          ))}
-                        </select>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            void handleAttachToCampaign(campaign.id, {
-                              productId: pickProductId[campaign.id],
-                            })
-                            setProductPickerId(null)
-                          }}
-                          disabled={!pickProductId[campaign.id] || attachingId === campaign.id}
-                        >
-                          Attach
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => setReuseProductForCampaignId(null)}
-                        >
-                          Add a new product instead
-                        </button>
-                      </div>
-                    ) : (
-                      <>
-                        <ProductForm
-                          businessId={businessId}
-                          campaignId={campaign.id}
-                          urlRequired={!currentProduct && requiresDestinationUrl(campaign.objective)}
-                          onSaved={(created) => {
-                            setReuseProductForCampaignId(null)
-                            setProductPickerId(null)
-                            // A freshly created product isn't in this
-                            // section's own products list yet — without
-                            // this, the campaign's thumbnail (looked up
-                            // from that list) would silently stay blank
-                            // until the next full reload, even though
-                            // the campaign's own productId updates right
-                            // away via handleAttachToCampaign below.
-                            setProducts((prev) => [...prev, created])
-                            void handleAttachToCampaign(campaign.id, { productId: created.id })
-                          }}
-                          onCancel={() => setProductPickerId(null)}
-                        />
-                        {products.length > 0 && (
-                          <button
-                            type="button"
-                            onClick={() => setReuseProductForCampaignId(campaign.id)}
-                          >
-                            Use an existing product instead
-                          </button>
-                        )}
-                      </>
-                    ))}
-                  {attachErrors[campaign.id] && (
-                    <p className="form-error" role="alert">
-                      {attachErrors[campaign.id]}
-                    </p>
-                  )}
                 </div>
-                {hasStaleCreatives && !isPublished && (
-                  <div
-                    className="campaign-block"
-                    aria-label={`Stale ads for ${campaign.name ?? campaign.id}`}
-                  >
-                    <p role="alert">
-                      These ads were generated from an older version of the product. Regenerate?
-                    </p>
-                    <button
-                      type="button"
-                      onClick={() => void handleGenerateCreatives(campaign.id)}
-                      disabled={generatingCreativesId === campaign.id}
-                    >
-                      {generatingCreativesId === campaign.id ? 'Regenerating…' : 'Regenerate'}
-                    </button>
-                  </div>
-                )}
                 {campaign.status === 'DRAFT' ? (
                   <div aria-label={`Campaign readiness for ${campaign.name ?? campaign.id}`}>
                     <p>Campaign needs:</p>
@@ -1486,50 +1593,7 @@ export function CampaignsSection({
                           </p>
                         </fieldset>
                       )}
-                    {campaign.metaCampaignId !== null ? (
-                      <p className="field-hint">
-                        This campaign is already published, so its strategy can't be regenerated.
-                        Create a new campaign to try a different strategy.
-                      </p>
-                    ) : (
-                      <button
-                        type="button"
-                        onClick={() => handleGenerateStrategy(campaign.id)}
-                        disabled={generatingId === campaign.id}
-                      >
-                        {generatingId === campaign.id
-                          ? 'Generating…'
-                          : strategy
-                            ? 'Regenerate strategy'
-                            : 'Generate strategy'}
-                      </button>
-                    )}
-                    {strategyError && (
-                      <p className="form-error" role="alert">
-                        {strategyError}
-                      </p>
-                    )}
-                    {needsAdExperienceAnswerId === campaign.id && (
-                      <fieldset>
-                        <legend>Has this business run advertising campaigns before?</legend>
-                        <div className="button-row">
-                          <button
-                            type="button"
-                            onClick={() => handleGenerateStrategy(campaign.id, true)}
-                            disabled={generatingId === campaign.id}
-                          >
-                            Yes
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => handleGenerateStrategy(campaign.id, false)}
-                            disabled={generatingId === campaign.id}
-                          >
-                            No
-                          </button>
-                        </div>
-                      </fieldset>
-                    )}
+                    {!strategy && strategyControls}
                   </>
                 )}
                 {/* Once ads exist, the creatives are what the user acts on —
@@ -1775,97 +1839,7 @@ export function CampaignsSection({
                     className="campaign-block"
                     aria-label={`Ads for ${campaign.name ?? campaign.id}`}
                   >
-                    {isPublished ? (
-                      <p className="field-hint">{ADS_LOCKED_NOTE}</p>
-                    ) : (
-                      <>
-                    <fieldset className="format-picker">
-                      <legend>Ad format</legend>
-                      <label>
-                        <input
-                          type="radio"
-                          name={`creative-format-${campaign.id}`}
-                          checked={effectiveFormat === 'SINGLE_IMAGE'}
-                          disabled={isCreativeTest}
-                          onChange={() =>
-                            setCreativeFormat((prev) => ({ ...prev, [campaign.id]: 'SINGLE_IMAGE' }))
-                          }
-                        />
-                        Single image
-                      </label>
-                      <label>
-                        <input
-                          type="radio"
-                          name={`creative-format-${campaign.id}`}
-                          checked={effectiveFormat === 'SINGLE_VIDEO'}
-                          disabled={isCreativeTest}
-                          onChange={() =>
-                            setCreativeFormat((prev) => ({ ...prev, [campaign.id]: 'SINGLE_VIDEO' }))
-                          }
-                        />
-                        Single video
-                      </label>
-                      <label>
-                        <input
-                          type="radio"
-                          name={`creative-format-${campaign.id}`}
-                          checked={effectiveFormat === 'CAROUSEL'}
-                          disabled={isCreativeTest}
-                          onChange={() => {
-                            setCreativeFormat((prev) => ({ ...prev, [campaign.id]: 'CAROUSEL' }))
-                            if (campaignProductId && !productImages[campaignProductId]) {
-                              void listProductImages(businessId, campaignProductId).then(
-                                (images) =>
-                                  setProductImages((prev) => ({
-                                    ...prev,
-                                    [campaignProductId]: onlyPhotos(images),
-                                  })),
-                              )
-                            }
-                          }}
-                        />
-                        Carousel
-                      </label>
-                    </fieldset>
-                    {isCreativeTest && planFormat === 'SINGLE_VIDEO' && (
-                      <p className="field-hint">
-                        This is a video test: every ad is a video, so any difference in results
-                        comes from the message, not the format. Pick the video for each ad below;
-                        one video can back all of them.
-                      </p>
-                    )}
-                    {isCreativeTest && planFormat !== 'SINGLE_VIDEO' && (
-                      <p className="field-hint">
-                        Carousel isn&apos;t part of Test #1. The first test compares single-image ads
-                        so any difference in results comes from the creative, not the format.
-                        Once it has run, a carousel is a good next experiment, or start a standard
-                        campaign now.
-                      </p>
-                    )}
-                    {creativeFormat[campaign.id] === 'CAROUSEL' &&
-                      campaignProductId &&
-                      (productImages[campaignProductId]?.length ?? 0) > MAX_CAROUSEL_CARDS && (
-                        <p className="field-hint">
-                          Using the first {MAX_CAROUSEL_CARDS} of{' '}
-                          {productImages[campaignProductId]?.length} photos — reorder product
-                          photos to change which are included.
-                        </p>
-                      )}
-                    <button
-                      type="button"
-                      onClick={() => handleGenerateCreatives(campaign.id)}
-                      disabled={generatingCreativesId === campaign.id}
-                    >
-                      {generatingCreativesId === campaign.id
-                        ? 'Generating…'
-                        : campaignCreatives.length > 0
-                          ? hasBrandProfile
-                            ? 'Regenerate with brand voice'
-                            : 'Regenerate ads'
-                          : 'Generate ads'}
-                    </button>
-                      </>
-                    )}
+                    {isPublished && <p className="field-hint">{ADS_LOCKED_NOTE}</p>}
                     {creativeError && (
                       <p className="form-error" role="alert">
                         {creativeError}
@@ -1873,106 +1847,70 @@ export function CampaignsSection({
                     )}
                     {campaignCreatives.length > 0 &&
                       (selectedCreative && !showAllCreatives[campaign.id] && !isCreativeTest ? (
-                        <div aria-label={`Selected ad for ${campaign.name ?? campaign.id}`}>
-                          <button type="button" disabled>
-                            Selected
-                          </button>
-                          {selectedCreative.format === 'CAROUSEL' ? (
-                            <>
-                              <ul className="photo-manager" aria-label="Carousel cards">
-                                {selectedCreative.cards.map((card, index) => (
-                                  <li key={card.id} className="photo-thumb">
-                                    <img
-                                      src={card.imageUrl}
-                                      alt={card.headline}
-                                      width={96}
-                                      height={96}
-                                    />
-                                    <p>{card.headline}</p>
-                                    <div className="photo-thumb-actions">
-                                      <button
-                                        type="button"
-                                        onClick={() =>
-                                          void handleReorderCreativeCards(
-                                            campaign.id,
-                                            selectedCreative.id,
-                                            (() => {
-                                              const ids = selectedCreative.cards.map((c) => c.id)
-                                              if (index === 0) return ids
-                                              ;[ids[index - 1], ids[index]] = [
-                                                ids[index],
-                                                ids[index - 1],
-                                              ]
-                                              return ids
-                                            })(),
-                                          )
-                                        }
-                                        disabled={index === 0 || cardActionId === selectedCreative.id}
-                                        aria-label="Move earlier"
-                                      >
-                                        ←
-                                      </button>
-                                      <button
-                                        type="button"
-                                        onClick={() =>
-                                          void handleReorderCreativeCards(
-                                            campaign.id,
-                                            selectedCreative.id,
-                                            (() => {
-                                              const ids = selectedCreative.cards.map((c) => c.id)
-                                              if (index === ids.length - 1) return ids
-                                              ;[ids[index + 1], ids[index]] = [
-                                                ids[index],
-                                                ids[index + 1],
-                                              ]
-                                              return ids
-                                            })(),
-                                          )
-                                        }
-                                        disabled={
-                                          index === selectedCreative.cards.length - 1 ||
-                                          cardActionId === selectedCreative.id
-                                        }
-                                        aria-label="Move later"
-                                      >
-                                        →
-                                      </button>
-                                      <button
-                                        type="button"
-                                        onClick={() =>
-                                          void handleRemoveCreativeCard(
-                                            campaign.id,
-                                            selectedCreative.id,
-                                            card.id,
-                                          )
-                                        }
-                                        disabled={cardActionId === selectedCreative.id}
-                                      >
-                                        {cardActionId === selectedCreative.id
-                                          ? 'Removing…'
-                                          : 'Remove'}
-                                      </button>
-                                    </div>
-                                  </li>
-                                ))}
-                              </ul>
-                              {cardErrors[selectedCreative.id] && (
-                                <p className="form-error" role="alert">
-                                  {cardErrors[selectedCreative.id]}
-                                </p>
+                        <div
+                          className="ad-selected"
+                          aria-label={`Selected ad for ${campaign.name ?? campaign.id}`}
+                        >
+                          <div
+                            className={
+                              selectedCreative.format === 'CAROUSEL'
+                                ? 'ad-selected-grid ad-selected-grid-carousel'
+                                : 'ad-selected-grid'
+                            }
+                          >
+                            <div className="ad-selected-preview">
+                              {selectedCreative.format === 'CAROUSEL' ? (
+                                <CarouselEditor
+                                  business={business}
+                                  creative={selectedCreative}
+                                  ctaLabel={ctaLabels[selectedCreative.cta] ?? selectedCreative.cta}
+                                  busy={cardActionId === selectedCreative.id}
+                                  locked={isPublished}
+                                  error={cardErrors[selectedCreative.id]}
+                                  onReorder={(cardIds) =>
+                                    handleReorderCreativeCards(
+                                      campaign.id,
+                                      selectedCreative.id,
+                                      cardIds,
+                                    )
+                                  }
+                                  onRemove={(cardId) =>
+                                    handleRemoveCreativeCard(
+                                      campaign.id,
+                                      selectedCreative.id,
+                                      cardId,
+                                    )
+                                  }
+                                />
+                              ) : (
+                                <SocialPostPreview
+                                  business={business}
+                                  creative={selectedCreative}
+                                  ctaLabel={ctaLabels[selectedCreative.cta] ?? selectedCreative.cta}
+                                />
                               )}
-                            </>
-                          ) : selectedCreative.format === 'SINGLE_VIDEO' ? (
+                            </div>
+                            <div className="ad-selected-actions">
+                            <button type="button" className="selected-chip" disabled>
+                              Selected
+                            </button>
+                          {selectedCreative.format === 'CAROUSEL' ? null
+                          : selectedCreative.format === 'SINGLE_VIDEO' ? (
                             // The same picker as the full ads list: this ad's video
                             // only, with the option to upload a new one. Locked once
                             // the campaign is published, like every other edit.
-                            !isPublished && (
+                            isPublished ? (
+                              <ActionRow primary disabled icon={<VideoIcon />} onClick={() => {}}>
+                                Change video
+                              </ActionRow>
+                            ) : (
                             <CreativeEditor
                               businessId={businessId}
                               campaignId={campaign.id}
                               productId={campaignProductId ?? null}
                               creative={selectedCreative}
                               showCopyControls={false}
+                              rowStyle
                               onUpdated={(updated) => {
                                 setCreatives((prev) => ({
                                   ...prev,
@@ -1987,12 +1925,14 @@ export function CampaignsSection({
                           ) : (
                             campaignProductId && (
                             <div className="image-picker">
-                              <button
-                                type="button"
+                              <ActionRow
+                                primary
+                                icon={<ImageIcon />}
+                                disabled={isPublished}
                                 onClick={() => handleToggleImageMenu(selectedCreative.id)}
                               >
                                 {selectedCreative.imageUrl ? 'Change image' : 'Upload Image'}
-                              </button>
+                              </ActionRow>
                               {imageMenuId === selectedCreative.id && (
                                 <div className="image-menu">
                                   <label htmlFor={`creative-image-upload-${selectedCreative.id}`}>
@@ -2066,8 +2006,7 @@ export function CampaignsSection({
                             )
                           )}
                           {selectedCreative.format === 'SINGLE_IMAGE' &&
-                            campaignProductId &&
-                            !isPublished && (
+                            campaignProductId && (
                               <>
                                 {(['story', 'square'] as const).map((slot) => (
                                   <ExtraAssetSlot
@@ -2077,6 +2016,7 @@ export function CampaignsSection({
                                     campaignId={campaign.id}
                                     productId={campaignProductId}
                                     creative={selectedCreative}
+                                    locked={isPublished}
                                     onUpdated={(updated) => {
                                       setCreatives((prev) => ({
                                         ...prev,
@@ -2090,11 +2030,30 @@ export function CampaignsSection({
                                 ))}
                               </>
                             )}
-                          <SocialPostPreview
-                            business={business}
-                            creative={selectedCreative}
-                            ctaLabel={ctaLabels[selectedCreative.cta] ?? selectedCreative.cta}
-                          />
+                          <div className="card-divider" />
+                          <p className="card-tags-label">Tags</p>
+                          <ul className="card-tags" aria-label="Tags">
+                            {[
+                              business?.industry
+                                ? (options?.industries.find((o) => o.value === business.industry)
+                                    ?.label ?? business.industry)
+                                : null,
+                              brandPricePositioning
+                                ? (options?.pricePositionings.find(
+                                    (o) => o.value === brandPricePositioning,
+                                  )?.label ?? brandPricePositioning)
+                                : null,
+                              FORMAT_TAG_LABELS[selectedCreative.format] ?? null,
+                            ]
+                              .filter((tag): tag is string => tag !== null)
+                              .map((tag) => (
+                                <li key={tag} className="card-tag">
+                                  {tag}
+                                </li>
+                              ))}
+                          </ul>
+                            </div>
+                          </div>
                           {!isPublished && (
                             <button
                               type="button"
@@ -2244,46 +2203,158 @@ export function CampaignsSection({
                       ))}
                   </div>
                 )}
-                {canPublish && (
+                <div className="card-editing">
+                {hasStaleCreatives && !isPublished && (
                   <div
-                    className="campaign-block"
-                    aria-label={`Publish ${campaign.name ?? campaign.id}`}
+                    className="campaign-block card-notice"
+                    aria-label={`Stale ads for ${campaign.name ?? campaign.id}`}
                   >
-                    <InstagramNote businessId={businessId} />
-                    <label htmlFor={`publish-paused-${campaign.id}`}>
-                      <input
-                        id={`publish-paused-${campaign.id}`}
-                        type="checkbox"
-                        checked={publishPaused[campaign.id] ?? getPublishPaused(campaign.id)}
-                        onChange={(event) => {
-                          setPublishPausedState((prev) => ({
-                            ...prev,
-                            [campaign.id]: event.target.checked,
-                          }))
-                          setPublishPaused(campaign.id, event.target.checked)
-                        }}
-                      />
-                      Publish paused (nothing spends until you click Activate)
-                    </label>
+                    <p role="alert">
+                      These ads were generated from an older version of the product. Regenerate?
+                    </p>
                     <button
                       type="button"
-                      onClick={() => handleApproveAndPublish(campaign.id, campaign.status)}
-                      disabled={approvingId === campaign.id || campaign.id in publishStatuses}
+                      className="button-quiet"
+                      onClick={() => void handleGenerateCreatives(campaign.id)}
+                      disabled={generatingCreativesId === campaign.id}
                     >
-                      {campaign.id in publishStatuses
+                      {generatingCreativesId === campaign.id ? 'Regenerating…' : 'Regenerate'}
+                    </button>
+                  </div>
+                )}
+                  {(formatPicker !== null || editingActions.length > 0) && (
+                    <div className="card-editing-row">
+                      {strategy && formatPicker}
+                      <CardToolbar label="Edit campaign" actions={editingActions} />
+                    </div>
+                  )}
+                  {strategy && formatHints}
+                  {strategy && strategyControls}
+                  {productPickerId === campaign.id &&
+                    (editingProductForCampaignId === campaign.id && currentProduct ? (
+                      <ProductForm
+                        businessId={businessId}
+                        product={currentProduct}
+                        onSaved={() => {
+                          setEditingProductForCampaignId(null)
+                          setProductPickerId(null)
+                          void refresh()
+                        }}
+                        onCancel={() => setEditingProductForCampaignId(null)}
+                      />
+                    ) : reuseProductForCampaignId === campaign.id ? (
+                      <div className="button-row">
+                        <select
+                          aria-label="Change product"
+                          value={pickProductId[campaign.id] ?? ''}
+                          onChange={(event) =>
+                            setPickProductId((prev) => ({
+                              ...prev,
+                              [campaign.id]: event.target.value,
+                            }))
+                          }
+                        >
+                          <option value="">Choose a product…</option>
+                          {products.map((product) => (
+                            <option key={product.id} value={product.id}>
+                              {product.description}
+                            </option>
+                          ))}
+                        </select>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            void handleAttachToCampaign(campaign.id, {
+                              productId: pickProductId[campaign.id],
+                            })
+                            setProductPickerId(null)
+                          }}
+                          disabled={!pickProductId[campaign.id] || attachingId === campaign.id}
+                        >
+                          Attach
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setReuseProductForCampaignId(null)}
+                        >
+                          Add a new product instead
+                        </button>
+                      </div>
+                    ) : (
+                      <>
+                        <ProductForm
+                          businessId={businessId}
+                          campaignId={campaign.id}
+                          urlRequired={!currentProduct && requiresDestinationUrl(campaign.objective)}
+                          onSaved={(created) => {
+                            setReuseProductForCampaignId(null)
+                            setProductPickerId(null)
+                            // A freshly created product isn't in this
+                            // section's own products list yet — without
+                            // this, the campaign's thumbnail (looked up
+                            // from that list) would silently stay blank
+                            // until the next full reload, even though
+                            // the campaign's own productId updates right
+                            // away via handleAttachToCampaign below.
+                            setProducts((prev) => [...prev, created])
+                            void handleAttachToCampaign(campaign.id, { productId: created.id })
+                          }}
+                          onCancel={() => setProductPickerId(null)}
+                        />
+                        {products.length > 0 && (
+                          <button
+                            type="button"
+                            onClick={() => setReuseProductForCampaignId(campaign.id)}
+                          >
+                            Use an existing product instead
+                          </button>
+                        )}
+                      </>
+                    ))}
+                  {attachErrors[campaign.id] && (
+                    <p className="form-error" role="alert">
+                      {attachErrors[campaign.id]}
+                    </p>
+                  )}
+                </div>
+                {canPublish && (
+                  <PublishFooter
+                    ariaLabel={`Publish ${campaign.name ?? campaign.id}`}
+                    heading={
+                      campaign.status === 'FAILED'
+                        ? 'Publishing failed'
+                        : isPublishing
+                          ? 'Publishing to Meta…'
+                          : 'Ready to publish?'
+                    }
+                    description={
+                      campaign.status === 'FAILED'
+                        ? 'The last attempt did not go through. You can retry now.'
+                        : pausedChoice
+                          ? 'Approving sends this campaign to Meta paused. It will not run or spend until you click Activate.'
+                          : 'Approving sends this campaign to Meta set to run. It can start spending as soon as Meta approves it.'
+                    }
+                    pausedId={`publish-paused-${campaign.id}`}
+                    paused={pausedChoice}
+                    onPausedChange={(checked) => {
+                      setPublishPausedState((prev) => ({ ...prev, [campaign.id]: checked }))
+                      setPublishPaused(campaign.id, checked)
+                    }}
+                    buttonLabel={
+                      campaign.id in publishStatuses
                         ? describePublishStatus(publishStatuses[campaign.id])
                         : approvingId === campaign.id
                           ? 'Publishing…'
                           : campaign.status === 'FAILED'
                             ? 'Retry publish'
-                            : 'Approve & Publish'}
-                    </button>
-                    {approveError && (
-                      <p className="form-error" role="alert">
-                        {approveError}
-                      </p>
-                    )}
-                  </div>
+                            : 'Approve & Publish'
+                    }
+                    buttonDisabled={isPublishing}
+                    onPublish={() => handleApproveAndPublish(campaign.id, campaign.status)}
+                    error={approveError}
+                  >
+                    <InstagramNote businessId={businessId} />
+                  </PublishFooter>
                 )}
                 {isLive && (
                   <div

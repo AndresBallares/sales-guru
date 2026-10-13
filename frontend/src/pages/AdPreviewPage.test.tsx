@@ -539,9 +539,10 @@ describe('AdPreviewPage', () => {
       renderPage()
 
       expect(await screen.findByText(LOCKED)).toBeInTheDocument()
-      expect(screen.queryByRole('list', { name: 'Carousel cards' })).not.toBeInTheDocument()
+      // The slides can still be browsed, but not edited.
+      expect(screen.getByRole('list', { name: 'Carousel slides' })).toBeInTheDocument()
       expect(screen.queryByRole('button', { name: 'Move earlier' })).not.toBeInTheDocument()
-      expect(screen.queryByRole('button', { name: 'Remove' })).not.toBeInTheDocument()
+      expect(screen.queryByRole('button', { name: /^Remove slide/ })).not.toBeInTheDocument()
     })
 
     it('keeps the ads editable for a campaign that is not published', async () => {
@@ -567,15 +568,16 @@ describe('AdPreviewPage', () => {
       })
     }
 
-    it('shows a card manager instead of the single-image picker', async () => {
+    it('shows the preview-first carousel editor instead of the single-image picker', async () => {
       mockedApi.listCreatives.mockResolvedValue([makeCarouselCreative()])
 
       renderPage()
 
-      const manager = await screen.findByRole('list', { name: 'Carousel cards' })
-      expect(within(manager).getByText('Card 1')).toBeInTheDocument()
-      expect(within(manager).getByText('Card 2')).toBeInTheDocument()
-      expect(within(manager).getByText('Card 3')).toBeInTheDocument()
+      const rail = await screen.findByRole('list', { name: 'Carousel slides' })
+      expect(within(rail).getByRole('button', { name: /Card 1$/ })).toBeInTheDocument()
+      expect(within(rail).getByRole('button', { name: /Card 2$/ })).toBeInTheDocument()
+      expect(within(rail).getByRole('button', { name: /Card 3$/ })).toBeInTheDocument()
+      expect(screen.getByText('Slide 1 of 3')).toBeInTheDocument()
       expect(screen.queryByRole('button', { name: 'Upload Image' })).not.toBeInTheDocument()
     })
 
@@ -593,8 +595,8 @@ describe('AdPreviewPage', () => {
       const user = userEvent.setup()
 
       renderPage()
-      await screen.findByRole('list', { name: 'Carousel cards' })
-      await user.click(screen.getAllByRole('button', { name: 'Move earlier' })[1])
+      await user.click(await screen.findByRole('button', { name: /^Slide 2 of 3/ }))
+      await user.click(screen.getByRole('button', { name: 'Move earlier' }))
 
       await waitFor(() =>
         expect(mockedApi.reorderCreativeCards).toHaveBeenCalledWith('biz-1', 'camp-1', 'creative-1', [
@@ -611,8 +613,8 @@ describe('AdPreviewPage', () => {
       const user = userEvent.setup()
 
       renderPage()
-      await screen.findByRole('list', { name: 'Carousel cards' })
-      await user.click(screen.getAllByRole('button', { name: 'Move later' })[0])
+      await screen.findByRole('list', { name: 'Carousel slides' })
+      await user.click(screen.getByRole('button', { name: 'Move later' }))
 
       await waitFor(() =>
         expect(mockedApi.reorderCreativeCards).toHaveBeenCalledWith('biz-1', 'camp-1', 'creative-1', [
@@ -629,8 +631,8 @@ describe('AdPreviewPage', () => {
       const user = userEvent.setup()
 
       renderPage()
-      await screen.findByRole('list', { name: 'Carousel cards' })
-      await user.click(screen.getAllByRole('button', { name: 'Move earlier' })[1])
+      await user.click(await screen.findByRole('button', { name: /^Slide 2 of 3/ }))
+      await user.click(screen.getByRole('button', { name: 'Move earlier' }))
 
       expect(await screen.findByRole('alert')).toHaveTextContent('Could not reorder.')
     })
@@ -648,8 +650,8 @@ describe('AdPreviewPage', () => {
       const user = userEvent.setup()
 
       renderPage()
-      await screen.findByRole('list', { name: 'Carousel cards' })
-      await user.click(screen.getAllByRole('button', { name: 'Remove' })[1])
+      await user.click(await screen.findByRole('button', { name: /^Slide 2 of 3/ }))
+      await user.click(screen.getByRole('button', { name: 'Remove slide 2' }))
 
       await waitFor(() =>
         expect(mockedApi.removeCreativeCard).toHaveBeenCalledWith(
@@ -659,9 +661,9 @@ describe('AdPreviewPage', () => {
           'card-2',
         ),
       )
-      const manager = await screen.findByRole('list', { name: 'Carousel cards' })
-      expect(within(manager).getByText('Card 3')).toBeInTheDocument()
-      expect(within(manager).queryByText('Card 2')).not.toBeInTheDocument()
+      const rail = await screen.findByRole('list', { name: 'Carousel slides' })
+      expect(within(rail).getByRole('button', { name: /Card 3$/ })).toBeInTheDocument()
+      expect(within(rail).queryByRole('button', { name: /Card 2$/ })).not.toBeInTheDocument()
     })
 
     it('shows an error if removing the last-allowed card fails', async () => {
@@ -672,8 +674,8 @@ describe('AdPreviewPage', () => {
       const user = userEvent.setup()
 
       renderPage()
-      await screen.findByRole('list', { name: 'Carousel cards' })
-      await user.click(screen.getAllByRole('button', { name: 'Remove' })[0])
+      await screen.findByRole('list', { name: 'Carousel slides' })
+      await user.click(screen.getByRole('button', { name: 'Remove slide 1' }))
 
       expect(await screen.findByRole('alert')).toHaveTextContent('A carousel needs at least 2 cards')
     })
@@ -684,8 +686,8 @@ describe('AdPreviewPage', () => {
       const user = userEvent.setup()
 
       renderPage()
-      await screen.findByRole('list', { name: 'Carousel cards' })
-      await user.click(screen.getAllByRole('button', { name: 'Remove' })[0])
+      await screen.findByRole('list', { name: 'Carousel slides' })
+      await user.click(screen.getByRole('button', { name: 'Remove slide 1' }))
 
       expect(await screen.findByRole('alert')).toHaveTextContent('Could not remove this card.')
     })

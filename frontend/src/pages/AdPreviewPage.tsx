@@ -23,6 +23,7 @@ import {
 import { onlyPhotos, PHOTOS_ONLY_HINT } from '../lib/media'
 import { describePublishStatus, PublishJobError, waitForPublishJob } from '../lib/publishJob'
 import { ADS_LOCKED_NOTE, isPublished } from '../lib/publishedCampaign'
+import { CarouselEditor } from '../components/CarouselEditor'
 import { CreativeEditor } from '../components/CreativeEditor'
 import { ExtraAssetSlot } from '../components/ExtraAssetSlot'
 import { SocialPostPreview } from '../components/SocialPostPreview'
@@ -161,23 +162,12 @@ export function AdPreviewPage() {
     }
   }
 
-  async function handleMoveCard(cardId: string, direction: -1 | 1) {
+  async function handleReorderCards(cardIds: string[]) {
     if (!businessId || !campaignId || !creative) return
-    const index = creative.cards.findIndex((card) => card.id === cardId)
-    const swapWith = index + direction
-    if (index === -1 || swapWith < 0 || swapWith >= creative.cards.length) return
-
-    const reordered = [...creative.cards]
-    ;[reordered[index], reordered[swapWith]] = [reordered[swapWith], reordered[index]]
-    setCardActionId(cardId)
+    setCardActionId(creative.id)
     setCardError(null)
     try {
-      const updated = await reorderCreativeCards(
-        businessId,
-        campaignId,
-        creative.id,
-        reordered.map((card) => card.id),
-      )
+      const updated = await reorderCreativeCards(businessId, campaignId, creative.id, cardIds)
       setCreative(updated)
     } catch (err) {
       setCardError(err instanceof ApiError ? err.message : 'Could not reorder cards.')
@@ -188,7 +178,7 @@ export function AdPreviewPage() {
 
   async function handleRemoveCard(cardId: string) {
     if (!businessId || !campaignId || !creative) return
-    setCardActionId(cardId)
+    setCardActionId(creative.id)
     setCardError(null)
     try {
       const updated = await removeCreativeCard(businessId, campaignId, creative.id, cardId)
@@ -290,6 +280,17 @@ export function AdPreviewPage() {
                 />
               ))}
             </>
+          ) : creative.format === 'CAROUSEL' ? (
+            <CarouselEditor
+              business={business}
+              creative={creative}
+              ctaLabel={ctaLabels[creative.cta] ?? creative.cta}
+              busy={cardActionId !== null}
+              locked={published}
+              error={cardError}
+              onReorder={handleReorderCards}
+              onRemove={handleRemoveCard}
+            />
           ) : (
             <SocialPostPreview
               business={business}
@@ -300,48 +301,8 @@ export function AdPreviewPage() {
 
           {published ? (
             <p className="field-hint">{ADS_LOCKED_NOTE}</p>
-          ) : selectedCreatives.length > 1 ? null : creative.format === 'CAROUSEL' ? (
-            <>
-              <ul className="photo-manager" aria-label="Carousel cards">
-                {creative.cards.map((card, index) => (
-                  <li key={card.id} className="photo-thumb">
-                    <img src={card.imageUrl} alt={card.headline} width={96} height={96} />
-                    <p>{card.headline}</p>
-                    <div className="photo-thumb-actions">
-                      <button
-                        type="button"
-                        onClick={() => void handleMoveCard(card.id, -1)}
-                        disabled={index === 0 || cardActionId !== null}
-                        aria-label="Move earlier"
-                      >
-                        ←
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => void handleMoveCard(card.id, 1)}
-                        disabled={index === creative.cards.length - 1 || cardActionId !== null}
-                        aria-label="Move later"
-                      >
-                        →
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => void handleRemoveCard(card.id)}
-                        disabled={cardActionId !== null}
-                      >
-                        {cardActionId === card.id ? 'Removing…' : 'Remove'}
-                      </button>
-                    </div>
-                  </li>
-                ))}
-              </ul>
-              {cardError && (
-                <p className="form-error" role="alert">
-                  {cardError}
-                </p>
-              )}
-            </>
-          ) : creative.format === 'SINGLE_VIDEO' ? (
+          ) : selectedCreatives.length > 1 || creative.format === 'CAROUSEL' ? null
+          : creative.format === 'SINGLE_VIDEO' ? (
             <CreativeEditor
               businessId={businessId ?? ''}
               campaignId={campaignId ?? ''}
