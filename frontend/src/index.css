@@ -2599,3 +2599,254 @@ code {
 a.btn-outline {
   text-decoration: none;
 }
+
+/* ---------- Product photos: a vertical list ---------- */
+
+.photo-section-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem 1rem;
+}
+
+.photo-section-header label {
+  flex: 1 1 14rem;
+  min-width: 0;
+}
+
+.photo-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.photo-row {
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--surface);
+}
+
+.photo-row-primary {
+  border-color: var(--primary);
+  background: var(--primary-soft);
+}
+
+.photo-row-drag {
+  display: grid;
+  grid-template-columns: 44px 72px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.5rem 0.75rem;
+  padding: 0.5rem 0.75rem 0.5rem 0.25rem;
+  border-radius: 14px;
+}
+
+.photo-row-drag[draggable='true'] {
+  cursor: grab;
+}
+
+.photo-row-drag.is-dragging {
+  opacity: 0.4;
+}
+
+.photo-row-drag.is-over {
+  outline: 2px dashed var(--primary);
+  outline-offset: 2px;
+}
+
+.photo-handle {
+  display: grid;
+  place-items: center;
+  align-self: auto;
+  width: 44px;
+  height: 44px;
+  min-height: 44px;
+  padding: 0;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: grab;
+}
+
+.photo-handle:hover:not(:disabled) {
+  background: var(--surface-hover);
+  color: var(--text);
+  box-shadow: none;
+}
+
+.photo-handle:disabled {
+  background: transparent;
+  color: var(--text-disabled);
+  cursor: not-allowed;
+}
+
+.photo-row-thumb {
+  display: block;
+  width: 72px;
+  height: 72px;
+  overflow: hidden;
+  border: 1px solid var(--border-strong);
+  border-radius: 10px;
+  background: var(--surface-hover);
+}
+
+.photo-row-thumb img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  pointer-events: none;
+}
+
+.photo-row-info {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.photo-row-info p {
+  margin: 0;
+}
+
+.photo-row-name {
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.photo-row-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--primary-soft-text);
+}
+
+.photo-row-meta {
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+}
+
+.photo-row-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.photo-set-primary {
+  white-space: nowrap;
+  padding: 0.4rem 0.8rem;
+  font-size: 0.9rem;
+}
+
+.photo-menu {
+  position: relative;
+  margin-left: auto;
+}
+
+.photo-menu-trigger {
+  width: 44px;
+  height: 44px;
+  min-height: 44px;
+}
+
+.photo-menu-trigger::after {
+  display: none;
+}
+
+.photo-menu-list {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  z-index: 10;
+  min-width: 11rem;
+  margin: 0;
+  padding: 0.35rem;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  border: 1px solid var(--border-strong);
+  border-radius: 12px;
+  background: var(--surface-solid, var(--bg));
+  box-shadow: var(--shadow-card);
+}
+
+.photo-menu-list li {
+  margin: 0;
+}
+
+.photo-menu-list button {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  width: 100%;
+  min-height: 44px;
+  padding: 0.5rem 0.75rem;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text);
+  font-weight: 500;
+  text-align: left;
+}
+
+.photo-menu-list button:hover:not(:disabled) {
+  background: var(--surface-hover);
+  box-shadow: none;
+}
+
+.photo-menu-list button:disabled {
+  background: transparent;
+  color: var(--text-disabled);
+}
+
+.photo-menu-danger {
+  color: var(--error) !important;
+}
+
+.photo-notice {
+  display: flex;
+  gap: 0.75rem;
+  align-items: flex-start;
+  padding: 0.85rem 1rem;
+  border: 1px solid var(--border-strong);
+  border-radius: 12px;
+  background: var(--primary-soft);
+}
+
+.photo-notice p {
+  margin: 0;
+  max-width: 62ch;
+  font-size: 0.9rem;
+}
+
+.photo-notice-title {
+  font-weight: 600;
+  margin-bottom: 0.2rem !important;
+}
+
+.photo-notice svg {
+  flex: none;
+  margin-top: 0.1rem;
+}
+
+/* Narrow screens: the actions drop under the name instead of squeezing it. */
+@media (max-width: 480px) {
+  .photo-row-drag {
+    grid-template-columns: 44px 64px minmax(0, 1fr);
+  }
+
+  .photo-row-thumb {
+    width: 64px;
+    height: 64px;
+  }
+
+  .photo-row-actions {
+    grid-column: 2 / -1;
+    justify-content: space-between;
+  }
+}
