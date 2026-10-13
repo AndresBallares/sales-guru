@@ -7,6 +7,7 @@ import {
   type FormEvent,
 } from 'react'
 import { PlusIcon, SaveIcon } from './icons'
+import { PhotoList, type PhotoItem } from './PhotoList'
 import {
   ApiError,
   createProduct,
@@ -19,7 +20,6 @@ import {
   type ProductImage,
 } from '../lib/api'
 import { BlackFrameFallback } from './BlackFrameFallback'
-import { MediaBadges } from './MediaBadges'
 import { useMediaIntake, type StagedMedia } from '../lib/useMediaIntake'
 import {
   DESTINATION_URL_ERROR_MESSAGE,
@@ -75,6 +75,7 @@ export function ProductForm({
   const [reorderingImages, setReorderingImages] = useState(false)
   const [isDraggingPhoto, setIsDraggingPhoto] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const addPhotosButtonRef = useRef<HTMLButtonElement>(null)
   // Validation, thumbnail capture and saving of every photo/video picked here:
   // the same pipeline the ad editor's "Upload a new video" uses.
   const {
@@ -170,40 +171,52 @@ export function ProductForm({
     })
   }
 
-  async function handleMoveExisting(imageId: string, direction: -1 | 1) {
-    if (!isEditing) return
-    const index = existingImages.findIndex((image) => image.id === imageId)
-    const swapWith = index + direction
-    if (index === -1 || swapWith < 0 || swapWith >= existingImages.length) return
-
-    const reordered = [...existingImages]
-    ;[reordered[index], reordered[swapWith]] = [reordered[swapWith], reordered[index]]
-    setReorderingImages(true)
-    setImageError(null)
-    try {
-      const saved = await reorderProductImages(
-        businessId,
-        product.id,
-        reordered.map((image) => image.id),
-      )
-      setExistingImages(saved)
-    } catch (err) {
-      setImageError(err instanceof ApiError ? err.message : 'Could not reorder images.')
-    } finally {
-      setReorderingImages(false)
+  // The photos' new order, whichever way it was asked for (drag, arrow keys, the menu's
+  // Move up / Move down, or "Set primary", which moves a photo to the top). The first
+  // photo is the primary one, so the order is all there is to save.
+  async function handleReorder(orderedIds: string[]) {
+    if (isEditing) {
+      setReorderingImages(true)
+      setImageError(null)
+      try {
+        const saved = await reorderProductImages(businessId, product.id, orderedIds)
+        setExistingImages(saved)
+      } catch (err) {
+        setImageError(err instanceof ApiError ? err.message : 'Could not reorder images.')
+      } finally {
+        setReorderingImages(false)
+      }
+      return
     }
+    setStagedPhotos((prev) =>
+      orderedIds
+        .map((id) => prev.find((photo) => photo.id === id))
+        .filter((photo): photo is StagedMedia => photo !== undefined),
+    )
   }
 
-  function handleMoveStaged(photoId: string, direction: -1 | 1) {
-    setStagedPhotos((prev) => {
-      const index = prev.findIndex((photo) => photo.id === photoId)
-      const swapWith = index + direction
-      if (index === -1 || swapWith < 0 || swapWith >= prev.length) return prev
-      const reordered = [...prev]
-      ;[reordered[index], reordered[swapWith]] = [reordered[swapWith], reordered[index]]
-      return reordered
-    })
-  }
+  const photoItems: PhotoItem[] = isEditing
+    ? existingImages.map((image) => ({
+        id: image.id,
+        src:
+          image.mediaType === 'VIDEO' && image.thumbnailUrl ? image.thumbnailUrl : image.url,
+        fullSrc: image.url,
+        isVideo: image.mediaType === 'VIDEO',
+        aspectClass: image.aspectClass,
+        width: image.width,
+        height: image.height,
+        durationSeconds: image.durationSeconds,
+        warned: Boolean(image.aspectRatioWarning),
+      }))
+    : stagedPhotos.map((photo) => ({
+        id: photo.id,
+        src: photo.previewUrl,
+        isVideo: photo.isVideo,
+        name: photo.file.name,
+        aspectClass: photo.aspectClass,
+        durationSeconds: photo.durationSeconds,
+        warned: Boolean(photo.warning),
+      }))
 
   function handleUrlBlur() {
     if (!url) {
@@ -315,103 +328,34 @@ export function ProductForm({
         />
       </div>
       <div className="field">
-        <label htmlFor={`photos-${idSuffix}`}>
-          Product photos{' '}
-          <span className="field-hint">
-            (at least one is needed before an ad can be published — the first is
-            used as the primary image)
-          </span>
-        </label>
-        {(isEditing ? existingImages.length > 0 : stagedPhotos.length > 0) && (
-          <ul className="photo-manager" aria-label="Uploaded product photos">
-            {isEditing
-              ? existingImages.map((image, index) => (
-                  <li key={image.id} className="photo-thumb">
-                    {index === 0 && <span className="photo-primary-badge">Primary</span>}
-                    <img
-                      src={
-                        image.mediaType === 'VIDEO' && image.thumbnailUrl
-                          ? image.thumbnailUrl
-                          : image.url
-                      }
-                      alt={`${image.mediaType === 'VIDEO' ? 'Video' : 'Product'} ${index + 1}`}
-                      width={96}
-                      height={96}
-                    />
-                    <MediaBadges
-                      aspectClass={image.aspectClass}
-                      isVideo={image.mediaType === 'VIDEO'}
-                      durationSeconds={image.durationSeconds}
-                    />
-                    <div className="photo-thumb-actions">
-                      <button
-                        type="button"
-                        onClick={() => void handleMoveExisting(image.id, -1)}
-                        disabled={index === 0 || reorderingImages}
-                        aria-label="Move earlier"
-                      >
-                        ←
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => void handleMoveExisting(image.id, 1)}
-                        disabled={index === existingImages.length - 1 || reorderingImages}
-                        aria-label="Move later"
-                      >
-                        →
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => void handleRemoveExisting(image.id)}
-                        disabled={removingImageId === image.id}
-                      >
-                        {removingImageId === image.id ? 'Removing…' : 'Remove'}
-                      </button>
-                    </div>
-                    {image.aspectRatioWarning && (
-                      <p className="form-warning">{image.aspectRatioWarning}</p>
-                    )}
-                  </li>
-                ))
-              : stagedPhotos.map((photo, index) => (
-                  <li key={photo.id} className="photo-thumb">
-                    {index === 0 && <span className="photo-primary-badge">Primary</span>}
-                    <img
-                      src={photo.previewUrl}
-                      alt={`${photo.isVideo ? 'Video' : 'Product'} ${index + 1}`}
-                      width={96}
-                      height={96}
-                    />
-                    <MediaBadges
-                      aspectClass={photo.aspectClass}
-                      isVideo={photo.isVideo}
-                      durationSeconds={photo.durationSeconds}
-                    />
-                    <div className="photo-thumb-actions">
-                      <button
-                        type="button"
-                        onClick={() => handleMoveStaged(photo.id, -1)}
-                        disabled={index === 0}
-                        aria-label="Move earlier"
-                      >
-                        ←
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => handleMoveStaged(photo.id, 1)}
-                        disabled={index === stagedPhotos.length - 1}
-                        aria-label="Move later"
-                      >
-                        →
-                      </button>
-                      <button type="button" onClick={() => handleRemoveStaged(photo.id)}>
-                        Remove
-                      </button>
-                    </div>
-                    {photo.warning && <p className="form-warning">{photo.warning}</p>}
-                  </li>
-                ))}
-          </ul>
+        <div className="photo-section-header">
+          <label htmlFor={`photos-${idSuffix}`}>
+            Product photos{' '}
+            <span className="field-hint">
+              (at least one is needed before an ad can be published — the first is
+              used as the primary image)
+            </span>
+          </label>
+          <button
+            type="button"
+            className="btn-outline btn-gold"
+            ref={addPhotosButtonRef}
+            disabled={uploadingImage}
+            onClick={() => fileInputRef.current?.click()}
+          >
+            <PlusIcon />
+            Add photos
+          </button>
+        </div>
+        {photoItems.length > 0 && (
+          <PhotoList
+            items={photoItems}
+            busy={reorderingImages}
+            removingId={removingImageId}
+            onReorder={handleReorder}
+            onRemove={(id) => (isEditing ? handleRemoveExisting(id) : handleRemoveStaged(id))}
+            onEmptied={() => addPhotosButtonRef.current?.focus()}
+          />
         )}
         {/* The drag handlers are a pure convenience layer on top of a real
             <label htmlFor> + <input type="file"> — click and keyboard use
@@ -462,7 +406,7 @@ export function ProductForm({
             onCancel={cancelBlackVideo}
           />
         )}
-        {uploadingImage && <p>Uploading…</p>}
+        {uploadingImage && <output>Uploading…</output>}
         {imageError && (
           <p className="form-error" role="alert">
             {imageError}

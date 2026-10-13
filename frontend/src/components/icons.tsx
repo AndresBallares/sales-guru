@@ -247,6 +247,62 @@ export function ArrowRightIcon() {
   )
 }
 
+export function GripVerticalIcon() {
+  return (
+    <svg width={20} height={20} viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" focusable="false">
+      <circle cx="9" cy="6" r="1.7" />
+      <circle cx="15" cy="6" r="1.7" />
+      <circle cx="9" cy="12" r="1.7" />
+      <circle cx="15" cy="12" r="1.7" />
+      <circle cx="9" cy="18" r="1.7" />
+      <circle cx="15" cy="18" r="1.7" />
+    </svg>
+  )
+}
+
+export function MoreIcon() {
+  return (
+    <svg width={20} height={20} viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" focusable="false">
+      <circle cx="5" cy="12" r="1.8" />
+      <circle cx="12" cy="12" r="1.8" />
+      <circle cx="19" cy="12" r="1.8" />
+    </svg>
+  )
+}
+
+export function StarIcon() {
+  return (
+    <svg width={14} height={14} viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" focusable="false">
+      <path d="m12 3 2.7 5.6 6.1.9-4.4 4.3 1 6.1L12 17l-5.4 2.9 1-6.1L3.2 9.5l6.1-.9z" />
+    </svg>
+  )
+}
+
+export function ArrowUpIcon() {
+  return (
+    <Icon size={18}>
+      <path d="M12 19V5M6 11l6-6 6 6" />
+    </Icon>
+  )
+}
+
+export function ArrowDownIcon() {
+  return (
+    <Icon size={18}>
+      <path d="M12 5v14M6 13l6 6 6-6" />
+    </Icon>
+  )
+}
+
+export function InfoIcon() {
+  return (
+    <Icon size={20}>
+      <circle cx="12" cy="12" r="9" />
+      <path d="M12 11v5M12 8h.01" />
+    </Icon>
+  )
+}
+
 export function ChevronDownIcon() {
   return (
     <Icon size={18}>
