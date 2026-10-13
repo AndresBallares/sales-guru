@@ -351,6 +351,42 @@ describe('DashboardPage', () => {
       expect(await screen.findByText('Business detail page')).toBeInTheDocument()
     })
 
+    it('lets you skip the Meta step for now from the saved confirmation, to the right of Continue', async () => {
+      mockedApi.listBusinesses.mockResolvedValue([acme])
+      mockedApi.getOptions.mockResolvedValue({
+        industries: INDUSTRY_OPTIONS,
+        objectives: [],
+        campaignStatuses: [],
+        ctas: [],
+        actionTypes: [],
+        eventVenues: [],
+        voiceTraits: [{ value: 'WARM', label: 'Warm' }],
+        pricePositionings: [{ value: 'PREMIUM', label: 'Premium' }],
+      })
+      mockedApi.createBrandProfile.mockResolvedValue({ ...brand, description: 'Our brand.' })
+      const user = userEvent.setup()
+
+      renderDashboard()
+      await user.type(await screen.findByLabelText(/Brand overview/), 'Our brand.')
+      await user.type(screen.getByLabelText('Ideal customer'), 'Gift buyers.')
+      await user.click(await screen.findByLabelText('Warm'))
+      await user.selectOptions(screen.getByLabelText('Price positioning'), 'PREMIUM')
+      // Nothing to skip until the profile is saved.
+      expect(screen.queryByRole('link', { name: 'Skip for now' })).not.toBeInTheDocument()
+      await user.click(screen.getByRole('button', { name: 'Save brand profile' }))
+
+      const skip = await screen.findByRole('link', { name: 'Skip for now' })
+      const next = screen.getByRole('button', { name: 'Continue to Meta connection settings' })
+      expect(skip).toHaveAttribute('href', '/businesses/biz-1?skipMeta=1')
+      // Same quiet underlined style as Cancel, right after Continue in the same row.
+      expect(skip).toHaveClass('cancel-link')
+      expect(next.nextElementSibling).toBe(skip)
+
+      await user.click(skip)
+
+      expect(await screen.findByText('Business detail page')).toBeInTheDocument()
+    })
+
     it('does not show the Continue confirmation for a profile that already existed and was not just saved', async () => {
       mockedApi.listBusinesses.mockResolvedValue([acme])
       mockedApi.getBrandProfile.mockResolvedValue(brand)

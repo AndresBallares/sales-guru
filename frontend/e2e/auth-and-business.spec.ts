@@ -264,3 +264,35 @@ test('a business without a brand profile cannot start a campaign until it has on
   await expect(page.getByLabel(/Brand overview/)).toBeFocused()
   await expect(page).toHaveURL(/\/$/)
 })
+
+test('after saving the Brand profile you can skip Meta for now and go on to the campaigns', async ({
+  page,
+}) => {
+  const email = uniqueEmail()
+  await page.goto('/signup')
+  await page.getByLabel('Email').fill(email)
+  await page.getByLabel('Password').fill('supersecret123')
+  await page.getByRole('checkbox').check()
+  await page.getByRole('button', { name: 'Sign up' }).click()
+  await page.getByLabel('Name').fill('Skipper Co')
+  await page.getByLabel('Industry').selectOption({ label: 'Fashion / Jewelry' })
+  await page.getByRole('button', { name: 'Save Business' }).click()
+
+  await page.getByLabel(/Brand overview/).fill('Family-run studio since 1985.')
+  await page.getByLabel('Ideal customer').fill('Busy professionals, 30-55.')
+  await page.getByLabel('Warm').check()
+  await page.getByLabel('Price positioning').selectOption({ label: 'Mid-range' })
+  await page.getByRole('button', { name: 'Save brand profile' }).click()
+
+  // Both choices appear once the profile is saved, Continue first.
+  await expect(page.getByText('Brand profile saved.')).toBeVisible()
+  await expect(
+    page.getByRole('button', { name: 'Continue to Meta connection settings' }),
+  ).toBeVisible()
+  await page.getByRole('link', { name: 'Skip for now' }).click()
+
+  // Straight to the business's campaign step, without the Meta step.
+  await expect(page.getByRole('heading', { name: 'Skipper Co' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Create a campaign' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Meta Ads' })).not.toBeVisible()
+})

@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { Link } from 'react-router-dom'
 import type { Business } from '../lib/api'
 import { BrandProfileSection } from './BrandProfileSection'
 import { ArrowRightIcon } from './icons'
@@ -16,7 +17,8 @@ export interface BrandFocusRequest {
 // It is also step two of onboarding: after a business is created (or the
 // business page sends someone back here) `focusRequest` selects that business
 // and puts the cursor in its form; after the profile is saved, a confirmation
-// offers the next step, the business's Meta connection settings.
+// offers the next step, the business's Meta connection settings, or to skip
+// that for now and go straight on to its campaigns.
 export function BrandBusinessSection({
   businesses,
   focusRequest,
@@ -63,14 +65,21 @@ export function BrandBusinessSection({
               {selected?.name ?? 'this business'} will now use it to keep its strategy and ads on
               brand.
             </p>
-            <button
-              type="button"
-              className="btn-outline btn-gold"
-              onClick={() => onContinue(selectedId)}
-            >
-              Continue to Meta connection settings
-              <ArrowRightIcon />
-            </button>
+            <div className="button-row">
+              <button
+                type="button"
+                className="btn-outline btn-gold"
+                onClick={() => onContinue(selectedId)}
+              >
+                Continue to Meta connection settings
+                <ArrowRightIcon />
+              </button>
+              {/* Or skip Meta for now: on to this business's campaigns (the same
+                  soft gate as the Meta step's own "Skip for now"). */}
+              <Link className="cancel-link" to={`/businesses/${selectedId}?skipMeta=1`}>
+                Skip for now
+              </Link>
+            </div>
           </div>
         ) : null
       }
