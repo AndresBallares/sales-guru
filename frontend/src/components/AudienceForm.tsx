@@ -1,4 +1,5 @@
 import { useState, type FormEvent } from 'react'
+import { PlusIcon } from './icons'
 import { ApiError, createAudience, type Audience } from '../lib/api'
 
 // Extracted from AudiencesSection (confirmed 2026-09-09) so NewCampaignFlow
@@ -126,14 +127,17 @@ export function AudienceForm({
           {formError}
         </p>
       )}
-      <button type="submit" disabled={submitting}>
-        {submitting ? 'Adding…' : 'Add audience'}
-      </button>
-      {onCancel && (
-        <button type="button" onClick={onCancel} disabled={submitting}>
-          Cancel
+      <div className="button-row">
+        <button type="submit" className="btn-outline btn-gold" disabled={submitting}>
+          <PlusIcon />
+          {submitting ? 'Adding…' : 'Add audience'}
         </button>
-      )}
+        {onCancel && (
+          <button type="button" className="cancel-link" onClick={onCancel} disabled={submitting}>
+            Cancel
+          </button>
+        )}
+      </div>
     </form>
   )
 }

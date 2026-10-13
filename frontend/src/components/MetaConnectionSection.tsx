@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
+import { SaveIcon } from './icons'
 import { InstagramAccountForm } from './InstagramAccountForm'
 import { useSearchParams } from 'react-router-dom'
 import {
@@ -276,9 +277,11 @@ export function MetaConnectionSection({
           </div>
           <button
             type="button"
+            className="btn-outline btn-gold"
             onClick={handleFinalize}
             disabled={finalizing || !selectedAdAccountId || !selectedPageId}
           >
+            <SaveIcon />
             {finalizing ? 'Saving…' : 'Save connection'}
           </button>
         </div>
@@ -362,9 +365,11 @@ export function MetaConnectionSection({
                 {!pixelListError && (
                   <button
                     type="button"
+                    className="btn-outline btn-gold"
                     onClick={handleSetPixel}
                     disabled={settingPixel || !selectedPixelId}
                   >
+                    <SaveIcon />
                     {settingPixel ? 'Saving…' : 'Save Pixel'}
                   </button>
                 )}
