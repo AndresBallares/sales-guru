@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { SaveIcon } from './icons'
+import { ArrowRightIcon, SaveIcon } from './icons'
 import { InstagramAccountForm } from './InstagramAccountForm'
 import { useSearchParams } from 'react-router-dom'
 import {
@@ -22,9 +22,13 @@ import {
 export function MetaConnectionSection({
   businessId,
   onSetupComplete,
+  onContinue,
 }: {
   businessId: string
   onSetupComplete?: (complete: boolean) => void
+  // When given, a clear "Continue to campaigns" action appears once the
+  // connection is fully set up (the onboarding step before the first campaign).
+  onContinue?: () => void
 }) {
   const [searchParams, setSearchParams] = useSearchParams()
   const [connection, setConnection] = useState<MetaConnection | null>(null)
@@ -384,6 +388,18 @@ export function MetaConnectionSection({
               </>
             )}
           </div>
+          {setupComplete && onContinue && (
+            <div className="flow-callout" role="status">
+              <p>
+                <strong>Meta connection saved.</strong> You can now create this business's first
+                campaign.
+              </p>
+              <button type="button" className="btn-outline btn-gold" onClick={onContinue}>
+                Continue to campaigns
+                <ArrowRightIcon />
+              </button>
+            </div>
+          )}
         </div>
       )}
     </section>

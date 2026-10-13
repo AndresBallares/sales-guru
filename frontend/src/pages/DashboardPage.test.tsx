@@ -22,6 +22,7 @@ vi.mock('../lib/api', async (importOriginal) => {
     updateBusiness: vi.fn<typeof actual.updateBusiness>(),
     listCampaigns: vi.fn<typeof actual.listCampaigns>(),
     getBrandProfile: vi.fn<typeof actual.getBrandProfile>(),
+    createBrandProfile: vi.fn<typeof actual.createBrandProfile>(),
   }
 })
 const mockedApi = vi.mocked(api)
@@ -59,9 +60,9 @@ beforeEach(() => {
   })
 })
 
-function renderDashboard() {
+function renderDashboard(entry = '/') {
   render(
-    <MemoryRouter initialEntries={['/']}>
+    <MemoryRouter initialEntries={[entry]}>
       <AuthProvider>
         <Routes>
           <Route path="/" element={<DashboardPage />} />
@@ -70,6 +71,24 @@ function renderDashboard() {
       </AuthProvider>
     </MemoryRouter>,
   )
+}
+
+const brandFixture: api.BrandProfile = {
+  id: 'brand-1',
+  businessId: 'biz-1',
+  description: 'Family-run studio making handcrafted gold jewelry.',
+  idealCustomer: 'Women 30-55 buying for milestones.',
+  voiceTraits: ['WARM'],
+  pricePositioning: 'PREMIUM',
+  brandPhrases: null,
+  avoidPhrases: null,
+  tagline: null,
+  competitors: null,
+  exampleCopy: null,
+  proofPoints: [],
+  offer: null,
+  adLanguages: ['English'],
+  logoUrl: null,
 }
 
 describe('DashboardPage', () => {
@@ -294,6 +313,79 @@ describe('DashboardPage', () => {
     }
     const globex: api.Business = { ...acme, id: 'biz-2', name: 'Globex' }
 
+    it('confirms a saved brand profile and offers Continue to Meta connection settings', async () => {
+      mockedApi.listBusinesses.mockResolvedValue([acme])
+      mockedApi.getOptions.mockResolvedValue({
+        industries: INDUSTRY_OPTIONS,
+        objectives: [],
+        campaignStatuses: [],
+        ctas: [],
+        actionTypes: [],
+        eventVenues: [],
+        voiceTraits: [{ value: 'WARM', label: 'Warm' }],
+        pricePositionings: [{ value: 'PREMIUM', label: 'Premium' }],
+      })
+      mockedApi.createBrandProfile.mockResolvedValue({ ...brand, description: 'Our brand.' })
+      const user = userEvent.setup()
+
+      renderDashboard()
+      await user.type(await screen.findByLabelText(/Brand overview/), 'Our brand.')
+      await user.type(screen.getByLabelText('Ideal customer'), 'Gift buyers.')
+      await user.click(await screen.findByLabelText('Warm'))
+      await user.selectOptions(screen.getByLabelText('Price positioning'), 'PREMIUM')
+      // Nothing to continue to until it is saved.
+      expect(
+        screen.queryByRole('button', { name: 'Continue to Meta connection settings' }),
+      ).not.toBeInTheDocument()
+      await user.click(screen.getByRole('button', { name: 'Save brand profile' }))
+
+      expect(await screen.findByText('Brand profile saved.')).toBeInTheDocument()
+      expect(screen.getByText(/Every campaign for Acme Widgets will now use it/)).toBeInTheDocument()
+      // The saved profile is shown, with the way to edit it.
+      expect(screen.getByText('Our brand.')).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: 'Edit brand profile' })).toBeInTheDocument()
+
+      await user.click(screen.getByRole('button', { name: 'Continue to Meta connection settings' }))
+
+      // Goes on to that business's page, where the Meta step comes next.
+      expect(await screen.findByText('Business detail page')).toBeInTheDocument()
+    })
+
+    it('does not show the Continue confirmation for a profile that already existed and was not just saved', async () => {
+      mockedApi.listBusinesses.mockResolvedValue([acme])
+      mockedApi.getBrandProfile.mockResolvedValue(brand)
+
+      renderDashboard()
+
+      expect(await screen.findByText(brand.description)).toBeInTheDocument()
+      expect(screen.queryByText('Brand profile saved.')).not.toBeInTheDocument()
+      expect(
+        screen.queryByRole('button', { name: 'Continue to Meta connection settings' }),
+      ).not.toBeInTheDocument()
+    })
+
+    it('opens the Brand form of the business named in ?brand= and clears the parameter', async () => {
+      mockedApi.listBusinesses.mockResolvedValue([acme, globex])
+      mockedApi.getBrandProfile.mockRejectedValue(new api.ApiError(404, 'no profile'))
+
+      renderDashboard('/?brand=biz-2')
+
+      await waitFor(() => expect(screen.getByLabelText(/Brand overview/)).toHaveFocus())
+      expect(screen.getByLabelText('Business', { exact: true })).toHaveValue('biz-2')
+      expect(mockedApi.getBrandProfile).toHaveBeenCalledWith('biz-2')
+    })
+
+    it('ignores a ?brand= that is not one of your businesses', async () => {
+      mockedApi.listBusinesses.mockResolvedValue([acme, globex])
+      mockedApi.getBrandProfile.mockRejectedValue(new api.ApiError(404, 'no profile'))
+
+      renderDashboard('/?brand=someone-elses')
+
+      await screen.findByLabelText(/Brand overview/)
+      expect(screen.getByLabelText('Business', { exact: true })).toHaveValue('biz-1')
+      expect(mockedApi.getBrandProfile).not.toHaveBeenCalledWith('someone-elses')
+    })
+
     it('sits underneath the Company Information section', async () => {
       mockedApi.listBusinesses.mockResolvedValue([acme])
       mockedApi.getBrandProfile.mockResolvedValue(brand)
@@ -396,17 +488,18 @@ describe('DashboardPage', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent('Server error')
   })
 
-  it('creates a business and navigates straight to its detail page', async () => {
-    mockedApi.listBusinesses.mockResolvedValue([])
-    mockedApi.createBusiness.mockResolvedValue({
+  it('creates a business and takes you straight to its Brand form, ready to complete', async () => {
+    const created: api.Business = {
       id: '1',
       name: 'Acme Widgets',
-      website: null,
-      industry: null,
-      location: null,
+      website: 'https://acme.example',
+      industry: 'FASHION_JEWELRY',
+      location: 'CDMX',
       logoUrl: null,
-      description: null,
-    })
+      description: 'We make widgets.',
+    }
+    mockedApi.listBusinesses.mockResolvedValueOnce([]).mockResolvedValue([created])
+    mockedApi.createBusiness.mockResolvedValue(created)
     const user = userEvent.setup()
 
     renderDashboard()
@@ -428,9 +521,48 @@ describe('DashboardPage', () => {
         description: 'We make widgets.',
       }),
     )
-    // Lands on the new business's own page — not left behind on a
-    // cleared, dead-end create-business form.
-    expect(await screen.findByText('Business detail page')).toBeInTheDocument()
+    // Stays on the dashboard: the new business is listed and its Brand form is
+    // open with the cursor in the first field.
+    expect(await screen.findByRole('link', { name: 'Acme Widgets' })).toBeInTheDocument()
+    const overview = await screen.findByLabelText(/Brand overview/)
+    expect(overview).toHaveFocus()
+    expect(mockedApi.getBrandProfile).toHaveBeenCalledWith('1')
+    expect(screen.queryByText('Business detail page')).not.toBeInTheDocument()
+    // The Company Information form is emptied and closed again.
+    expect(screen.queryByLabelText('Name', { selector: '#name' })).not.toBeInTheDocument()
+  })
+
+  it('selects the new business in the Brand picker when others already exist', async () => {
+    const existing: api.Business = {
+      id: 'biz-old',
+      name: 'Old Co',
+      website: null,
+      industry: null,
+      location: null,
+      logoUrl: null,
+      description: null,
+    }
+    const created: api.Business = { ...existing, id: 'biz-new', name: 'New Co' }
+    mockedApi.listBusinesses
+      .mockResolvedValueOnce([existing])
+      .mockResolvedValue([existing, created])
+    mockedApi.createBusiness.mockResolvedValue(created)
+    mockedApi.getBrandProfile.mockImplementation(async (businessId) => {
+      if (businessId === 'biz-old') return { ...brandFixture, businessId, description: 'Old brand.' }
+      throw new api.ApiError(404, 'no profile')
+    })
+    const user = userEvent.setup()
+
+    renderDashboard()
+    await screen.findByText('Old brand.')
+    await user.click(screen.getByRole('button', { name: 'Add Business' }))
+    await user.type(screen.getByLabelText('Name', { selector: '#name' }), 'New Co')
+    await user.selectOptions(screen.getByLabelText('Industry'), 'OTHER')
+    await user.click(screen.getByRole('button', { name: 'Save Business' }))
+
+    expect(await screen.findByLabelText(/Brand overview/)).toHaveFocus()
+    expect(screen.getByLabelText('Business', { exact: true })).toHaveValue('biz-new')
+    expect(mockedApi.getBrandProfile).toHaveBeenCalledWith('biz-new')
   })
 
   it('shows an error if creating a business fails', async () => {
@@ -595,7 +727,16 @@ describe('DashboardPage', () => {
   })
 
   it('uploads the staged logo after the business is created', async () => {
-    mockedApi.listBusinesses.mockResolvedValue([])
+    const created: api.Business = {
+      id: '1',
+      name: 'Acme Widgets',
+      website: null,
+      industry: 'FASHION_JEWELRY',
+      location: null,
+      logoUrl: null,
+      description: null,
+    }
+    mockedApi.listBusinesses.mockResolvedValueOnce([]).mockResolvedValue([created])
     mockedApi.createBusiness.mockResolvedValue({
       id: '1',
       name: 'Acme Widgets',
@@ -626,7 +767,7 @@ describe('DashboardPage', () => {
     await user.click(screen.getByRole('button', { name: 'Save Business' }))
 
     await waitFor(() => expect(mockedApi.uploadBusinessLogo).toHaveBeenCalledWith('1', logo))
-    expect(await screen.findByText('Business detail page')).toBeInTheDocument()
+    expect(await screen.findByLabelText(/Brand overview/)).toBeInTheDocument()
   })
 
   it('does not upload a logo when none was staged', async () => {
@@ -653,8 +794,17 @@ describe('DashboardPage', () => {
     expect(mockedApi.uploadBusinessLogo).not.toHaveBeenCalled()
   })
 
-  it('still navigates to the new business even if the logo upload fails', async () => {
-    mockedApi.listBusinesses.mockResolvedValue([])
+  it('still goes on to the Brand form even if the logo upload fails', async () => {
+    const created: api.Business = {
+      id: '1',
+      name: 'Acme Widgets',
+      website: null,
+      industry: 'FASHION_JEWELRY',
+      location: null,
+      logoUrl: null,
+      description: null,
+    }
+    mockedApi.listBusinesses.mockResolvedValueOnce([]).mockResolvedValue([created])
     mockedApi.createBusiness.mockResolvedValue({
       id: '1',
       name: 'Acme Widgets',
@@ -676,7 +826,7 @@ describe('DashboardPage', () => {
 
     await user.click(screen.getByRole('button', { name: 'Save Business' }))
 
-    expect(await screen.findByText('Business detail page')).toBeInTheDocument()
+    expect(await screen.findByLabelText(/Brand overview/)).toBeInTheDocument()
   })
 
   it('renders the industry dropdown as required with every fetched option', async () => {
@@ -1142,6 +1292,25 @@ describe('DashboardPage', () => {
       )
       expect(await screen.findByRole('link', { name: 'Acme Inc' })).toBeInTheDocument()
       expect(screen.queryByRole('region', { name: 'Edit business' })).not.toBeInTheDocument()
+    })
+
+    it('does not also try to create a business when an edit is saved', async () => {
+      mockedApi.listBusinesses
+        .mockResolvedValueOnce([acme])
+        .mockResolvedValueOnce([{ ...acme, name: 'Acme Inc' }])
+      mockedApi.updateBusiness.mockResolvedValue({ ...acme, name: 'Acme Inc' })
+      const user = userEvent.setup()
+
+      renderDashboard()
+      await screen.findByRole('link', { name: 'Acme Widgets' })
+      // Something typed into the Add Business form must not be submitted by an edit.
+      await user.click(screen.getByRole('button', { name: 'Add Business' }))
+      await user.type(screen.getByLabelText('Name', { selector: '#name' }), 'Half-typed business')
+      const panel = await openEditPanel(user)
+      await user.click(await panel.findByRole('button', { name: 'Save' }))
+
+      await waitFor(() => expect(mockedApi.updateBusiness).toHaveBeenCalled())
+      expect(mockedApi.createBusiness).not.toHaveBeenCalled()
     })
 
     it('asks which business when there are several and edits the one picked', async () => {

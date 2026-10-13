@@ -6,7 +6,7 @@ import {
   type DragEvent,
   type FormEvent,
 } from 'react'
-import { Link, useNavigate } from 'react-router-dom'
+import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import {
   ApiError,
@@ -17,7 +17,7 @@ import {
   type Business,
   type Option,
 } from '../lib/api'
-import { BrandBusinessSection } from '../components/BrandBusinessSection'
+import { BrandBusinessSection, type BrandFocusRequest } from '../components/BrandBusinessSection'
 import { DeleteBusinessSection } from '../components/DeleteBusinessSection'
 import { EditBusinessSection } from '../components/EditBusinessSection'
 import { PlusIcon, SaveIcon } from '../components/icons'
@@ -31,6 +31,10 @@ const MAX_DESCRIPTION_LENGTH = 1000
 export function DashboardPage() {
   const { user, logout } = useAuth()
   const navigate = useNavigate()
+  const [searchParams, setSearchParams] = useSearchParams()
+  // Asks the Brand section to select a business and focus its form — set after a
+  // business is created, or when the business page sends someone back here.
+  const [brandFocus, setBrandFocus] = useState<BrandFocusRequest | null>(null)
 
   const [businesses, setBusinesses] = useState<Business[]>([])
   const [loadingBusinesses, setLoadingBusinesses] = useState(true)
@@ -88,6 +92,20 @@ export function DashboardPage() {
     })
     nameInputRef.current?.focus({ preventScroll: true })
   }, [focusRequest])
+
+  // Back to an empty, closed Company Information form (after a business was saved).
+  function resetCompanyForm() {
+    if (logoPreviewUrl) URL.revokeObjectURL(logoPreviewUrl)
+    setName('')
+    setWebsite('')
+    setIndustry('')
+    setLocation('')
+    setDescription('')
+    setLogoFile(null)
+    setLogoPreviewUrl(null)
+    setLogoError(null)
+    setShowForm(false)
+  }
 
   async function refreshBusinesses() {
     setLoadingBusinesses(true)
@@ -170,6 +188,9 @@ export function DashboardPage() {
   }
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
+    // The Edit Business panel's own form is rendered inside this one, so its
+    // submit event bubbles up here: only a submit of THIS form creates a business.
+    if (event.target !== event.currentTarget) return
     event.preventDefault()
     setFormError(null)
     setSubmitting(true)
@@ -190,13 +211,34 @@ export function DashboardPage() {
           // reasoning as ProductForm's own post-create photo upload.
         }
       }
-      navigate(`/businesses/${business.id}`)
+      // Next step of onboarding is that business's Brand profile, right here on
+      // the dashboard: refresh the list, then select it and focus its form.
+      resetCompanyForm()
+      await refreshBusinesses()
+      setBrandFocus({ businessId: business.id, nonce: Date.now() })
     } catch (err) {
       setFormError(err instanceof ApiError ? err.message : 'Could not create business.')
     } finally {
       setSubmitting(false)
     }
   }
+
+  // /?brand=<id> (the business page's link) selects that business's Brand form.
+  useEffect(() => {
+    const id = searchParams.get('brand')
+    if (!id || loadingBusinesses) return
+    if (businesses.some((b) => b.id === id)) {
+      setBrandFocus({ businessId: id, nonce: Date.now() })
+    }
+    setSearchParams(
+      (prev) => {
+        const next = new URLSearchParams(prev)
+        next.delete('brand')
+        return next
+      },
+      { replace: true },
+    )
+  }, [searchParams, setSearchParams, loadingBusinesses, businesses])
 
   const formVisible = showForm || (!loadingBusinesses && businesses.length === 0)
 
@@ -416,7 +458,13 @@ export function DashboardPage() {
         </form>
       </section>
 
-      {!loadingBusinesses && <BrandBusinessSection businesses={businesses} />}
+      {!loadingBusinesses && (
+        <BrandBusinessSection
+          businesses={businesses}
+          focusRequest={brandFocus}
+          onContinue={(id) => navigate(`/businesses/${id}`)}
+        />
+      )}
     </main>
   )
 }

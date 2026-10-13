@@ -2,6 +2,7 @@ import { test, expect } from '@playwright/test'
 import {
   PRODUCT_PHOTO_PATH,
   SECOND_PRODUCT_PHOTO_PATH,
+  finishOnboarding,
   reachMetaPixelStep,
 } from './support/fakeMetaFlow'
 
@@ -16,11 +17,11 @@ test('publishes a carousel ad paused, with all three cards intact', async ({ pag
   // photos, capped at MAX_CAROUSEL_CARDS — well under that here). Reuses
   // the two existing product-photo fixtures, repeating one rather than
   // adding a third fixture file.
-  await reachMetaPixelStep(page, {
+  await reachMetaPixelStep(page)
+  await page.getByRole('button', { name: 'Skip for now' }).click()
+  await finishOnboarding(page, {
     productPhotoPaths: [PRODUCT_PHOTO_PATH, SECOND_PRODUCT_PHOTO_PATH, PRODUCT_PHOTO_PATH],
   })
-  await page.getByRole('button', { name: 'Skip for now' }).click()
-  await expect(page.getByRole('heading', { name: 'Campaigns' })).toBeVisible()
 
   await page.getByRole('button', { name: 'Generate strategy' }).click()
   await expect(

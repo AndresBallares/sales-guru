@@ -238,3 +238,11 @@ export function CloseIcon() {
     </Icon>
   )
 }
+
+export function ArrowRightIcon() {
+  return (
+    <Icon size={18}>
+      <path d="M5 12h14M13 6l6 6-6 6" />
+    </Icon>
+  )
+}
