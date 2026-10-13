@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test'
-import { reachMetaPixelStep } from './support/fakeMetaFlow'
+import { createBusinessWithBrand, reachMetaPixelStep } from './support/fakeMetaFlow'
 
 // Regression coverage for a real bug: "Skip for now" (the optional Meta
 // Pixel step) used to only set local React state, forgotten on every
@@ -52,4 +52,22 @@ test('disconnecting and reconnecting resets a skipped Pixel choice', async ({ pa
   // skip — a fresh connection gets a fresh choice.
   await expect(page.getByRole('button', { name: 'Skip for now' })).toBeVisible()
   await expect(page.getByRole('button', { name: 'Continue to campaigns' })).not.toBeVisible()
+})
+
+// The Meta step before the first campaign is a soft gate: "Skip for now" goes on to
+// the campaigns without connecting Meta, and a reload stays on the campaign step.
+test('skipping the Meta step goes on to the campaigns without connecting Meta', async ({
+  page,
+}) => {
+  await createBusinessWithBrand(page)
+  await expect(page.getByRole('button', { name: 'Connect Meta Ads' })).toBeVisible()
+
+  await page.getByRole('link', { name: 'Skip for now' }).click()
+
+  await expect(page.getByRole('heading', { name: 'Create a campaign' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Meta Ads' })).not.toBeVisible()
+
+  await page.reload()
+  await expect(page.getByRole('heading', { name: 'Create a campaign' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Meta Ads' })).not.toBeVisible()
 })

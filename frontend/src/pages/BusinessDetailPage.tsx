@@ -24,6 +24,8 @@ import {
 export function BusinessDetailPage() {
   const { businessId } = useParams<{ businessId: string }>()
   const [searchParams] = useSearchParams()
+  // "Skip for now" on the Meta step: on to the campaigns without connecting Meta yet.
+  const metaSkipped = searchParams.get('skipMeta') === '1'
   // What the Meta OAuth round-trip came back with (?meta=...). Read once here:
   // the Meta setup step strips it from the URL as soon as it mounts.
   const [metaOutcome] = useState(() => searchParams.get('meta'))
@@ -177,18 +179,24 @@ export function BusinessDetailPage() {
         <BrandRequiredNotice businessId={businessId} businessName={business?.name} />
       )}
 
-      {businessId && gate.state === 'ready' && gate.hasBrand && gate.metaStep && !metaContinued && (
-        <MetaConnectionSection
-          businessId={businessId}
-          onSetupComplete={setMetaSetupComplete}
-          onContinue={() => setMetaContinued(true)}
-        />
-      )}
+      {businessId &&
+        gate.state === 'ready' &&
+        gate.hasBrand &&
+        gate.metaStep &&
+        !metaContinued &&
+        !metaSkipped && (
+          <MetaConnectionSection
+            businessId={businessId}
+            onSetupComplete={setMetaSetupComplete}
+            onContinue={() => setMetaContinued(true)}
+            skipTo={`/businesses/${businessId}?skipMeta=1`}
+          />
+        )}
 
       {businessId &&
         gate.state === 'ready' &&
         gate.hasBrand &&
-        (!gate.metaStep || metaContinued) && (
+        (!gate.metaStep || metaContinued || metaSkipped) && (
           <>
             {campaigns === null || campaigns.length === 0 ? (
               <CampaignsSection businessId={businessId} onCampaignsChange={setCampaigns} />

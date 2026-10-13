@@ -22,6 +22,8 @@ vi.mock('../lib/api', async (importOriginal) => {
     listCampaigns: vi.fn<typeof actual.listCampaigns>(),
     getMetaConnection: vi.fn<typeof actual.getMetaConnection>(),
     listMetaPixels: vi.fn<typeof actual.listMetaPixels>(),
+    listMetaAdAccounts: vi.fn<typeof actual.listMetaAdAccounts>(),
+    listMetaPages: vi.fn<typeof actual.listMetaPages>(),
     skipMetaPixel: vi.fn<typeof actual.skipMetaPixel>(),
     getStrategy: vi.fn<typeof actual.getStrategy>(),
     getBrandProfile: vi.fn<typeof actual.getBrandProfile>(),
@@ -302,6 +304,106 @@ describe('BusinessDetailPage', () => {
 
       expect(await screen.findByRole('heading', { name: 'Create a campaign' })).toBeInTheDocument()
       expect(screen.queryByRole('heading', { name: 'Meta Ads' })).not.toBeInTheDocument()
+    })
+
+    it('offers a quiet Skip for now link while Meta is not connected', async () => {
+      renderPage()
+
+      const skip = await screen.findByRole('link', { name: 'Skip for now' })
+      expect(skip).toHaveAttribute('href', '/businesses/biz-1?skipMeta=1')
+      expect(screen.getByRole('button', { name: 'Connect Meta Ads' })).toBeInTheDocument()
+    })
+
+    it('goes on to this business\'s campaigns, without Meta, when Skip for now is clicked', async () => {
+      const user = userEvent.setup()
+
+      renderPage()
+      await user.click(await screen.findByRole('link', { name: 'Skip for now' }))
+
+      expect(await screen.findByRole('heading', { name: 'Create a campaign' })).toBeInTheDocument()
+      expect(screen.queryByRole('heading', { name: 'Meta Ads' })).not.toBeInTheDocument()
+      expect(screen.queryByRole('button', { name: 'Connect Meta Ads' })).not.toBeInTheDocument()
+    })
+
+    it('opens straight on the campaign step when ?skipMeta=1 is in the URL (a reload keeps it)', async () => {
+      renderPage('/businesses/biz-1?skipMeta=1')
+
+      expect(await screen.findByRole('heading', { name: 'Create a campaign' })).toBeInTheDocument()
+      expect(screen.queryByRole('heading', { name: 'Meta Ads' })).not.toBeInTheDocument()
+    })
+
+    it('also offers the skip while the ad account and Page are still to be chosen', async () => {
+      mockedApi.getMetaConnection.mockResolvedValue({
+        ...completeMeta,
+        adAccountId: null,
+        pageId: null,
+        pixelId: null,
+      })
+      mockedApi.listMetaAdAccounts.mockResolvedValue([])
+      mockedApi.listMetaPages.mockResolvedValue([])
+
+      renderPage()
+
+      expect(await screen.findByRole('button', { name: 'Save connection' })).toBeInTheDocument()
+      expect(screen.getByRole('link', { name: 'Skip for now' })).toHaveAttribute(
+        'href',
+        '/businesses/biz-1?skipMeta=1',
+      )
+    })
+
+    it('has no skip link once the connection is saved: Continue to campaigns takes over', async () => {
+      mockedApi.getMetaConnection.mockResolvedValue({ ...completeMeta, pixelId: null })
+      mockedApi.listMetaPixels.mockResolvedValue([])
+
+      renderPage()
+
+      await screen.findByRole('button', { name: 'Skip for now' }) // the Pixel step's own skip
+      expect(screen.queryByRole('link', { name: 'Skip for now' })).not.toBeInTheDocument()
+    })
+
+    it('does not offer the skip on the later Meta step, after a campaign, product and audience exist', async () => {
+      mockedApi.listCampaigns.mockResolvedValue([draftCampaign])
+      mockedApi.listProducts.mockResolvedValue([
+        {
+          id: 'prod-1',
+          description: 'Handmade leather wallets',
+          price: 49.99,
+          margin: null,
+          features: null,
+          benefits: null,
+          primaryImageUrl: null,
+          url: null,
+        },
+      ])
+      mockedApi.listAudiences.mockResolvedValue([
+        {
+          id: 'aud-1',
+          description: 'Busy professionals, 30-55',
+          ageMin: 30,
+          ageMax: 55,
+          location: null,
+          interests: null,
+          problem: null,
+          desire: null,
+        },
+      ])
+
+      renderPage()
+
+      expect(await screen.findByRole('heading', { name: 'Meta Ads' })).toBeInTheDocument()
+      await screen.findByRole('button', { name: 'Connect Meta Ads' })
+      expect(screen.queryByRole('link', { name: 'Skip for now' })).not.toBeInTheDocument()
+    })
+
+    it('does not weaken the Brand gate: skipping Meta never skips the brand profile', async () => {
+      mockedApi.getBrandProfile.mockRejectedValue(new api.ApiError(404, 'no profile'))
+
+      renderPage('/businesses/biz-1?skipMeta=1')
+
+      expect(
+        await screen.findByRole('heading', { name: 'Complete the Brand profile first' }),
+      ).toBeInTheDocument()
+      expect(screen.queryByRole('heading', { name: 'Create a campaign' })).not.toBeInTheDocument()
     })
 
     it('is skipped when Meta is already fully set up', async () => {
