@@ -1177,6 +1177,12 @@ code {
   position: relative;
 }
 
+/* Feed frames take the image's own shape (set inline); the image fills them,
+   cropping only what falls outside Meta's 1.91:1 to 4:5 feed range. */
+.social-post-image-frame-feed .social-post-image {
+  object-fit: cover;
+}
+
 .social-post-play {
   position: absolute;
   inset: 0;
