@@ -109,3 +109,59 @@ export function StatusIcon({ status }: { status: string }) {
     </Icon>
   )
 }
+
+export function PackageIcon() {
+  return (
+    <Icon>
+      <path d="m12 3 8 4v10l-8 4-8-4V7zM4 7l8 4 8-4M12 11v10" />
+    </Icon>
+  )
+}
+
+export function RefreshIcon() {
+  return (
+    <Icon>
+      <path d="M20 11a8 8 0 0 0-14.5-4.2M4 4v4h4M4 13a8 8 0 0 0 14.5 4.2M20 20v-4h-4" />
+    </Icon>
+  )
+}
+
+export function StrategyIcon() {
+  return (
+    <Icon>
+      <path d="M9 18h6M10 21h4M12 3a6 6 0 0 0-3.5 10.9c.6.5 1 1.2 1 2V16h5v-.1c0-.8.4-1.5 1-2A6 6 0 0 0 12 3z" />
+    </Icon>
+  )
+}
+
+export function VoiceIcon() {
+  return (
+    <Icon>
+      <rect x="9" y="3" width="6" height="11" rx="3" />
+      <path d="M5 11a7 7 0 0 0 14 0M12 18v3" />
+    </Icon>
+  )
+}
+
+export function SpinnerIcon() {
+  return (
+    <span className="icon-spin">
+      <Icon>
+        <path d="M12 3a9 9 0 1 0 9 9" />
+      </Icon>
+    </span>
+  )
+}
+
+export function GripIcon() {
+  return (
+    <svg width={14} height={14} viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" focusable="false">
+      <circle cx="9" cy="6" r="1.6" />
+      <circle cx="15" cy="6" r="1.6" />
+      <circle cx="9" cy="12" r="1.6" />
+      <circle cx="15" cy="12" r="1.6" />
+      <circle cx="9" cy="18" r="1.6" />
+      <circle cx="15" cy="18" r="1.6" />
+    </svg>
+  )
+}
