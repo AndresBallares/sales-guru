@@ -1,19 +1,21 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useState, type ReactNode } from 'react'
 import { PencilIcon } from './icons'
 import { ApiError, getBrandProfile, type BrandProfile } from '../lib/api'
 import { BrandProfileForm } from './BrandProfileForm'
 
-// The "Brand DNA" onboarding step (PRD.md §5 step 3.5) — shown right
-// after Company Information, ahead of Campaigns (same "one gate at a
-// time" pattern as BusinessDetailPage's other steps). Doubles as the
-// later "editable from the business page" view once a profile exists —
-// same component, not a separate onboarding-only form.
+// The "Brand DNA" section (PRD.md §5 step 3.5): the short questionnaire the
+// Strategist/Creative Agents ground into, and its later edit view — the same
+// component for both. It now lives on the dashboard, under Company
+// Information, for one business at a time; `headerExtra` is where the
+// dashboard puts its business picker, right under the heading.
 export function BrandProfileSection({
   businessId,
   onProfileChange,
+  headerExtra,
 }: {
   businessId: string
   onProfileChange?: (profile: BrandProfile | null) => void
+  headerExtra?: ReactNode
 }) {
   const [profile, setProfile] = useState<BrandProfile | null>(null)
   const [loading, setLoading] = useState(true)
@@ -44,10 +46,16 @@ export function BrandProfileSection({
     void refresh()
   }, [refresh])
 
+  // Switching to another business never carries an open edit over to it.
+  useEffect(() => {
+    setEditing(false)
+  }, [businessId])
+
   if (loading) {
     return (
       <section>
         <h2>Brand</h2>
+        {headerExtra}
         <p>Loading…</p>
       </section>
     )
@@ -57,6 +65,7 @@ export function BrandProfileSection({
     return (
       <section>
         <h2>Brand</h2>
+        {headerExtra}
         <p className="form-error" role="alert">
           {error}
         </p>
@@ -68,6 +77,7 @@ export function BrandProfileSection({
     return (
       <section>
         <h2>Brand</h2>
+        {headerExtra}
         <p>{profile.description}</p>
         <button type="button" className="btn-outline" onClick={() => setEditing(true)}>
           <PencilIcon />
@@ -80,11 +90,13 @@ export function BrandProfileSection({
   return (
     <section>
       <h2>Brand</h2>
+      {headerExtra}
       <p>
         A couple of quick questions so the AI writes strategy and ad copy in
         your voice, not a generic one.
       </p>
       <BrandProfileForm
+        key={businessId}
         businessId={businessId}
         profile={profile ?? undefined}
         onSaved={(saved) => {

@@ -21,6 +21,7 @@ vi.mock('../lib/api', async (importOriginal) => {
     deleteBusiness: vi.fn<typeof actual.deleteBusiness>(),
     updateBusiness: vi.fn<typeof actual.updateBusiness>(),
     listCampaigns: vi.fn<typeof actual.listCampaigns>(),
+    getBrandProfile: vi.fn<typeof actual.getBrandProfile>(),
   }
 })
 const mockedApi = vi.mocked(api)
@@ -41,6 +42,10 @@ const INDUSTRY_OPTIONS = [
 
 beforeEach(() => {
   vi.resetAllMocks()
+  // The Brand section under Company Information loads a profile for a business.
+  mockedApi.getBrandProfile.mockRejectedValue(
+    new api.ApiError(404, 'This business has no brand profile yet'),
+  )
   mockedApi.getMe.mockResolvedValue({ id: '1', email: 'owner@example.com', needsTermsAcceptance: false })
   mockedApi.getOptions.mockResolvedValue({
     industries: INDUSTRY_OPTIONS,
@@ -257,6 +262,121 @@ describe('DashboardPage', () => {
       await user.click(screen.getByRole('button', { name: 'Add Business' }))
 
       expect(mockedApi.createBusiness).not.toHaveBeenCalled()
+    })
+  })
+
+  describe('the Brand section', () => {
+    const brand: api.BrandProfile = {
+      id: 'brand-1',
+      businessId: 'biz-1',
+      description: 'Family-run studio making handcrafted gold jewelry.',
+      idealCustomer: 'Women 30-55 buying for milestones.',
+      voiceTraits: ['WARM'],
+      pricePositioning: 'PREMIUM',
+      brandPhrases: null,
+      avoidPhrases: null,
+      tagline: null,
+      competitors: null,
+      exampleCopy: null,
+      proofPoints: [],
+      offer: null,
+      adLanguages: ['English'],
+      logoUrl: null,
+    }
+    const acme: api.Business = {
+      id: 'biz-1',
+      name: 'Acme Widgets',
+      website: null,
+      industry: null,
+      location: null,
+      description: null,
+      logoUrl: null,
+    }
+    const globex: api.Business = { ...acme, id: 'biz-2', name: 'Globex' }
+
+    it('sits underneath the Company Information section', async () => {
+      mockedApi.listBusinesses.mockResolvedValue([acme])
+      mockedApi.getBrandProfile.mockResolvedValue(brand)
+
+      renderDashboard()
+
+      const brandHeading = await screen.findByRole('heading', { name: 'Brand' })
+      const company = screen.getByRole('heading', { name: 'Company Information' })
+      expect(
+        company.compareDocumentPosition(brandHeading) & Node.DOCUMENT_POSITION_FOLLOWING,
+      ).toBeTruthy()
+    })
+
+    it('shows the profile summary and an Edit brand profile button for a business that has one', async () => {
+      mockedApi.listBusinesses.mockResolvedValue([acme])
+      mockedApi.getBrandProfile.mockResolvedValue(brand)
+
+      renderDashboard()
+
+      expect(await screen.findByText(brand.description)).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: 'Edit brand profile' })).toBeInTheDocument()
+      expect(mockedApi.getBrandProfile).toHaveBeenCalledWith('biz-1')
+      // One business: no picker.
+      expect(screen.queryByLabelText('Business')).not.toBeInTheDocument()
+    })
+
+    it('shows the brand form for a business without a profile yet', async () => {
+      mockedApi.listBusinesses.mockResolvedValue([acme])
+
+      renderDashboard()
+
+      expect(await screen.findByRole('button', { name: 'Save brand profile' })).toBeInTheDocument()
+    })
+
+    it('asks to add a business first when there are none', async () => {
+      mockedApi.listBusinesses.mockResolvedValue([])
+
+      renderDashboard()
+
+      expect(await screen.findByText(/Add a business above/)).toBeInTheDocument()
+      expect(mockedApi.getBrandProfile).not.toHaveBeenCalled()
+      expect(screen.queryByRole('button', { name: 'Save brand profile' })).not.toBeInTheDocument()
+    })
+
+    it('lets you pick which business when there are several, starting with the first', async () => {
+      mockedApi.listBusinesses.mockResolvedValue([acme, globex])
+      mockedApi.getBrandProfile.mockImplementation(async (businessId) => ({
+        ...brand,
+        businessId,
+        description: businessId === 'biz-1' ? 'Acme brand story.' : 'Globex brand story.',
+      }))
+      const user = userEvent.setup()
+
+      renderDashboard()
+
+      expect(await screen.findByText('Acme brand story.')).toBeInTheDocument()
+      const picker = screen.getByLabelText('Business')
+      expect(picker).toHaveValue('biz-1')
+
+      await user.selectOptions(picker, 'biz-2')
+
+      expect(await screen.findByText('Globex brand story.')).toBeInTheDocument()
+      expect(mockedApi.getBrandProfile).toHaveBeenCalledWith('biz-2')
+      expect(screen.queryByText('Acme brand story.')).not.toBeInTheDocument()
+    })
+
+    it('does not carry an open brand edit over to another business', async () => {
+      mockedApi.listBusinesses.mockResolvedValue([acme, globex])
+      mockedApi.getBrandProfile.mockImplementation(async (businessId) => ({
+        ...brand,
+        businessId,
+        description: businessId === 'biz-1' ? 'Acme brand story.' : 'Globex brand story.',
+      }))
+      const user = userEvent.setup()
+
+      renderDashboard()
+      await user.click(await screen.findByRole('button', { name: 'Edit brand profile' }))
+      expect(screen.getByRole('button', { name: 'Save' })).toBeInTheDocument()
+
+      await user.selectOptions(screen.getByLabelText('Business'), 'biz-2')
+
+      expect(await screen.findByText('Globex brand story.')).toBeInTheDocument()
+      expect(screen.queryByRole('button', { name: 'Save' })).not.toBeInTheDocument()
     })
   })
 
@@ -703,7 +823,7 @@ describe('DashboardPage', () => {
       const user = userEvent.setup()
 
       renderDashboard()
-      await screen.findByText('Globex')
+      await screen.findByRole('link', { name: 'Globex' })
       await user.click(screen.getByRole('button', { name: 'Delete Business' }))
       // Nothing to confirm until one is picked.
       expect(screen.queryByLabelText(/Type/)).not.toBeInTheDocument()
@@ -714,7 +834,7 @@ describe('DashboardPage', () => {
       await user.click(screen.getByRole('button', { name: 'Permanently delete business' }))
 
       await waitFor(() => expect(mockedApi.deleteBusiness).toHaveBeenCalledWith('biz-2'))
-      await waitFor(() => expect(screen.queryByText('Globex')).not.toBeInTheDocument())
+      await waitFor(() => expect(screen.queryByRole('link', { name: 'Globex' })).not.toBeInTheDocument())
       expect(screen.getByText('Acme Widgets')).toBeInTheDocument()
       // Panel closed again.
       expect(
@@ -765,7 +885,7 @@ describe('DashboardPage', () => {
       const user = userEvent.setup()
 
       renderDashboard()
-      await screen.findByText('Globex')
+      await screen.findByRole('link', { name: 'Globex' })
       await user.click(screen.getByRole('button', { name: 'Delete Business' }))
 
       await user.selectOptions(screen.getByLabelText('Business to delete'), 'biz-1')
@@ -934,7 +1054,7 @@ describe('DashboardPage', () => {
       const user = userEvent.setup()
 
       renderDashboard()
-      await screen.findByText('Acme Widgets')
+      await screen.findByRole('link', { name: 'Acme Widgets' })
       const edit = screen.getByRole('button', { name: 'Edit Business' })
       await user.click(edit)
       await user.selectOptions(await screen.findByLabelText('Business to edit'), 'biz-2')
@@ -1030,7 +1150,7 @@ describe('DashboardPage', () => {
       const user = userEvent.setup()
 
       renderDashboard()
-      await screen.findByText('Globex')
+      await screen.findByRole('link', { name: 'Globex' })
       const panel = await openEditPanel(user)
       // No form until one is picked.
       expect(panel.queryByLabelText('Name')).not.toBeInTheDocument()
@@ -1197,7 +1317,7 @@ describe('DashboardPage', () => {
       const user = userEvent.setup()
 
       renderDashboard()
-      await screen.findByText('Globex')
+      await screen.findByRole('link', { name: 'Globex' })
       const panel = await openEditPanel(user)
       await user.click(panel.getByRole('button', { name: 'Cancel' }))
 

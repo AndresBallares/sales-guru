@@ -17,6 +17,7 @@ import {
   type Business,
   type Option,
 } from '../lib/api'
+import { BrandBusinessSection } from '../components/BrandBusinessSection'
 import { DeleteBusinessSection } from '../components/DeleteBusinessSection'
 import { EditBusinessSection } from '../components/EditBusinessSection'
 import { PlusIcon, SaveIcon } from '../components/icons'
@@ -414,6 +415,8 @@ export function DashboardPage() {
           </div>
         </form>
       </section>
+
+      {!loadingBusinesses && <BrandBusinessSection businesses={businesses} />}
     </main>
   )
 }

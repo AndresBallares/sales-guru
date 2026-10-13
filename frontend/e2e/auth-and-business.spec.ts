@@ -64,29 +64,12 @@ test('sign up, create a business, log out, log back in', async ({ page }) => {
   await page.getByRole('button', { name: 'Save Business' }).click()
 
   // Creating a business navigates straight to its own detail page — no
-  // dead-end empty form left behind on the dashboard. Brand comes first
-  // in this flow (PRD.md §5 step 3.5, confirmed 2026-09-11) — a short
-  // one-time questionnaire the Strategist/Creative Agents ground into
-  // once filled in — ahead of even the campaign objective step.
+  // dead-end empty form left behind on the dashboard. The Brand profile now
+  // lives on the dashboard (under Company Information), so nothing gates the
+  // campaign step here.
   await expect(page.getByRole('heading', { name: 'Acme Widgets' })).toBeVisible()
-  await expect(page.getByRole('heading', { name: 'Brand' })).toBeVisible()
-
-  const brandStepResults = await new AxeBuilder({ page }).analyze()
-  expect(brandStepResults.violations).toEqual([])
-
-  await page.getByLabel(/Brand overview/).fill('Family-run studio since 1985.')
-  await page.getByLabel('Ideal customer').fill('Women 30-55 buying for milestones.')
-  await page.getByLabel('Warm').check()
-  await page.getByLabel('Price positioning').selectOption({ label: 'Premium' })
-  await page.getByRole('button', { name: 'Save brand profile' }).click()
-
-  // Saving the brand profile moves straight to the campaign objective
-  // step — its onboarding form is gone, replaced by a summary + "Edit
-  // brand profile" that stays reachable from here on (not a one-time-
-  // only gate — see the dedicated brand-profile-onboarding spec).
+  await expect(page.getByRole('heading', { name: 'Brand' })).not.toBeVisible()
   await expect(page.getByText('No campaigns yet')).toBeVisible()
-  await expect(page.getByRole('button', { name: 'Save brand profile' })).not.toBeVisible()
-  await expect(page.getByRole('button', { name: 'Edit brand profile' })).toBeVisible()
 
   const businessDetailResults = await new AxeBuilder({ page }).analyze()
   expect(businessDetailResults.violations).toEqual([])
@@ -143,12 +126,10 @@ test('sign up, create a business, log out, log back in', async ({ page }) => {
   await expect(page.getByText('Acme Widgets — Fashion / Jewelry · CDMX')).toBeVisible()
 })
 
-// Dedicated coverage for the Brand ("brand DNA") onboarding step itself
-// (PRD.md §5 step 3.5) — the combined flow above already exercises the
-// happy path once; this isolates the required-field gate and the
-// "editable later" round-trip so a regression in either fails here,
-// unambiguously, rather than buried in the middle of the longer flow.
-test('the Brand step blocks on required fields, then is editable later', async ({
+// Dedicated coverage for the Brand ("brand DNA") profile (PRD.md §5 step 3.5),
+// which lives on the dashboard under Company Information: isolates the
+// required-field gate and the "editable later" round-trip.
+test('the Brand section blocks on required fields, then is editable later', async ({
   page,
 }) => {
   const email = uniqueEmail()
@@ -162,7 +143,10 @@ test('the Brand step blocks on required fields, then is editable later', async (
   await page.getByLabel('Name').fill('Venzi Jewelry')
   await page.getByLabel('Industry').selectOption({ label: 'Fashion / Jewelry' })
   await page.getByRole('button', { name: 'Save Business' }).click()
+  await expect(page.getByRole('heading', { name: 'Venzi Jewelry' })).toBeVisible()
 
+  // Back on the dashboard, Brand sits under Company Information.
+  await page.getByRole('link', { name: /Back to dashboard/ }).click()
   await expect(page.getByRole('heading', { name: 'Brand' })).toBeVisible()
 
   // The browser's own required-field validation blocks submission with
@@ -177,31 +161,17 @@ test('the Brand step blocks on required fields, then is editable later', async (
   await page.getByLabel('Price positioning').selectOption({ label: 'Luxury' })
   await page.getByRole('button', { name: 'Save brand profile' }).click()
 
-  // Saved — the Brand step gives way to the next one (campaign objective).
-  await expect(page.getByText('No campaigns yet')).toBeVisible()
+  // Saved — the form gives way to a summary with "Edit brand profile".
+  await expect(page.getByRole('button', { name: 'Save brand profile' })).not.toBeVisible()
+  await expect(page.getByRole('button', { name: 'Edit brand profile' })).toBeVisible()
 
-  // Complete the rest of onboarding so the fully-settled page (Campaigns
-  // view) is reachable — that's where "editable later" is exercised.
-  await page.getByLabel('Objective').selectOption({ label: 'Sales' })
-  await page.getByRole('button', { name: 'Create campaign' }).click()
-  await page.getByLabel('What do you sell?').fill('Handmade gold rings')
-  await page.getByLabel('Price').fill('900')
-  await page.getByLabel(/^URL/).fill('https://venzi.example/rings')
-  await page.getByRole('button', { name: 'Add product' }).click()
-  await page.getByLabel('Who buys?').fill('Self-purchasing women, 30-55')
-  await page.getByRole('button', { name: 'Add audience' }).click()
-
-  // Meta Ads is next and can't be completed here (real OAuth) — but
-  // "Edit brand profile" must already be reachable regardless, since
-  // it's not gated behind Meta the way the Campaigns view is.
-  await expect(page.getByRole('heading', { name: 'Meta Ads' })).toBeVisible()
   await page.getByRole('button', { name: 'Edit brand profile' }).click()
   await expect(page.getByLabel(/Brand overview/)).toHaveValue(
     'Family-run studio since 1985.',
   )
 
   await page.getByLabel('Tagline').fill('Wear your story')
-  await page.getByRole('button', { name: 'Save' }).click()
+  await page.getByRole('button', { name: 'Save', exact: true }).click()
 
   await expect(page.getByRole('button', { name: 'Edit brand profile' })).toBeVisible()
 })

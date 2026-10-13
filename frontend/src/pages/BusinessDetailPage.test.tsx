@@ -174,17 +174,18 @@ function renderPage(entry = '/businesses/biz-1') {
 }
 
 describe('BusinessDetailPage', () => {
-  it('starts on the Brand step for a business with no brand profile yet', async () => {
+  it('has no Brand section or Brand gate: a business without a brand profile goes straight to campaigns', async () => {
     mockedApi.getBrandProfile.mockRejectedValue(
       new api.ApiError(404, 'This business has no brand profile yet'),
     )
 
     renderPage()
 
-    expect(
-      await screen.findByRole('button', { name: 'Save brand profile' }),
-    ).toBeInTheDocument()
-    expect(screen.queryByRole('heading', { name: 'Create a campaign' })).not.toBeInTheDocument()
+    expect(await screen.findByRole('heading', { name: 'Create a campaign' })).toBeInTheDocument()
+    // Brand now lives on the dashboard, under Company Information.
+    expect(screen.queryByRole('heading', { name: 'Brand' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Save brand profile' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Edit brand profile' })).not.toBeInTheDocument()
   })
 
   it('starts on the campaign step for a business with no campaign yet', async () => {
@@ -317,11 +318,8 @@ describe('BusinessDetailPage', () => {
       expect(screen.queryByRole('heading', { name: 'Audiences' })).not.toBeInTheDocument()
       expect(screen.queryByRole('heading', { name: 'Meta Ads' })).not.toBeInTheDocument()
     })
-    // Brand is still reachable once onboarding is complete — "editable
-    // later from the business page," not a one-time-only gate.
-    expect(
-      await screen.findByRole('button', { name: 'Edit brand profile' }),
-    ).toBeInTheDocument()
+    // Brand is edited from the dashboard now, not from this page.
+    expect(screen.queryByRole('button', { name: 'Edit brand profile' })).not.toBeInTheDocument()
     // The results dashboard sits above the campaign list (an unpublished
     // campaign has no results, so it shows its empty state).
     const results = screen.getByRole('heading', { name: 'Results' })
