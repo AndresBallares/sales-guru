@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
-import { SaveIcon } from './icons'
+import { ArrowRightIcon, SaveIcon } from './icons'
 import { InstagramAccountForm } from './InstagramAccountForm'
-import { useSearchParams } from 'react-router-dom'
+import { Link, useSearchParams } from 'react-router-dom'
 import {
   ApiError,
   connectMeta,
@@ -22,9 +22,21 @@ import {
 export function MetaConnectionSection({
   businessId,
   onSetupComplete,
+  onContinue,
+  skipTo,
+  onSkip,
 }: {
   businessId: string
   onSetupComplete?: (complete: boolean) => void
+  // When given, a clear "Continue to campaigns" action appears once the
+  // connection is fully set up (the onboarding step before the first campaign).
+  onContinue?: () => void
+  // When given, a quiet "Skip for now" link to this path appears while the
+  // connection is not set up yet (a soft gate: on to the campaigns without Meta).
+  skipTo?: string
+  // Same quiet "Skip for now" action as a button, for a step that is already on the
+  // right page (no navigation needed). `skipTo` wins if both are given.
+  onSkip?: () => void
 }) {
   const [searchParams, setSearchParams] = useSearchParams()
   const [connection, setConnection] = useState<MetaConnection | null>(null)
@@ -211,6 +223,16 @@ export function MetaConnectionSection({
     }
   }
 
+  const skipAction = skipTo ? (
+    <Link className="cancel-link" to={skipTo}>
+      Skip for now
+    </Link>
+  ) : onSkip ? (
+    <button type="button" className="cancel-link" onClick={onSkip}>
+      Skip for now
+    </button>
+  ) : null
+
   return (
     <section>
       <h2>Meta Ads</h2>
@@ -236,9 +258,12 @@ export function MetaConnectionSection({
       {!loading && connection === null && (
         <>
           <p>Not connected yet.</p>
-          <button type="button" onClick={handleConnect} disabled={connecting}>
-            {connecting ? 'Connecting…' : 'Connect Meta Ads'}
-          </button>
+          <div className="button-row">
+            <button type="button" onClick={handleConnect} disabled={connecting}>
+              {connecting ? 'Connecting…' : 'Connect Meta Ads'}
+            </button>
+            {skipAction}
+          </div>
         </>
       )}
 
@@ -275,15 +300,18 @@ export function MetaConnectionSection({
               ))}
             </select>
           </div>
-          <button
-            type="button"
-            className="btn-outline btn-gold"
-            onClick={handleFinalize}
-            disabled={finalizing || !selectedAdAccountId || !selectedPageId}
-          >
-            <SaveIcon />
-            {finalizing ? 'Saving…' : 'Save connection'}
-          </button>
+          <div className="button-row">
+            <button
+              type="button"
+              className="btn-outline btn-gold"
+              onClick={handleFinalize}
+              disabled={finalizing || !selectedAdAccountId || !selectedPageId}
+            >
+              <SaveIcon />
+              {finalizing ? 'Saving…' : 'Save connection'}
+            </button>
+            {skipAction}
+          </div>
         </div>
       )}
 
@@ -384,6 +412,18 @@ export function MetaConnectionSection({
               </>
             )}
           </div>
+          {setupComplete && onContinue && (
+            <div className="flow-callout" role="status">
+              <p>
+                <strong>Meta connection saved.</strong> You can now create this business's first
+                campaign.
+              </p>
+              <button type="button" className="btn-outline btn-gold" onClick={onContinue}>
+                Continue to campaigns
+                <ArrowRightIcon />
+              </button>
+            </div>
+          )}
         </div>
       )}
     </section>

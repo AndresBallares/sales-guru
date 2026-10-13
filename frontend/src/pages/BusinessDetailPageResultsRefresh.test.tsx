@@ -80,6 +80,10 @@ vi.mock('../lib/api', async (importOriginal) => {
     ...actual,
     getBusiness: vi.fn<typeof actual.getBusiness>(),
     getOptions: vi.fn<typeof actual.getOptions>(),
+    // The page's up-front onboarding check.
+    getBrandProfile: vi.fn<typeof actual.getBrandProfile>(),
+    getMetaConnection: vi.fn<typeof actual.getMetaConnection>(),
+    listCampaigns: vi.fn<typeof actual.listCampaigns>(),
   }
 })
 const mockedApi = vi.mocked(api)
@@ -95,6 +99,15 @@ describe('BusinessDetailPage: Results refresh', () => {
       industry: null,
     } as api.Business)
     mockedApi.getOptions.mockResolvedValue({ industries: [] } as never)
+    // Brand saved, Meta fully set up, a campaign exists: straight to the completed view.
+    mockedApi.getBrandProfile.mockResolvedValue({} as api.BrandProfile)
+    mockedApi.getMetaConnection.mockResolvedValue({
+      adAccountId: 'act_1',
+      pageId: 'page_1',
+      pixelId: 'pixel_1',
+      pixelSkipped: false,
+    } as api.MetaConnection)
+    mockedApi.listCampaigns.mockResolvedValue([campaign('a')])
   })
 
   async function renderCompletedPage() {

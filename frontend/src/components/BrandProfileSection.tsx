@@ -12,10 +12,20 @@ export function BrandProfileSection({
   businessId,
   onProfileChange,
   headerExtra,
+  summaryExtra,
+  onSaved,
+  autoFocusForm = false,
 }: {
   businessId: string
   onProfileChange?: (profile: BrandProfile | null) => void
   headerExtra?: ReactNode
+  // Shown under the profile summary (the dashboard puts its "saved — continue"
+  // confirmation here).
+  summaryExtra?: ReactNode
+  // Called after the profile is saved (created or updated).
+  onSaved?: (profile: BrandProfile) => void
+  // Focus the form's first field when it appears.
+  autoFocusForm?: boolean
 }) {
   const [profile, setProfile] = useState<BrandProfile | null>(null)
   const [loading, setLoading] = useState(true)
@@ -53,7 +63,7 @@ export function BrandProfileSection({
 
   if (loading) {
     return (
-      <section>
+      <section id="brand">
         <h2>Brand</h2>
         {headerExtra}
         <p>Loading…</p>
@@ -63,7 +73,7 @@ export function BrandProfileSection({
 
   if (error) {
     return (
-      <section>
+      <section id="brand">
         <h2>Brand</h2>
         {headerExtra}
         <p className="form-error" role="alert">
@@ -75,7 +85,7 @@ export function BrandProfileSection({
 
   if (profile && !editing) {
     return (
-      <section>
+      <section id="brand">
         <h2>Brand</h2>
         {headerExtra}
         <p>{profile.description}</p>
@@ -83,12 +93,13 @@ export function BrandProfileSection({
           <PencilIcon />
           Edit brand profile
         </button>
+        {summaryExtra}
       </section>
     )
   }
 
   return (
-    <section>
+    <section id="brand">
       <h2>Brand</h2>
       {headerExtra}
       <p>
@@ -99,10 +110,12 @@ export function BrandProfileSection({
         key={businessId}
         businessId={businessId}
         profile={profile ?? undefined}
+        autoFocus={autoFocusForm}
         onSaved={(saved) => {
           setProfile(saved)
           onProfileChange?.(saved)
           setEditing(false)
+          onSaved?.(saved)
         }}
         onCancel={profile ? () => setEditing(false) : undefined}
       />

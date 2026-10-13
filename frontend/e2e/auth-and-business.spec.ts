@@ -63,12 +63,53 @@ test('sign up, create a business, log out, log back in', async ({ page }) => {
   await page.getByLabel('Location').fill('CDMX')
   await page.getByRole('button', { name: 'Save Business' }).click()
 
-  // Creating a business navigates straight to its own detail page — no
-  // dead-end empty form left behind on the dashboard. The Brand profile now
-  // lives on the dashboard (under Company Information), so nothing gates the
-  // campaign step here.
+  // The onboarding order: business -> Brand profile -> save and confirm ->
+  // Meta connection -> first campaign. Saving a business stays on the dashboard,
+  // in that business's Brand form, ready to complete.
+  await expect(page.getByLabel(/Brand overview/)).toBeFocused()
+  await expect(page.getByLabel('Business', { exact: true })).toHaveCount(0)
+
+  const brandFormResults = await new AxeBuilder({ page }).analyze()
+  expect(brandFormResults.violations).toEqual([])
+
+  await page.getByLabel(/Brand overview/).fill('Family-run studio since 1985.')
+  await page.getByLabel('Ideal customer').fill('Women 30-55 buying for milestones.')
+  await page.getByLabel('Warm').check()
+  await page.getByLabel('Price positioning').selectOption({ label: 'Premium' })
+  await page.getByRole('button', { name: 'Save brand profile' }).click()
+
+  // Saved and confirmed, with a clear way on to the Meta connection settings.
+  await expect(page.getByText('Brand profile saved.')).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Save brand profile' })).not.toBeVisible()
+  await expect(page.getByRole('button', { name: 'Edit brand profile' })).toBeVisible()
+  await page.getByRole('button', { name: 'Continue to Meta connection settings' }).click()
+
+  // The Meta step comes before any campaign; real OAuth can't be driven here,
+  // so it is only checked (the fake-meta specs go through it).
   await expect(page.getByRole('heading', { name: 'Acme Widgets' })).toBeVisible()
-  await expect(page.getByRole('heading', { name: 'Brand' })).not.toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Meta Ads' })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Connect Meta Ads' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Create a campaign' })).not.toBeVisible()
+
+  const metaStepResults = await new AxeBuilder({ page }).analyze()
+  expect(metaStepResults.violations).toEqual([])
+
+  // Fake-connect stands in for the OAuth round trip.
+  const businessId = page.url().match(/businesses\/([^/?]+)/)?.[1]
+  const fakeConnect = await page.request.post(
+    `http://localhost:8000/businesses/${businessId}/meta/fake-connect`,
+  )
+  expect(fakeConnect.ok()).toBe(true)
+  await page.reload()
+  await page.getByLabel('Ad account').selectOption({ label: 'Fake Ad Account' })
+  await page.getByLabel('Page').selectOption({ label: 'Fake Page' })
+  await page.getByRole('button', { name: 'Save connection' }).click()
+  await page.getByRole('button', { name: 'Skip for now' }).click()
+
+  // Meta saved: a clear Continue to campaigns.
+  await expect(page.getByText('Meta connection saved.')).toBeVisible()
+  await page.getByRole('button', { name: 'Continue to campaigns' }).click()
+
   await expect(page.getByText('No campaigns yet')).toBeVisible()
 
   const businessDetailResults = await new AxeBuilder({ page }).analyze()
@@ -96,17 +137,10 @@ test('sign up, create a business, log out, log back in', async ({ page }) => {
   await page.getByLabel('Where are your customers?').fill('New York')
   await page.getByRole('button', { name: 'Add audience' }).click()
 
-  // Adding an audience moves straight to the Meta Ads step — the
-  // audience step (and the audience itself) is no longer shown on screen.
-  // The Campaigns step is now gated behind a completed Meta connection
-  // (real OAuth, which this suite can't drive), so Campaigns must NOT
-  // appear alongside it — this is exactly the bug this gating fixed.
-  await expect(page.getByRole('heading', { name: 'Meta Ads' })).toBeVisible()
-  await expect(page.getByRole('button', { name: 'Connect Meta Ads' })).toBeVisible()
-  await expect(page.getByRole('heading', { name: 'Campaigns' })).not.toBeVisible()
-
-  const metaStepResults = await new AxeBuilder({ page }).analyze()
-  expect(metaStepResults.violations).toEqual([])
+  // Adding an audience completes the onboarding: Meta is already connected, so
+  // the full Campaigns view opens with no Meta step in front of it.
+  await expect(page.getByRole('heading', { name: 'Campaigns' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Meta Ads' })).not.toBeVisible()
 
   await page.getByRole('link', { name: '← Back to dashboard' }).click()
   await expect(page.getByRole('heading', { name: 'Sales Guru' })).toBeVisible()
@@ -143,11 +177,10 @@ test('the Brand section blocks on required fields, then is editable later', asyn
   await page.getByLabel('Name').fill('Venzi Jewelry')
   await page.getByLabel('Industry').selectOption({ label: 'Fashion / Jewelry' })
   await page.getByRole('button', { name: 'Save Business' }).click()
-  await expect(page.getByRole('heading', { name: 'Venzi Jewelry' })).toBeVisible()
 
-  // Back on the dashboard, Brand sits under Company Information.
-  await page.getByRole('link', { name: /Back to dashboard/ }).click()
+  // Saving the business leaves you in its Brand form on the dashboard.
   await expect(page.getByRole('heading', { name: 'Brand' })).toBeVisible()
+  await expect(page.getByLabel(/Brand overview/)).toBeFocused()
 
   // The browser's own required-field validation blocks submission with
   // the ideal-customer field (and every other required field) still
@@ -197,4 +230,69 @@ test('signup rejects a duplicate email', async ({ page }) => {
   await page.getByRole('button', { name: 'Sign up' }).click()
 
   await expect(page.getByRole('alert')).toHaveText('Email already registered')
+})
+
+test('a business without a brand profile cannot start a campaign until it has one', async ({
+  page,
+}) => {
+  const email = uniqueEmail()
+  await page.goto('/signup')
+  await page.getByLabel('Email').fill(email)
+  await page.getByLabel('Password').fill('supersecret123')
+  await page.getByRole('checkbox').check()
+  await page.getByRole('button', { name: 'Sign up' }).click()
+  await page.getByLabel('Name').fill('Gated Co')
+  await page.getByLabel('Industry').selectOption({ label: 'Fashion / Jewelry' })
+  await page.getByRole('button', { name: 'Save Business' }).click()
+  await expect(page.getByLabel(/Brand overview/)).toBeFocused()
+
+  // Skip the Brand form and open the business page directly.
+  await page.getByRole('link', { name: 'Gated Co' }).click()
+
+  await expect(
+    page.getByRole('heading', { name: 'Complete the Brand profile first' }),
+  ).toBeVisible()
+  await expect(page.getByText(/Campaigns can't be created until it does/)).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Meta Ads' })).not.toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Create a campaign' })).not.toBeVisible()
+
+  const gateResults = await new AxeBuilder({ page }).analyze()
+  expect(gateResults.violations).toEqual([])
+
+  // The link goes back to that business's Brand form, ready to complete.
+  await page.getByRole('link', { name: 'Complete the Brand profile' }).click()
+  await expect(page.getByLabel(/Brand overview/)).toBeFocused()
+  await expect(page).toHaveURL(/\/$/)
+})
+
+test('after saving the Brand profile you can skip Meta for now and go on to the campaigns', async ({
+  page,
+}) => {
+  const email = uniqueEmail()
+  await page.goto('/signup')
+  await page.getByLabel('Email').fill(email)
+  await page.getByLabel('Password').fill('supersecret123')
+  await page.getByRole('checkbox').check()
+  await page.getByRole('button', { name: 'Sign up' }).click()
+  await page.getByLabel('Name').fill('Skipper Co')
+  await page.getByLabel('Industry').selectOption({ label: 'Fashion / Jewelry' })
+  await page.getByRole('button', { name: 'Save Business' }).click()
+
+  await page.getByLabel(/Brand overview/).fill('Family-run studio since 1985.')
+  await page.getByLabel('Ideal customer').fill('Busy professionals, 30-55.')
+  await page.getByLabel('Warm').check()
+  await page.getByLabel('Price positioning').selectOption({ label: 'Mid-range' })
+  await page.getByRole('button', { name: 'Save brand profile' }).click()
+
+  // Both choices appear once the profile is saved, Continue first.
+  await expect(page.getByText('Brand profile saved.')).toBeVisible()
+  await expect(
+    page.getByRole('button', { name: 'Continue to Meta connection settings' }),
+  ).toBeVisible()
+  await page.getByRole('link', { name: 'Skip for now' }).click()
+
+  // Straight to the business's campaign step, without the Meta step.
+  await expect(page.getByRole('heading', { name: 'Skipper Co' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Create a campaign' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Meta Ads' })).not.toBeVisible()
 })

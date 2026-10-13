@@ -1,4 +1,5 @@
 import { render, screen, waitFor } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { BusinessDetailPage } from './BusinessDetailPage'
@@ -20,6 +21,11 @@ vi.mock('../lib/api', async (importOriginal) => {
     listAudiences: vi.fn<typeof actual.listAudiences>(),
     listCampaigns: vi.fn<typeof actual.listCampaigns>(),
     getMetaConnection: vi.fn<typeof actual.getMetaConnection>(),
+    listMetaPixels: vi.fn<typeof actual.listMetaPixels>(),
+    listMetaAdAccounts: vi.fn<typeof actual.listMetaAdAccounts>(),
+    listMetaPages: vi.fn<typeof actual.listMetaPages>(),
+    skipMetaPixel: vi.fn<typeof actual.skipMetaPixel>(),
+    getStrategy: vi.fn<typeof actual.getStrategy>(),
     getBrandProfile: vi.fn<typeof actual.getBrandProfile>(),
     getBusinessDashboard: vi.fn<typeof actual.getBusinessDashboard>(),
     getCampaignDashboard: vi.fn<typeof actual.getCampaignDashboard>(),
@@ -69,6 +75,22 @@ const brandProfile: api.BrandProfile = {
   offer: null,
   adLanguages: ['English'],
   logoUrl: null,
+}
+
+// A fully set-up Meta connection (ad account, Page and a Pixel).
+const completeMeta: api.MetaConnection = {
+  id: 'conn-1',
+  businessId: 'biz-1',
+  metaUserId: 'meta-user-1',
+  adAccountId: 'act_1',
+  pageId: 'page_1',
+  instagramUserId: 'ig_1',
+  instagramUserIdDiscovered: 'ig_1',
+  instagramUserIdManual: null,
+  pixelId: 'pixel_1',
+  pixelSkipped: false,
+  tokenExpiresAt: '2026-10-01T00:00:00Z',
+  createdAt: '2026-08-08T00:00:00Z',
 }
 
 const INDUSTRY_OPTIONS = [
@@ -174,21 +196,265 @@ function renderPage(entry = '/businesses/biz-1') {
 }
 
 describe('BusinessDetailPage', () => {
-  it('has no Brand section or Brand gate: a business without a brand profile goes straight to campaigns', async () => {
-    mockedApi.getBrandProfile.mockRejectedValue(
-      new api.ApiError(404, 'This business has no brand profile yet'),
-    )
+  describe('the Brand gate', () => {
+    beforeEach(() => {
+      mockedApi.getBrandProfile.mockRejectedValue(
+        new api.ApiError(404, 'This business has no brand profile yet'),
+      )
+    })
 
-    renderPage()
+    it('stops a business without a brand profile and explains that it must be completed first', async () => {
+      renderPage()
 
-    expect(await screen.findByRole('heading', { name: 'Create a campaign' })).toBeInTheDocument()
-    // Brand now lives on the dashboard, under Company Information.
-    expect(screen.queryByRole('heading', { name: 'Brand' })).not.toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: 'Save brand profile' })).not.toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: 'Edit brand profile' })).not.toBeInTheDocument()
+      expect(
+        await screen.findByRole('heading', { name: 'Complete the Brand profile first' }),
+      ).toBeInTheDocument()
+      expect(screen.getByText(/Campaigns can't be created until it does/)).toBeInTheDocument()
+      expect(screen.getByText(/Acme Widgets doesn't have a brand profile yet/)).toBeInTheDocument()
+    })
+
+    it('offers a link to that business\'s Brand form on the dashboard', async () => {
+      renderPage()
+
+      const link = await screen.findByRole('link', { name: 'Complete the Brand profile' })
+      expect(link).toHaveAttribute('href', '/?brand=biz-1')
+    })
+
+    it('shows nothing that could start a campaign while the gate is up', async () => {
+      mockedApi.getMetaConnection.mockResolvedValue(completeMeta)
+
+      renderPage()
+      await screen.findByRole('heading', { name: 'Complete the Brand profile first' })
+
+      expect(screen.queryByRole('heading', { name: 'Create a campaign' })).not.toBeInTheDocument()
+      expect(screen.queryByRole('heading', { name: 'Campaigns' })).not.toBeInTheDocument()
+      expect(screen.queryByRole('heading', { name: 'Meta Ads' })).not.toBeInTheDocument()
+      expect(screen.queryByRole('heading', { name: 'Results' })).not.toBeInTheDocument()
+    })
+
+    it('gates even a business that already has campaigns', async () => {
+      mockedApi.listCampaigns.mockResolvedValue([draftCampaign])
+
+      renderPage()
+
+      expect(
+        await screen.findByRole('heading', { name: 'Complete the Brand profile first' }),
+      ).toBeInTheDocument()
+      expect(screen.queryByText('Sales — Draft')).not.toBeInTheDocument()
+    })
+
+    it('does not flash the gate or the campaign step while it is still checking', async () => {
+      mockedApi.getBrandProfile.mockReturnValue(new Promise(() => {}))
+
+      renderPage()
+
+      expect(await screen.findByText('Loading…')).toBeInTheDocument()
+      expect(
+        screen.queryByRole('heading', { name: 'Complete the Brand profile first' }),
+      ).not.toBeInTheDocument()
+      expect(screen.queryByRole('heading', { name: 'Create a campaign' })).not.toBeInTheDocument()
+    })
+
+    it('shows an error with Try again if the check itself fails, and still does not let campaigns start', async () => {
+      mockedApi.getBrandProfile.mockRejectedValueOnce(new api.ApiError(500, 'Server error'))
+
+      renderPage()
+
+      expect(await screen.findByRole('alert')).toHaveTextContent('Server error')
+      expect(screen.queryByRole('heading', { name: 'Create a campaign' })).not.toBeInTheDocument()
+
+      mockedApi.getMetaConnection.mockResolvedValue(completeMeta)
+      mockedApi.getBrandProfile.mockResolvedValue(brandProfile)
+      await userEvent.click(screen.getByRole('button', { name: 'Try again' }))
+
+      expect(await screen.findByRole('heading', { name: 'Create a campaign' })).toBeInTheDocument()
+    })
+  })
+
+  describe('the Meta step before the first campaign', () => {
+    it('comes first for a business with a brand profile but no campaign and no Meta connection', async () => {
+      renderPage()
+
+      expect(await screen.findByRole('heading', { name: 'Meta Ads' })).toBeInTheDocument()
+      // The button appears once the (empty) connection has loaded.
+      expect(await screen.findByRole('button', { name: 'Connect Meta Ads' })).toBeInTheDocument()
+      expect(screen.queryByRole('heading', { name: 'Create a campaign' })).not.toBeInTheDocument()
+      expect(screen.queryByRole('button', { name: 'Continue to campaigns' })).not.toBeInTheDocument()
+    })
+
+    it('offers Continue to campaigns once the connection is saved, and that opens the campaign step', async () => {
+      // Connected, but the Pixel decision (save or skip) is still open.
+      mockedApi.getMetaConnection.mockResolvedValue({ ...completeMeta, pixelId: null })
+      mockedApi.listMetaPixels.mockResolvedValue([])
+      mockedApi.skipMetaPixel.mockResolvedValue({ ...completeMeta, pixelId: null, pixelSkipped: true })
+      const user = userEvent.setup()
+
+      renderPage()
+      await screen.findByRole('heading', { name: 'Meta Ads' })
+      expect(screen.queryByRole('button', { name: 'Continue to campaigns' })).not.toBeInTheDocument()
+
+      await user.click(await screen.findByRole('button', { name: 'Skip for now' }))
+
+      const next = await screen.findByRole('button', { name: 'Continue to campaigns' })
+      expect(screen.getByText('Meta connection saved.')).toBeInTheDocument()
+      // Still on the Meta step until the user chooses to continue.
+      expect(screen.queryByRole('heading', { name: 'Create a campaign' })).not.toBeInTheDocument()
+
+      await user.click(next)
+
+      expect(await screen.findByRole('heading', { name: 'Create a campaign' })).toBeInTheDocument()
+      expect(screen.queryByRole('heading', { name: 'Meta Ads' })).not.toBeInTheDocument()
+    })
+
+    it('offers a quiet Skip for now link while Meta is not connected', async () => {
+      renderPage()
+
+      const skip = await screen.findByRole('link', { name: 'Skip for now' })
+      expect(skip).toHaveAttribute('href', '/businesses/biz-1?skipMeta=1')
+      expect(screen.getByRole('button', { name: 'Connect Meta Ads' })).toBeInTheDocument()
+    })
+
+    it('goes on to this business\'s campaigns, without Meta, when Skip for now is clicked', async () => {
+      const user = userEvent.setup()
+
+      renderPage()
+      await user.click(await screen.findByRole('link', { name: 'Skip for now' }))
+
+      expect(await screen.findByRole('heading', { name: 'Create a campaign' })).toBeInTheDocument()
+      expect(screen.queryByRole('heading', { name: 'Meta Ads' })).not.toBeInTheDocument()
+      expect(screen.queryByRole('button', { name: 'Connect Meta Ads' })).not.toBeInTheDocument()
+    })
+
+    it('opens straight on the campaign step when ?skipMeta=1 is in the URL (a reload keeps it)', async () => {
+      renderPage('/businesses/biz-1?skipMeta=1')
+
+      expect(await screen.findByRole('heading', { name: 'Create a campaign' })).toBeInTheDocument()
+      expect(screen.queryByRole('heading', { name: 'Meta Ads' })).not.toBeInTheDocument()
+    })
+
+    it('also offers the skip while the ad account and Page are still to be chosen', async () => {
+      mockedApi.getMetaConnection.mockResolvedValue({
+        ...completeMeta,
+        adAccountId: null,
+        pageId: null,
+        pixelId: null,
+      })
+      mockedApi.listMetaAdAccounts.mockResolvedValue([])
+      mockedApi.listMetaPages.mockResolvedValue([])
+
+      renderPage()
+
+      expect(await screen.findByRole('button', { name: 'Save connection' })).toBeInTheDocument()
+      expect(screen.getByRole('link', { name: 'Skip for now' })).toHaveAttribute(
+        'href',
+        '/businesses/biz-1?skipMeta=1',
+      )
+    })
+
+    it('has no skip link once the connection is saved: Continue to campaigns takes over', async () => {
+      mockedApi.getMetaConnection.mockResolvedValue({ ...completeMeta, pixelId: null })
+      mockedApi.listMetaPixels.mockResolvedValue([])
+
+      renderPage()
+
+      await screen.findByRole('button', { name: 'Skip for now' }) // the Pixel step's own skip
+      expect(screen.queryByRole('link', { name: 'Skip for now' })).not.toBeInTheDocument()
+    })
+
+    describe('the later Meta step, after a campaign, product and audience exist', () => {
+      beforeEach(() => {
+        mockedApi.listCampaigns.mockResolvedValue([draftCampaign])
+        mockedApi.listProducts.mockResolvedValue([
+          {
+            id: 'prod-1',
+            description: 'Handmade leather wallets',
+            price: 49.99,
+            margin: null,
+            features: null,
+            benefits: null,
+            primaryImageUrl: null,
+            url: null,
+          },
+        ])
+        mockedApi.listAudiences.mockResolvedValue([
+          {
+            id: 'aud-1',
+            description: 'Busy professionals, 30-55',
+            ageMin: 30,
+            ageMax: 55,
+            location: null,
+            interests: null,
+            problem: null,
+            desire: null,
+          },
+        ])
+      })
+
+      it('offers a quiet Skip for now button', async () => {
+        renderPage()
+
+        expect(await screen.findByRole('heading', { name: 'Meta Ads' })).toBeInTheDocument()
+        expect(await screen.findByRole('button', { name: 'Connect Meta Ads' })).toBeInTheDocument()
+        expect(screen.getByRole('button', { name: 'Skip for now' })).toHaveClass('cancel-link')
+      })
+
+      it('moves on to the campaigns, saying Meta is still to connect, when skipped', async () => {
+        const user = userEvent.setup()
+        renderPage('/businesses/biz-1?skipMeta=1')
+
+        await user.click(await screen.findByRole('button', { name: 'Skip for now' }))
+
+        expect(await screen.findByText("Meta isn't connected yet.")).toBeInTheDocument()
+        expect(screen.queryByRole('heading', { name: 'Meta Ads' })).not.toBeInTheDocument()
+      })
+
+      it('stays skipped on a reload (?metaLater=1) and can go back to connect Meta', async () => {
+        const user = userEvent.setup()
+        renderPage('/businesses/biz-1?metaLater=1')
+
+        await user.click(await screen.findByRole('button', { name: 'Connect Meta' }))
+
+        expect(await screen.findByRole('heading', { name: 'Meta Ads' })).toBeInTheDocument()
+        expect(screen.queryByText("Meta isn't connected yet.")).not.toBeInTheDocument()
+      })
+    })
+
+    it('does not weaken the Brand gate: skipping Meta never skips the brand profile', async () => {
+      mockedApi.getBrandProfile.mockRejectedValue(new api.ApiError(404, 'no profile'))
+
+      renderPage('/businesses/biz-1?skipMeta=1')
+
+      expect(
+        await screen.findByRole('heading', { name: 'Complete the Brand profile first' }),
+      ).toBeInTheDocument()
+      expect(screen.queryByRole('heading', { name: 'Create a campaign' })).not.toBeInTheDocument()
+    })
+
+    it('is skipped when Meta is already fully set up', async () => {
+      mockedApi.getMetaConnection.mockResolvedValue(completeMeta)
+
+      renderPage()
+
+      expect(await screen.findByRole('heading', { name: 'Create a campaign' })).toBeInTheDocument()
+      expect(screen.queryByRole('heading', { name: 'Meta Ads' })).not.toBeInTheDocument()
+      expect(screen.queryByRole('button', { name: 'Continue to campaigns' })).not.toBeInTheDocument()
+    })
+
+    it('is not forced on a business that already has campaigns', async () => {
+      mockedApi.listCampaigns.mockResolvedValue([draftCampaign])
+      mockedApi.getStrategy.mockRejectedValue(new api.ApiError(404, 'no strategy'))
+
+      renderPage()
+
+      // Falls through to the usual steps (product next), not the Meta-first step.
+      expect(await screen.findByRole('heading', { name: 'Products' })).toBeInTheDocument()
+      expect(screen.queryByRole('button', { name: 'Connect Meta Ads' })).not.toBeInTheDocument()
+    })
   })
 
   it('starts on the campaign step for a business with no campaign yet', async () => {
+    mockedApi.getMetaConnection.mockResolvedValue(completeMeta)
+
     renderPage()
 
     expect(await screen.findByRole('heading', { name: 'Acme Widgets' })).toBeInTheDocument()
@@ -332,6 +598,7 @@ describe('BusinessDetailPage', () => {
 
   it('does not show the results dashboard while onboarding is still in progress', async () => {
     mockedApi.listCampaigns.mockResolvedValue([])
+    mockedApi.getMetaConnection.mockResolvedValue(completeMeta)
 
     renderPage()
 

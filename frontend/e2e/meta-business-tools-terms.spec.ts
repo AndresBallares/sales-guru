@@ -27,7 +27,8 @@ test('shows a friendly message and lets the user skip when the ad account has no
   // The whole Meta connection isn't blocked over an optional step — the
   // user can still skip Pixel setup and continue.
   await page.getByRole('button', { name: 'Skip for now' }).click()
-  await expect(page.getByRole('heading', { name: 'Campaigns' })).toBeVisible()
+  // Skipping the Pixel completes the Meta step: on to the campaigns.
+  await expect(page.getByRole('button', { name: 'Continue to campaigns' })).toBeVisible()
 })
 
 test('retries loading Pixels after the ad account accepts the terms', async ({ page }) => {

@@ -41,13 +41,15 @@ export function uniqueEmail(): string {
 // fake-connect (gated behind FAKE_META, app/core/config.py's Settings,
 // never on in production) gets past it instead.
 //
-// Signup through business+campaign creation, landing right on the product
-// onboarding step ("No products yet") — split out from reachMetaPixelStep
-// so product-photos.spec.ts can exercise ProductForm's own upload/staging
-// UI directly, instead of going through the single-file default below.
-export async function reachProductStep(
+// The onboarding order is: create the business, complete and confirm its Brand
+// profile (on the dashboard), connect Meta, then create the first campaign.
+// These helpers walk that order in pieces so a spec can stop wherever it needs.
+
+// Signup, create the business, complete and save its Brand profile, and follow
+// "Continue to Meta connection settings" to the business page's Meta step.
+export async function createBusinessWithBrand(
   page: Page,
-  objectiveLabel = 'Awareness',
+  businessName = 'Acme Widgets',
 ): Promise<void> {
   const email = uniqueEmail()
   const password = 'supersecret123'
@@ -59,56 +61,89 @@ export async function reachProductStep(
   await page.getByRole('button', { name: 'Sign up' }).click()
   await expect(page.getByText(`Signed in as ${email}`)).toBeVisible()
 
-  await page.getByLabel('Name').fill('Acme Widgets')
+  await page.getByLabel('Name').fill(businessName)
   await page.getByLabel('Industry').selectOption({ label: 'Fashion / Jewelry' })
   await page.getByRole('button', { name: 'Save Business' }).click()
-  await expect(page.getByRole('heading', { name: 'Acme Widgets' })).toBeVisible()
 
-  // The campaign step comes straight away: the Brand profile now lives on
-  // the dashboard and no longer gates the business page.
-  await expect(page.getByRole('heading', { name: 'Create a campaign' })).toBeVisible()
+  // Saving a business stays on the dashboard, in that business's Brand form.
+  await expect(page.getByLabel(/Brand overview/)).toBeFocused()
+  await page.getByLabel(/Brand overview/).fill('Family-run studio since 1985.')
+  await page.getByLabel('Ideal customer').fill('Busy professionals, 30-55.')
+  await page.getByLabel('Warm').check()
+  await page.getByLabel('Price positioning').selectOption({ label: 'Mid-range' })
+  await page.getByRole('button', { name: 'Save brand profile' }).click()
 
-  // AWARENESS (Meta's REACH goal) needs no Pixel at *creation* time —
-  // keeps this helper focused on the fake-Meta path, not every
-  // objective's own extra setup step.
-  await page.getByLabel('Objective').selectOption({ label: objectiveLabel })
-  await page.getByRole('button', { name: 'Create campaign' }).click()
+  await expect(page.getByText('Brand profile saved.')).toBeVisible()
+  await page.getByRole('button', { name: 'Continue to Meta connection settings' }).click()
 
-  await expect(page.getByText('No products yet')).toBeVisible()
+  // The Meta step comes before the first campaign.
+  await expect(page.getByRole('heading', { name: businessName })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Meta Ads' })).toBeVisible()
 }
 
-// Returns the business id — callers past this point often need it for a
-// direct API call (fake-connect itself already needed one), and re-
-// deriving it from the URL a second time would just be duplicated work.
-//
-// withProductPhoto defaults to true since every normal path needs one to
-// reach creative selection; product-photos.spec.ts passes false to reach
-// the same point deliberately without one, to exercise the 428 block
-// itself. productPhotoPaths overrides withProductPhoto entirely when
-// given — one setInputFiles call per path, each appending a photo
-// (ProductForm's own staging behavior, see product-photos.spec.ts) — for
-// a spec that needs more than one (a carousel's cards map 1:1 to a
-// product's photos).
+// From the Meta step: fake-connect (real OAuth can't be automated), choose the
+// ad account and Page, and save the connection, stopping at the Pixel step.
+// Returns the business id — callers often need it for a direct API call.
+export async function connectFakeMeta(
+  page: Page,
+  adAccountLabel = 'Fake Ad Account',
+): Promise<string> {
+  const businessId = page.url().match(/businesses\/([^/?]+)/)?.[1]
+  if (!businessId) {
+    throw new Error('could not read the business id out of the current URL')
+  }
+  // Playwright's request context shares this page's session cookie, so this lands
+  // as the same logged-in user hitting the API directly — exactly what a real
+  // "Connect Meta Ads" click would do, minus Meta's own login/consent screens.
+  const fakeConnectResponse = await page.request.post(
+    `http://localhost:8000/businesses/${businessId}/meta/fake-connect`,
+  )
+  expect(fakeConnectResponse.ok()).toBe(true)
+  await page.reload()
+
+  await page.getByLabel('Ad account').selectOption({ label: adAccountLabel })
+  await page.getByLabel('Page').selectOption({ label: 'Fake Page' })
+  await page.getByRole('button', { name: 'Save connection' }).click()
+  await expect(page.getByRole('button', { name: 'Skip for now' })).toBeVisible()
+
+  return businessId
+}
+
+// Business + Brand + fake Meta connection, stopping at the Pixel decision (the
+// last part of the Meta step, before "Continue to campaigns").
 export async function reachMetaPixelStep(
+  page: Page,
+  { adAccountLabel = 'Fake Ad Account' }: { adAccountLabel?: string } = {},
+): Promise<string> {
+  await createBusinessWithBrand(page)
+  return connectFakeMeta(page, adAccountLabel)
+}
+
+// From a finished Meta step ("Continue to campaigns" showing): create the first
+// campaign, a product and an audience, ending on the completed Campaigns view.
+//
+// withProductPhoto defaults to true since every normal path needs one to reach
+// creative selection (select_creative 428s a product with no photos);
+// product-photos.spec.ts reaches the product step without one on purpose.
+// productPhotoPaths overrides it — one setInputFiles per path, each appending a
+// photo — for a spec that needs several (a carousel's cards map 1:1 to photos).
+export async function finishOnboarding(
   page: Page,
   {
     withProductPhoto = true,
     productPhotoPaths,
-    adAccountLabel = 'Fake Ad Account',
     objectiveLabel = 'Awareness',
   }: {
     withProductPhoto?: boolean
     productPhotoPaths?: string[]
-    adAccountLabel?: string
     objectiveLabel?: string
   } = {},
-): Promise<string> {
-  await reachProductStep(page, objectiveLabel)
+): Promise<void> {
+  await createFirstCampaign(page, objectiveLabel)
 
   await page.getByLabel('What do you sell?').fill('Handmade leather wallets')
-  // Optional for an AWARENESS campaign at *creation* time, but publish
-  // (app/api/campaign.py's publish_campaign) always needs a destination
-  // URL to advertise, whatever the objective — so this still needs one.
+  // Optional for an AWARENESS campaign at *creation* time, but publish always
+  // needs a destination URL to advertise, whatever the objective.
   await page.getByLabel(/^URL/).fill('https://acme.example/wallets')
   if (productPhotoPaths) {
     for (const photoPath of productPhotoPaths) {
@@ -125,40 +160,40 @@ export async function reachMetaPixelStep(
   await page.getByLabel('Who buys?').fill('Busy professionals, 30-55')
   await page.getByRole('button', { name: 'Add audience' }).click()
 
-  await expect(page.getByRole('heading', { name: 'Meta Ads' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Campaigns' })).toBeVisible()
+}
 
-  const businessId = page.url().match(/businesses\/([^/?]+)/)?.[1]
-  if (!businessId) {
-    throw new Error('could not read the business id out of the current URL')
-  }
-  // Playwright's request context shares this page's session cookie, so
-  // this lands as the same logged-in user hitting the API directly —
-  // exactly what a real "Connect Meta Ads" click would do, minus the
-  // detour through Meta's own login/consent screens.
-  const fakeConnectResponse = await page.request.post(
-    `http://localhost:8000/businesses/${businessId}/meta/fake-connect`,
-  )
-  expect(fakeConnectResponse.ok()).toBe(true)
-  await page.reload()
+// "Continue to campaigns", then create the first campaign (AWARENESS needs no
+// Pixel at *creation* time, which keeps these helpers focused on the Meta path).
+async function createFirstCampaign(page: Page, objectiveLabel: string): Promise<void> {
+  await page.getByRole('button', { name: 'Continue to campaigns' }).click()
+  await expect(page.getByRole('heading', { name: 'Create a campaign' })).toBeVisible()
+  await page.getByLabel('Objective').selectOption({ label: objectiveLabel })
+  await page.getByRole('button', { name: 'Create campaign' }).click()
+  await expect(page.getByText('No products yet')).toBeVisible()
+}
 
-  await page.getByLabel('Ad account').selectOption({ label: adAccountLabel })
-  await page.getByLabel('Page').selectOption({ label: 'Fake Page' })
-  await page.getByRole('button', { name: 'Save connection' }).click()
-  await expect(page.getByRole('button', { name: 'Skip for now' })).toBeVisible()
-
-  return businessId
+// The whole way through to the product step ("No products yet"), skipping the
+// optional Pixel — split out so product-photos.spec.ts can exercise
+// ProductForm's own upload/staging UI directly.
+export async function reachProductStep(
+  page: Page,
+  objectiveLabel = 'Awareness',
+): Promise<void> {
+  await reachMetaPixelStep(page)
+  await page.getByRole('button', { name: 'Skip for now' }).click()
+  await createFirstCampaign(page, objectiveLabel)
 }
 
 export async function signUpAndReachFakeMetaConnectedBusiness(
   page: Page,
   options: { withProductPhoto?: boolean } = {},
 ): Promise<void> {
-  await reachMetaPixelStep(page, options)
+  await reachMetaPixelStep(page)
 
-  // Persisted on the connection itself (app/api/meta.py's skip_pixel),
-  // not local-only state — see meta-pixel-skip.spec.ts for dedicated
-  // coverage of that persistence.
+  // Persisted on the connection itself (app/api/meta.py's skip_pixel), not
+  // local-only state — see meta-pixel-skip.spec.ts for dedicated coverage.
   await page.getByRole('button', { name: 'Skip for now' }).click()
 
-  await expect(page.getByRole('heading', { name: 'Campaigns' })).toBeVisible()
+  await finishOnboarding(page, options)
 }

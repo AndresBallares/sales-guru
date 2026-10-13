@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test'
-import { reachMetaPixelStep } from './support/fakeMetaFlow'
+import { finishOnboarding, reachMetaPixelStep } from './support/fakeMetaFlow'
 
 // A cold-start SALES campaign gets a CREATIVE_TEST_PLAN: the user adds 3-4
 // generated ads to the test, and they all publish together as separate ads
@@ -8,11 +8,11 @@ import { reachMetaPixelStep } from './support/fakeMetaFlow'
 test('a SALES campaign publishes a creative test of 3 ads, paused by default', async ({
   page,
 }) => {
-  await reachMetaPixelStep(page, { objectiveLabel: 'Sales' })
+  await reachMetaPixelStep(page)
   // SALES optimizes for conversions, which needs a Pixel.
   await page.getByLabel('Meta Pixel').selectOption({ label: 'Fake Pixel' })
   await page.getByRole('button', { name: 'Save Pixel' }).click()
-  await expect(page.getByRole('heading', { name: 'Campaigns' })).toBeVisible()
+  await finishOnboarding(page, { objectiveLabel: 'Sales' })
 
   await page.getByRole('button', { name: 'Generate strategy' }).click()
   await expect(

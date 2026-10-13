@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent } from 'react'
+import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { SaveIcon } from './icons'
 import {
   ApiError,
@@ -41,6 +41,7 @@ export function BrandProfileForm({
   profile,
   onSaved,
   onCancel,
+  autoFocus = false,
 }: {
   businessId: string
   // Omitted = create mode; given = edit mode, pre-filled and PATCHing
@@ -48,8 +49,18 @@ export function BrandProfileForm({
   profile?: BrandProfile
   onSaved: (profile: BrandProfile) => void
   onCancel?: () => void
+  // Focus the first field when the form appears (a brand-new business lands
+  // here ready to be completed).
+  autoFocus?: boolean
 }) {
   const isEditing = profile !== undefined
+  const descriptionRef = useRef<HTMLTextAreaElement>(null)
+
+  useEffect(() => {
+    if (autoFocus) descriptionRef.current?.focus()
+    // Only when the form first appears.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   const [description, setDescription] = useState(profile?.description ?? '')
   const [idealCustomer, setIdealCustomer] = useState(profile?.idealCustomer ?? '')
@@ -161,6 +172,7 @@ export function BrandProfileForm({
         </label>
         <textarea
           id="brand-description"
+          ref={descriptionRef}
           required
           maxLength={MAX_DESCRIPTION_LENGTH}
           value={description}
