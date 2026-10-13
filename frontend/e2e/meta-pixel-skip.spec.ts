@@ -71,3 +71,36 @@ test('skipping the Meta step goes on to the campaigns without connecting Meta', 
   await expect(page.getByRole('heading', { name: 'Create a campaign' })).toBeVisible()
   await expect(page.getByRole('heading', { name: 'Meta Ads' })).not.toBeVisible()
 })
+
+// The Meta step after the audience is saved is a soft gate too: "Skip for now" opens
+// the campaigns (generate and select ads) without Meta, and a reload stays there.
+test('skipping Meta after saving the audience opens the campaigns without Meta', async ({
+  page,
+}) => {
+  await createBusinessWithBrand(page)
+  await page.getByRole('link', { name: 'Skip for now' }).click()
+  await page.getByLabel('Objective').selectOption({ label: 'Awareness' })
+  await page.getByRole('button', { name: 'Create campaign' }).click()
+  await expect(page.getByText('No products yet')).toBeVisible()
+  await page.getByLabel('What do you sell?').fill('Handmade leather wallets')
+  await page.getByLabel(/^URL/).fill('https://acme.example/wallets')
+  await page.getByRole('button', { name: 'Add product' }).click()
+  await expect(page.getByText('No audiences yet')).toBeVisible()
+  await page.getByLabel('Who buys?').fill('Busy professionals, 30-55')
+  await page.getByRole('button', { name: 'Add audience' }).click()
+
+  // Back on the Meta step, this time with a way past it.
+  await expect(page.getByRole('heading', { name: 'Meta Ads' })).toBeVisible()
+  await page.getByRole('button', { name: 'Skip for now' }).click()
+
+  await expect(page.getByRole('heading', { name: 'Campaigns' })).toBeVisible()
+  await expect(page.getByText("Meta isn't connected yet.")).toBeVisible()
+  await page.getByRole('button', { name: 'Generate strategy' }).click()
+  await expect(
+    page.getByText('Has this business run advertising campaigns before?'),
+  ).toBeVisible()
+
+  await page.reload()
+  await expect(page.getByRole('heading', { name: 'Campaigns' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Meta Ads' })).not.toBeVisible()
+})

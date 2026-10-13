@@ -24,6 +24,7 @@ export function MetaConnectionSection({
   onSetupComplete,
   onContinue,
   skipTo,
+  onSkip,
 }: {
   businessId: string
   onSetupComplete?: (complete: boolean) => void
@@ -33,6 +34,9 @@ export function MetaConnectionSection({
   // When given, a quiet "Skip for now" link to this path appears while the
   // connection is not set up yet (a soft gate: on to the campaigns without Meta).
   skipTo?: string
+  // Same quiet "Skip for now" action as a button, for a step that is already on the
+  // right page (no navigation needed). `skipTo` wins if both are given.
+  onSkip?: () => void
 }) {
   const [searchParams, setSearchParams] = useSearchParams()
   const [connection, setConnection] = useState<MetaConnection | null>(null)
@@ -219,6 +223,16 @@ export function MetaConnectionSection({
     }
   }
 
+  const skipAction = skipTo ? (
+    <Link className="cancel-link" to={skipTo}>
+      Skip for now
+    </Link>
+  ) : onSkip ? (
+    <button type="button" className="cancel-link" onClick={onSkip}>
+      Skip for now
+    </button>
+  ) : null
+
   return (
     <section>
       <h2>Meta Ads</h2>
@@ -248,11 +262,7 @@ export function MetaConnectionSection({
             <button type="button" onClick={handleConnect} disabled={connecting}>
               {connecting ? 'Connecting…' : 'Connect Meta Ads'}
             </button>
-            {skipTo && (
-              <Link className="cancel-link" to={skipTo}>
-                Skip for now
-              </Link>
-            )}
+            {skipAction}
           </div>
         </>
       )}
@@ -300,11 +310,7 @@ export function MetaConnectionSection({
               <SaveIcon />
               {finalizing ? 'Saving…' : 'Save connection'}
             </button>
-            {skipTo && (
-              <Link className="cancel-link" to={skipTo}>
-                Skip for now
-              </Link>
-            )}
+            {skipAction}
           </div>
         </div>
       )}
