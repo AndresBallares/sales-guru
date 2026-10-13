@@ -62,8 +62,19 @@ beforeEach(() => {
   mockedImageValidation.readImageDimensions.mockResolvedValue({ width: 1000, height: 1000 })
 })
 
+async function openMenu(user: ReturnType<typeof userEvent.setup>, n: number) {
+  await user.click(screen.getByRole('button', { name: `More actions for Image ${n}` }))
+}
+async function moveFromMenu(user: ReturnType<typeof userEvent.setup>, n: number, action: string) {
+  await openMenu(user, n)
+  await user.click(screen.getByRole('menuitem', { name: action }))
+}
+async function removeFromMenu(user: ReturnType<typeof userEvent.setup>, n: number) {
+  await moveFromMenu(user, n, 'Remove')
+}
+
 describe('ProductForm — create mode photo staging', () => {
-  it('stages a selected photo as a thumbnail, marked Primary', async () => {
+  it('stages a selected photo as a thumbnail, marked Primary image', async () => {
     const user = userEvent.setup()
     render(<ProductForm businessId="biz-1" onSaved={vi.fn<(product: api.Product) => void>()} />)
 
@@ -71,7 +82,7 @@ describe('ProductForm — create mode photo staging', () => {
 
     const thumbnails = await screen.findAllByRole('img')
     expect(thumbnails).toHaveLength(1)
-    expect(screen.getByText('Primary')).toBeInTheDocument()
+    expect(screen.getByText('Primary image')).toBeInTheDocument()
     expect(mockedApi.uploadProductImage).not.toHaveBeenCalled()
   })
 
@@ -160,7 +171,7 @@ describe('ProductForm — create mode photo staging', () => {
     await user.upload(screen.getByLabelText(/Product photos/), bigJpeg())
     await screen.findByRole('img')
 
-    await user.click(screen.getByRole('button', { name: 'Remove' }))
+    await removeFromMenu(user, 1)
 
     expect(screen.queryByRole('img')).not.toBeInTheDocument()
   })
@@ -174,20 +185,20 @@ describe('ProductForm — create mode photo staging', () => {
     ])
     const items = await screen.findAllByRole('listitem')
     const bPreviewSrc = within(items[1]).getByRole('img').getAttribute('src')
-    expect(within(items[0]).getByText('Primary')).toBeInTheDocument()
+    expect(within(items[0]).getByText('Primary image')).toBeInTheDocument()
 
-    // a.jpg (position 0) moves later, swapping with b.jpg.
-    await user.click(within(items[0]).getByRole('button', { name: 'Move later' }))
+    // a.jpg (position 0) moves down, swapping with b.jpg.
+    await moveFromMenu(user, 1, 'Move down')
 
     const reordered = screen.getAllByRole('listitem')
     expect(within(reordered[0]).getByRole('img')).toHaveAttribute('src', bPreviewSrc)
-    expect(within(reordered[0]).getByText('Primary')).toBeInTheDocument()
-    expect(within(reordered[1]).queryByText('Primary')).not.toBeInTheDocument()
+    expect(within(reordered[0]).getByText('Primary image')).toBeInTheDocument()
+    expect(within(reordered[1]).queryByText('Primary image')).not.toBeInTheDocument()
 
-    // Moving it back earlier restores the original order.
-    await user.click(within(reordered[1]).getByRole('button', { name: 'Move earlier' }))
+    // Moving it back up restores the original order.
+    await moveFromMenu(user, 2, 'Move up')
     const restored = screen.getAllByRole('listitem')
-    expect(within(restored[0]).getByText('Primary')).toBeInTheDocument()
+    expect(within(restored[0]).getByText('Primary image')).toBeInTheDocument()
   })
 
   it('uploads staged photos in order, reporting the primary photo\'s URL on save', async () => {
@@ -257,12 +268,12 @@ describe('ProductForm — edit mode live photo management', () => {
 
     const items = await screen.findAllByRole('listitem')
     expect(items).toHaveLength(2)
-    expect(within(items[0]).getByText('Primary')).toBeInTheDocument()
+    expect(within(items[0]).getByText('Primary image')).toBeInTheDocument()
     expect(within(items[0]).getByRole('img')).toHaveAttribute(
       'src',
       'http://localhost:8000/product-images/img-1',
     )
-    expect(within(items[0]).getByText(/aspect ratio/)).toBeInTheDocument()
+    expect(screen.getByText('Some images may be cropped in certain ad placements.')).toBeInTheDocument()
   })
 
   it('uploads a new photo immediately and appends it, showing an uploading indicator meanwhile', async () => {
@@ -312,7 +323,7 @@ describe('ProductForm — edit mode live photo management', () => {
     render(<ProductForm businessId="biz-1" product={product} onSaved={vi.fn<(product: api.Product) => void>()} />)
     await screen.findByRole('img')
 
-    await user.click(screen.getByRole('button', { name: 'Remove' }))
+    await removeFromMenu(user, 1)
 
     await waitFor(() =>
       expect(mockedApi.deleteProductImage).toHaveBeenCalledWith('biz-1', 'prod-1', 'img-1'),
@@ -334,14 +345,15 @@ describe('ProductForm — edit mode live photo management', () => {
     render(<ProductForm businessId="biz-1" product={product} onSaved={vi.fn<(product: api.Product) => void>()} />)
     await screen.findByRole('img')
 
-    await user.click(screen.getByRole('button', { name: 'Remove' }))
+    await removeFromMenu(user, 1)
 
     expect(await screen.findByRole('alert')).toHaveTextContent(
       "This photo is used by a published ad and can't be deleted. Used by: Rings, Spring rings.",
     )
     // The photo is still there, and can be tried again.
     expect(screen.getByRole('img')).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Remove' })).toBeEnabled()
+    await user.click(screen.getByRole('button', { name: 'More actions for Image 1' }))
+    expect(screen.getByRole('menuitem', { name: 'Remove' })).toBeEnabled()
   })
 
   it('falls back to a generic message for a non-ApiError delete failure', async () => {
@@ -353,7 +365,7 @@ describe('ProductForm — edit mode live photo management', () => {
     render(<ProductForm businessId="biz-1" product={product} onSaved={vi.fn<(product: api.Product) => void>()} />)
     await screen.findByRole('img')
 
-    await user.click(screen.getByRole('button', { name: 'Remove' }))
+    await removeFromMenu(user, 1)
 
     expect(await screen.findByRole('alert')).toHaveTextContent('Could not remove image.')
   })
@@ -371,7 +383,8 @@ describe('ProductForm — edit mode live photo management', () => {
     render(<ProductForm businessId="biz-1" product={product} onSaved={vi.fn<(product: api.Product) => void>()} />)
     const items = await screen.findAllByRole('listitem')
 
-    await user.click(within(items[0]).getByRole('button', { name: 'Move later' }))
+    expect(items).toHaveLength(2)
+    await moveFromMenu(user, 1, 'Move down')
 
     await waitFor(() =>
       expect(mockedApi.reorderProductImages).toHaveBeenCalledWith('biz-1', 'prod-1', [
@@ -389,7 +402,7 @@ describe('ProductForm — edit mode live photo management', () => {
       { id: 'img-1', url: 'http://localhost:8000/product-images/img-1', createdAt: '2026-09-01T00:00:00Z' },
       { id: 'img-2', url: 'http://localhost:8000/product-images/img-2', createdAt: '2026-09-02T00:00:00Z' },
     ])
-    await user.click(within(reordered[1]).getByRole('button', { name: 'Move earlier' }))
+    await moveFromMenu(user, 2, 'Move up')
 
     await waitFor(() =>
       expect(mockedApi.reorderProductImages).toHaveBeenLastCalledWith('biz-1', 'prod-1', [
@@ -409,7 +422,8 @@ describe('ProductForm — edit mode live photo management', () => {
     render(<ProductForm businessId="biz-1" product={product} onSaved={vi.fn<(product: api.Product) => void>()} />)
     const items = await screen.findAllByRole('listitem')
 
-    await user.click(within(items[0]).getByRole('button', { name: 'Move later' }))
+    expect(items).toHaveLength(2)
+    await moveFromMenu(user, 1, 'Move down')
 
     expect(await screen.findByRole('alert')).toHaveTextContent('Could not reorder')
   })
@@ -461,14 +475,13 @@ describe('ProductForm — product media (videos and ad-shape badges)', () => {
     render(<ProductForm businessId="biz-1" product={product} onSaved={vi.fn<(product: api.Product) => void>()} />)
 
     const items = await screen.findAllByRole('listitem')
-    expect(within(items[0]).getByText('Video 1:15')).toBeInTheDocument()
-    expect(within(items[0]).getByText('Story 9:16')).toBeInTheDocument()
+    expect(within(items[0]).getByText('Story 9:16 · 1:15')).toBeInTheDocument()
     expect(within(items[0]).getByRole('img')).toHaveAttribute(
       'src',
       'http://localhost:8000/product-images/v1/thumbnail',
     )
     expect(within(items[1]).getByText('Unclassified')).toBeInTheDocument()
-    expect(within(items[1]).queryByText(/^Video/)).not.toBeInTheDocument()
+    expect(within(items[1]).queryByText(/\d:\d\d$/)).not.toBeInTheDocument()
   })
 
   it('uploads a video with its captured thumbnail in edit mode', async () => {
@@ -491,8 +504,7 @@ describe('ProductForm — product media (videos and ad-shape badges)', () => {
     await waitFor(() =>
       expect(mockedApi.uploadProductImage).toHaveBeenCalledWith('biz-1', 'prod-1', file, thumbnail),
     )
-    expect(await screen.findByText('Video 0:12')).toBeInTheDocument()
-    expect(screen.getByText('Story 9:16')).toBeInTheDocument()
+    expect(await screen.findByText('Story 9:16 · 0:12')).toBeInTheDocument()
   })
 
   it('stages a video with its thumbnail in create mode and uploads both on save', async () => {
@@ -510,7 +522,7 @@ describe('ProductForm — product media (videos and ad-shape badges)', () => {
 
     await user.type(screen.getByLabelText('What do you sell?'), 'Handmade wallets')
     await user.upload(screen.getByLabelText(/Product photos/), file)
-    expect(await screen.findByText('Video 0:12')).toBeInTheDocument()
+    expect(await screen.findByText('Story 9:16 · 0:12')).toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: 'Add product' }))
 
     await waitFor(() =>
@@ -535,8 +547,8 @@ describe('ProductForm — product media (videos and ad-shape badges)', () => {
 
     await user.upload(screen.getByLabelText(/Product photos/), clip())
 
-    expect(await screen.findByText(/standard ad shape/)).toBeInTheDocument()
-    expect(screen.getByText('Unclassified')).toBeInTheDocument()
+    expect(await screen.findByText(/standard ad shapes/)).toBeInTheDocument()
+    expect(screen.getByText(/^Unclassified/)).toBeInTheDocument()
   })
 
   it('accepts a typeless .m4v and uploads it as video/mp4', async () => {
@@ -666,7 +678,7 @@ describe('ProductForm — product media (videos and ad-shape badges)', () => {
       await waitFor(() =>
         expect(mockedApi.uploadProductImage).toHaveBeenCalledWith('biz-1', 'prod-1', file, manualThumbnail),
       )
-      expect(await screen.findByText('Video 0:12')).toBeInTheDocument()
+      expect(await screen.findByText('Story 9:16 · 0:12')).toBeInTheDocument()
       expect(screen.queryByLabelText('Upload a thumbnail image')).not.toBeInTheDocument()
     })
 
@@ -685,7 +697,7 @@ describe('ProductForm — product media (videos and ad-shape badges)', () => {
       await user.upload(screen.getByLabelText(/Product photos/), file)
 
       await user.upload(await screen.findByLabelText('Upload a thumbnail image'), manualThumbnail)
-      expect(await screen.findByText('Video 0:12')).toBeInTheDocument()
+      expect(await screen.findByText('Story 9:16 · 0:12')).toBeInTheDocument()
       await user.click(screen.getByRole('button', { name: 'Add product' }))
 
       await waitFor(() =>
