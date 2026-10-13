@@ -1,8 +1,9 @@
 import { useState } from 'react'
 import type { Business } from '../lib/api'
 import { BusinessEditForm } from './BusinessEditForm'
+import { PencilIcon } from './icons'
 
-// Lives next to "Create business" and "Delete business" on the dashboard
+// Lives next to "Save Business" and "Delete Business" on the dashboard
 // (moved there from the business page, 2026-10-09). The dashboard lists
 // several businesses, so the button opens a panel that asks which one, then
 // shows the same edit form the business page used to show inline.
@@ -33,16 +34,27 @@ export function EditBusinessSection({
     <>
       {/* Never disabled, same as "Delete business": with nothing to edit the
           panel says so instead. */}
-      <button type="button" onClick={() => setOpen(true)}>
-        Edit business
+      <button
+        type="button"
+        className="btn-outline"
+        aria-expanded={open}
+        aria-controls="edit-business-panel"
+        onClick={() => (open ? close() : setOpen(true))}
+      >
+        <PencilIcon />
+        Edit Business
       </button>
       {open && (
-        <section className="edit-business-panel" aria-labelledby="edit-business-heading">
+        <section
+          id="edit-business-panel"
+          className="edit-business-panel"
+          aria-labelledby="edit-business-heading"
+        >
           <h2 id="edit-business-heading">Edit business</h2>
           {businesses.length === 0 ? (
             <>
               <p>You have no businesses to edit.</p>
-              <button type="button" onClick={close}>
+              <button type="button" className="cancel-link" onClick={close}>
                 Cancel
               </button>
             </>
@@ -75,7 +87,7 @@ export function EditBusinessSection({
                   onCancel={close}
                 />
               ) : (
-                <button type="button" onClick={close}>
+                <button type="button" className="cancel-link" onClick={close}>
                   Cancel
                 </button>
               )}

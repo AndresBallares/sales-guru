@@ -8,6 +8,7 @@ import {
   type Option,
 } from '../lib/api'
 import { validateImageFile } from '../lib/imageValidation'
+import { SaveIcon } from './icons'
 
 // Mirrors the backend's own cap (app/schemas/business.py) — description is
 // pasted verbatim into the Strategist/Creative Agent prompts, so a pasted-in
@@ -296,12 +297,15 @@ export function BusinessEditForm({
           {formError}
         </p>
       )}
-      <button type="submit" disabled={submitting}>
-        {submitting ? 'Saving…' : 'Save'}
-      </button>
-      <button type="button" onClick={onCancel} disabled={submitting}>
-        Cancel
-      </button>
+      <div className="button-row">
+        <button type="submit" className="btn-outline btn-gold" disabled={submitting}>
+          <SaveIcon />
+          {submitting ? 'Saving…' : 'Save'}
+        </button>
+        <button type="button" className="cancel-link" onClick={onCancel} disabled={submitting}>
+          Cancel
+        </button>
+      </div>
     </form>
   )
 }

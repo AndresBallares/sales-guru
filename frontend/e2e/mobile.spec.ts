@@ -67,7 +67,7 @@ test.describe('mobile viewport', () => {
     await page.getByRole('button', { name: 'Sign up' }).click()
     await expect(page.getByText(`Signed in as ${email}`)).toBeVisible()
 
-    for (const name of [/Switch to (dark|light) mode/, 'Log out', 'Create business']) {
+    for (const name of [/Switch to (dark|light) mode/, 'Log out', 'Save Business']) {
       const box = await page.getByRole('button', { name }).boundingBox()
       expect(box).not.toBeNull()
       expect(box!.height).toBeGreaterThanOrEqual(44)

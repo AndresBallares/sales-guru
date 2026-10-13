@@ -1,4 +1,11 @@
-import { useEffect, useRef, useState, type ChangeEvent, type DragEvent, type FormEvent } from 'react'
+import {
+  useEffect,
+  useRef,
+  useState,
+  type ChangeEvent,
+  type DragEvent,
+  type FormEvent,
+} from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import {
@@ -12,6 +19,7 @@ import {
 } from '../lib/api'
 import { DeleteBusinessSection } from '../components/DeleteBusinessSection'
 import { EditBusinessSection } from '../components/EditBusinessSection'
+import { PlusIcon, SaveIcon } from '../components/icons'
 import { validateImageFile } from '../lib/imageValidation'
 
 // Mirrors the backend's own cap (app/schemas/business.py) — description is
@@ -51,6 +59,34 @@ export function DashboardPage() {
   const [logoError, setLogoError] = useState<string | null>(null)
   const [isDraggingLogo, setIsDraggingLogo] = useState(false)
   const logoInputRef = useRef<HTMLInputElement>(null)
+  // "Add Business" (in the Company Information heading) scrolls that form into
+  // view and focuses its Name field.
+  const formSectionRef = useRef<HTMLElement>(null)
+  // The Company Information fields appear when "Add Business" is clicked (and
+  // while there are no businesses yet, so a new account sees them straight away).
+  const [showForm, setShowForm] = useState(false)
+  const [focusRequest, setFocusRequest] = useState(0)
+  const nameInputRef = useRef<HTMLInputElement>(null)
+
+  function handleAddBusiness() {
+    if (showForm) {
+      setShowForm(false)
+      return
+    }
+    setShowForm(true)
+    setFocusRequest((count) => count + 1)
+  }
+
+  // After the fields have rendered, bring the form into view and focus Name.
+  useEffect(() => {
+    if (focusRequest === 0) return
+    const reduceMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
+    formSectionRef.current?.scrollIntoView({
+      behavior: reduceMotion ? 'auto' : 'smooth',
+      block: 'start',
+    })
+    nameInputRef.current?.focus({ preventScroll: true })
+  }, [focusRequest])
 
   async function refreshBusinesses() {
     setLoadingBusinesses(true)
@@ -161,6 +197,8 @@ export function DashboardPage() {
     }
   }
 
+  const formVisible = showForm || (!loadingBusinesses && businesses.length === 0)
+
   return (
     <main className="dashboard">
       <header className="dashboard-header">
@@ -193,168 +231,185 @@ export function DashboardPage() {
         </ul>
       </section>
 
-      <section>
-        <h2>Company Information</h2>
+      <section ref={formSectionRef}>
+        <div className="section-header">
+          <h2>Company Information</h2>
+          <button
+            type="button"
+            className="section-action-button"
+            aria-expanded={formVisible}
+            aria-controls="company-information-fields"
+            onClick={handleAddBusiness}
+          >
+            <PlusIcon />
+            Add Business
+          </button>
+        </div>
         <form onSubmit={handleSubmit} noValidate>
-          <div className="field">
-            <label htmlFor="logo">
-              Logo{' '}
-              <span className="field-hint">
-                (used to keep AI-generated ads consistent and on-brand)
-              </span>
-            </label>
-            {logoPreviewUrl ? (
-              <div className="logo-card">
-                <img src={logoPreviewUrl} alt="Business logo" className="logo-card-avatar" />
-                <div className="logo-card-info">
-                  <strong>{name || 'Your business'}</strong>
-                  {website && <span className="logo-card-website">{website}</span>}
-                </div>
-                <button
-                  type="button"
-                  className="logo-card-edit"
-                  onClick={handleRemoveLogo}
-                  aria-label="Remove logo"
-                >
-                  <svg
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="1.5"
-                    aria-hidden="true"
+          {formVisible && (
+            <div id="company-information-fields" className="company-fields">
+              <div className="field">
+                <label htmlFor="logo">
+                  Logo{' '}
+                  <span className="field-hint">
+                    (used to keep AI-generated ads consistent and on-brand)
+                  </span>
+                </label>
+                {logoPreviewUrl ? (
+                  <div className="logo-card">
+                    <img src={logoPreviewUrl} alt="Business logo" className="logo-card-avatar" />
+                    <div className="logo-card-info">
+                      <strong>{name || 'Your business'}</strong>
+                      {website && <span className="logo-card-website">{website}</span>}
+                    </div>
+                    <button
+                      type="button"
+                      className="logo-card-edit"
+                      onClick={handleRemoveLogo}
+                      aria-label="Remove logo"
+                    >
+                      <svg
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="1.5"
+                        aria-hidden="true"
+                      >
+                        <path d="M12 20h9" />
+                        <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4Z" />
+                      </svg>
+                    </button>
+                  </div>
+                ) : (
+                  // The drag handlers are a pure convenience layer on top of a
+                  // real <label htmlFor> + <input type="file"> — click and
+                  // keyboard use both go through native label/input semantics
+                  // unaffected by these, so there's no accessibility
+                  // regression from attaching them directly to the label.
+                  // eslint-disable-next-line jsx-a11y/no-noninteractive-element-interactions
+                  <label
+                    htmlFor="logo"
+                    className={`photo-dropzone${isDraggingLogo ? ' photo-dropzone-active' : ''}`}
+                    onDragOver={handleLogoDragOver}
+                    onDragLeave={handleLogoDragLeave}
+                    onDrop={handleLogoDrop}
                   >
-                    <path d="M12 20h9" />
-                    <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4Z" />
-                  </svg>
-                </button>
+                    <svg
+                      className="photo-dropzone-icon"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="1.5"
+                      aria-hidden="true"
+                    >
+                      <rect x="3" y="3" width="18" height="18" rx="3" />
+                      <circle cx="8.5" cy="8.5" r="1.5" />
+                      <path d="M21 15l-5-5L5 21" />
+                    </svg>
+                    <span className="photo-dropzone-text">
+                      <strong>Add logo</strong>
+                      <br />
+                      Drag and drop, or click to browse
+                    </span>
+                    <input
+                      ref={logoInputRef}
+                      id="logo"
+                      type="file"
+                      accept="image/jpeg,image/png"
+                      onChange={handleLogoSelected}
+                      className="photo-dropzone-input"
+                    />
+                  </label>
+                )}
+                {logoError && (
+                  <p className="form-error" role="alert">
+                    {logoError}
+                  </p>
+                )}
               </div>
-            ) : (
-              // The drag handlers are a pure convenience layer on top of a
-              // real <label htmlFor> + <input type="file"> — click and
-              // keyboard use both go through native label/input semantics
-              // unaffected by these, so there's no accessibility
-              // regression from attaching them directly to the label.
-              // eslint-disable-next-line jsx-a11y/no-noninteractive-element-interactions
-              <label
-                htmlFor="logo"
-                className={`photo-dropzone${isDraggingLogo ? ' photo-dropzone-active' : ''}`}
-                onDragOver={handleLogoDragOver}
-                onDragLeave={handleLogoDragLeave}
-                onDrop={handleLogoDrop}
-              >
-                <svg
-                  className="photo-dropzone-icon"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="1.5"
-                  aria-hidden="true"
-                >
-                  <rect x="3" y="3" width="18" height="18" rx="3" />
-                  <circle cx="8.5" cy="8.5" r="1.5" />
-                  <path d="M21 15l-5-5L5 21" />
-                </svg>
-                <span className="photo-dropzone-text">
-                  <strong>Add logo</strong>
-                  <br />
-                  Drag and drop, or click to browse
-                </span>
+              <div className="field">
+                <label htmlFor="name">Name</label>
                 <input
-                  ref={logoInputRef}
-                  id="logo"
-                  type="file"
-                  accept="image/jpeg,image/png"
-                  onChange={handleLogoSelected}
-                  className="photo-dropzone-input"
+                  id="name"
+                  ref={nameInputRef}
+                  required
+                  value={name}
+                  onChange={(event) => setName(event.target.value)}
                 />
-              </label>
-            )}
-            {logoError && (
-              <p className="form-error" role="alert">
-                {logoError}
-              </p>
-            )}
-          </div>
-          <div className="field">
-            <label htmlFor="name">Name</label>
-            <input
-              id="name"
-              required
-              value={name}
-              onChange={(event) => setName(event.target.value)}
-            />
-          </div>
-          <div className="field">
-            <label htmlFor="website">Website</label>
-            <input
-              id="website"
-              type="url"
-              value={website}
-              onChange={(event) => setWebsite(event.target.value)}
-            />
-          </div>
-          <div className="field">
-            <label htmlFor="industry">Industry</label>
-            <select
-              id="industry"
-              required
-              value={industry}
-              onChange={(event) => setIndustry(event.target.value)}
-            >
-              <option value="">Select an industry…</option>
-              {industries.map((option) => (
-                <option key={option.value} value={option.value}>
-                  {option.label}
-                </option>
-              ))}
-            </select>
-          </div>
-          <div className="field">
-            <label htmlFor="location">Location</label>
-            <input
-              id="location"
-              value={location}
-              onChange={(event) => setLocation(event.target.value)}
-            />
-          </div>
-          <div className="field">
-            <label htmlFor="description">
-              About your business{' '}
-              <span className="field-hint">
-                (helps the AI write better strategy and ad copy)
-              </span>
-            </label>
-            <textarea
-              id="description"
-              placeholder={
-                'Who you are, what makes you different, who your typical customer is — ' +
-                "e.g. \"Family-run studio in Brooklyn, handmade recycled-gold pieces, " +
-                'mostly customers buying for milestones."'
-              }
-              maxLength={MAX_DESCRIPTION_LENGTH}
-              value={description}
-              onChange={(event) => setDescription(event.target.value)}
-            />
-            <p className="field-hint">
-              {description.length}/{MAX_DESCRIPTION_LENGTH}
-            </p>
-          </div>
-          {formError && (
-            <p className="form-error" role="alert">
-              {formError}
-            </p>
+              </div>
+              <div className="field">
+                <label htmlFor="website">Website</label>
+                <input
+                  id="website"
+                  type="url"
+                  value={website}
+                  onChange={(event) => setWebsite(event.target.value)}
+                />
+              </div>
+              <div className="field">
+                <label htmlFor="industry">Industry</label>
+                <select
+                  id="industry"
+                  required
+                  value={industry}
+                  onChange={(event) => setIndustry(event.target.value)}
+                >
+                  <option value="">Select an industry…</option>
+                  {industries.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div className="field">
+                <label htmlFor="location">Location</label>
+                <input
+                  id="location"
+                  value={location}
+                  onChange={(event) => setLocation(event.target.value)}
+                />
+              </div>
+              <div className="field">
+                <label htmlFor="description">
+                  About your business{' '}
+                  <span className="field-hint">
+                    (helps the AI write better strategy and ad copy)
+                  </span>
+                </label>
+                <textarea
+                  id="description"
+                  placeholder={
+                    'Who you are, what makes you different, who your typical customer is — ' +
+                    'e.g. "Family-run studio in Brooklyn, handmade recycled-gold pieces, ' +
+                    'mostly customers buying for milestones."'
+                  }
+                  maxLength={MAX_DESCRIPTION_LENGTH}
+                  value={description}
+                  onChange={(event) => setDescription(event.target.value)}
+                />
+                <p className="field-hint">
+                  {description.length}/{MAX_DESCRIPTION_LENGTH}
+                </p>
+              </div>
+              {formError && (
+                <p className="form-error" role="alert">
+                  {formError}
+                </p>
+              )}
+            </div>
           )}
           <div className="button-row">
-            <button type="submit" disabled={submitting}>
-              {submitting ? 'Creating…' : 'Create business'}
-            </button>
+            {formVisible && (
+              <button type="submit" className="btn-outline btn-gold" disabled={submitting}>
+                <SaveIcon />
+                {submitting ? 'Saving…' : 'Save Business'}
+              </button>
+            )}
+            <EditBusinessSection businesses={businesses} onSaved={() => void refreshBusinesses()} />
             <DeleteBusinessSection
               businesses={businesses}
               onDeleted={() => void refreshBusinesses()}
-            />
-            <EditBusinessSection
-              businesses={businesses}
-              onSaved={() => void refreshBusinesses()}
             />
           </div>
         </form>

@@ -91,6 +91,175 @@ describe('DashboardPage', () => {
     expect(await screen.findByText(/— Fashion \/ Jewelry/)).toBeInTheDocument()
   })
 
+  describe('the Add Business button', () => {
+    it('sits in the Company Information heading row with a plus icon', async () => {
+      mockedApi.listBusinesses.mockResolvedValue([])
+
+      renderDashboard()
+
+      const button = await screen.findByRole('button', { name: 'Add Business' })
+      const header = button.closest('.section-header') as HTMLElement
+      expect(within(header).getByRole('heading', { name: 'Company Information' })).toBeInTheDocument()
+      expect(button).toHaveClass('section-action-button')
+      expect(button.firstElementChild?.tagName.toLowerCase()).toBe('svg')
+      expect(button.firstElementChild).toHaveAttribute('aria-hidden', 'true')
+    })
+
+    it('focuses the Name field of the Company Information form it sits in', async () => {
+      mockedApi.listBusinesses.mockResolvedValue([])
+      const scrollIntoView = vi.fn()
+      Element.prototype.scrollIntoView = scrollIntoView
+      const user = userEvent.setup()
+
+      renderDashboard()
+      await user.click(await screen.findByRole('button', { name: 'Add Business' }))
+
+      expect(scrollIntoView).toHaveBeenCalledWith({ behavior: 'smooth', block: 'start' })
+      expect(screen.getByLabelText('Name')).toHaveFocus()
+    })
+
+    it('scrolls without animation when the user prefers reduced motion', async () => {
+      mockedApi.listBusinesses.mockResolvedValue([])
+      const scrollIntoView = vi.fn()
+      Element.prototype.scrollIntoView = scrollIntoView
+      const originalMatchMedia = window.matchMedia
+      window.matchMedia = ((query: string) => ({
+        matches: query.includes('prefers-reduced-motion'),
+        media: query,
+        addEventListener: () => {},
+        removeEventListener: () => {},
+      })) as unknown as typeof window.matchMedia
+      const user = userEvent.setup()
+
+      try {
+        renderDashboard()
+        await user.click(await screen.findByRole('button', { name: 'Add Business' }))
+
+        expect(scrollIntoView).toHaveBeenCalledWith({ behavior: 'auto', block: 'start' })
+      } finally {
+        window.matchMedia = originalMatchMedia
+      }
+    })
+
+    it('hides the Company Information fields while a business exists, keeping Edit and Delete', async () => {
+      mockedApi.listBusinesses.mockResolvedValue([
+        {
+          id: 'biz-1',
+          name: 'Acme Widgets',
+          website: null,
+          industry: null,
+          location: null,
+          description: null,
+          logoUrl: null,
+        },
+      ])
+
+      renderDashboard()
+      await screen.findByText('Acme Widgets')
+
+      expect(screen.getByRole('heading', { name: 'Company Information' })).toBeInTheDocument()
+      for (const label of ['Name', 'Website', 'Industry', 'Location']) {
+        expect(screen.queryByLabelText(label)).not.toBeInTheDocument()
+      }
+      expect(screen.queryByText(/About your business/)).not.toBeInTheDocument()
+      expect(screen.queryByText(/^Logo/)).not.toBeInTheDocument()
+      expect(screen.queryByRole('button', { name: 'Save Business' })).not.toBeInTheDocument()
+      expect(screen.getByRole('button', { name: 'Edit Business' })).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: 'Delete Business' })).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: 'Add Business' })).toHaveAttribute(
+        'aria-expanded',
+        'false',
+      )
+    })
+
+    it('shows the logo, name, website, industry, location and about fields when Add Business is clicked, and focuses Name', async () => {
+      mockedApi.listBusinesses.mockResolvedValue([
+        {
+          id: 'biz-1',
+          name: 'Acme Widgets',
+          website: null,
+          industry: null,
+          location: null,
+          description: null,
+          logoUrl: null,
+        },
+      ])
+      Element.prototype.scrollIntoView = vi.fn()
+      const user = userEvent.setup()
+
+      renderDashboard()
+      await screen.findByText('Acme Widgets')
+      const add = screen.getByRole('button', { name: 'Add Business' })
+      await user.click(add)
+
+      expect(add).toHaveAttribute('aria-expanded', 'true')
+      expect(screen.getByText(/^Logo/)).toBeInTheDocument()
+      for (const label of ['Name', 'Website', 'Industry', 'Location']) {
+        expect(screen.getByLabelText(label)).toBeInTheDocument()
+      }
+      expect(screen.getByLabelText(/About your business/)).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: 'Save Business' })).toBeInTheDocument()
+      expect(screen.getByLabelText('Name')).toHaveFocus()
+    })
+
+    it('hides the fields again when Add Business is clicked a second time', async () => {
+      mockedApi.listBusinesses.mockResolvedValue([
+        {
+          id: 'biz-1',
+          name: 'Acme Widgets',
+          website: null,
+          industry: null,
+          location: null,
+          description: null,
+          logoUrl: null,
+        },
+      ])
+      Element.prototype.scrollIntoView = vi.fn()
+      const user = userEvent.setup()
+
+      renderDashboard()
+      await screen.findByText('Acme Widgets')
+      const add = screen.getByRole('button', { name: 'Add Business' })
+      await user.click(add)
+      await user.click(add)
+
+      expect(add).toHaveAttribute('aria-expanded', 'false')
+      expect(screen.queryByLabelText('Name')).not.toBeInTheDocument()
+      expect(screen.queryByRole('button', { name: 'Save Business' })).not.toBeInTheDocument()
+    })
+
+    it('shows the fields straight away for an account with no businesses yet', async () => {
+      mockedApi.listBusinesses.mockResolvedValue([])
+
+      renderDashboard()
+
+      expect(await screen.findByLabelText('Name')).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: 'Save Business' })).toBeInTheDocument()
+    })
+
+    it('is shown when businesses already exist, and does not create anything itself', async () => {
+      mockedApi.listBusinesses.mockResolvedValue([
+        {
+          id: 'biz-1',
+          name: 'Acme Widgets',
+          website: null,
+          industry: null,
+          location: null,
+          description: null,
+          logoUrl: null,
+        },
+      ])
+      Element.prototype.scrollIntoView = vi.fn()
+      const user = userEvent.setup()
+
+      renderDashboard()
+      await screen.findByText('Acme Widgets')
+      await user.click(screen.getByRole('button', { name: 'Add Business' }))
+
+      expect(mockedApi.createBusiness).not.toHaveBeenCalled()
+    })
+  })
+
   it('shows an empty state when there are no businesses', async () => {
     mockedApi.listBusinesses.mockResolvedValue([])
 
@@ -128,7 +297,7 @@ describe('DashboardPage', () => {
     await user.selectOptions(screen.getByLabelText('Industry'), 'FASHION_JEWELRY')
     await user.type(screen.getByLabelText('Location'), 'CDMX')
     await user.type(screen.getByLabelText(/About your business/), 'We make widgets.')
-    await user.click(screen.getByRole('button', { name: 'Create business' }))
+    await user.click(screen.getByRole('button', { name: 'Save Business' }))
 
     await waitFor(() =>
       expect(mockedApi.createBusiness).toHaveBeenCalledWith({
@@ -153,7 +322,7 @@ describe('DashboardPage', () => {
     await screen.findByText(/No businesses yet/)
 
     await user.type(screen.getByLabelText('Name'), 'x')
-    await user.click(screen.getByRole('button', { name: 'Create business' }))
+    await user.click(screen.getByRole('button', { name: 'Save Business' }))
 
     expect(await screen.findByRole('alert')).toHaveTextContent('Name is required')
   })
@@ -334,7 +503,7 @@ describe('DashboardPage', () => {
     await user.type(screen.getByLabelText('Name'), 'Acme Widgets')
     await user.selectOptions(screen.getByLabelText('Industry'), 'FASHION_JEWELRY')
 
-    await user.click(screen.getByRole('button', { name: 'Create business' }))
+    await user.click(screen.getByRole('button', { name: 'Save Business' }))
 
     await waitFor(() => expect(mockedApi.uploadBusinessLogo).toHaveBeenCalledWith('1', logo))
     expect(await screen.findByText('Business detail page')).toBeInTheDocument()
@@ -358,7 +527,7 @@ describe('DashboardPage', () => {
     await user.type(screen.getByLabelText('Name'), 'Acme Widgets')
     await user.selectOptions(screen.getByLabelText('Industry'), 'FASHION_JEWELRY')
 
-    await user.click(screen.getByRole('button', { name: 'Create business' }))
+    await user.click(screen.getByRole('button', { name: 'Save Business' }))
 
     await waitFor(() => expect(mockedApi.createBusiness).toHaveBeenCalled())
     expect(mockedApi.uploadBusinessLogo).not.toHaveBeenCalled()
@@ -385,7 +554,7 @@ describe('DashboardPage', () => {
     await user.type(screen.getByLabelText('Name'), 'Acme Widgets')
     await user.selectOptions(screen.getByLabelText('Industry'), 'FASHION_JEWELRY')
 
-    await user.click(screen.getByRole('button', { name: 'Create business' }))
+    await user.click(screen.getByRole('button', { name: 'Save Business' }))
 
     expect(await screen.findByText('Business detail page')).toBeInTheDocument()
   })
@@ -414,7 +583,7 @@ describe('DashboardPage', () => {
     await screen.findByText(/No businesses yet/)
 
     await user.type(screen.getByLabelText('Name'), 'Acme Widgets')
-    await user.click(screen.getByRole('button', { name: 'Create business' }))
+    await user.click(screen.getByRole('button', { name: 'Save Business' }))
 
     expect(await screen.findByRole('alert')).toHaveTextContent('Industry is required')
   })
@@ -460,14 +629,16 @@ describe('DashboardPage', () => {
     }
     const globex: api.Business = { ...acme, id: 'biz-2', name: 'Globex' }
 
-    it('puts Delete business in the same row as Create business', async () => {
+    it('puts Delete Business in the same row as Save Business', async () => {
       mockedApi.listBusinesses.mockResolvedValue([acme])
+      const user = userEvent.setup()
 
       renderDashboard()
       await screen.findByText('Acme Widgets')
+      await user.click(screen.getByRole('button', { name: 'Add Business' }))
 
-      const create = screen.getByRole('button', { name: 'Create business' })
-      const del = screen.getByRole('button', { name: 'Delete business' })
+      const create = screen.getByRole('button', { name: 'Save Business' })
+      const del = screen.getByRole('button', { name: 'Delete Business' })
       expect(del.parentElement).toBe(create.parentElement)
     })
 
@@ -477,7 +648,7 @@ describe('DashboardPage', () => {
 
       renderDashboard()
       await screen.findByText(/No businesses yet/)
-      await user.click(screen.getByRole('button', { name: 'Delete business' }))
+      await user.click(screen.getByRole('button', { name: 'Delete Business' }))
 
       expect(screen.getByText('You have no businesses to delete.')).toBeInTheDocument()
       expect(screen.queryByLabelText('Business to delete')).not.toBeInTheDocument()
@@ -490,7 +661,7 @@ describe('DashboardPage', () => {
 
       renderDashboard()
       await screen.findByText('Acme Widgets')
-      await user.click(screen.getByRole('button', { name: 'Delete business' }))
+      await user.click(screen.getByRole('button', { name: 'Delete Business' }))
 
       const confirm = await screen.findByRole('button', { name: 'Permanently delete business' })
       expect(confirm).toBeDisabled()
@@ -514,7 +685,7 @@ describe('DashboardPage', () => {
       const user = userEvent.setup()
 
       renderDashboard()
-      await user.click(screen.getByRole('button', { name: 'Delete business' }))
+      await user.click(screen.getByRole('button', { name: 'Delete Business' }))
       expect(screen.getByText('You have no businesses to delete.')).toBeInTheDocument()
 
       finishLoading([acme])
@@ -533,7 +704,7 @@ describe('DashboardPage', () => {
 
       renderDashboard()
       await screen.findByText('Globex')
-      await user.click(screen.getByRole('button', { name: 'Delete business' }))
+      await user.click(screen.getByRole('button', { name: 'Delete Business' }))
       // Nothing to confirm until one is picked.
       expect(screen.queryByLabelText(/Type/)).not.toBeInTheDocument()
       expect(screen.getByRole('button', { name: 'Permanently delete business' })).toBeDisabled()
@@ -561,7 +732,7 @@ describe('DashboardPage', () => {
 
       renderDashboard()
       await screen.findByText('Acme Widgets')
-      await user.click(screen.getByRole('button', { name: 'Delete business' }))
+      await user.click(screen.getByRole('button', { name: 'Delete Business' }))
       await user.type(await screen.findByLabelText(/Type/), 'Acme Widgets')
       await user.click(screen.getByRole('button', { name: 'Permanently delete business' }))
 
@@ -579,7 +750,7 @@ describe('DashboardPage', () => {
 
       renderDashboard()
       await screen.findByText('Acme Widgets')
-      await user.click(screen.getByRole('button', { name: 'Delete business' }))
+      await user.click(screen.getByRole('button', { name: 'Delete Business' }))
       await user.type(await screen.findByLabelText(/Type/), 'Acme Widgets')
       await user.click(screen.getByRole('button', { name: 'Permanently delete business' }))
 
@@ -595,7 +766,7 @@ describe('DashboardPage', () => {
 
       renderDashboard()
       await screen.findByText('Globex')
-      await user.click(screen.getByRole('button', { name: 'Delete business' }))
+      await user.click(screen.getByRole('button', { name: 'Delete Business' }))
 
       await user.selectOptions(screen.getByLabelText('Business to delete'), 'biz-1')
       expect(
@@ -614,7 +785,7 @@ describe('DashboardPage', () => {
 
       renderDashboard()
       await screen.findByText('Acme Widgets')
-      await user.click(screen.getByRole('button', { name: 'Delete business' }))
+      await user.click(screen.getByRole('button', { name: 'Delete Business' }))
       await screen.findByLabelText(/Type/)
       await user.click(screen.getByRole('button', { name: 'Cancel' }))
 
@@ -638,20 +809,176 @@ describe('DashboardPage', () => {
     const globex: api.Business = { ...acme, id: 'biz-2', name: 'Globex' }
 
     async function openEditPanel(user: ReturnType<typeof userEvent.setup>) {
-      await user.click(screen.getByRole('button', { name: 'Edit business' }))
+      await user.click(screen.getByRole('button', { name: 'Edit Business' }))
       return within(await screen.findByRole('region', { name: 'Edit business' }))
     }
 
-    it('puts Edit business right after Delete business in the same row', async () => {
+    it('puts Delete Business immediately to the right of Edit Business, after Save Business', async () => {
+      mockedApi.listBusinesses.mockResolvedValue([acme])
+      const user = userEvent.setup()
+
+      renderDashboard()
+      await screen.findByText('Acme Widgets')
+      await user.click(screen.getByRole('button', { name: 'Add Business' }))
+
+      const save = screen.getByRole('button', { name: 'Save Business' })
+      const edit = screen.getByRole('button', { name: 'Edit Business' })
+      const del = screen.getByRole('button', { name: 'Delete Business' })
+      expect(edit.parentElement).toBe(del.parentElement)
+      expect(save.nextElementSibling).toBe(edit)
+      expect(edit.nextElementSibling).toBe(del)
+    })
+
+    it('styles Edit as a neutral outline and Delete as a red outline, each with an icon first', async () => {
       mockedApi.listBusinesses.mockResolvedValue([acme])
 
       renderDashboard()
       await screen.findByText('Acme Widgets')
 
-      const del = screen.getByRole('button', { name: 'Delete business' })
-      const edit = screen.getByRole('button', { name: 'Edit business' })
-      expect(edit.parentElement).toBe(del.parentElement)
-      expect(del.nextElementSibling).toBe(edit)
+      const edit = screen.getByRole('button', { name: 'Edit Business' })
+      const del = screen.getByRole('button', { name: 'Delete Business' })
+      expect(edit).toHaveClass('btn-outline')
+      expect(edit).not.toHaveClass('btn-outline-danger')
+      expect(del).toHaveClass('btn-outline', 'btn-outline-danger')
+      for (const button of [edit, del]) {
+        expect(button.firstElementChild?.tagName.toLowerCase()).toBe('svg')
+        expect(button.firstElementChild).toHaveAttribute('aria-hidden', 'true')
+      }
+    })
+
+    it('styles Save Business as the same outlined button shape in gold, with a save icon first', async () => {
+      mockedApi.listBusinesses.mockResolvedValue([acme])
+      const user = userEvent.setup()
+
+      renderDashboard()
+      await screen.findByText('Acme Widgets')
+      await user.click(screen.getByRole('button', { name: 'Add Business' }))
+
+      const save = screen.getByRole('button', { name: 'Save Business' })
+      const edit = screen.getByRole('button', { name: 'Edit Business' })
+      expect(save).toHaveClass('btn-outline', 'btn-gold')
+      expect(save.firstElementChild?.tagName.toLowerCase()).toBe('svg')
+      expect(save.firstElementChild).toHaveAttribute('aria-hidden', 'true')
+      // Same icon box as the Edit button's.
+      expect(save.firstElementChild?.getAttribute('width')).toBe(
+        edit.firstElementChild?.getAttribute('width'),
+      )
+    })
+
+    it('shows Saving… and disables Save Business while a business is being created', async () => {
+      mockedApi.listBusinesses.mockResolvedValue([])
+      mockedApi.createBusiness.mockReturnValue(new Promise(() => {}))
+      const user = userEvent.setup()
+
+      renderDashboard()
+      await screen.findByText(/No businesses yet/)
+      await user.type(screen.getByLabelText('Name'), 'Acme')
+      await user.selectOptions(screen.getByLabelText('Industry'), 'OTHER')
+      await user.click(screen.getByRole('button', { name: 'Save Business' }))
+
+      const saving = await screen.findByRole('button', { name: 'Saving…' })
+      expect(saving).toBeDisabled()
+      expect(saving).toHaveClass('btn-gold')
+    })
+
+    it('styles the edit panel\'s Save in gold with the save icon, and its Cancel as text-link styling', async () => {
+      mockedApi.listBusinesses.mockResolvedValue([acme])
+      const user = userEvent.setup()
+
+      renderDashboard()
+      await screen.findByText('Acme Widgets')
+      await user.click(screen.getByRole('button', { name: 'Edit Business' }))
+
+      const panel = within(await screen.findByRole('region', { name: 'Edit business' }))
+      const save = panel.getByRole('button', { name: 'Save' })
+      const cancel = panel.getByRole('button', { name: 'Cancel' })
+      expect(save).toHaveClass('btn-outline', 'btn-gold')
+      expect(save.firstElementChild?.tagName.toLowerCase()).toBe('svg')
+      expect(save.firstElementChild).toHaveAttribute('aria-hidden', 'true')
+      // Cancel is understated underlined text, with no icon or button shape.
+      expect(cancel).toHaveClass('cancel-link')
+      expect(cancel).not.toHaveClass('btn-outline')
+      expect(cancel.querySelector('svg')).toBeNull()
+      // Save and Cancel share one row.
+      expect(save.parentElement).toBe(cancel.parentElement)
+    })
+
+    it('toggles the edit panel: a second click on Edit Business closes it', async () => {
+      mockedApi.listBusinesses.mockResolvedValue([acme])
+      const user = userEvent.setup()
+
+      renderDashboard()
+      await screen.findByText('Acme Widgets')
+      const edit = screen.getByRole('button', { name: 'Edit Business' })
+      expect(edit).toHaveAttribute('aria-expanded', 'false')
+      expect(screen.queryByRole('region', { name: 'Edit business' })).not.toBeInTheDocument()
+
+      await user.click(edit)
+      expect(edit).toHaveAttribute('aria-expanded', 'true')
+      expect(edit).toHaveAttribute('aria-controls', 'edit-business-panel')
+      expect(await screen.findByRole('region', { name: 'Edit business' })).toHaveAttribute(
+        'id',
+        'edit-business-panel',
+      )
+
+      await user.click(edit)
+      expect(edit).toHaveAttribute('aria-expanded', 'false')
+      expect(screen.queryByRole('region', { name: 'Edit business' })).not.toBeInTheDocument()
+
+      await user.click(edit)
+      expect(await screen.findByRole('region', { name: 'Edit business' })).toBeInTheDocument()
+    })
+
+    it('starts the edit panel fresh after it was closed with the toggle', async () => {
+      mockedApi.listBusinesses.mockResolvedValue([acme, globex])
+      const user = userEvent.setup()
+
+      renderDashboard()
+      await screen.findByText('Acme Widgets')
+      const edit = screen.getByRole('button', { name: 'Edit Business' })
+      await user.click(edit)
+      await user.selectOptions(await screen.findByLabelText('Business to edit'), 'biz-2')
+      expect(screen.getByLabelText('Name', { selector: '#business-name' })).toHaveValue('Globex')
+
+      await user.click(edit)
+      await user.click(edit)
+
+      // Back to the picker with nothing chosen, as after Cancel.
+      expect(await screen.findByLabelText('Business to edit')).toHaveValue('')
+    })
+
+    it('keeps Edit and Delete side by side even while the Edit panel is open', async () => {
+      mockedApi.listBusinesses.mockResolvedValue([acme])
+      const user = userEvent.setup()
+
+      renderDashboard()
+      await screen.findByText('Acme Widgets')
+      await user.click(screen.getByRole('button', { name: 'Edit Business' }))
+
+      const edit = screen.getByRole('button', { name: 'Edit Business' })
+      const del = screen.getByRole('button', { name: 'Delete Business' })
+      // The panel is its own full-width item in the same row; the stylesheet
+      // orders it after both buttons (checked in the browser, jsdom has no CSS).
+      const panel = screen.getByRole('region', { name: 'Edit business' })
+      expect(panel).toHaveClass('edit-business-panel')
+      expect(panel.parentElement).toBe(edit.parentElement)
+      expect(del.parentElement).toBe(edit.parentElement)
+    })
+
+    it('shows the delete confirmation with a neutral Cancel and a red delete button', async () => {
+      mockedApi.listBusinesses.mockResolvedValue([acme])
+      mockedApi.listCampaigns.mockResolvedValue([])
+      const user = userEvent.setup()
+
+      renderDashboard()
+      await screen.findByText('Acme Widgets')
+      await user.click(screen.getByRole('button', { name: 'Delete Business' }))
+
+      expect(screen.getByRole('button', { name: 'Permanently delete business' })).toHaveClass(
+        'btn-danger',
+      )
+      expect(screen.getByRole('button', { name: 'Cancel' })).toHaveClass('cancel-link')
+      expect(screen.getByText(/This will remove "Acme Widgets"/)).toBeInTheDocument()
     })
 
     it('says there is nothing to edit when there are no businesses', async () => {

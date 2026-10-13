@@ -10,6 +10,7 @@ import {
   ArchiveIcon,
   ImageIcon,
   PackageIcon,
+  PlusIcon,
   RefreshIcon,
   StatusIcon,
   StrategyIcon,
@@ -1003,7 +1004,19 @@ export function CampaignsSection({
   return (
     <>
       <section>
-        <h2>Campaigns</h2>
+        <div className="section-header">
+          <h2>Campaigns</h2>
+          {!loading && !listError && campaigns.length > 0 && !showCreateForm && (
+            <button
+              type="button"
+              className="section-action-button"
+              onClick={() => setShowCreateForm(true)}
+            >
+              <PlusIcon />
+              Create campaign
+            </button>
+          )}
+        </div>
         {loading && <p>Loading…</p>}
         {listError && (
           <p className="form-error" role="alert">
@@ -1012,11 +1025,6 @@ export function CampaignsSection({
         )}
         {!loading && !listError && campaigns.length === 0 && (
           <p>No campaigns yet — create your first one below.</p>
-        )}
-        {!loading && !listError && campaigns.length > 0 && !showCreateForm && (
-          <button type="button" onClick={() => setShowCreateForm(true)}>
-            New campaign
-          </button>
         )}
         {!loading && !listError && campaigns.length > 0 && showCreateForm && (
           <NewCampaignFlow

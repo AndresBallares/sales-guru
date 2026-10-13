@@ -54,11 +54,11 @@ test('deleting a business is blocked while a campaign is live, and succeeds once
   await expect(page.getByRole('heading', { name: 'Acme Widgets' })).toBeVisible()
   await expect(page.getByText(/Live on Meta/)).toBeVisible()
 
-  // Delete lives next to "Create business" on the dashboard. Blocked while
+  // Delete lives next to "Save Business" on the dashboard. Blocked while
   // the campaign is still LIVE.
   await page.getByRole('link', { name: '← Back to dashboard' }).click()
   await expect(page.getByRole('heading', { name: 'Your businesses' })).toBeVisible()
-  await page.getByRole('button', { name: 'Delete business' }).click()
+  await page.getByRole('button', { name: 'Delete Business' }).click()
   // The only business is preselected, so just type its name.
   await page.getByLabel(/Type/).fill('Acme Widgets')
   const deleteButton = page.getByRole('button', { name: 'Permanently delete business' })
@@ -87,7 +87,7 @@ test('deleting a business is blocked while a campaign is live, and succeeds once
   await expect(page.getByText(/Live on Meta/)).not.toBeVisible()
 
   await page.getByRole('link', { name: '← Back to dashboard' }).click()
-  await page.getByRole('button', { name: 'Delete business' }).click()
+  await page.getByRole('button', { name: 'Delete Business' }).click()
   await page.getByLabel(/Type/).fill('Acme Widgets')
   await deleteButton.click()
   await expect(page.getByText(/No businesses yet/)).toBeVisible()

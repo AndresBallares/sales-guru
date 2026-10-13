@@ -671,18 +671,80 @@ describe('CampaignsSection', () => {
     expect(screen.queryByLabelText('Name', { exact: true })).not.toBeInTheDocument()
   })
 
-  it('shows the create form by default, with no New campaign button, when there are no campaigns yet', async () => {
+  it('shows the create form by default, with no Create campaign button in the header, when there are no campaigns yet', async () => {
     mockedApi.listCampaigns.mockResolvedValue([])
 
     renderCampaigns(<CampaignsSection businessId="biz-1" />)
 
     expect(await screen.findByRole('heading', { name: 'Create a campaign' })).toBeInTheDocument()
-    expect(
-      screen.queryByRole('button', { name: 'New campaign' }),
-    ).not.toBeInTheDocument()
+    // (The form's own submit button is also named "Create campaign".)
+    expect(document.querySelector('.section-header button')).toBeNull()
   })
 
-  it('reveals the create form via the New campaign button once a campaign already exists', async () => {
+  it('puts the Create campaign button in the Campaigns heading row, with a plus icon', async () => {
+    mockedApi.listCampaigns.mockResolvedValue([
+      {
+        id: 'camp-1',
+        name: 'First campaign',
+        objective: 'SALES',
+        status: 'DRAFT',
+        productId: null,
+        audienceId: null,
+        metaCampaignId: null,
+        eventVenueKey: null,
+        startDate: null,
+        endDate: null,
+        pausedReason: null,
+        dailySpendFlag: null,
+        needsDestinationUrl: false,
+      },
+    ])
+
+    renderCampaigns(<CampaignsSection businessId="biz-1" />)
+
+    const button = await screen.findByRole('button', { name: 'Create campaign' })
+    const header = button.closest('.section-header') as HTMLElement
+    expect(within(header).getByRole('heading', { name: 'Campaigns' })).toBeInTheDocument()
+    expect(button).toHaveClass('section-action-button')
+    // The plus icon comes first, is decorative, and the label follows it.
+    expect(button.firstElementChild?.tagName.toLowerCase()).toBe('svg')
+    expect(button.firstElementChild).toHaveAttribute('aria-hidden', 'true')
+    expect(button).toHaveTextContent('Create campaign')
+  })
+
+  it('hides the header button while the create form is open and shows it again on Cancel', async () => {
+    mockedApi.listCampaigns.mockResolvedValue([
+      {
+        id: 'camp-1',
+        name: 'First campaign',
+        objective: 'SALES',
+        status: 'DRAFT',
+        productId: null,
+        audienceId: null,
+        metaCampaignId: null,
+        eventVenueKey: null,
+        startDate: null,
+        endDate: null,
+        pausedReason: null,
+        dailySpendFlag: null,
+        needsDestinationUrl: false,
+      },
+    ])
+    const user = userEvent.setup()
+
+    renderCampaigns(<CampaignsSection businessId="biz-1" />)
+    await user.click(await screen.findByRole('button', { name: 'Create campaign' }))
+
+    expect(document.querySelector('.section-action-button')).toBeNull()
+
+    await user.click(screen.getByRole('button', { name: 'Cancel' }))
+
+    expect(await screen.findByRole('button', { name: 'Create campaign' })).toHaveClass(
+      'section-action-button',
+    )
+  })
+
+  it('reveals the create form via the Create campaign button once a campaign already exists', async () => {
     mockedApi.listCampaigns.mockResolvedValue([
       {
         id: 'camp-1',
@@ -706,7 +768,7 @@ describe('CampaignsSection', () => {
     await screen.findByText('First campaign — Sales — Draft')
     expect(screen.queryByRole('heading', { name: 'Create a campaign' })).not.toBeInTheDocument()
 
-    await user.click(screen.getByRole('button', { name: 'New campaign' }))
+    await user.click(screen.getByRole('button', { name: 'Create campaign' }))
 
     // A second+ campaign gets the guided flow (NewCampaignFlow), not the
     // plain "Create a campaign" form — that's only for a business's first
@@ -736,13 +798,13 @@ describe('CampaignsSection', () => {
     const user = userEvent.setup()
 
     renderCampaigns(<CampaignsSection businessId="biz-1" />)
-    await user.click(await screen.findByRole('button', { name: 'New campaign' }))
+    await user.click(await screen.findByRole('button', { name: 'Create campaign' }))
     await user.type(screen.getByLabelText('Name'), 'Discarded draft')
 
     await user.click(screen.getByRole('button', { name: 'Cancel' }))
 
     expect(screen.queryByRole('heading', { name: 'New campaign' })).not.toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'New campaign' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Create campaign' })).toBeInTheDocument()
     expect(mockedApi.createCampaign).not.toHaveBeenCalled()
   })
 
@@ -808,7 +870,7 @@ describe('CampaignsSection', () => {
     const user = userEvent.setup()
 
     renderCampaigns(<CampaignsSection businessId="biz-1" />)
-    await user.click(await screen.findByRole('button', { name: 'New campaign' }))
+    await user.click(await screen.findByRole('button', { name: 'Create campaign' }))
     await user.type(screen.getByLabelText('Name'), 'Second campaign')
     await user.selectOptions(screen.getByLabelText('Objective'), 'LEADS')
     await user.click(screen.getByRole('button', { name: 'Continue' }))
@@ -856,7 +918,7 @@ describe('CampaignsSection', () => {
     // flow is gone again.
     expect(await screen.findByText('First campaign — Sales — Draft')).toBeInTheDocument()
     expect(screen.queryByRole('heading', { name: 'New campaign' })).not.toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'New campaign' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Create campaign' })).toBeInTheDocument()
   })
 
   it('nudges toward adding a business description when the campaign step is empty', async () => {

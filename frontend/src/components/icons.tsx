@@ -21,9 +21,9 @@ function Icon({ children, size = 20 }: { children: ReactNode; size?: number }) {
   )
 }
 
-export function TrashIcon() {
+export function TrashIcon({ size }: { size?: number } = {}) {
   return (
-    <Icon>
+    <Icon size={size}>
       <path d="M4 7h16M10 11v6M14 11v6M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12M9 7V4h6v3" />
     </Icon>
   )
@@ -163,5 +163,29 @@ export function GripIcon() {
       <circle cx="9" cy="18" r="1.6" />
       <circle cx="15" cy="18" r="1.6" />
     </svg>
+  )
+}
+
+export function PlusIcon() {
+  return (
+    <Icon size={18}>
+      <path d="M12 5v14M5 12h14" />
+    </Icon>
+  )
+}
+
+export function PencilIcon() {
+  return (
+    <Icon size={18}>
+      <path d="M4 20h4L19 9a2.1 2.1 0 0 0-4-4L4 16zM13.5 6.5l4 4" />
+    </Icon>
+  )
+}
+
+export function SaveIcon() {
+  return (
+    <Icon size={18}>
+      <path d="M5 4h11l3 3v12a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1zM8 4v5h7V4M8 20v-6h8v6" />
+    </Icon>
   )
 }

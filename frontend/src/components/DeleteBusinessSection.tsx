@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react'
 import { ApiError, deleteBusiness, listCampaigns, type Business, type Campaign } from '../lib/api'
+import { TrashIcon } from './icons'
 
-// Lives next to "Create business" on the dashboard (moved there from the
+// Lives next to "Save Business" on the dashboard (moved there from the
 // business page, 2026-10-09). Deleting is still a deliberate two-step act:
 // the button only opens a panel where you pick the business and type its
 // name, never a one-click action on a list row.
@@ -91,8 +92,9 @@ export function DeleteBusinessSection({
       {/* Never disabled: it flips state as the business list loads, and the
           button's colour fade is caught mid-way by the accessibility scan.
           With nothing to delete, the panel says so instead. */}
-      <button type="button" onClick={openConfirm}>
-        Delete business
+      <button type="button" className="btn-outline btn-outline-danger" onClick={openConfirm}>
+        <TrashIcon size={18} />
+        Delete Business
       </button>
       {confirming && (
         <section className="delete-business-panel">
@@ -119,13 +121,13 @@ export function DeleteBusinessSection({
           {business && (
             <>
               <p>
-                This will remove "{business.name}" from your business list. This can't be
-                undone from here.
+                This will remove "{business.name}" from your business list. This can't be undone
+                from here.
               </p>
               {hasMetaCampaigns && (
                 <p>
-                  This business has campaigns that were published to Meta — they'll remain
-                  (paused) in your Meta account after this business is deleted.
+                  This business has campaigns that were published to Meta — they'll remain (paused)
+                  in your Meta account after this business is deleted.
                 </p>
               )}
               <div className="field">
@@ -145,16 +147,19 @@ export function DeleteBusinessSection({
               {error}
             </p>
           )}
-          <button
-            type="button"
-            onClick={() => void handleDelete()}
-            disabled={!nameMatches || deleting}
-          >
-            {deleting ? 'Deleting…' : 'Permanently delete business'}
-          </button>
-          <button type="button" onClick={cancel} disabled={deleting}>
-            Cancel
-          </button>
+          <div className="button-row">
+            <button
+              type="button"
+              className="btn-danger"
+              onClick={() => void handleDelete()}
+              disabled={!nameMatches || deleting}
+            >
+              {deleting ? 'Deleting…' : 'Permanently delete business'}
+            </button>
+            <button type="button" className="cancel-link" onClick={cancel} disabled={deleting}>
+              Cancel
+            </button>
+          </div>
         </section>
       )}
     </>
