@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
+import { PencilIcon } from './icons'
 import { ApiError, getBrandProfile, type BrandProfile } from '../lib/api'
 import { BrandProfileForm } from './BrandProfileForm'
 
@@ -68,7 +69,8 @@ export function BrandProfileSection({
       <section>
         <h2>Brand</h2>
         <p>{profile.description}</p>
-        <button type="button" onClick={() => setEditing(true)}>
+        <button type="button" className="btn-outline" onClick={() => setEditing(true)}>
+          <PencilIcon />
           Edit brand profile
         </button>
       </section>

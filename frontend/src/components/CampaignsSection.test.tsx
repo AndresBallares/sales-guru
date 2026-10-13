@@ -873,7 +873,7 @@ describe('CampaignsSection', () => {
     await user.click(await screen.findByRole('button', { name: 'Create campaign' }))
     await user.type(screen.getByLabelText('Name'), 'Second campaign')
     await user.selectOptions(screen.getByLabelText('Objective'), 'LEADS')
-    await user.click(screen.getByRole('button', { name: 'Continue' }))
+    await user.click(screen.getByRole('button', { name: 'Next' }))
 
     await waitFor(() =>
       expect(mockedApi.createCampaign).toHaveBeenCalledWith('biz-1', {

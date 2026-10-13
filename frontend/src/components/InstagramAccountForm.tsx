@@ -1,4 +1,5 @@
 import { useId, useState } from 'react'
+import { SaveIcon } from './icons'
 import {
   ApiError,
   refreshMetaInstagram,
@@ -77,9 +78,11 @@ export function InstagramAccountForm({
       <div className="button-row">
         <button
           type="button"
+          className="btn-outline btn-gold"
           onClick={() => void run('save', () => setMetaInstagramAccount(businessId, trimmed))}
           disabled={busy !== null || trimmed === '' || unchanged}
         >
+          <SaveIcon />
           {busy === 'save' ? 'Checking with Meta…' : 'Save account ID'}
         </button>
         {connection.instagramUserIdManual && (

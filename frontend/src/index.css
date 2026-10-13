@@ -1676,13 +1676,8 @@ code {
 }
 
 .campaign-card-action {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.5rem;
   align-self: center;
   margin-left: auto;
-  padding: 0.7rem 1.5rem;
-  font-size: 1.05rem;
 }
 
 .campaign-description {
@@ -2159,8 +2154,6 @@ code {
 
 .publish-footer-button {
   align-self: center;
-  padding: 0.75rem 1.75rem;
-  font-size: 1rem;
 }
 
 .publish-footer-error {

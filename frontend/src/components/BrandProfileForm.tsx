@@ -1,4 +1,5 @@
 import { useEffect, useState, type FormEvent } from 'react'
+import { SaveIcon } from './icons'
 import {
   ApiError,
   createBrandProfile,
@@ -323,14 +324,17 @@ export function BrandProfileForm({
           {formError}
         </p>
       )}
-      <button type="submit" disabled={submitting}>
-        {submitting ? 'Saving…' : isEditing ? 'Save' : 'Save brand profile'}
-      </button>
-      {onCancel && (
-        <button type="button" onClick={onCancel} disabled={submitting}>
-          Cancel
+      <div className="button-row">
+        <button type="submit" className="btn-outline btn-gold" disabled={submitting}>
+          <SaveIcon />
+          {submitting ? 'Saving…' : isEditing ? 'Save' : 'Save brand profile'}
         </button>
-      )}
+        {onCancel && (
+          <button type="button" className="cancel-link" onClick={onCancel} disabled={submitting}>
+            Cancel
+          </button>
+        )}
+      </div>
     </form>
   )
 }

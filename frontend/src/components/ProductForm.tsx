@@ -6,6 +6,7 @@ import {
   type DragEvent,
   type FormEvent,
 } from 'react'
+import { PlusIcon, SaveIcon } from './icons'
 import {
   ApiError,
   createProduct,
@@ -541,14 +542,17 @@ export function ProductForm({
           {formError}
         </p>
       )}
-      <button type="submit" disabled={submitting}>
-        {submitting ? (isEditing ? 'Saving…' : 'Adding…') : isEditing ? 'Save' : 'Add product'}
-      </button>
-      {onCancel && (
-        <button type="button" onClick={onCancel} disabled={submitting}>
-          Cancel
+      <div className="button-row">
+        <button type="submit" className="btn-outline btn-gold" disabled={submitting}>
+          {isEditing ? <SaveIcon /> : <PlusIcon />}
+          {submitting ? (isEditing ? 'Saving…' : 'Adding…') : isEditing ? 'Save' : 'Add product'}
         </button>
-      )}
+        {onCancel && (
+          <button type="button" className="cancel-link" onClick={onCancel} disabled={submitting}>
+            Cancel
+          </button>
+        )}
+      </div>
     </form>
   )
 }
