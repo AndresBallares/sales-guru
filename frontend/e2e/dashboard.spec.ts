@@ -22,7 +22,7 @@ test('the results dashboard sits above the campaigns and has an empty state unti
   await page.getByRole('button', { name: 'No' }).click()
   await expect(page.getByText('Creative angles:')).toBeVisible()
   await page.getByRole('button', { name: 'Generate ads' }).click()
-  await page.getByRole('button', { name: 'Select this ad' }).first().click()
+  await page.getByRole('button', { name: 'Continue with this creative' }).first().click()
   await expect(page.getByRole('heading', { name: 'Ad preview' })).toBeVisible()
   await page.waitForLoadState('networkidle')
   await page.getByRole('button', { name: 'Approve & Publish' }).click()

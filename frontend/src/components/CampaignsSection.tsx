@@ -1,12 +1,14 @@
 import { useCallback, useEffect, useRef, useState, type ChangeEvent, type FormEvent } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { ADS_LOCKED_NOTE, isPublished as isPublishedCampaign } from '../lib/publishedCampaign'
+import { CreativeCard } from './CreativeCard'
 import { CreativeEditor } from './CreativeEditor'
 import { ActionRow } from './ActionRow'
 import { ExtraAssetSlot } from './ExtraAssetSlot'
 import { CardToolbar, type ToolbarAction } from './CardToolbar'
 import { CarouselEditor } from './CarouselEditor'
 import {
+  ArrowRightIcon,
   ArchiveIcon,
   CheckIcon,
   CloseIcon,
@@ -2109,56 +2111,80 @@ export function CampaignsSection({
                             )}
                           </div>
                         )}
-                        <ul aria-label={`Ad creatives for ${campaign.name ?? campaign.id}`}>
+                        <section
+                          className="creative-choices"
+                          aria-labelledby={`creative-choices-${campaign.id}`}
+                        >
+                          <h4 id={`creative-choices-${campaign.id}`}>
+                            {isCreativeTest ? 'Choose your test ads' : 'Choose your ad creative'}
+                          </h4>
+                          {!isCreativeTest && (
+                            <p className="creative-choices-intro">
+                              Review your generated creative options, then continue with one to
+                              preview your{' '}
+                              {campaignCreatives.every((c) => c.format === 'CAROUSEL')
+                                ? 'carousel '
+                                : ''}
+                              campaign.
+                            </p>
+                          )}
+                        <ul
+                          className="creative-card-list"
+                          aria-label={`Ad creatives for ${campaign.name ?? campaign.id}`}
+                        >
                           {campaignCreatives.map((c, index) => (
                             <li key={c.id}>
-                              <p>
-                                <strong>
-                                  Creative {VARIANT_LETTERS[index] ?? index + 1} —{' '}
-                                  {c.status}
-                                </strong>
-                                {c.format === 'SINGLE_VIDEO' && (
-                                  <span className="media-badge media-badge-video">Video ad</span>
-                                )}
-                              </p>
-                              {c.imageUrl && (
-                                <img
-                                  src={c.imageUrl}
-                                  alt={`Creative ${VARIANT_LETTERS[index] ?? index + 1}`}
-                                  width={160}
-                                  height={160}
-                                  style={{ objectFit: 'cover' }}
-                                />
-                              )}
-                              <p>
-                                <strong>Headline:</strong> {c.headline}
-                              </p>
-                              <p>
-                                <strong>Primary text:</strong> {c.bodyText}
-                              </p>
-                              <p>
-                                <strong>Description:</strong> {c.description}
-                              </p>
-                              <p>
-                                <strong>CTA:</strong> {ctaLabels[c.cta] ?? c.cta}
-                              </p>
-                              {c.creativeAngle && (
-                                <p>
-                                  <strong>Angle:</strong> {c.creativeAngle}
-                                </p>
-                              )}
-                              {c.imagePrompt && (
-                                <p>
-                                  <strong>Image prompt:</strong> {c.imagePrompt}
-                                </p>
-                              )}
-                              {c.videoPrompt && (
-                                <p>
-                                  <strong>Video prompt:</strong> {c.videoPrompt}
-                                </p>
-                              )}
-                              {c.format !== 'CAROUSEL' &&
-                                !isPublished && (
+                              <CreativeCard
+                                letter={VARIANT_LETTERS[index] ?? String(index + 1)}
+                                creative={c}
+                                ctaLabel={ctaLabels[c.cta] ?? c.cta}
+                                action={
+                                  isPublished ? undefined : isCreativeTest ? (
+                                    (c.status === 'SELECTED' || testAdCount < MAX_TEST_ADS) && (
+                                      <button
+                                        type="button"
+                                        className="btn-outline creative-card-button"
+                                        onClick={() =>
+                                          handleToggleTestAd(
+                                            campaign.id,
+                                            c.id,
+                                            c.status === 'SELECTED',
+                                          )
+                                        }
+                                        disabled={selectingId === c.id}
+                                      >
+                                        {selectingId === c.id
+                                          ? 'Updating…'
+                                          : c.status === 'SELECTED'
+                                            ? 'Remove from test'
+                                            : 'Add to test'}
+                                      </button>
+                                    )
+                                  ) : (
+                                    <button
+                                      type="button"
+                                      className="btn-outline btn-gold creative-card-button"
+                                      aria-busy={selectingId === c.id}
+                                      disabled={selectingId === c.id}
+                                      onClick={() =>
+                                        // The chosen ad is already saved as selected when
+                                        // coming back from the preview: just go on to it.
+                                        c.status === 'SELECTED'
+                                          ? navigate(
+                                              `/businesses/${businessId}/campaigns/${campaign.id}/ad`,
+                                            )
+                                          : void handleSelectCreative(campaign.id, c.id)
+                                      }
+                                    >
+                                      {selectingId === c.id
+                                        ? 'Opening preview…'
+                                        : 'Continue with this creative'}
+                                      {selectingId !== c.id && <ArrowRightIcon />}
+                                    </button>
+                                  )
+                                }
+                              >
+                                {c.format !== 'CAROUSEL' && !isPublished && (
                                   <CreativeEditor
                                     businessId={businessId}
                                     campaignId={campaign.id}
@@ -2177,46 +2203,11 @@ export function CampaignsSection({
                                     }}
                                   />
                                 )}
-                              {!isPublished && (
-                                <>
-                              {isCreativeTest ? (
-                                (c.status === 'SELECTED' || testAdCount < MAX_TEST_ADS) && (
-                                  <button
-                                    type="button"
-                                    onClick={() =>
-                                      handleToggleTestAd(
-                                        campaign.id,
-                                        c.id,
-                                        c.status === 'SELECTED',
-                                      )
-                                    }
-                                    disabled={selectingId === c.id}
-                                  >
-                                    {selectingId === c.id
-                                      ? 'Updating…'
-                                      : c.status === 'SELECTED'
-                                        ? 'Remove from test'
-                                        : 'Add to test'}
-                                  </button>
-                                )
-                              ) : (
-                                <button
-                                  type="button"
-                                  onClick={() => handleSelectCreative(campaign.id, c.id)}
-                                  disabled={c.status === 'SELECTED' || selectingId === c.id}
-                                >
-                                  {c.status === 'SELECTED'
-                                    ? 'Selected'
-                                    : selectingId === c.id
-                                      ? 'Selecting…'
-                                      : 'Select this ad'}
-                                </button>
-                              )}
-                                </>
-                              )}
+                              </CreativeCard>
                             </li>
                           ))}
                         </ul>
+                        </section>
                         </>
                       ))}
                   </div>

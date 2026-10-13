@@ -18,7 +18,7 @@ test('deleting a business is blocked while a campaign is live, and succeeds once
   await expect(page.getByText('Creative angles:')).toBeVisible()
 
   await page.getByRole('button', { name: 'Generate ads' }).click()
-  await page.getByRole('button', { name: 'Select this ad' }).first().click()
+  await page.getByRole('button', { name: 'Continue with this creative' }).first().click()
   // The ad page publishes paused by default; this spec needs a LIVE campaign.
   // Let the page finish loading before touching the checkbox: its state is
   // local, so a re-render after the uncheck would silently put it back to

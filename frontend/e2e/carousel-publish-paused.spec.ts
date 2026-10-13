@@ -32,7 +32,7 @@ test('publishes a carousel ad paused, with all three cards intact', async ({ pag
 
   await page.getByRole('radio', { name: 'Carousel' }).check()
   await page.getByRole('button', { name: 'Generate ads' }).click()
-  await page.getByRole('button', { name: 'Select this ad' }).first().click()
+  await page.getByRole('button', { name: 'Continue with this creative' }).first().click()
 
   // Selecting an ad navigates to a dedicated preview page (card
   // reorder/remove, no publish controls of its own) — the Publish

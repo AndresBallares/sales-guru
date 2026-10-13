@@ -53,7 +53,7 @@ test('blocks selecting an ad to publish until the product has a photo', async ({
   await expect(page.getByText('Creative angles:')).toBeVisible()
 
   await page.getByRole('button', { name: 'Generate ads' }).click()
-  await page.getByRole('button', { name: 'Select this ad' }).first().click()
+  await page.getByRole('button', { name: 'Continue with this creative' }).first().click()
 
   await expect(page.getByRole('alert')).toHaveText(
     'Add at least one product photo before selecting an ad to publish',

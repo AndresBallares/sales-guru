@@ -15,6 +15,14 @@ function renderCampaigns(ui: ReactElement) {
   return render(<MemoryRouter>{ui}</MemoryRouter>)
 }
 
+// The editing controls live in each card's collapsed "Edit creative" section.
+async function openEditCreative() {
+  const user = userEvent.setup()
+  for (const toggle of await screen.findAllByRole('button', { name: 'Edit creative' })) {
+    await user.click(toggle)
+  }
+}
+
 // readVideoInfo needs a real <video> decoder and canvas, which jsdom lacks.
 vi.mock('../lib/media', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../lib/media')>()
@@ -2057,7 +2065,7 @@ describe('CampaignsSection', () => {
     renderCampaigns(<CampaignsSection businessId="biz-1" />)
     await screen.findByText('Headline A')
 
-    await user.click(screen.getAllByRole('button', { name: 'Select this ad' })[0])
+    await user.click(screen.getAllByRole('button', { name: 'Continue with this creative' })[0])
 
     expect(mockedApi.selectCreative).toHaveBeenCalledWith('biz-1', 'camp-1', 'creative-1')
     // Selecting an ad collapses the 4-variant list down to just that one
@@ -2502,7 +2510,174 @@ describe('CampaignsSection', () => {
     await user.click(screen.getByRole('button', { name: 'Choose a different ad' }))
 
     expect(await screen.findByText('Headline B')).toBeInTheDocument()
-    expect(screen.getAllByRole('button', { name: 'Select this ad' })).toHaveLength(1)
+    // Every card can be continued with; the chosen one is marked with text, not just a border.
+    expect(screen.getAllByRole('button', { name: 'Continue with this creative' })).toHaveLength(2)
+    expect(screen.getByText('Selected', { selector: '.creative-card-status' })).toBeInTheDocument()
+    expect(screen.getByText('Not selected')).toBeInTheDocument()
+  })
+
+  describe('the ad creative choices', () => {
+    const adsGenerated = {
+      id: 'camp-1',
+      name: null,
+      objective: 'SALES' as const,
+      status: 'ADS_GENERATED',
+      productId: null,
+      audienceId: null,
+      metaCampaignId: null,
+      eventVenueKey: null,
+      startDate: null,
+      endDate: null,
+      pausedReason: null,
+      dailySpendFlag: null,
+      needsDestinationUrl: false,
+    }
+
+    function renderWithPreviewRoute() {
+      return render(
+        <MemoryRouter initialEntries={['/businesses/biz-1']}>
+          <Routes>
+            <Route path="/businesses/:businessId" element={<CampaignsSection businessId="biz-1" />} />
+            <Route
+              path="/businesses/:businessId/campaigns/:campaignId/ad"
+              element={<p>Ad preview page</p>}
+            />
+          </Routes>
+        </MemoryRouter>,
+      )
+    }
+
+    function twoCreatives(statusA: api.CreativeStatus = 'GENERATED') {
+      return [
+        fakeCreative({
+          id: 'creative-1',
+          headline: 'Headline A',
+          creativeAngle: 'Self-purchase empowerment',
+          imagePrompt: 'Prompt A '.repeat(60).trim(),
+          status: statusA,
+        }),
+        fakeCreative({
+          id: 'creative-2',
+          headline: 'Headline B',
+          creativeAngle: 'Gifting for milestones',
+          imagePrompt: 'Prompt B',
+          videoPrompt: 'Video B',
+          status: statusA === 'SELECTED' ? 'REJECTED' : 'GENERATED',
+        }),
+      ]
+    }
+
+    beforeEach(() => {
+      mockedApi.listCampaigns.mockResolvedValue([adsGenerated])
+      mockedApi.getStrategy.mockResolvedValue(FAKE_STRATEGY)
+    })
+
+    it('shows the page heading, intro and one card per creative with its angle', async () => {
+      mockedApi.listCreatives.mockResolvedValue(twoCreatives())
+
+      renderCampaigns(<CampaignsSection businessId="biz-1" />)
+
+      expect(await screen.findByRole('heading', { name: 'Choose your ad creative' })).toBeVisible()
+      expect(
+        screen.getByText(/Review your generated creative options, then continue with one/),
+      ).toBeVisible()
+      expect(screen.getAllByRole('article')).toHaveLength(2)
+      expect(screen.getByText('Creative A')).toBeInTheDocument()
+      expect(screen.getByText('Self-purchase empowerment')).toBeInTheDocument()
+      expect(screen.getByText('Gifting for milestones')).toBeInTheDocument()
+      expect(screen.getAllByText('Generated')).toHaveLength(2)
+      expect(screen.queryByRole('button', { name: 'Select this ad' })).not.toBeInTheDocument()
+    })
+
+    it('opens each card’s creative details on its own, with the full prompt', async () => {
+      mockedApi.listCreatives.mockResolvedValue(twoCreatives())
+      const user = userEvent.setup()
+      renderCampaigns(<CampaignsSection businessId="biz-1" />)
+      await screen.findByText('Headline A')
+      const [toggleA, toggleB] = screen.getAllByRole('button', { name: 'Creative details' })
+      expect(toggleA).toHaveAttribute('aria-expanded', 'false')
+      expect(screen.queryByText('Video B')).not.toBeVisible()
+
+      await user.click(toggleB)
+
+      expect(toggleB).toHaveAttribute('aria-expanded', 'true')
+      expect(toggleA).toHaveAttribute('aria-expanded', 'false')
+      expect(screen.getByText('Video B')).toBeVisible()
+      expect(screen.getByText('Prompt B')).toBeVisible()
+      await user.click(toggleA)
+      expect(screen.getByText('Prompt A '.repeat(60).trim())).toBeVisible()
+      await user.click(toggleA)
+      expect(toggleA).toHaveAttribute('aria-expanded', 'false')
+    })
+
+    it('keeps the editing controls in a separate, collapsed "Edit creative" section', async () => {
+      mockedApi.listCreatives.mockResolvedValue(twoCreatives())
+      const user = userEvent.setup()
+      renderCampaigns(<CampaignsSection businessId="biz-1" />)
+      await screen.findByText('Headline A')
+      const [editA, editB] = screen.getAllByRole('button', { name: 'Edit creative' })
+      const [detailsA] = screen.getAllByRole('button', { name: 'Creative details' })
+      expect(editA).toHaveAttribute('aria-expanded', 'false')
+      // The editor is out of the way (and out of the accessibility tree) until asked for.
+      expect(screen.queryByRole('button', { name: 'Regenerate headline' })).not.toBeInTheDocument()
+      // The primary action stays visible in the main card.
+      expect(screen.getAllByRole('button', { name: 'Continue with this creative' })).toHaveLength(2)
+
+      await user.click(editA)
+
+      expect(editA).toHaveAttribute('aria-expanded', 'true')
+      expect(editB).toHaveAttribute('aria-expanded', 'false')
+      expect(detailsA).toHaveAttribute('aria-expanded', 'false')
+      expect(screen.getAllByRole('button', { name: 'Regenerate headline' })).toHaveLength(1)
+
+      await user.click(detailsA)
+      expect(editA).toHaveAttribute('aria-expanded', 'true')
+      expect(detailsA).toHaveAttribute('aria-expanded', 'true')
+      await user.click(editA)
+      expect(screen.queryByRole('button', { name: 'Regenerate headline' })).not.toBeInTheDocument()
+    })
+
+    it('continues with Creative B: selects that creative and opens the preview', async () => {
+      mockedApi.listCreatives.mockResolvedValue(twoCreatives())
+      mockedApi.selectCreative.mockResolvedValue(
+        fakeCreative({ id: 'creative-2', headline: 'Headline B', status: 'SELECTED' }),
+      )
+      const user = userEvent.setup()
+      renderWithPreviewRoute()
+      await screen.findByText('Headline B')
+
+      await user.click(screen.getAllByRole('button', { name: 'Continue with this creative' })[1])
+
+      expect(mockedApi.selectCreative).toHaveBeenCalledWith('biz-1', 'camp-1', 'creative-2')
+      expect(await screen.findByText('Ad preview page')).toBeInTheDocument()
+    })
+
+    it('goes straight to the preview from the already-chosen creative, without selecting again', async () => {
+      mockedApi.listCreatives.mockResolvedValue(twoCreatives('SELECTED'))
+      const user = userEvent.setup()
+      renderWithPreviewRoute()
+      await screen.findByRole('button', { name: 'Choose a different ad' })
+      await user.click(screen.getByRole('button', { name: 'Choose a different ad' }))
+
+      await user.click(screen.getAllByRole('button', { name: 'Continue with this creative' })[0])
+
+      expect(mockedApi.selectCreative).not.toHaveBeenCalled()
+      expect(await screen.findByText('Ad preview page')).toBeInTheDocument()
+    })
+
+    it('shows progress and blocks a second press while the choice is being saved', async () => {
+      mockedApi.listCreatives.mockResolvedValue(twoCreatives())
+      mockedApi.selectCreative.mockReturnValue(new Promise(() => {}))
+      const user = userEvent.setup()
+      renderCampaigns(<CampaignsSection businessId="biz-1" />)
+      await screen.findByText('Headline A')
+
+      await user.click(screen.getAllByRole('button', { name: 'Continue with this creative' })[0])
+
+      const busy = await screen.findByRole('button', { name: 'Opening preview…' })
+      expect(busy).toBeDisabled()
+      expect(busy).toHaveAttribute('aria-busy', 'true')
+    })
   })
 
   it('closes the image menu when Upload Image is clicked again', async () => {
@@ -2675,7 +2850,7 @@ describe('CampaignsSection', () => {
     renderCampaigns(<CampaignsSection businessId="biz-1" />)
     await screen.findByText('Emeralds With a Story')
 
-    await user.click(screen.getByRole('button', { name: 'Select this ad' }))
+    await user.click(screen.getByRole('button', { name: 'Continue with this creative' }))
 
     expect(await screen.findByRole('alert')).toHaveTextContent('Could not select ad.')
   })
@@ -4543,6 +4718,7 @@ describe('CampaignsSection creative test (CREATIVE_TEST_PLAN)', () => {
     const user = userEvent.setup()
 
     renderCampaigns(<CampaignsSection businessId="biz-1" />)
+    await openEditCreative()
     await screen.findByText('Headline B')
     expect(screen.getAllByRole('button', { name: 'Regenerate headline' })).toHaveLength(4)
 
@@ -4848,6 +5024,7 @@ describe('CampaignsSection video ads and the creative test format', () => {
       mockedApi.listCreatives.mockResolvedValue(videoCreatives())
 
       renderCampaigns(<CampaignsSection businessId="biz-1" />)
+      await openEditCreative()
       await screen.findByText('Headline A')
 
       expect(screen.getAllByText('Video ad')).toHaveLength(4)
@@ -5035,6 +5212,7 @@ describe('CampaignsSection changing a video ad\'s video', () => {
     const user = userEvent.setup()
 
     renderCampaigns(<CampaignsSection businessId="biz-1" />)
+    await openEditCreative()
     await screen.findByText('Headline B')
     const buttons = screen.getAllByRole('button', { name: 'Change video' })
     expect(buttons).toHaveLength(3)
@@ -5093,6 +5271,7 @@ describe('CampaignsSection changing a video ad\'s video', () => {
     const user = userEvent.setup()
 
     renderCampaigns(<CampaignsSection businessId="biz-1" />)
+    await openEditCreative()
     await user.click(await screen.findByRole('button', { name: 'Change video' }))
 
     expect(await screen.findByText(/No videos on this product yet/)).toBeInTheDocument()
@@ -5119,6 +5298,7 @@ describe('CampaignsSection changing a video ad\'s video', () => {
     const user = userEvent.setup()
 
     renderCampaigns(<CampaignsSection businessId="biz-1" />)
+    await openEditCreative()
     await user.click(await screen.findByRole('button', { name: 'Change video' }))
     const callsBefore = mockedApi.listCampaigns.mock.calls.length
     await user.click(await screen.findByAltText('Product video option'))

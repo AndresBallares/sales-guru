@@ -42,7 +42,7 @@ test('a fake Meta connection carries a campaign through real strategy and ad gen
   // its own: a TEST_PLAN campaign (the only kind a business with no
   // advertising history, i.e. every fresh e2e signup, ever gets)
   // generates copy for two audience variants, not one.
-  const selectAdButton = page.getByRole('button', { name: 'Select this ad' }).first()
+  const selectAdButton = page.getByRole('button', { name: 'Continue with this creative' }).first()
   let adsGenerated = false
   for (let attempt = 0; attempt < 3 && !adsGenerated; attempt++) {
     try {
@@ -53,7 +53,7 @@ test('a fake Meta connection carries a campaign through real strategy and ad gen
       await page.getByRole('button', { name: 'Generate ads' }).click()
     }
   }
-  await page.getByRole('button', { name: 'Select this ad' }).first().click()
+  await page.getByRole('button', { name: 'Continue with this creative' }).first().click()
 
   await page.getByRole('button', { name: 'Approve & Publish' }).click()
   await expect(page.getByRole('button', { name: 'Publishing…' })).toBeVisible()

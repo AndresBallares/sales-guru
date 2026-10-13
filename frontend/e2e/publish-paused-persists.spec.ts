@@ -13,7 +13,7 @@ test('the Publish paused choice follows the user between the ad page and the das
   await page.getByRole('button', { name: 'No' }).click()
   await expect(page.getByText('Creative angles:')).toBeVisible()
   await page.getByRole('button', { name: 'Generate ads' }).click()
-  await page.getByRole('button', { name: 'Select this ad' }).first().click()
+  await page.getByRole('button', { name: 'Continue with this creative' }).first().click()
 
   // On the ad page: uncheck it (it starts checked).
   await expect(page.getByRole('heading', { name: 'Ad preview' })).toBeVisible()
