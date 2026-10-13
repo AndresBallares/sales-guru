@@ -61,7 +61,7 @@ export async function reachProductStep(
 
   await page.getByLabel('Name').fill('Acme Widgets')
   await page.getByLabel('Industry').selectOption({ label: 'Fashion / Jewelry' })
-  await page.getByRole('button', { name: 'Create business' }).click()
+  await page.getByRole('button', { name: 'Save Business' }).click()
   await expect(page.getByRole('heading', { name: 'Acme Widgets' })).toBeVisible()
 
   // Brand (PRD.md §5 step 3.5) comes first, ahead of the campaign

@@ -61,7 +61,7 @@ test('sign up, create a business, log out, log back in', async ({ page }) => {
   await page.getByLabel('Name').fill('Acme Widgets')
   await page.getByLabel('Industry').selectOption({ label: 'Fashion / Jewelry' })
   await page.getByLabel('Location').fill('CDMX')
-  await page.getByRole('button', { name: 'Create business' }).click()
+  await page.getByRole('button', { name: 'Save Business' }).click()
 
   // Creating a business navigates straight to its own detail page — no
   // dead-end empty form left behind on the dashboard. Brand comes first
@@ -161,7 +161,7 @@ test('the Brand step blocks on required fields, then is editable later', async (
   await page.getByRole('button', { name: 'Sign up' }).click()
   await page.getByLabel('Name').fill('Venzi Jewelry')
   await page.getByLabel('Industry').selectOption({ label: 'Fashion / Jewelry' })
-  await page.getByRole('button', { name: 'Create business' }).click()
+  await page.getByRole('button', { name: 'Save Business' }).click()
 
   await expect(page.getByRole('heading', { name: 'Brand' })).toBeVisible()
 
