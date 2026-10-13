@@ -1,5 +1,32 @@
-import { useState } from 'react'
+import { useState, type CSSProperties, type SyntheticEvent } from 'react'
 import type { Business, Creative } from '../lib/api'
+
+// The feed shows an image at its own shape between 1.91:1 (landscape) and 4:5
+// (portrait); only an image beyond those limits is cropped to them. Until the
+// image has loaded the frame is 4:5, Meta's recommended feed shape.
+const FEED_MIN_RATIO = 4 / 5
+const FEED_MAX_RATIO = 1.91
+
+function useFeedFrame() {
+  const [ratio, setRatio] = useState(FEED_MIN_RATIO)
+  const style: CSSProperties = {
+    aspectRatio: String(Math.min(Math.max(ratio, FEED_MIN_RATIO), FEED_MAX_RATIO)),
+  }
+  function onLoad(event: SyntheticEvent<HTMLImageElement>) {
+    const { naturalWidth, naturalHeight } = event.currentTarget
+    if (naturalWidth > 0 && naturalHeight > 0) setRatio(naturalWidth / naturalHeight)
+  }
+  return { style, onLoad, className: 'social-post-image-frame social-post-image-frame-feed' }
+}
+
+function FeedImage({ src, alt }: { src: string; alt: string }) {
+  const frame = useFeedFrame()
+  return (
+    <div className={frame.className} style={frame.style}>
+      <img className="social-post-image" src={src} alt={alt} onLoad={frame.onLoad} />
+    </div>
+  )
+}
 
 // The one place a selected ad's Facebook/Instagram-post look is defined —
 // shared by AdPreviewPage (the dedicated ad page) and CampaignsSection
@@ -66,7 +93,12 @@ function FeedPost({
         </ul>
       ) : creative.format === 'SINGLE_VIDEO' ? (
         <>
-          <VideoFrame imageUrl={creative.imageUrl} videoUrl={creative.videoUrl} alt={creative.headline} />
+          <VideoFrame
+            imageUrl={creative.imageUrl}
+            videoUrl={creative.videoUrl}
+            alt={creative.headline}
+            feed
+          />
           <div className="social-post-link-card">
             <div className="social-post-link-card-text">
               <p className="social-post-headline">{creative.headline}</p>
@@ -77,15 +109,7 @@ function FeedPost({
         </>
       ) : (
         <>
-          {creative.imageUrl && (
-            <div className="social-post-image-frame">
-              <img
-                className="social-post-image"
-                src={creative.imageUrl}
-                alt={creative.headline}
-              />
-            </div>
-          )}
+          {creative.imageUrl && <FeedImage src={creative.imageUrl} alt={creative.headline} />}
           <div className="social-post-link-card">
             <div className="social-post-link-card-text">
               <p className="social-post-headline">{creative.headline}</p>
@@ -110,17 +134,24 @@ function VideoFrame({
   imageUrl,
   videoUrl,
   alt,
+  feed = false,
 }: {
   imageUrl: string | null | undefined
   videoUrl: string | null | undefined
   alt: string
+  // Size the frame to the thumbnail's own shape (the feed placement only).
+  feed?: boolean
 }) {
+  const frame = useFeedFrame()
   // Which video is playing, so showing a different one starts back on its thumbnail.
   const [playing, setPlaying] = useState<string | null>(null)
   const isPlaying = playing !== null && playing === videoUrl
   if (isPlaying) {
     return (
-      <div className="social-post-image-frame">
+      <div
+        className={feed ? frame.className : 'social-post-image-frame'}
+        style={feed ? frame.style : undefined}
+      >
         <video
           className="social-post-image"
           src={videoUrl ?? undefined}
@@ -133,8 +164,22 @@ function VideoFrame({
     )
   }
   return (
-    <div className="social-post-image-frame social-post-video-frame">
-      {imageUrl && <img className="social-post-image" src={imageUrl} alt={alt} />}
+    <div
+      className={
+        feed
+          ? `${frame.className} social-post-video-frame`
+          : 'social-post-image-frame social-post-video-frame'
+      }
+      style={feed ? frame.style : undefined}
+    >
+      {imageUrl && (
+        <img
+          className="social-post-image"
+          src={imageUrl}
+          alt={alt}
+          onLoad={feed ? frame.onLoad : undefined}
+        />
+      )}
       {videoUrl && (
         <button
           type="button"

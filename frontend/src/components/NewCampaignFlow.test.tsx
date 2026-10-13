@@ -93,13 +93,13 @@ beforeEach(() => {
 })
 
 describe('NewCampaignFlow', () => {
-  it('shows the details step first, with a Continue and a Cancel button', () => {
+  it('shows the details step first, with a Next and a Cancel button', () => {
     renderFlow()
 
     expect(screen.getByRole('heading', { name: 'New campaign' })).toBeInTheDocument()
     expect(screen.getByLabelText('Name')).toBeInTheDocument()
     expect(screen.getByLabelText('Objective')).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Continue' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Next' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Cancel' })).toBeInTheDocument()
   })
 
@@ -119,7 +119,7 @@ describe('NewCampaignFlow', () => {
     const user = userEvent.setup()
 
     await user.type(screen.getByLabelText('Name'), 'Necklace push')
-    await user.click(screen.getByRole('button', { name: 'Continue' }))
+    await user.click(screen.getByRole('button', { name: 'Next' }))
 
     expect(await screen.findByLabelText('What do you sell?')).toBeInTheDocument()
     expect(screen.queryByLabelText('Choose an existing product')).not.toBeInTheDocument()
@@ -131,7 +131,7 @@ describe('NewCampaignFlow', () => {
     renderFlow({ products: [existingProduct] })
     const user = userEvent.setup()
 
-    await user.click(screen.getByRole('button', { name: 'Continue' }))
+    await user.click(screen.getByRole('button', { name: 'Next' }))
 
     expect(await screen.findByLabelText('What do you sell?')).toBeInTheDocument()
     expect(
@@ -144,7 +144,7 @@ describe('NewCampaignFlow', () => {
     renderFlow({ products: [existingProduct] })
     const user = userEvent.setup()
 
-    await user.click(screen.getByRole('button', { name: 'Continue' }))
+    await user.click(screen.getByRole('button', { name: 'Next' }))
     await user.click(await screen.findByRole('button', { name: 'Use an existing product instead' }))
 
     expect(screen.getByLabelText('Choose an existing product')).toBeInTheDocument()
@@ -157,7 +157,7 @@ describe('NewCampaignFlow', () => {
     renderFlow({ products: [existingProduct] })
     const user = userEvent.setup()
 
-    await user.click(screen.getByRole('button', { name: 'Continue' }))
+    await user.click(screen.getByRole('button', { name: 'Next' }))
     await user.click(await screen.findByRole('button', { name: 'Use an existing product instead' }))
     await user.selectOptions(
       screen.getByLabelText('Choose an existing product'),
@@ -180,7 +180,7 @@ describe('NewCampaignFlow', () => {
     renderFlow({ audiences: [existingAudience] })
     const user = userEvent.setup()
 
-    await user.click(screen.getByRole('button', { name: 'Continue' }))
+    await user.click(screen.getByRole('button', { name: 'Next' }))
     await user.type(await screen.findByLabelText('What do you sell?'), 'Necklaces')
     await user.click(screen.getByRole('button', { name: 'Add product' }))
 
@@ -195,7 +195,7 @@ describe('NewCampaignFlow', () => {
     renderFlow({ products: [], audiences: [] })
     const user = userEvent.setup()
 
-    await user.click(screen.getByRole('button', { name: 'Continue' }))
+    await user.click(screen.getByRole('button', { name: 'Next' }))
 
     expect(await screen.findByLabelText('What do you sell?')).toBeInTheDocument()
     expect(
@@ -223,7 +223,7 @@ describe('NewCampaignFlow', () => {
     const { onDone } = renderFlow()
     const user = userEvent.setup()
 
-    await user.click(screen.getByRole('button', { name: 'Continue' }))
+    await user.click(screen.getByRole('button', { name: 'Next' }))
     await user.type(await screen.findByLabelText('What do you sell?'), 'Necklaces')
     await user.click(screen.getByRole('button', { name: 'Add product' }))
     await user.type(await screen.findByLabelText('Who buys?'), 'Necklace shoppers')
@@ -264,7 +264,7 @@ describe('NewCampaignFlow', () => {
     const { onDone } = renderFlow()
     const user = userEvent.setup()
 
-    await user.click(screen.getByRole('button', { name: 'Continue' }))
+    await user.click(screen.getByRole('button', { name: 'Next' }))
     await user.type(await screen.findByLabelText('What do you sell?'), 'Necklaces')
     await user.click(screen.getByRole('button', { name: 'Add product' }))
     await user.type(await screen.findByLabelText('Who buys?'), 'Necklace shoppers')
@@ -288,7 +288,7 @@ describe('NewCampaignFlow', () => {
     renderFlow()
     const user = userEvent.setup()
 
-    await user.click(screen.getByRole('button', { name: 'Continue' }))
+    await user.click(screen.getByRole('button', { name: 'Next' }))
 
     expect(await screen.findByRole('alert')).toHaveTextContent('Unknown event venue')
     expect(screen.getByLabelText('Name')).toBeInTheDocument()
@@ -302,7 +302,7 @@ describe('NewCampaignFlow', () => {
     await user.selectOptions(screen.getByLabelText('Event venue'), 'jck_las_vegas')
     await user.type(screen.getByLabelText('Start date'), '2027-06-01')
     await user.type(screen.getByLabelText('End date'), '2027-06-04')
-    await user.click(screen.getByRole('button', { name: 'Continue' }))
+    await user.click(screen.getByRole('button', { name: 'Next' }))
 
     await waitFor(() =>
       expect(mockedApi.createCampaign).toHaveBeenCalledWith('biz-1', {
@@ -320,7 +320,7 @@ describe('NewCampaignFlow', () => {
     renderFlow({ products: [existingProduct] })
     const user = userEvent.setup()
 
-    await user.click(screen.getByRole('button', { name: 'Continue' }))
+    await user.click(screen.getByRole('button', { name: 'Next' }))
     await user.click(await screen.findByRole('button', { name: 'Use an existing product instead' }))
     await user.selectOptions(
       screen.getByLabelText('Choose an existing product'),
@@ -336,7 +336,7 @@ describe('NewCampaignFlow', () => {
     renderFlow({ products: [existingProduct] })
     const user = userEvent.setup()
 
-    await user.click(screen.getByRole('button', { name: 'Continue' }))
+    await user.click(screen.getByRole('button', { name: 'Next' }))
     await user.click(await screen.findByRole('button', { name: 'Use an existing product instead' }))
     expect(screen.getByLabelText('Choose an existing product')).toBeInTheDocument()
 
@@ -359,7 +359,7 @@ describe('NewCampaignFlow', () => {
     renderFlow({ audiences: [existingAudience] })
     const user = userEvent.setup()
 
-    await user.click(screen.getByRole('button', { name: 'Continue' }))
+    await user.click(screen.getByRole('button', { name: 'Next' }))
     await user.type(await screen.findByLabelText('What do you sell?'), 'Necklaces')
     await user.click(screen.getByRole('button', { name: 'Add product' }))
 
@@ -390,7 +390,7 @@ describe('NewCampaignFlow', () => {
     renderFlow({ audiences: [existingAudience] })
     const user = userEvent.setup()
 
-    await user.click(screen.getByRole('button', { name: 'Continue' }))
+    await user.click(screen.getByRole('button', { name: 'Next' }))
     await user.type(await screen.findByLabelText('What do you sell?'), 'Necklaces')
     await user.click(screen.getByRole('button', { name: 'Add product' }))
     await user.click(
@@ -412,7 +412,7 @@ describe('NewCampaignFlow', () => {
     renderFlow({ audiences: [existingAudience] })
     const user = userEvent.setup()
 
-    await user.click(screen.getByRole('button', { name: 'Continue' }))
+    await user.click(screen.getByRole('button', { name: 'Next' }))
     await user.type(await screen.findByLabelText('What do you sell?'), 'Necklaces')
     await user.click(screen.getByRole('button', { name: 'Add product' }))
     await user.click(
@@ -448,7 +448,7 @@ describe('NewCampaignFlow', () => {
     const { onDone } = renderFlow()
     const user = userEvent.setup()
 
-    await user.click(screen.getByRole('button', { name: 'Continue' }))
+    await user.click(screen.getByRole('button', { name: 'Next' }))
     await user.type(await screen.findByLabelText('What do you sell?'), 'Necklaces')
     await user.click(screen.getByRole('button', { name: 'Add product' }))
     await user.type(await screen.findByLabelText('Who buys?'), 'Necklace shoppers')
@@ -479,7 +479,7 @@ describe('NewCampaignFlow', () => {
     renderFlow()
     const user = userEvent.setup()
 
-    await user.click(screen.getByRole('button', { name: 'Continue' }))
+    await user.click(screen.getByRole('button', { name: 'Next' }))
     await user.type(await screen.findByLabelText('What do you sell?'), 'Necklaces')
     await user.click(screen.getByRole('button', { name: 'Add product' }))
     await user.type(await screen.findByLabelText('Who buys?'), 'Necklace shoppers')

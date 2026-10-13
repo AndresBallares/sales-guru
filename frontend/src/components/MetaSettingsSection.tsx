@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { RefreshIcon } from './icons'
 import {
   ApiError,
   finalizeMetaConnection,
@@ -113,7 +114,13 @@ export function MetaSettingsSection({
             ad account, Page and Pixel stay as they are.
           </p>
           <div className="button-row">
-            <button type="button" onClick={() => void handleReconnect()} disabled={reconnecting}>
+            <button
+              type="button"
+              className="btn-outline"
+              onClick={() => void handleReconnect()}
+              disabled={reconnecting}
+            >
+              <RefreshIcon size={18} />
               {reconnecting ? 'Opening Meta…' : 'Reconnect Meta'}
             </button>
             {pages === null && (

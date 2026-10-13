@@ -216,10 +216,15 @@ export function NewCampaignFlow({
             </p>
           )}
           <div className="button-row">
-            <button type="submit" disabled={submittingDetails}>
-              {submittingDetails ? 'Creating…' : 'Continue'}
+            <button type="submit" className="btn-outline btn-gold" disabled={submittingDetails}>
+              {submittingDetails ? 'Creating…' : 'Next'}
             </button>
-            <button type="button" onClick={onCancel} disabled={submittingDetails}>
+            <button
+              type="button"
+              className="cancel-link"
+              onClick={onCancel}
+              disabled={submittingDetails}
+            >
               Cancel
             </button>
           </div>

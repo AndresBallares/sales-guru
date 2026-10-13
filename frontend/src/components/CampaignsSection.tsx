@@ -8,13 +8,19 @@ import { CardToolbar, type ToolbarAction } from './CardToolbar'
 import { CarouselEditor } from './CarouselEditor'
 import {
   ArchiveIcon,
+  CheckIcon,
+  CloseIcon,
   ImageIcon,
   PackageIcon,
+  PauseIcon,
+  PlayIcon,
   PlusIcon,
   RefreshIcon,
   StatusIcon,
   StrategyIcon,
   TrashIcon,
+  UndoIcon,
+  UploadIcon,
   VideoIcon,
   VoiceIcon,
 } from './icons'
@@ -1063,9 +1069,11 @@ export function CampaignsSection({
                   </p>
                   <button
                     type="button"
+                    className="btn-outline"
                     onClick={() => void handleRestore(campaign.id)}
                     disabled={restoringId === campaign.id}
                   >
+                    <UndoIcon />
                     {restoringId === campaign.id ? 'Restoring…' : 'Restore campaign'}
                   </button>
                   {restoreErrors[campaign.id] && (
@@ -1324,25 +1332,25 @@ export function CampaignsSection({
                     (campaign.hasDelivered || deliveredOverride[campaign.id] ? (
                       <button
                         type="button"
-                        className="campaign-card-action"
+                        className="campaign-card-action btn-outline"
                         aria-label="Archive campaign"
                         onClick={() =>
                           setConfirmingAction((prev) => ({ ...prev, [campaign.id]: 'archive' }))
                         }
                       >
-                        <ArchiveIcon />
+                        <ArchiveIcon size={18} />
                         Archive
                       </button>
                     ) : (
                       <button
                         type="button"
-                        className="campaign-card-action"
+                        className="campaign-card-action btn-outline btn-outline-danger"
                         aria-label="Delete campaign"
                         onClick={() =>
                           setConfirmingAction((prev) => ({ ...prev, [campaign.id]: 'delete' }))
                         }
                       >
-                        <TrashIcon />
+                        <TrashIcon size={18} />
                         Delete
                       </button>
                     ))}
@@ -2088,12 +2096,14 @@ export function CampaignsSection({
                             {testAdCount >= MIN_TEST_ADS && (
                               <button
                                 type="button"
+                                className="btn-outline btn-gold"
                                 onClick={() =>
                                   navigate(
                                     `/businesses/${businessId}/campaigns/${campaign.id}/ad`,
                                   )
                                 }
                               >
+                                <UploadIcon />
                                 Review &amp; publish
                               </button>
                             )}
@@ -2381,9 +2391,11 @@ export function CampaignsSection({
                     )}
                     <button
                       type="button"
+                      className="btn-outline"
                       onClick={() => handlePause(campaign.id)}
                       disabled={pausingId === campaign.id}
                     >
+                      <PauseIcon />
                       {pausingId === campaign.id ? 'Pausing…' : 'Pause campaign'}
                     </button>
                     {pauseError && (
@@ -2393,9 +2405,11 @@ export function CampaignsSection({
                     )}
                     <button
                       type="button"
+                      className="btn-outline"
                       onClick={() => handleRefreshMetrics(campaign.id)}
                       disabled={refreshingMetricsId === campaign.id}
                     >
+                      <RefreshIcon size={18} />
                       {refreshingMetricsId === campaign.id
                         ? 'Refreshing…'
                         : 'Refresh results'}
@@ -2431,9 +2445,11 @@ export function CampaignsSection({
                     )}
                     <button
                       type="button"
+                      className="btn-outline"
                       onClick={() => handleAnalyze(campaign.id)}
                       disabled={analyzingId === campaign.id}
                     >
+                      <RefreshIcon size={18} />
                       {analyzingId === campaign.id ? 'Analyzing…' : 'Analyze now'}
                     </button>
                     {analyzeError && (
@@ -2487,26 +2503,30 @@ export function CampaignsSection({
                                 </p>
                               )}
                               {recommendation.status === 'PENDING' && (
-                                <>
+                                <div className="button-row">
                                   <button
                                     type="button"
+                                    className="btn-outline btn-gold"
                                     onClick={() =>
                                       handleApproveRecommendation(campaign.id, recommendation.id)
                                     }
                                     disabled={acting}
                                   >
+                                    <CheckIcon />
                                     {approving ? 'Approving…' : 'Approve'}
                                   </button>
                                   <button
                                     type="button"
+                                    className="btn-outline btn-outline-danger"
                                     onClick={() =>
                                       handleRejectRecommendation(campaign.id, recommendation.id)
                                     }
                                     disabled={acting}
                                   >
+                                    <CloseIcon />
                                     {rejecting ? 'Rejecting…' : 'Reject'}
                                   </button>
-                                </>
+                                </div>
                               )}
                               {recommendationError && (
                                 <p className="form-error" role="alert">
@@ -2522,9 +2542,11 @@ export function CampaignsSection({
                       <div>
                         <button
                           type="button"
+                          className="btn-outline"
                           onClick={() => handleEvaluateTestPlan(campaign.id)}
                           disabled={evaluatingId === campaign.id}
                         >
+                          <CheckIcon />
                           {evaluatingId === campaign.id ? 'Evaluating…' : 'Evaluate test'}
                         </button>
                         {evaluateError && (
@@ -2578,9 +2600,11 @@ export function CampaignsSection({
                       <>
                         <button
                           type="button"
+                          className="btn-outline btn-gold"
                           onClick={() => handleActivate(campaign.id)}
                           disabled={activatingId === campaign.id}
                         >
+                          <PlayIcon />
                           {activatingId === campaign.id ? 'Activating…' : 'Activate'}
                         </button>
                         {activateError && (
@@ -2672,7 +2696,8 @@ export function CampaignsSection({
                 {formError}
               </p>
             )}
-            <button type="submit" disabled={submitting}>
+            <button type="submit" className="btn-outline btn-gold" disabled={submitting}>
+              <PlusIcon />
               {submitting ? 'Creating…' : 'Create campaign'}
             </button>
           </form>

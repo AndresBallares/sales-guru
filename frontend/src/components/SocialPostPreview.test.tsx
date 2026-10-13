@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react'
+import { fireEvent, render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it } from 'vitest'
 import { SocialPostPreview } from './SocialPostPreview'
@@ -356,5 +356,76 @@ describe('SocialPostPreview', () => {
 
       expect(screen.queryByRole('button', { name: 'Square' })).not.toBeInTheDocument()
     })
+  })
+})
+
+describe('SocialPostPreview feed image frame', () => {
+  function frameAfterLoad(width: number, height: number, overrides: Partial<Creative> = {}) {
+    render(
+      <SocialPostPreview
+        business={business}
+        creative={makeCreative({ imageUrl: 'http://localhost:8000/img', ...overrides })}
+        ctaLabel="Shop Now"
+      />,
+    )
+    const image = screen.getByAltText('A great headline')
+    Object.defineProperty(image, 'naturalWidth', { value: width, configurable: true })
+    Object.defineProperty(image, 'naturalHeight', { value: height, configurable: true })
+    fireEvent.load(image)
+    return image.parentElement as HTMLElement
+  }
+
+  it('starts as a 4:5 frame before the image has loaded', () => {
+    render(
+      <SocialPostPreview
+        business={business}
+        creative={makeCreative({ imageUrl: 'http://localhost:8000/img' })}
+        ctaLabel="Shop Now"
+      />,
+    )
+
+    expect(screen.getByAltText('A great headline').parentElement).toHaveStyle({
+      aspectRatio: '0.8',
+    })
+  })
+
+  it('sizes the frame to a 4:5 image so it fills the frame', () => {
+    expect(frameAfterLoad(768, 960)).toHaveStyle({ aspectRatio: '0.8' })
+  })
+
+  it('sizes the frame to a square image', () => {
+    expect(frameAfterLoad(1080, 1080)).toHaveStyle({ aspectRatio: '1' })
+  })
+
+  it('limits a taller image to 4:5 and a wider one to 1.91:1, as the feed does', () => {
+    expect(frameAfterLoad(720, 1280)).toHaveStyle({ aspectRatio: '0.8' })
+  })
+
+  it('limits a very wide image to 1.91:1', () => {
+    expect(frameAfterLoad(3000, 1000)).toHaveStyle({ aspectRatio: '1.91' })
+  })
+
+  it('ignores a load event that reports no size', () => {
+    expect(frameAfterLoad(0, 0)).toHaveStyle({ aspectRatio: '0.8' })
+  })
+
+  it('sizes a video ad\'s thumbnail frame the same way', () => {
+    render(
+      <SocialPostPreview
+        business={business}
+        creative={makeCreative({
+          format: 'SINGLE_VIDEO',
+          imageUrl: 'http://localhost:8000/thumb',
+          videoUrl: 'http://localhost:8000/video',
+        })}
+        ctaLabel="Shop Now"
+      />,
+    )
+    const thumbnail = screen.getByAltText('A great headline')
+    Object.defineProperty(thumbnail, 'naturalWidth', { value: 1080, configurable: true })
+    Object.defineProperty(thumbnail, 'naturalHeight', { value: 1080, configurable: true })
+    fireEvent.load(thumbnail)
+
+    expect(thumbnail.parentElement).toHaveStyle({ aspectRatio: '1' })
   })
 })

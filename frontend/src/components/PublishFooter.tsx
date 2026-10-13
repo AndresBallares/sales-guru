@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react'
+import { UploadIcon } from './icons'
 
 // The campaign card's publishing footer: what approving does on the left, the
 // primary Approve & Publish button on the right. Stacks on narrow screens.
@@ -45,10 +46,11 @@ export function PublishFooter({
       </div>
       <button
         type="button"
-        className="publish-footer-button"
+        className="publish-footer-button btn-outline btn-gold"
         onClick={onPublish}
         disabled={buttonDisabled}
       >
+        <UploadIcon />
         {buttonLabel}
       </button>
       {error && (

@@ -29,9 +29,9 @@ export function TrashIcon({ size }: { size?: number } = {}) {
   )
 }
 
-export function ArchiveIcon() {
+export function ArchiveIcon({ size }: { size?: number } = {}) {
   return (
-    <Icon>
+    <Icon size={size}>
       <path d="M3 5h18v4H3zM5 9v10a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V9M10 13h4" />
     </Icon>
   )
@@ -118,9 +118,9 @@ export function PackageIcon() {
   )
 }
 
-export function RefreshIcon() {
+export function RefreshIcon({ size }: { size?: number } = {}) {
   return (
-    <Icon>
+    <Icon size={size}>
       <path d="M20 11a8 8 0 0 0-14.5-4.2M4 4v4h4M4 13a8 8 0 0 0 14.5 4.2M20 20v-4h-4" />
     </Icon>
   )
@@ -186,6 +186,55 @@ export function SaveIcon() {
   return (
     <Icon size={18}>
       <path d="M5 4h11l3 3v12a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1zM8 4v5h7V4M8 20v-6h8v6" />
+    </Icon>
+  )
+}
+
+export function PauseIcon() {
+  return (
+    <Icon size={18}>
+      <rect x="6" y="5" width="4" height="14" rx="1" />
+      <rect x="14" y="5" width="4" height="14" rx="1" />
+    </Icon>
+  )
+}
+
+export function PlayIcon() {
+  return (
+    <Icon size={18}>
+      <path d="M7 5v14l12-7z" />
+    </Icon>
+  )
+}
+
+export function UploadIcon() {
+  return (
+    <Icon size={18}>
+      <path d="M12 16V4M7 9l5-5 5 5M5 20h14" />
+    </Icon>
+  )
+}
+
+export function UndoIcon() {
+  return (
+    <Icon size={18}>
+      <path d="M9 7 4 12l5 5M4 12h10a6 6 0 0 1 0 12" />
+    </Icon>
+  )
+}
+
+export function CheckIcon() {
+  return (
+    <Icon size={18}>
+      <path d="m5 12.5 4.5 4.5L19 7.5" />
+    </Icon>
+  )
+}
+
+export function CloseIcon() {
+  return (
+    <Icon size={18}>
+      <path d="M6 6l12 12M18 6 6 18" />
     </Icon>
   )
 }
