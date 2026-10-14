@@ -302,3 +302,11 @@ export function InfoIcon() {
     </Icon>
   )
 }
+
+export function ChevronDownIcon() {
+  return (
+    <Icon size={18}>
+      <path d="m6 9 6 6 6-6" />
+    </Icon>
+  )
+}

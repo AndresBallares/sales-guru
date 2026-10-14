@@ -24,7 +24,7 @@ test('a fake Meta connection carries a campaign from creation to a live publish 
   await expect(page.getByText('Creative angles:')).toBeVisible()
 
   await page.getByRole('button', { name: 'Generate ads' }).click()
-  await page.getByRole('button', { name: 'Select this ad' }).first().click()
+  await page.getByRole('button', { name: 'Continue with this creative' }).first().click()
 
   // Selecting an ad navigates to the dedicated ad preview/publish page.
   // The ad page publishes paused by default; this spec needs a LIVE campaign.
