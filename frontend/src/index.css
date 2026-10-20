@@ -3877,3 +3877,65 @@ a.btn-outline {
     width: 100%;
   }
 }
+
+/* ---------- Next: the forward action under the ad choices, bottom right ---------- */
+
+.creative-next {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 0.5rem 1rem;
+  padding-top: 0.5rem;
+}
+
+.creative-next .field-hint {
+  margin: 0;
+}
+
+.btn-next {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.65rem;
+  min-height: 54px;
+  padding: 0 1.75rem;
+  border: none;
+  border-radius: 15px;
+  background: var(--create-bg);
+  color: var(--create-text);
+  box-shadow: none;
+  font-size: 1.125rem;
+  font-weight: 600;
+  white-space: nowrap;
+  transition: background-color 0.15s;
+}
+
+.btn-next svg {
+  width: 22px;
+  height: 22px;
+  flex: none;
+}
+
+.btn-next:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--create-bg) 88%, #000);
+  color: var(--create-text);
+  box-shadow: none;
+}
+
+.btn-next:active:not(:disabled) {
+  background: color-mix(in srgb, var(--create-bg) 80%, #000);
+}
+
+.btn-next:disabled {
+  background: var(--create-bg);
+  color: var(--create-text);
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .btn-next {
+    transition: none;
+  }
+}
