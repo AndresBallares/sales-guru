@@ -152,7 +152,6 @@ export function CampaignsSection({
   // The manual fallback for the readiness checklist below — reuses
   // handleAttachToCampaign above for the actual swap.
   const [pickProductId, setPickProductId] = useState<Record<string, string>>({})
-  const [pickAudienceId, setPickAudienceId] = useState<Record<string, string>>({})
   const [attachingId, setAttachingId] = useState<string | null>(null)
   const [attachErrors, setAttachErrors] = useState<Record<string, string>>({})
 
@@ -170,15 +169,11 @@ export function CampaignsSection({
     null,
   )
 
-  // Mirrors productPickerId/reuseProductForCampaignId above, for the
-  // audience picker in the readiness checklist below — collapsed by
-  // default (one "Attach an audience" click opens it for one campaign
-  // at a time) so it doesn't compete for the same field labels as
+  // Mirrors productPickerId above, for the audience form in the setup panel
+  // below — collapsed by default (Continue setup opens it for one campaign at
+  // a time) so it doesn't compete for the same field labels as
   // NewCampaignFlow's own audience step when both are open together.
   const [audiencePickerId, setAudiencePickerId] = useState<string | null>(null)
-  const [reuseAudienceForCampaignId, setReuseAudienceForCampaignId] = useState<string | null>(
-    null,
-  )
 
   const [name, setName] = useState('')
   const [objective, setObjective] = useState<Objective>('SALES')
@@ -1349,11 +1344,7 @@ export function CampaignsSection({
               setReuseProductForCampaignId(null)
               setProductPickerId(campaign.id)
             }
-            const openAudiencePicker = () => {
-              setReuseAudienceForCampaignId(null)
-              setAudiencePickerId(campaign.id)
-            }
-            const audienceFormOpen = !campaign.audienceId && audiencePickerId === campaign.id
+            const openAudiencePicker = () => setAudiencePickerId(campaign.id)
             const setupSteps: SetupStep[] = [
               {
                 key: 'objective',
@@ -1362,7 +1353,6 @@ export function CampaignsSection({
                 done: true,
                 doneText: `${objectiveLabel} selected`,
                 missingText: '',
-                actionLabel: '',
                 onAction: () => {},
               },
               {
@@ -1372,10 +1362,7 @@ export function CampaignsSection({
                 done: campaign.productId !== null,
                 doneText: currentProduct?.description ?? 'Product selected',
                 missingText: 'Select what you want to advertise',
-                actionLabel: 'Add product',
-                actionAriaLabel: 'Add product to this campaign',
                 onAction: openProductPicker,
-                actionHidden: productPickerId === campaign.id,
               },
               {
                 key: 'audience',
@@ -1386,71 +1373,21 @@ export function CampaignsSection({
                   audiences.find((audience) => audience.id === campaign.audienceId)?.description ??
                   'Audience attached',
                 missingText: 'Choose who should see your ads',
-                actionLabel: 'Complete setup',
                 onAction: openAudiencePicker,
-                actionHidden: audienceFormOpen,
-                children: !campaign.audienceId && audiencePickerId === campaign.id
-                  ? (
-                  reuseAudienceForCampaignId === campaign.id ? (
-                    <div className="button-row">
-                      <select
-                        aria-label="Which audience?"
-                        value={pickAudienceId[campaign.id] ?? ''}
-                        onChange={(event) =>
-                          setPickAudienceId((prev) => ({
-                            ...prev,
-                            [campaign.id]: event.target.value,
-                          }))
-                        }
-                      >
-                        <option value="">Which audience?</option>
-                        {audiences.map((audience) => (
-                          <option key={audience.id} value={audience.id}>
-                            {audience.description}
-                          </option>
-                        ))}
-                      </select>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          void handleAttachToCampaign(campaign.id, {
-                            audienceId: pickAudienceId[campaign.id],
-                          })
-                          setAudiencePickerId(null)
-                        }}
-                        disabled={!pickAudienceId[campaign.id] || attachingId === campaign.id}
-                      >
-                        Attach
-                      </button>
-                      <button type="button" onClick={() => setReuseAudienceForCampaignId(null)}>
-                        Add a new audience instead
-                      </button>
-                    </div>
-                  ) : (
-                    <div>
-                      <AudienceForm
-                        businessId={businessId}
-                        campaignId={campaign.id}
-                        onSaved={(created) => {
-                          setReuseAudienceForCampaignId(null)
-                          setAudiencePickerId(null)
-                          void handleAttachToCampaign(campaign.id, {
-                            audienceId: created.id,
-                          })
-                        }}
-                        onCancel={() => setAudiencePickerId(null)}
-                      />
-                      {audiences.length > 0 && (
-                        <button
-                          type="button"
-                          onClick={() => setReuseAudienceForCampaignId(campaign.id)}
-                        >
-                          Use an existing audience instead
-                        </button>
-                      )}
-                    </div>
-                  )
-                ) : null,
+                children:
+                  !campaign.audienceId && audiencePickerId === campaign.id ? (
+                    <AudienceForm
+                      businessId={businessId}
+                      campaignId={campaign.id}
+                      onSaved={(created) => {
+                        setAudiencePickerId(null)
+                        void handleAttachToCampaign(campaign.id, {
+                          audienceId: created.id,
+                        })
+                      }}
+                      onCancel={() => setAudiencePickerId(null)}
+                    />
+                  ) : null,
               },
             ]
             const nextSetupStep = setupSteps.find((step) => !step.done)
