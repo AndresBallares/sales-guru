@@ -3162,116 +3162,6 @@ a.btn-outline {
   color: #b42318;
 }
 
-.setup {
-  display: flex;
-  flex-direction: column;
-  gap: 0.5rem;
-}
-
-.setup-summary {
-  display: flex;
-  justify-content: space-between;
-  align-items: baseline;
-  gap: 1rem;
-  font-size: 0.9rem;
-  font-weight: 600;
-}
-
-.setup-summary p {
-  margin: 0;
-}
-
-.setup-summary span {
-  color: var(--text-secondary);
-}
-
-.setup-track {
-  appearance: none;
-  width: 100%;
-  height: 8px;
-  border: none;
-  border-radius: 999px;
-  overflow: hidden;
-  background: var(--border);
-  color: var(--primary);
-}
-
-.setup-track::-webkit-progress-bar {
-  background: var(--border);
-}
-
-.setup-track::-webkit-progress-value {
-  background: var(--primary);
-  border-radius: 999px;
-}
-
-.setup-track::-moz-progress-bar {
-  background: var(--primary);
-  border-radius: 999px;
-}
-
-.setup-steps {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-}
-
-.setup-step {
-  display: block;
-  padding: 0.75rem 0;
-  border-top: 1px solid var(--border);
-}
-
-.setup-step-row {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 0.5rem 0.75rem;
-}
-
-.setup-step-icon {
-  display: inline-flex;
-  flex: none;
-  color: #b7791f;
-}
-
-.setup-step[data-done='true'] .setup-step-icon {
-  color: var(--success);
-}
-
-.setup-step-text {
-  flex: 1 1 12rem;
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 0.1rem;
-  overflow-wrap: anywhere;
-}
-
-.setup-step-text span {
-  color: var(--text-secondary);
-  font-size: 0.9rem;
-}
-
-.setup-step-action {
-  min-height: 44px;
-  margin-left: auto;
-  padding: 0 0.75rem;
-  background: transparent;
-  color: var(--primary-soft-text);
-  border: none;
-  box-shadow: none;
-  font-size: 0.9rem;
-  font-weight: 600;
-}
-
-.setup-step-action:hover:not(:disabled) {
-  background: var(--primary-soft);
-  color: var(--primary-soft-text);
-}
-
 .campaign-card-footer {
   display: flex;
   align-items: center;
@@ -3325,10 +3215,6 @@ a.btn-outline {
 /* A draft card has nothing to edit yet; don't draw its empty divider and gap. */
 .card-editing:empty {
   display: none;
-}
-
-.setup-step:last-child {
-  padding-bottom: 0.25rem;
 }
 
 /* Compact header: smaller thumbnail, status and action on one line. */
@@ -3419,34 +3305,6 @@ a.btn-outline {
   line-height: 1.25;
 }
 
-.setup {
-  gap: 0.35rem;
-}
-
-.setup-track {
-  height: 6px;
-}
-
-.setup-step {
-  padding: 0.3rem 0;
-}
-
-.setup-step-row {
-  gap: 0.25rem 0.625rem;
-}
-
-.setup-step-text {
-  flex-direction: row;
-  flex-wrap: wrap;
-  align-items: baseline;
-  column-gap: 0.6rem;
-  row-gap: 0;
-}
-
-.setup-step-action {
-  min-height: 36px;
-}
-
 .campaign-card-footer {
   padding-top: 0.5rem;
 }
@@ -3474,9 +3332,221 @@ a.btn-outline {
     min-height: 44px;
   }
 
-  /* Narrow screens: the supporting text goes under the step name again. */
-  .setup-step-text {
-    flex-direction: column;
-    row-gap: 0.1rem;
+}
+
+/* ---------- Campaign setup panel ---------- */
+
+.setup {
+  display: flex;
+  flex-direction: column;
+  gap: 0.625rem;
+  padding: 1rem 1.25rem;
+  background: var(--row-bg);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+}
+
+.setup-heading {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 600;
+}
+
+.setup-summary {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.5rem 1rem;
+  color: var(--text-secondary);
+  font-size: 0.875rem;
+}
+
+.setup-summary p {
+  margin: 0;
+  flex: none;
+}
+
+.setup-track {
+  appearance: none;
+  flex: 1 1 8rem;
+  min-width: 8rem;
+  height: 7px;
+  border: none;
+  border-radius: 999px;
+  overflow: hidden;
+  background: var(--border);
+  color: var(--create-bg);
+}
+
+.setup-track::-webkit-progress-bar {
+  background: var(--border);
+}
+
+.setup-track::-webkit-progress-value {
+  background: color-mix(in srgb, var(--create-bg) 88%, #000);
+  border-radius: 999px;
+}
+
+.setup-track::-moz-progress-bar {
+  background: color-mix(in srgb, var(--create-bg) 88%, #000);
+  border-radius: 999px;
+}
+
+.setup-percent {
+  flex: none;
+  min-width: 2.5rem;
+  text-align: right;
+  font-size: 0.8125rem;
+  font-weight: 600;
+}
+
+.setup-steps {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.setup-step {
+  display: block;
+  padding: 0;
+  border-top: 1px solid var(--border);
+}
+
+.setup-step-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.5rem 0.75rem;
+  min-height: 60px;
+  padding: 0.5rem 0;
+}
+
+.setup-step-status {
+  display: inline-grid;
+  place-items: center;
+  flex: none;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  background: var(--warning-bg);
+  border: 1px solid color-mix(in srgb, var(--warning) 45%, transparent);
+  color: var(--warning);
+}
+
+.setup-step[data-done='true'] .setup-step-status {
+  background: var(--success-bg);
+  border-color: var(--success-border);
+  color: var(--success);
+}
+
+.setup-step-status svg {
+  width: 16px;
+  height: 16px;
+}
+
+.setup-step-kind {
+  display: inline-flex;
+  flex: none;
+  color: var(--text-tertiary);
+}
+
+.setup-step-kind svg {
+  width: 20px;
+  height: 20px;
+}
+
+.setup-step-text {
+  flex: 1 1 10rem;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  overflow-wrap: anywhere;
+}
+
+.setup-step-text strong {
+  font-size: 0.95rem;
+  font-weight: 600;
+}
+
+.setup-step-text span {
+  color: var(--text-secondary);
+  font-size: 0.875rem;
+}
+
+.setup-step-done {
+  display: inline-flex;
+  flex: none;
+  color: var(--success);
+}
+
+.setup-step-action {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex: none;
+  min-height: 38px;
+  margin-left: auto;
+  padding: 0 0.9rem;
+  border: 1px solid color-mix(in srgb, var(--create-bg) 80%, #000);
+  border-radius: 10px;
+  background: var(--create-bg);
+  color: var(--create-text);
+  box-shadow: none;
+  font-size: 0.875rem;
+  font-weight: 500;
+}
+
+.setup-step-action svg {
+  width: 16px;
+  height: 16px;
+}
+
+.setup-step-action:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--create-bg) 90%, #000);
+  border-color: color-mix(in srgb, var(--create-bg) 70%, #000);
+  color: var(--create-text);
+}
+
+.setup-step-action:active:not(:disabled) {
+  background: color-mix(in srgb, var(--create-bg) 82%, #000);
+}
+
+.setup-step:last-child {
+  padding-bottom: 0;
+}
+
+@media (max-width: 720px) {
+  .setup {
+    padding: 0.875rem;
   }
+
+  .setup-step-row {
+    min-height: 56px;
+  }
+
+  /* Icons stay beside the text; the action wraps under it instead of overflowing. */
+  .setup-step-text {
+    flex: 1 1 0;
+  }
+
+  .setup-step-action {
+    margin-left: calc(26px + 20px + 1.5rem);
+    width: calc(100% - 26px - 20px - 1.5rem);
+    justify-content: center;
+    min-height: 44px;
+  }
+}
+
+/* On a draft the panel above already separates this area from the header. */
+.setup ~ .card-editing {
+  padding-top: 0;
+  border-top: none;
+}
+
+.setup ~ .card-editing:not(:has(*)),
+.setup ~ .card-editing:empty {
+  display: none;
 }

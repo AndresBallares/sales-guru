@@ -15,6 +15,8 @@ import {
   CloseIcon,
   ImageIcon,
   PackageIcon,
+  TargetIcon,
+  UsersIcon,
   PauseIcon,
   PlayIcon,
   PlusIcon,
@@ -1356,6 +1358,7 @@ export function CampaignsSection({
               {
                 key: 'objective',
                 label: 'Campaign objective',
+                icon: <TargetIcon />,
                 done: true,
                 doneText: `${objectiveLabel} selected`,
                 missingText: '',
@@ -1364,21 +1367,26 @@ export function CampaignsSection({
               },
               {
                 key: 'product',
-                label: campaign.productId ? 'Product' : 'Choose a product',
+                label: 'Choose a product',
+                icon: <PackageIcon />,
                 done: campaign.productId !== null,
                 doneText: currentProduct?.description ?? 'Product selected',
                 missingText: 'Select what you want to advertise',
-                actionLabel: 'Attach product',
+                actionLabel: 'Add product',
+                actionAriaLabel: 'Add product to this campaign',
                 onAction: openProductPicker,
                 actionHidden: productPickerId === campaign.id,
               },
               {
                 key: 'audience',
-                label: campaign.audienceId ? 'Audience' : 'Attach an audience',
+                label: 'Attach an audience',
+                icon: <UsersIcon />,
                 done: campaign.audienceId !== null,
-                doneText: 'Audience attached',
+                doneText:
+                  audiences.find((audience) => audience.id === campaign.audienceId)?.description ??
+                  'Audience attached',
                 missingText: 'Choose who should see your ads',
-                actionLabel: 'Attach audience',
+                actionLabel: 'Complete setup',
                 onAction: openAudiencePicker,
                 actionHidden: audienceFormOpen,
                 children: !campaign.audienceId && audiencePickerId === campaign.id
