@@ -716,6 +716,49 @@ async def test_create_meta_ad_set_defaults_to_broad_us_without_any_geo_override(
 
 
 @pytest.mark.asyncio
+async def test_create_meta_ad_set_never_restricts_placements(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The ad set leaves placements unset, so Meta uses Advantage+ placements.
+
+    A first creative test lets Meta choose where each ad runs (PRD.md, "Why
+    automatic placements"): fencing delivery in with manual placements raises the
+    cost per result and adds a second variable to a test meant to have one. The
+    per-placement *assets* are handled on the ad creative instead, so no
+    placement or device field may ever appear on the ad set, whatever else is set.
+    """
+    client = _mock_client_returning(monkeypatch, _FakeResponse({"id": "adset_123"}))
+
+    await meta.create_meta_ad_set(
+        access_token="token",
+        ad_account_id="act_1",
+        name="Creative test",
+        meta_campaign_id="campaign_123",
+        daily_budget_cents=5000,
+        optimization_goal="OFFSITE_CONVERSIONS",
+        age_min=25,
+        age_max=55,
+        pixel_id="pixel_1",
+        interests=[{"id": "6003139266461", "name": "Jewelry"}],
+        advantage_audience=1,
+        locales=[6],
+        target_cac_cents=2500,
+    )
+
+    _url, data = client.calls[0]
+    sent = json.dumps(data)
+    for field in (
+        "publisher_platforms",
+        "facebook_positions",
+        "instagram_positions",
+        "messenger_positions",
+        "audience_network_positions",
+        "device_platforms",
+    ):
+        assert field not in sent
+
+
+@pytest.mark.asyncio
 async def test_search_ad_geolocations_returns_the_raw_result_list(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
