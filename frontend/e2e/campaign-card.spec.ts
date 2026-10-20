@@ -58,3 +58,27 @@ for (const width of [320, 375]) {
     expect(box?.height).toBeGreaterThanOrEqual(44)
   })
 }
+
+test('the delete confirmation has room around its text and aligned, underlined Cancel', async ({
+  page,
+}) => {
+  await reachDraftCampaign(page)
+  await page.getByRole('button', { name: 'Delete campaign' }).first().click()
+
+  const dialog = page.getByRole('alertdialog')
+  const confirm = dialog.getByRole('button', { name: 'Delete campaign' })
+  const cancel = dialog.getByRole('button', { name: 'Cancel' })
+  const [panel, text, confirmBox, cancelBox] = await Promise.all([
+    dialog.boundingBox(),
+    dialog.locator('p').boundingBox(),
+    confirm.boundingBox(),
+    cancel.boundingBox(),
+  ])
+
+  // Space between the sentence and the buttons, and padding inside the panel.
+  expect(confirmBox!.y - (text!.y + text!.height)).toBeGreaterThanOrEqual(12)
+  expect(text!.x - panel!.x).toBeGreaterThanOrEqual(16)
+  // Cancel sits on the button's centre line, as underlined text.
+  expect(Math.abs(confirmBox!.y + confirmBox!.height / 2 - (cancelBox!.y + cancelBox!.height / 2))).toBeLessThanOrEqual(1)
+  expect(await cancel.evaluate((el) => getComputedStyle(el).textDecorationLine)).toBe('underline')
+})
