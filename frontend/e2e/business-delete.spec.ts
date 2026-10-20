@@ -49,7 +49,7 @@ test('deleting a business is blocked while a campaign is live, and succeeds once
       new URL(response.url()).pathname.endsWith('/campaigns') &&
       response.ok(),
   )
-  await page.getByRole('link', { name: '← Back to dashboard' }).click()
+  await page.getByRole('button', { name: 'Back to ad choices' }).click()
   await campaignsLoaded
   await expect(page.getByRole('heading', { name: 'Acme Widgets' })).toBeVisible()
   await expect(page.getByText(/Live on Meta/)).toBeVisible()

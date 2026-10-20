@@ -30,7 +30,7 @@ test('the results dashboard sits above the campaigns and has an empty state unti
     page.getByRole('button', { name: /Approve & Publish|Publishing…/ }),
   ).toHaveCount(0)
 
-  await page.getByRole('link', { name: '← Back to dashboard' }).click()
+  await page.getByRole('button', { name: 'Back to ad choices' }).click()
 
   // Published paused (the default), so it has never run: the stat strip is
   // there, the panel says why there are no numbers, and nothing shows a fake zero.

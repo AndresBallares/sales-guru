@@ -1,6 +1,6 @@
 import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { MemoryRouter, Route, Routes } from 'react-router-dom'
+import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { AdPreviewPage } from './AdPreviewPage'
 import * as api from '../lib/api'
@@ -135,6 +135,37 @@ beforeEach(() => {
 })
 
 describe('AdPreviewPage', () => {
+  it('has a round back button before the title that returns to the ad choices', async () => {
+    function ChoicesStub() {
+      const { pathname, search } = useLocation()
+      return <p>{`Ad choices at ${pathname}${search}`}</p>
+    }
+    render(
+      <MemoryRouter initialEntries={['/businesses/biz-1/campaigns/camp-1/ad']}>
+        <Routes>
+          <Route
+            path="/businesses/:businessId/campaigns/:campaignId/ad"
+            element={<AdPreviewPage />}
+          />
+          <Route path="/businesses/:businessId" element={<ChoicesStub />} />
+        </Routes>
+      </MemoryRouter>,
+    )
+
+    const back = await screen.findByRole('button', { name: 'Back to ad choices' })
+    expect(back).toHaveClass('back-button')
+    expect(screen.queryByRole('link', { name: /Back to dashboard/ })).not.toBeInTheDocument()
+    const heading = screen.getByRole('heading', { level: 1 })
+    expect(back.compareDocumentPosition(heading) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+
+    await userEvent.click(back)
+
+    // Straight to the business page, staying on the campaigns even if Meta is not connected yet.
+    expect(
+      await screen.findByText('Ad choices at /businesses/biz-1?metaLater=1'),
+    ).toBeInTheDocument()
+  })
+
   it('shows the selected ad as a social-post preview', async () => {
     renderPage()
 
