@@ -41,6 +41,12 @@ test('a SALES campaign publishes a creative test of 3 ads, paused by default', a
 
   // Publish paused is on by default — the happy path here is the default.
   await expect(page.getByLabel(/Publish paused/)).toBeChecked()
+  // Approve & Publish is the same gold as the Create campaign button (#ecd68a).
+  expect(
+    await page
+      .getByRole('button', { name: 'Approve & Publish' })
+      .evaluate((el) => getComputedStyle(el).backgroundColor),
+  ).toBe('rgb(236, 214, 138)')
   await page.getByRole('button', { name: 'Approve & Publish' }).click()
   await expect(
     page.getByRole('button', { name: /Approve & Publish|Publishing…/ }),

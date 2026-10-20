@@ -326,6 +326,14 @@ describe('AdPreviewPage', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent('Could not attach image.')
   })
 
+  it('styles Approve & Publish in the same gold as the Create campaign button', async () => {
+    renderPage()
+
+    const button = await screen.findByRole('button', { name: 'Approve & Publish' })
+    // btn-gold is the gold-token style the outlined buttons use (--create-bg), not the default purple.
+    expect(button).toHaveClass('btn-outline', 'btn-gold')
+  })
+
   it('approves and publishes a pending campaign', async () => {
     mockedApi.approveCampaign.mockResolvedValue(makeCampaign({ status: 'APPROVED' }))
     mockedApi.publishCampaign.mockResolvedValue(makeCampaign({ status: 'LIVE' }))

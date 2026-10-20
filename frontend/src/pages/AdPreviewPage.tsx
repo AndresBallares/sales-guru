@@ -399,6 +399,7 @@ export function AdPreviewPage() {
               </label>
               <button
                 type="button"
+                className="btn-outline btn-gold"
                 onClick={() => void handleApproveAndPublish()}
                 disabled={publishing || publishStatus !== null}
               >

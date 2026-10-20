@@ -3948,6 +3948,79 @@ describe('CampaignsSection', () => {
       ]
     }
 
+    it('keeps the card header short: the name, the objective and the status, not the product description', async () => {
+      const longDescription =
+        'Contemporary handcrafted fine jewelry, including rings, bracelets, necklaces and earrings, crafted in 18K gold with natural gemstones.'
+      mockedApi.listCampaigns.mockResolvedValue([
+        {
+          ...draftCampaignFixture,
+          name: 'Placement pair test',
+          status: 'PAUSED',
+          productId: 'prod-1',
+          metaCampaignId: 'meta_campaign_1',
+          pausedReason: 'Manually paused',
+        },
+      ])
+      mockedApi.listProducts.mockResolvedValue([
+        {
+          id: 'prod-1',
+          description: longDescription,
+          price: null,
+          margin: null,
+          features: null,
+          benefits: null,
+          primaryImageUrl: null,
+          url: null,
+        },
+      ])
+      mockedApi.getStrategy.mockResolvedValue(FAKE_STRATEGY)
+      mockedApi.listCreatives.mockResolvedValue(ads())
+
+      const { container } = renderCampaigns(<CampaignsSection businessId="biz-1" />)
+      await screen.findByRole('heading', { name: 'Placement pair test' })
+
+      const header = container.querySelector('.campaign-card-header') as HTMLElement
+      expect(header).toHaveTextContent('Placement pair test')
+      expect(header.querySelector('.campaign-card-subtitle')).toHaveTextContent(/^Sales$/)
+      expect(header).not.toHaveTextContent('handcrafted')
+      expect(header).toHaveTextContent('Paused')
+    })
+
+    it('says the campaign is published once, not twice', async () => {
+      mockedApi.listCampaigns.mockResolvedValue([
+        {
+          ...draftCampaignFixture,
+          status: 'PAUSED',
+          metaCampaignId: 'meta_campaign_1',
+          pausedReason: 'Manually paused',
+        },
+      ])
+      mockedApi.getStrategy.mockResolvedValue(FAKE_STRATEGY)
+      mockedApi.listCreatives.mockResolvedValue(ads())
+
+      renderCampaigns(<CampaignsSection businessId="biz-1" />)
+      await screen.findByText(/Ad one/)
+
+      expect(screen.getAllByText(LOCKED)).toHaveLength(1)
+    })
+
+    it('still says it once for a published campaign that has no strategy to show', async () => {
+      mockedApi.listCampaigns.mockResolvedValue([
+        {
+          ...draftCampaignFixture,
+          status: 'PAUSED',
+          metaCampaignId: 'meta_campaign_1',
+          pausedReason: 'Manually paused',
+        },
+      ])
+      mockedApi.getStrategy.mockRejectedValue(new api.ApiError(404, 'No strategy'))
+      mockedApi.listCreatives.mockResolvedValue([])
+
+      renderCampaigns(<CampaignsSection businessId="biz-1" />)
+
+      expect(await screen.findAllByText(LOCKED)).toHaveLength(1)
+    })
+
     // LIVE, PAUSED, and the pre-publish statuses an old bug could leave a published
     // campaign in: all published, because they have a Meta id.
     it.each(['LIVE', 'PAUSED', 'ADS_GENERATED', 'PENDING_APPROVAL', 'APPROVED', 'STRATEGY_GENERATED'])(
@@ -4008,7 +4081,7 @@ describe('CampaignsSection', () => {
   })
 
   describe('regenerating a strategy', () => {
-    it('explains that a published campaign’s strategy is fixed instead of offering to regenerate it', async () => {
+    it('offers no way to regenerate a published campaign’s strategy, and does not repeat the published note under it', async () => {
       mockedApi.listCampaigns.mockResolvedValue([
         {
           ...draftCampaignFixture,
@@ -4019,10 +4092,10 @@ describe('CampaignsSection', () => {
       mockedApi.getStrategy.mockResolvedValue(FAKE_STRATEGY)
 
       renderCampaigns(<CampaignsSection businessId="biz-1" />)
-      expect(
-        await screen.findByText(/This campaign is already published, so its strategy can't be regenerated/),
-      ).toBeInTheDocument()
-      expect(screen.getByText(/Create a new campaign to try a different strategy/)).toBeInTheDocument()
+      // The one published note is enough; the strategy-specific repeat is gone.
+      expect(await screen.findByText(ADS_LOCKED_NOTE)).toBeInTheDocument()
+      expect(screen.queryByText(/so its strategy can't be regenerated/)).not.toBeInTheDocument()
+      expect(screen.queryByText(/try a different strategy/)).not.toBeInTheDocument()
       expect(screen.queryByRole('button', { name: 'Regenerate strategy' })).not.toBeInTheDocument()
       expect(screen.queryByRole('button', { name: 'Generate strategy' })).not.toBeInTheDocument()
     })
