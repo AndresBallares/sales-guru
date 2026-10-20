@@ -1088,8 +1088,8 @@ li ul {
 }
 
 .campaign-thumb {
-  width: 72px;
-  height: 72px;
+  width: 80px;
+  height: 80px;
   flex: none;
   object-fit: cover;
   border-radius: 16px;
@@ -3080,5 +3080,403 @@ a.btn-outline {
   .creative-card-button {
     width: auto;
     min-width: 16rem;
+  }
+}
+
+/* ---------- Campaign card: compact header, setup progress, footer ---------- */
+
+.campaign-card {
+  gap: 1rem;
+  padding: 1.5rem;
+}
+
+.campaign-card-header {
+  align-items: flex-start;
+}
+
+.campaign-card-heading {
+  gap: 0.25rem;
+}
+
+.campaign-card-title {
+  font-size: 1.35rem;
+  font-weight: 600;
+}
+
+.campaign-card-subtitle {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 0.95rem;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.campaign-card-side {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 0.5rem;
+  margin-left: auto;
+}
+
+.campaign-card-side .status-pill {
+  padding: 0.1rem 0.65rem 0.1rem 0.5rem;
+  font-size: 0.8rem;
+}
+
+.campaign-thumb-empty {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--primary-soft);
+  color: var(--primary-soft-text);
+}
+
+.campaign-thumb-empty svg {
+  width: 32px;
+  height: 32px;
+}
+
+.campaign-card-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  min-height: 44px;
+  padding: 0 0.5rem;
+  background: transparent;
+  color: var(--text-secondary);
+  border: none;
+  box-shadow: none;
+  font-size: 0.9rem;
+  font-weight: 500;
+}
+
+.campaign-card-link:hover:not(:disabled) {
+  background: transparent;
+  color: var(--text);
+  text-decoration: underline;
+}
+
+.campaign-card-link-danger,
+.campaign-card-link-danger:hover:not(:disabled) {
+  color: #b42318;
+}
+
+.setup {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.setup-summary {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 1rem;
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+
+.setup-summary p {
+  margin: 0;
+}
+
+.setup-summary span {
+  color: var(--text-secondary);
+}
+
+.setup-track {
+  appearance: none;
+  width: 100%;
+  height: 8px;
+  border: none;
+  border-radius: 999px;
+  overflow: hidden;
+  background: var(--border);
+  color: var(--primary);
+}
+
+.setup-track::-webkit-progress-bar {
+  background: var(--border);
+}
+
+.setup-track::-webkit-progress-value {
+  background: var(--primary);
+  border-radius: 999px;
+}
+
+.setup-track::-moz-progress-bar {
+  background: var(--primary);
+  border-radius: 999px;
+}
+
+.setup-steps {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.setup-step {
+  display: block;
+  padding: 0.75rem 0;
+  border-top: 1px solid var(--border);
+}
+
+.setup-step-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.5rem 0.75rem;
+}
+
+.setup-step-icon {
+  display: inline-flex;
+  flex: none;
+  color: #b7791f;
+}
+
+.setup-step[data-done='true'] .setup-step-icon {
+  color: var(--success);
+}
+
+.setup-step-text {
+  flex: 1 1 12rem;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  overflow-wrap: anywhere;
+}
+
+.setup-step-text span {
+  color: var(--text-secondary);
+  font-size: 0.9rem;
+}
+
+.setup-step-action {
+  min-height: 44px;
+  margin-left: auto;
+  padding: 0 0.75rem;
+  background: transparent;
+  color: var(--primary-soft-text);
+  border: none;
+  box-shadow: none;
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+
+.setup-step-action:hover:not(:disabled) {
+  background: var(--primary-soft);
+  color: var(--primary-soft-text);
+}
+
+.campaign-card-footer {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.5rem 1rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--border);
+}
+
+.campaign-card-continue {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-height: 44px;
+}
+
+.campaign-card-footer .campaign-card-link {
+  margin-left: auto;
+}
+
+@media (max-width: 720px) {
+  .campaign-card {
+    padding: 1rem;
+  }
+
+  .campaign-card-title {
+    font-size: 1.2rem;
+  }
+
+  .campaign-thumb {
+    width: 56px;
+    height: 56px;
+  }
+
+  .campaign-card-side {
+    flex-direction: row;
+    align-items: center;
+    flex-wrap: wrap;
+  }
+
+  .campaign-card-continue {
+    width: 100%;
+    justify-content: center;
+  }
+
+  .campaign-card-footer .campaign-card-link {
+    margin-left: 0;
+  }
+}
+
+/* A draft card has nothing to edit yet; don't draw its empty divider and gap. */
+.card-editing:empty {
+  display: none;
+}
+
+.setup-step:last-child {
+  padding-bottom: 0.25rem;
+}
+
+/* Compact header: smaller thumbnail, status and action on one line. */
+.campaign-card {
+  padding: 1.25rem;
+  gap: 0.75rem;
+}
+
+.campaign-card-header {
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.campaign-thumb {
+  width: 56px;
+  height: 56px;
+  border-radius: 12px;
+}
+
+.campaign-thumb-empty svg {
+  width: 24px;
+  height: 24px;
+}
+
+.campaign-card-title {
+  font-size: 1.15rem;
+}
+
+.campaign-card-subtitle {
+  font-size: 0.875rem;
+}
+
+.campaign-card-side {
+  flex-direction: row;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 0.25rem;
+}
+
+.campaign-card-header .campaign-card-link {
+  min-height: 32px;
+  padding: 0 0.35rem;
+}
+
+@media (max-width: 720px) {
+  .campaign-card {
+    padding: 1rem;
+  }
+
+  .campaign-thumb {
+    width: 48px;
+    height: 48px;
+  }
+}
+
+.card-editing:not(:has(*)) {
+  display: none;
+}
+
+/* Tighter still: about a fifth shorter than the first compact pass. */
+.campaign-card {
+  padding: 0.875rem 1.25rem;
+  gap: 0.5rem;
+}
+
+.campaign-card-header {
+  gap: 0.625rem;
+}
+
+.campaign-thumb {
+  width: 44px;
+  height: 44px;
+  border-radius: 10px;
+}
+
+.campaign-thumb-empty svg {
+  width: 22px;
+  height: 22px;
+}
+
+.campaign-card-title {
+  font-size: 1.1rem;
+  line-height: 1.2;
+}
+
+.campaign-card-subtitle {
+  line-height: 1.25;
+}
+
+.setup {
+  gap: 0.35rem;
+}
+
+.setup-track {
+  height: 6px;
+}
+
+.setup-step {
+  padding: 0.3rem 0;
+}
+
+.setup-step-row {
+  gap: 0.25rem 0.625rem;
+}
+
+.setup-step-text {
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: baseline;
+  column-gap: 0.6rem;
+  row-gap: 0;
+}
+
+.setup-step-action {
+  min-height: 36px;
+}
+
+.campaign-card-footer {
+  padding-top: 0.5rem;
+}
+
+.campaign-card-continue {
+  min-height: 40px;
+}
+
+.card-editing {
+  gap: 0.5rem;
+  padding-top: 0.25rem;
+}
+
+@media (max-width: 720px) {
+  .campaign-card {
+    padding: 0.875rem;
+  }
+
+  .campaign-thumb {
+    width: 40px;
+    height: 40px;
+  }
+
+  .campaign-card-continue {
+    min-height: 44px;
+  }
+
+  /* Narrow screens: the supporting text goes under the step name again. */
+  .setup-step-text {
+    flex-direction: column;
+    row-gap: 0.1rem;
   }
 }

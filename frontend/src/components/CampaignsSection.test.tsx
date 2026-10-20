@@ -477,7 +477,7 @@ describe('CampaignsSection', () => {
 
     renderCampaigns(<CampaignsSection businessId="biz-1" />)
 
-    expect(await screen.findByText('Sales — Draft')).toBeInTheDocument()
+    expect(await screen.findByRole('heading', { name: 'Sales' })).toBeInTheDocument()
   })
 
   it('shows the campaign name, when set, ahead of the objective', async () => {
@@ -502,7 +502,7 @@ describe('CampaignsSection', () => {
     renderCampaigns(<CampaignsSection businessId="biz-1" />)
 
     expect(
-      await screen.findByText('Custom Colombian Emerald Ring — Sales — Draft'),
+      await screen.findByRole('heading', { name: 'Custom Colombian Emerald Ring' }),
     ).toBeInTheDocument()
   })
 
@@ -572,7 +572,7 @@ describe('CampaignsSection', () => {
         name: 'Spring Sale',
       }),
     )
-    expect(await screen.findByText('Spring Sale — Leads — Draft')).toBeInTheDocument()
+    expect(await screen.findByRole('heading', { name: 'Spring Sale' })).toBeInTheDocument()
   })
 
   it('does not offer a Product or Audience field on the create-campaign form', async () => {
@@ -773,7 +773,7 @@ describe('CampaignsSection', () => {
     const user = userEvent.setup()
 
     renderCampaigns(<CampaignsSection businessId="biz-1" />)
-    await screen.findByText('First campaign — Sales — Draft')
+    await screen.findByRole('heading', { name: 'First campaign' })
     expect(screen.queryByRole('heading', { name: 'Create a campaign' })).not.toBeInTheDocument()
 
     await user.click(screen.getByRole('button', { name: 'Create campaign' }))
@@ -924,7 +924,7 @@ describe('CampaignsSection', () => {
     await waitFor(() => expect(mockedApi.createStrategy).toHaveBeenCalledWith('biz-1', 'camp-2', undefined))
     // Back to the (refreshed) list — no manual reload, and the guided
     // flow is gone again.
-    expect(await screen.findByText('First campaign — Sales — Draft')).toBeInTheDocument()
+    expect(await screen.findByRole('heading', { name: 'First campaign' })).toBeInTheDocument()
     expect(screen.queryByRole('heading', { name: 'New campaign' })).not.toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Create campaign' })).toBeInTheDocument()
   })
@@ -982,9 +982,11 @@ describe('CampaignsSection', () => {
     renderCampaigns(<CampaignsSection businessId="biz-1" />)
 
     const checklist = await screen.findByLabelText('Campaign readiness for camp-1')
-    expect(checklist).toHaveTextContent('✓ Objective')
-    expect(checklist).toHaveTextContent('✗ Product')
-    expect(checklist).toHaveTextContent('✗ Audience')
+    expect(checklist).toHaveTextContent('1 of 3 setup steps complete')
+    expect(checklist).toHaveTextContent('33%')
+    expect(checklist).toHaveTextContent('Sales selected')
+    expect(checklist).toHaveTextContent('Select what you want to advertise')
+    expect(checklist).toHaveTextContent('Choose who should see your ads')
     expect(screen.queryByRole('button', { name: 'Generate strategy' })).not.toBeInTheDocument()
   })
 
@@ -1039,7 +1041,7 @@ describe('CampaignsSection', () => {
     renderCampaigns(<CampaignsSection businessId="biz-1" />)
     await screen.findByLabelText('Campaign readiness for camp-1')
 
-    await user.click(screen.getByRole('button', { name: 'Attach an audience' }))
+    await user.click(screen.getByRole('button', { name: 'Attach audience' }))
     await user.click(screen.getByRole('button', { name: 'Use an existing audience instead' }))
     const picker = screen.getByLabelText('Which audience?')
     await user.selectOptions(picker, 'aud-1')
@@ -1050,6 +1052,142 @@ describe('CampaignsSection', () => {
         audienceId: 'aud-1',
       }),
     )
+  })
+
+  describe('the campaign card header and setup progress', () => {
+    const walletProduct: api.Product = {
+      id: 'prod-1',
+      description: 'Handmade wallets',
+      price: null,
+      margin: null,
+      features: null,
+      benefits: null,
+      primaryImageUrl: 'https://img.example/wallet.jpg',
+      url: null,
+    }
+    const walletAudience: api.Audience = {
+      id: 'aud-1',
+      description: 'Wallet lovers',
+      ageMin: null,
+      ageMax: null,
+      location: null,
+      interests: null,
+      problem: null,
+      desire: null,
+    }
+
+    it('shows the name, objective and status without repeating the status in the title', async () => {
+      mockedApi.listCampaigns.mockResolvedValue([
+        { ...draftCampaignFixture, name: 'Spring Sale', productId: 'prod-1' },
+      ])
+      mockedApi.listProducts.mockResolvedValue([walletProduct])
+
+      renderCampaigns(<CampaignsSection businessId="biz-1" />)
+
+      const title = await screen.findByRole('heading', { name: 'Spring Sale' })
+      expect(title).not.toHaveTextContent('Draft')
+      expect(screen.getByText('Sales')).toHaveClass('campaign-card-subtitle')
+      expect(screen.getByText('Draft')).toHaveClass('status-pill')
+    })
+
+    it('shows the product thumbnail only when a product with an image is selected', async () => {
+      mockedApi.listCampaigns.mockResolvedValue([{ ...draftCampaignFixture, productId: 'prod-1' }])
+      mockedApi.listProducts.mockResolvedValue([walletProduct])
+
+      renderCampaigns(<CampaignsSection businessId="biz-1" />)
+
+      expect(await screen.findByRole('img', { name: 'Handmade wallets' })).toHaveAttribute(
+        'src',
+        'https://img.example/wallet.jpg',
+      )
+    })
+
+    it('shows a placeholder, not a broken image, when the product has no photo', async () => {
+      mockedApi.listCampaigns.mockResolvedValue([{ ...draftCampaignFixture, productId: 'prod-1' }])
+      mockedApi.listProducts.mockResolvedValue([{ ...walletProduct, primaryImageUrl: null }])
+
+      const { container } = renderCampaigns(<CampaignsSection businessId="biz-1" />)
+
+      await screen.findByLabelText('Campaign readiness for camp-1')
+      expect(screen.queryByRole('img')).not.toBeInTheDocument()
+      expect(container.querySelector('.campaign-thumb-empty')).not.toBeNull()
+    })
+
+    it('renders no thumbnail box when no product is selected', async () => {
+      mockedApi.listCampaigns.mockResolvedValue([draftCampaignFixture])
+
+      const { container } = renderCampaigns(<CampaignsSection businessId="biz-1" />)
+
+      await screen.findByLabelText('Campaign readiness for camp-1')
+      expect(container.querySelector('.campaign-thumb, .campaign-thumb-empty')).toBeNull()
+    })
+
+    it('counts the completed steps from the real campaign data', async () => {
+      mockedApi.listCampaigns.mockResolvedValue([{ ...draftCampaignFixture, productId: 'prod-1' }])
+      mockedApi.listProducts.mockResolvedValue([walletProduct])
+
+      renderCampaigns(<CampaignsSection businessId="biz-1" />)
+
+      const setup = await screen.findByLabelText('Campaign readiness for camp-1')
+      expect(setup).toHaveTextContent('2 of 3 setup steps complete')
+      expect(setup).toHaveTextContent('67%')
+      expect(within(setup).getByRole('progressbar')).toHaveAttribute('value', '2')
+      expect(within(setup).getByRole('progressbar')).toHaveAttribute('max', '3')
+      expect(setup).toHaveTextContent('Handmade wallets')
+      expect(within(setup).queryByRole('button', { name: 'Attach product' })).toBeNull()
+      expect(within(setup).getByRole('button', { name: 'Attach audience' })).toBeInTheDocument()
+    })
+
+    it('shows every step complete, with no Continue setup, once all three are set', async () => {
+      mockedApi.listCampaigns.mockResolvedValue([
+        { ...draftCampaignFixture, productId: 'prod-1', audienceId: 'aud-1' },
+      ])
+      mockedApi.listProducts.mockResolvedValue([walletProduct])
+      mockedApi.listAudiences.mockResolvedValue([walletAudience])
+
+      renderCampaigns(<CampaignsSection businessId="biz-1" />)
+
+      const setup = await screen.findByLabelText('Campaign readiness for camp-1')
+      expect(setup).toHaveTextContent('3 of 3 setup steps complete')
+      expect(setup).toHaveTextContent('100%')
+      expect(screen.queryByRole('button', { name: 'Continue setup' })).not.toBeInTheDocument()
+    })
+
+    it('Continue setup opens the first missing step, then the next one', async () => {
+      mockedApi.listCampaigns.mockResolvedValue([draftCampaignFixture])
+      const user = userEvent.setup()
+
+      renderCampaigns(<CampaignsSection businessId="biz-1" />)
+      await screen.findByLabelText('Campaign readiness for camp-1')
+
+      await user.click(screen.getByRole('button', { name: 'Continue setup' }))
+      expect(await screen.findByRole('button', { name: 'Add product' })).toBeInTheDocument()
+    })
+
+    it('Continue setup opens the audience form when only the audience is missing', async () => {
+      mockedApi.listCampaigns.mockResolvedValue([{ ...draftCampaignFixture, productId: 'prod-1' }])
+      mockedApi.listProducts.mockResolvedValue([walletProduct])
+      const user = userEvent.setup()
+
+      renderCampaigns(<CampaignsSection businessId="biz-1" />)
+      await screen.findByLabelText('Campaign readiness for camp-1')
+
+      await user.click(screen.getByRole('button', { name: 'Continue setup' }))
+      expect(await screen.findByRole('button', { name: 'Add audience' })).toBeInTheDocument()
+      expect(screen.queryByRole('button', { name: 'Attach audience' })).not.toBeInTheDocument()
+    })
+
+    it('keeps Delete in the footer, and still asks before deleting', async () => {
+      mockedApi.listCampaigns.mockResolvedValue([draftCampaignFixture])
+      const user = userEvent.setup()
+
+      renderCampaigns(<CampaignsSection businessId="biz-1" />)
+      await screen.findByLabelText('Campaign readiness for camp-1')
+
+      await user.click(screen.getByRole('button', { name: 'Delete campaign' }))
+      expect(screen.getByRole('alertdialog')).toBeInTheDocument()
+      expect(mockedApi.deleteCampaign).not.toHaveBeenCalled()
+    })
   })
 
   it('always shows a product-attach control, regardless of product count', async () => {
@@ -1069,13 +1207,13 @@ describe('CampaignsSection', () => {
 
     renderCampaigns(<CampaignsSection businessId="biz-1" />)
 
-    const productRow = await screen.findByLabelText('Product for camp-1')
-    expect(productRow).toHaveTextContent('No product selected')
+    const productRow = await screen.findByLabelText('Campaign readiness for camp-1')
+    expect(productRow).toHaveTextContent('Select what you want to advertise')
     // "Attach a product" while none is set, distinct from "Change
     // product" once one is (confirmed 2026-09-09) — also distinct from
     // ProductForm's own "Add product" submit button, so the two never
     // collide once the picker expands into create mode.
-    expect(screen.getByRole('button', { name: 'Attach a product' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Attach product' })).toBeInTheDocument()
     // The picker itself is collapsed until that button is clicked.
     expect(screen.queryByLabelText('Change product', { selector: 'select' })).toBeNull()
   })
@@ -1111,9 +1249,9 @@ describe('CampaignsSection', () => {
     const user = userEvent.setup()
 
     renderCampaigns(<CampaignsSection businessId="biz-1" />)
-    await screen.findByLabelText('Product for camp-1')
+    await screen.findByLabelText('Campaign readiness for camp-1')
 
-    await user.click(screen.getByRole('button', { name: 'Attach a product' }))
+    await user.click(screen.getByRole('button', { name: 'Attach product' }))
     await user.click(screen.getByRole('button', { name: 'Use an existing product instead' }))
     await user.selectOptions(screen.getByLabelText('Change product', { selector: 'select' }), 'prod-2')
     await user.click(screen.getByRole('button', { name: 'Attach' }))
@@ -1157,9 +1295,9 @@ describe('CampaignsSection', () => {
     const user = userEvent.setup()
 
     renderCampaigns(<CampaignsSection businessId="biz-1" />)
-    await screen.findByLabelText('Product for camp-1')
+    await screen.findByLabelText('Campaign readiness for camp-1')
 
-    await user.click(screen.getByRole('button', { name: 'Attach a product' }))
+    await user.click(screen.getByRole('button', { name: 'Attach product' }))
     await user.type(screen.getByLabelText('What do you sell?'), 'Leather belts')
     await user.click(screen.getByRole('button', { name: 'Add product' }))
 
@@ -1203,10 +1341,10 @@ describe('CampaignsSection', () => {
     const user = userEvent.setup()
 
     renderCampaigns(<CampaignsSection businessId="biz-1" />)
-    await screen.findByLabelText('Product for camp-1')
+    await screen.findByLabelText('Campaign readiness for camp-1')
     expect(screen.queryByRole('img')).not.toBeInTheDocument()
 
-    await user.click(screen.getByRole('button', { name: 'Attach a product' }))
+    await user.click(screen.getByRole('button', { name: 'Attach product' }))
     await user.type(screen.getByLabelText('What do you sell?'), 'Leather belts')
     await user.click(screen.getByRole('button', { name: 'Add product' }))
 
@@ -1233,9 +1371,9 @@ describe('CampaignsSection', () => {
     const user = userEvent.setup()
 
     renderCampaigns(<CampaignsSection businessId="biz-1" />)
-    await screen.findByLabelText('Product for camp-1')
+    await screen.findByLabelText('Campaign readiness for camp-1')
 
-    await user.click(screen.getByRole('button', { name: 'Attach a product' }))
+    await user.click(screen.getByRole('button', { name: 'Attach product' }))
     await user.click(screen.getByRole('button', { name: 'Use an existing product instead' }))
     expect(screen.getByLabelText('Change product', { selector: 'select' })).toBeInTheDocument()
 
@@ -1251,9 +1389,9 @@ describe('CampaignsSection', () => {
     const user = userEvent.setup()
 
     renderCampaigns(<CampaignsSection businessId="biz-1" />)
-    await screen.findByLabelText('Product for camp-1')
+    await screen.findByLabelText('Campaign readiness for camp-1')
 
-    await user.click(screen.getByRole('button', { name: 'Attach a product' }))
+    await user.click(screen.getByRole('button', { name: 'Attach product' }))
     expect(screen.getByLabelText('What do you sell?')).toBeInTheDocument()
 
     await user.click(screen.getByRole('button', { name: 'Cancel' }))
@@ -1295,7 +1433,7 @@ describe('CampaignsSection', () => {
     renderCampaigns(<CampaignsSection businessId="biz-1" />)
     await screen.findByLabelText('Campaign readiness for camp-1')
 
-    await user.click(screen.getByRole('button', { name: 'Attach an audience' }))
+    await user.click(screen.getByRole('button', { name: 'Attach audience' }))
     expect(screen.queryByLabelText('Which audience?')).toBeNull()
     await user.type(screen.getByLabelText('Who buys?'), 'Students')
     await user.click(screen.getByRole('button', { name: 'Add audience' }))
@@ -1332,7 +1470,7 @@ describe('CampaignsSection', () => {
     renderCampaigns(<CampaignsSection businessId="biz-1" />)
     await screen.findByLabelText('Campaign readiness for camp-1')
 
-    await user.click(screen.getByRole('button', { name: 'Attach an audience' }))
+    await user.click(screen.getByRole('button', { name: 'Attach audience' }))
     await user.click(screen.getByRole('button', { name: 'Use an existing audience instead' }))
     expect(screen.getByLabelText('Which audience?')).toBeInTheDocument()
 
@@ -1350,7 +1488,7 @@ describe('CampaignsSection', () => {
     renderCampaigns(<CampaignsSection businessId="biz-1" />)
     await screen.findByLabelText('Campaign readiness for camp-1')
 
-    await user.click(screen.getByRole('button', { name: 'Attach an audience' }))
+    await user.click(screen.getByRole('button', { name: 'Attach audience' }))
     expect(screen.getByLabelText('Who buys?')).toBeInTheDocument()
 
     await user.click(screen.getByRole('button', { name: 'Cancel' }))
@@ -1468,7 +1606,7 @@ describe('CampaignsSection', () => {
     renderCampaigns(<CampaignsSection businessId="biz-1" />)
     await screen.findByLabelText('Campaign readiness for camp-1')
 
-    await user.click(screen.getByRole('button', { name: 'Attach an audience' }))
+    await user.click(screen.getByRole('button', { name: 'Attach audience' }))
     await user.click(screen.getByRole('button', { name: 'Use an existing audience instead' }))
     await user.selectOptions(screen.getByLabelText('Which audience?'), 'aud-2')
     await user.click(screen.getByRole('button', { name: 'Attach' }))
@@ -1478,7 +1616,7 @@ describe('CampaignsSection', () => {
         audienceId: 'aud-2',
       }),
     )
-    expect(await screen.findByText('✓ Audience')).toBeInTheDocument()
+    expect(await screen.findByText('Audience attached')).toBeInTheDocument()
   })
 
   it('shows an error if manually attaching a product fails', async () => {
@@ -1509,9 +1647,9 @@ describe('CampaignsSection', () => {
     const user = userEvent.setup()
 
     renderCampaigns(<CampaignsSection businessId="biz-1" />)
-    await screen.findByLabelText('Product for camp-1')
+    await screen.findByLabelText('Campaign readiness for camp-1')
 
-    await user.click(screen.getByRole('button', { name: 'Attach a product' }))
+    await user.click(screen.getByRole('button', { name: 'Attach product' }))
     await user.click(screen.getByRole('button', { name: 'Use an existing product instead' }))
     await user.selectOptions(screen.getByLabelText('Change product', { selector: 'select' }), 'prod-2')
     await user.click(screen.getByRole('button', { name: 'Attach' }))
@@ -1541,7 +1679,7 @@ describe('CampaignsSection', () => {
     const user = userEvent.setup()
 
     renderCampaigns(<CampaignsSection businessId="biz-1" />)
-    await screen.findByText('Sales — Ready')
+    await screen.findByRole('heading', { name: 'Sales' })
 
     await user.click(screen.getByRole('button', { name: 'Generate strategy' }))
 
@@ -1581,7 +1719,7 @@ describe('CampaignsSection', () => {
     const user = userEvent.setup()
 
     renderCampaigns(<CampaignsSection businessId="biz-1" />)
-    await screen.findByText('Sales — Ready')
+    await screen.findByRole('heading', { name: 'Sales' })
 
     await user.click(screen.getByRole('button', { name: 'Generate strategy' }))
 
@@ -1614,7 +1752,7 @@ describe('CampaignsSection', () => {
     const user = userEvent.setup()
 
     renderCampaigns(<CampaignsSection businessId="biz-1" />)
-    await screen.findByText('Sales — Ready')
+    await screen.findByRole('heading', { name: 'Sales' })
 
     await user.click(screen.getByRole('button', { name: 'Generate strategy' }))
     await screen.findByText('Has this business run advertising campaigns before?')
@@ -1655,7 +1793,7 @@ describe('CampaignsSection', () => {
     const user = userEvent.setup()
 
     renderCampaigns(<CampaignsSection businessId="biz-1" />)
-    await screen.findByText('Sales — Ready')
+    await screen.findByRole('heading', { name: 'Sales' })
 
     await user.click(screen.getByRole('button', { name: 'Generate strategy' }))
 
@@ -1732,7 +1870,7 @@ describe('CampaignsSection', () => {
     const user = userEvent.setup()
 
     renderCampaigns(<CampaignsSection businessId="biz-1" />)
-    await screen.findByText('Sales — Ready')
+    await screen.findByRole('heading', { name: 'Sales' })
 
     await user.click(screen.getByRole('button', { name: 'Generate strategy' }))
 
@@ -2925,7 +3063,7 @@ describe('CampaignsSection', () => {
     const user = userEvent.setup()
 
     renderCampaigns(<CampaignsSection businessId="biz-1" />)
-    await screen.findByText('Sales — Pending approval')
+    await screen.findByRole('heading', { name: 'Sales' })
 
     await user.click(screen.getByRole('button', { name: 'Approve & Publish' }))
 
@@ -3576,7 +3714,7 @@ describe('CampaignsSection', () => {
         await waitFor(() =>
           expect(screen.queryByLabelText(/Show archived/)).not.toBeInTheDocument(),
         )
-        expect(screen.getByText(/Old test — Sales — Paused/)).toBeInTheDocument()
+        expect(screen.getByRole('heading', { name: 'Old test' })).toBeInTheDocument()
         expect(screen.queryByRole('button', { name: 'Restore campaign' })).not.toBeInTheDocument()
       })
 
@@ -3824,7 +3962,7 @@ describe('CampaignsSection', () => {
     const user = userEvent.setup()
 
     renderCampaigns(<CampaignsSection businessId="biz-1" />)
-    await screen.findByText('Sales — Pending approval')
+    await screen.findByRole('heading', { name: 'Sales' })
 
     await user.click(screen.getByRole('button', { name: 'Approve & Publish' }))
 
@@ -3875,7 +4013,7 @@ describe('CampaignsSection', () => {
     const user = userEvent.setup()
 
     renderCampaigns(<CampaignsSection businessId="biz-1" />)
-    await screen.findByText('Sales — Pending approval')
+    await screen.findByRole('heading', { name: 'Sales' })
 
     await user.click(screen.getByRole('button', { name: 'Approve & Publish' }))
 
@@ -3995,7 +4133,7 @@ describe('CampaignsSection', () => {
     ])
 
     renderCampaigns(<CampaignsSection businessId="biz-1" />)
-    await screen.findByText('Sales — Approved')
+    await screen.findByRole('heading', { name: 'Sales' })
 
     expect(
       screen.queryByRole('button', { name: 'Refresh results' }),
@@ -4476,7 +4614,7 @@ describe('CampaignsSection', () => {
     ])
 
     renderCampaigns(<CampaignsSection businessId="biz-1" />)
-    await screen.findByText('Sales — Approved')
+    await screen.findByRole('heading', { name: 'Sales' })
 
     expect(screen.queryByRole('button', { name: 'Analyze now' })).not.toBeInTheDocument()
   })
@@ -4851,7 +4989,7 @@ describe('CampaignsSection campaign type (creative test vs standard)', () => {
     const user = userEvent.setup()
 
     renderCampaigns(<CampaignsSection businessId="biz-1" />)
-    await screen.findByText('Sales — Ready')
+    await screen.findByRole('heading', { name: 'Sales' })
     expect(
       screen.getByRole('radio', { name: /Creative test \(recommended for a first campaign\)/ }),
     ).toBeChecked()
@@ -4869,7 +5007,7 @@ describe('CampaignsSection campaign type (creative test vs standard)', () => {
     const user = userEvent.setup()
 
     renderCampaigns(<CampaignsSection businessId="biz-1" />)
-    await screen.findByText('Sales — Ready')
+    await screen.findByRole('heading', { name: 'Sales' })
 
     await user.click(screen.getByRole('radio', { name: /Standard campaign/ }))
     await user.click(screen.getByRole('radio', { name: /Creative test/ }))
@@ -4892,7 +5030,7 @@ describe('CampaignsSection campaign type (creative test vs standard)', () => {
     mockedApi.listCampaigns.mockResolvedValue([{ ...SALES_CAMPAIGN, objective: 'TRAFFIC' }])
 
     renderCampaigns(<CampaignsSection businessId="biz-1" />)
-    await screen.findByText('Traffic — Ready')
+    await screen.findByRole('heading', { name: 'Traffic' })
 
     expect(screen.queryByRole('radio', { name: /Standard campaign/ })).not.toBeInTheDocument()
   })
@@ -4934,7 +5072,7 @@ describe('CampaignsSection video ads and the creative test format', () => {
     const user = userEvent.setup()
 
     renderCampaigns(<CampaignsSection businessId="biz-1" />)
-    await screen.findByText('Sales — Ready')
+    await screen.findByRole('heading', { name: 'Sales' })
     expect(screen.getByRole('radio', { name: 'Images' })).toBeChecked()
 
     await user.click(screen.getByRole('button', { name: 'Generate strategy' }))
@@ -4956,7 +5094,7 @@ describe('CampaignsSection video ads and the creative test format', () => {
     const user = userEvent.setup()
 
     renderCampaigns(<CampaignsSection businessId="biz-1" />)
-    await screen.findByText('Sales — Ready')
+    await screen.findByRole('heading', { name: 'Sales' })
     await user.click(screen.getByRole('radio', { name: 'Videos' }))
     await user.click(screen.getByRole('button', { name: 'Generate strategy' }))
 
@@ -4976,7 +5114,7 @@ describe('CampaignsSection video ads and the creative test format', () => {
     const user = userEvent.setup()
 
     renderCampaigns(<CampaignsSection businessId="biz-1" />)
-    await screen.findByText('Sales — Ready')
+    await screen.findByRole('heading', { name: 'Sales' })
     expect(screen.getByRole('radio', { name: 'Videos' })).toBeInTheDocument()
 
     await user.click(screen.getByRole('radio', { name: /Standard campaign/ }))
@@ -5436,7 +5574,7 @@ describe('CampaignsSection card layout', () => {
     renderCampaigns(<CampaignsSection businessId="biz-1" />)
 
     expect(
-      await screen.findByRole('heading', { name: 'Placement pair test — Sales — Paused' }),
+      await screen.findByRole('heading', { name: 'Placement pair test' }),
     ).toBeInTheDocument()
     expect(document.querySelector('.status-pill')).toHaveTextContent('Paused')
   })
