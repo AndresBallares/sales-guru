@@ -72,6 +72,8 @@ export function DashboardPage() {
   const [showForm, setShowForm] = useState(false)
   const [focusRequest, setFocusRequest] = useState(0)
   const nameInputRef = useRef<HTMLInputElement>(null)
+  // The business the Brand section is showing; the page's Next carries on to it.
+  const [nextBusinessId, setNextBusinessId] = useState('')
 
   function handleAddBusiness() {
     if (showForm) {
@@ -463,7 +465,20 @@ export function DashboardPage() {
           businesses={businesses}
           focusRequest={brandFocus}
           onContinue={(id) => navigate(`/businesses/${id}`)}
+          onSelectedChange={setNextBusinessId}
         />
+      )}
+
+      {!loadingBusinesses && nextBusinessId && (
+        <div className="page-next">
+          <button
+            type="button"
+            className="btn-outline btn-gold"
+            onClick={() => navigate(`/businesses/${nextBusinessId}`)}
+          >
+            Next
+          </button>
+        </div>
       )}
     </main>
   )

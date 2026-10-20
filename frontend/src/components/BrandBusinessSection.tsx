@@ -23,10 +23,13 @@ export function BrandBusinessSection({
   businesses,
   focusRequest,
   onContinue,
+  onSelectedChange,
 }: {
   businesses: Pick<Business, 'id' | 'name'>[]
   focusRequest?: BrandFocusRequest | null
   onContinue?: (businessId: string) => void
+  // Reports which business the section is showing, so the page's Next can follow it.
+  onSelectedChange?: (businessId: string) => void
 }) {
   const [pickedId, setPickedId] = useState('')
   const [focusedNonce, setFocusedNonce] = useState<number | null>(null)
@@ -42,6 +45,10 @@ export function BrandBusinessSection({
 
   const selectedId = businesses.find((b) => b.id === pickedId)?.id ?? businesses[0]?.id ?? ''
   const selected = businesses.find((b) => b.id === selectedId)
+
+  useEffect(() => {
+    onSelectedChange?.(selectedId)
+  }, [selectedId, onSelectedChange])
 
   if (businesses.length === 0) {
     return (

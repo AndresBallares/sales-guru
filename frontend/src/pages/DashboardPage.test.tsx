@@ -1,6 +1,6 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { MemoryRouter, Route, Routes } from 'react-router-dom'
+import { MemoryRouter, Route, Routes, useParams } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { DashboardPage } from './DashboardPage'
 import { AuthProvider } from '../context/AuthContext'
@@ -60,13 +60,22 @@ beforeEach(() => {
   })
 })
 
+function BusinessStub() {
+  const { businessId } = useParams()
+  return (
+    <p>
+      Business detail page<span data-testid="stub-business-id">{businessId}</span>
+    </p>
+  )
+}
+
 function renderDashboard(entry = '/') {
   render(
     <MemoryRouter initialEntries={[entry]}>
       <AuthProvider>
         <Routes>
           <Route path="/" element={<DashboardPage />} />
-          <Route path="/businesses/:businessId" element={<p>Business detail page</p>} />
+          <Route path="/businesses/:businessId" element={<BusinessStub />} />
         </Routes>
       </AuthProvider>
     </MemoryRouter>,
@@ -921,6 +930,56 @@ describe('DashboardPage', () => {
     await user.click(screen.getByRole('button', { name: 'Log out' }))
 
     await waitFor(() => expect(mockedApi.logout).toHaveBeenCalled())
+  })
+
+  describe('the Next button', () => {
+    const biz = (id: string, name: string): api.Business => ({
+      id,
+      name,
+      website: null,
+      industry: null,
+      location: null,
+      logoUrl: null,
+      description: null,
+    })
+
+    it('is not shown until there is a business to go on to', async () => {
+      mockedApi.listBusinesses.mockResolvedValue([])
+
+      renderDashboard()
+
+      await screen.findByText(/No businesses yet/)
+      expect(screen.queryByRole('button', { name: 'Next' })).not.toBeInTheDocument()
+    })
+
+    it('is a gold button at the end of the page that opens the business page', async () => {
+      mockedApi.listBusinesses.mockResolvedValue([biz('biz-1', 'Acme')])
+      const user = userEvent.setup()
+
+      renderDashboard()
+
+      const next = await screen.findByRole('button', { name: 'Next' })
+      expect(next).toHaveClass('btn-outline', 'btn-gold')
+      expect(next.parentElement).toHaveClass('page-next')
+      // Last thing on the page, below every section.
+      const main = next.closest('main') as HTMLElement
+      expect(main.lastElementChild).toBe(next.parentElement)
+
+      await user.click(next)
+
+      expect(await screen.findByTestId('stub-business-id')).toHaveTextContent('biz-1')
+    })
+
+    it('carries on to whichever business the Brand section is showing', async () => {
+      mockedApi.listBusinesses.mockResolvedValue([biz('biz-1', 'Acme'), biz('biz-2', 'Zenith')])
+      const user = userEvent.setup()
+      renderDashboard('/')
+
+      await user.selectOptions(await screen.findByLabelText('Business'), 'biz-2')
+      await user.click(screen.getByRole('button', { name: 'Next' }))
+
+      expect(await screen.findByTestId('stub-business-id')).toHaveTextContent('biz-2')
+    })
   })
 
   describe('delete business', () => {
