@@ -3590,3 +3590,9 @@ a.btn-outline {
 .confirm-panel .cancel-link {
   padding-left: 0;
 }
+
+/* The page's forward action: bottom-right of the content, in normal flow. */
+.page-next {
+  display: flex;
+  justify-content: flex-end;
+}
