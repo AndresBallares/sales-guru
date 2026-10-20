@@ -110,6 +110,8 @@ for (const width of [320, 375, 430]) {
     await page.getByRole('button', { name: 'Add to test' }).first().click()
     await expect(page.getByText('1 of 3–4 ads selected')).toBeVisible()
     const card = await openFirstEditCreative(page)
+    // Measure once the selection has settled (the button reads "Updating…" until then).
+    await expect(card.getByRole('button', { name: 'Remove from test' })).toBeEnabled()
     const cardBox = await card.boundingBox()
     const inside = await card.locator('.creative-editor-grouped *').evaluateAll(
       (els, limit) =>

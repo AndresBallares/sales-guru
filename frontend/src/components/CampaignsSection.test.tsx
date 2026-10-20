@@ -4081,7 +4081,7 @@ describe('CampaignsSection', () => {
   })
 
   describe('regenerating a strategy', () => {
-    it('explains that a published campaign’s strategy is fixed instead of offering to regenerate it', async () => {
+    it('offers no way to regenerate a published campaign’s strategy, and does not repeat the published note under it', async () => {
       mockedApi.listCampaigns.mockResolvedValue([
         {
           ...draftCampaignFixture,
@@ -4092,10 +4092,10 @@ describe('CampaignsSection', () => {
       mockedApi.getStrategy.mockResolvedValue(FAKE_STRATEGY)
 
       renderCampaigns(<CampaignsSection businessId="biz-1" />)
-      expect(
-        await screen.findByText(/This campaign is already published, so its strategy can't be regenerated/),
-      ).toBeInTheDocument()
-      expect(screen.getByText(/Create a new campaign to try a different strategy/)).toBeInTheDocument()
+      // The one published note is enough; the strategy-specific repeat is gone.
+      expect(await screen.findByText(ADS_LOCKED_NOTE)).toBeInTheDocument()
+      expect(screen.queryByText(/so its strategy can't be regenerated/)).not.toBeInTheDocument()
+      expect(screen.queryByText(/try a different strategy/)).not.toBeInTheDocument()
       expect(screen.queryByRole('button', { name: 'Regenerate strategy' })).not.toBeInTheDocument()
       expect(screen.queryByRole('button', { name: 'Generate strategy' })).not.toBeInTheDocument()
     })

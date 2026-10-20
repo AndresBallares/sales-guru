@@ -1133,31 +1133,25 @@ export function CampaignsSection({
             const strategyControls =
               campaign.status !== 'DRAFT' ? (
                 <>
-                    {campaign.metaCampaignId !== null ? (
-                      <p className="field-hint">
-                        This campaign is already published, so its strategy can't be regenerated.
-                        Create a new campaign to try a different strategy.
-                      </p>
-                    ) : (
-                      // With a strategy already, Regenerate strategy lives in the
-                      // card's editing toolbar instead.
-                      !strategy && (
-                        <button
-                          type="button"
-                          className="btn-generate"
-                          onClick={() => handleGenerateStrategy(campaign.id)}
-                          disabled={generatingId === campaign.id}
-                        >
-                          {generatingId === campaign.id ? (
-                            'Generating…'
-                          ) : (
-                            <>
-                              Generate strategy
-                              <ArrowRightIcon />
-                            </>
-                          )}
-                        </button>
-                      )
+                    {/* A published campaign's strategy is fixed: nothing to offer here, and the
+                        "already published" note on the card already says so. With a strategy
+                        already, Regenerate strategy lives in the card's editing toolbar. */}
+                    {campaign.metaCampaignId === null && !strategy && (
+                      <button
+                        type="button"
+                        className="btn-generate"
+                        onClick={() => handleGenerateStrategy(campaign.id)}
+                        disabled={generatingId === campaign.id}
+                      >
+                        {generatingId === campaign.id ? (
+                          'Generating…'
+                        ) : (
+                          <>
+                            Generate strategy
+                            <ArrowRightIcon />
+                          </>
+                        )}
+                      </button>
                     )}
                     {strategyError && (
                       <p className="form-error" role="alert">
