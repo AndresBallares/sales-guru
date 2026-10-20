@@ -48,7 +48,7 @@ test('a fake Meta connection carries a campaign from creation to a live publish 
   ).toHaveCount(0)
   await expect(page.getByRole('alert')).not.toBeVisible()
 
-  await page.getByRole('link', { name: '← Back to dashboard' }).click()
+  await page.getByRole('button', { name: 'Back to ad choices' }).click()
   await expect(page.getByText(/Live on Meta/)).toBeVisible()
 
   await page.getByRole('button', { name: 'Refresh results' }).click()

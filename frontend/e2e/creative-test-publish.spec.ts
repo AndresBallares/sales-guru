@@ -47,7 +47,7 @@ test('a SALES campaign publishes a creative test of 3 ads, paused by default', a
   ).toHaveCount(0)
   await expect(page.getByRole('alert')).not.toBeVisible()
 
-  await page.getByRole('link', { name: '← Back to dashboard' }).click()
+  await page.getByRole('button', { name: 'Back to ad choices' }).click()
   await expect(
     page.getByText('Paused — activate in Sales Guru or Ads Manager'),
   ).toBeVisible()

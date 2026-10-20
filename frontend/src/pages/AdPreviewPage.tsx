@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type ChangeEvent } from 'react'
-import { Link, useParams } from 'react-router-dom'
+import { useParams } from 'react-router-dom'
+import { BackButton } from '../components/BackButton'
 import {
   ApiError,
   approveCampaign,
@@ -249,9 +250,9 @@ export function AdPreviewPage() {
 
   return (
     <main className="business-detail">
-      <p>
-        {businessId && <Link to={`/businesses/${businessId}`}>&larr; Back to dashboard</Link>}
-      </p>
+      {businessId && (
+        <BackButton to={`/businesses/${businessId}?metaLater=1`} label="Back to ad choices" />
+      )}
       <h1>{campaign?.name ?? 'Ad preview'}</h1>
 
       {loading && <p>Loading…</p>}

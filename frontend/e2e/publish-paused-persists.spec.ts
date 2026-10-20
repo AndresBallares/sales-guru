@@ -23,7 +23,7 @@ test('the Publish paused choice follows the user between the ad page and the das
   await adPageCheckbox.uncheck()
 
   // Back on the dashboard the campaign's checkbox shows the same choice...
-  await page.getByRole('link', { name: '← Back to dashboard' }).click()
+  await page.getByRole('button', { name: 'Back to ad choices' }).click()
   const dashboardCheckbox = page.getByLabel(/Publish paused/)
   await expect(dashboardCheckbox).toBeVisible()
   await expect(dashboardCheckbox).not.toBeChecked()
