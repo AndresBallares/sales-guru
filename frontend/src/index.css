@@ -304,8 +304,8 @@ main {
   min-width: 0;
 }
 
-.business-detail > p:first-child {
-  margin-bottom: -0.5rem;
+.business-detail > .back-button:first-child {
+  margin-bottom: 0.5rem;
 }
 
 /* ---------- Cards (top-level sections) ---------- */
@@ -1609,11 +1609,25 @@ code {
 /* ---------- Campaign delete / archive ---------- */
 
 .confirm-panel {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 1rem;
   margin: 0.5rem 0;
-  padding: 0.6rem 0.9rem;
+  padding: 1.25rem;
   border: 1px solid var(--border-strong);
-  border-radius: 0.5rem;
-  background: var(--surface);
+  border-radius: 12px;
+  background: var(--row-bg);
+}
+
+.confirm-panel p {
+  margin: 0;
+  line-height: 1.5;
+}
+
+/* The buttons share one line, centred on each other, with the same gap as other button rows. */
+.confirm-panel .button-row {
+  gap: 0.75rem 1rem;
 }
 
 .show-archived {
@@ -3510,4 +3524,69 @@ a.btn-outline {
 .setup ~ .card-editing:not(:has(*)),
 .setup ~ .card-editing:empty {
   display: none;
+}
+
+/* ---------- Back button: soft circle, top-left of a page ---------- */
+
+.back-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 48px;
+  height: 48px;
+  min-height: 48px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  background: var(--tile-bg);
+  color: var(--text);
+  box-shadow:
+    0 1px 3px rgba(20, 20, 40, 0.1),
+    0 1px 2px rgba(20, 20, 40, 0.06);
+  transition:
+    background-color 0.15s,
+    transform 0.15s;
+}
+
+.back-button:hover:not(:disabled) {
+  background: var(--surface-hover);
+  color: var(--text);
+  box-shadow:
+    0 1px 3px rgba(20, 20, 40, 0.1),
+    0 1px 2px rgba(20, 20, 40, 0.06);
+}
+
+.back-button:active:not(:disabled) {
+  transform: scale(0.96);
+}
+
+.back-button svg {
+  width: 24px;
+  height: 24px;
+  stroke-width: 2.25;
+}
+
+:root[data-theme='dark'] .back-button {
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.5);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) .back-button {
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.5);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .back-button {
+    transition: none;
+  }
+
+  .back-button:active:not(:disabled) {
+    transform: none;
+  }
+}
+
+/* Flush with the button's left edge when it wraps beneath it on a narrow screen. */
+.confirm-panel .cancel-link {
+  padding-left: 0;
 }

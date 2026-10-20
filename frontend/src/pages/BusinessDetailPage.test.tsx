@@ -452,6 +452,20 @@ describe('BusinessDetailPage', () => {
     })
   })
 
+  it('has a round back button before the title that returns to the dashboard', async () => {
+    mockedApi.getMetaConnection.mockResolvedValue(completeMeta)
+    renderPage()
+
+    const heading = await screen.findByRole('heading', { name: 'Acme Widgets' })
+    const back = screen.getByRole('button', { name: 'Back to dashboard' })
+    expect(back.compareDocumentPosition(heading) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(screen.queryByRole('link', { name: /Back to dashboard/ })).not.toBeInTheDocument()
+
+    await userEvent.click(back)
+
+    expect(screen.getByText('Dashboard placeholder')).toBeInTheDocument()
+  })
+
   it('starts on the campaign step for a business with no campaign yet', async () => {
     mockedApi.getMetaConnection.mockResolvedValue(completeMeta)
 

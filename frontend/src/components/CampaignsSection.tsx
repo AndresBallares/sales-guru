@@ -1456,7 +1456,7 @@ export function CampaignsSection({
                       </button>
                       <button
                         type="button"
-                        className="link-button"
+                        className="cancel-link"
                         onClick={() =>
                           setConfirmingAction((prev) => ({ ...prev, [campaign.id]: undefined }))
                         }
@@ -1479,7 +1479,7 @@ export function CampaignsSection({
                       </button>
                       <button
                         type="button"
-                        className="link-button"
+                        className="cancel-link"
                         onClick={() =>
                           setConfirmingAction((prev) => ({ ...prev, [campaign.id]: undefined }))
                         }
