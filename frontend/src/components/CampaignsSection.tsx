@@ -27,7 +27,6 @@ import {
   StrategyIcon,
   TrashIcon,
   UndoIcon,
-  UploadIcon,
   VideoIcon,
   VoiceIcon,
 } from './icons'
@@ -2226,20 +2225,6 @@ export function CampaignsSection({
                               These ads run together in one ad set, so the test shows which
                               angle earns the cheapest result.
                             </p>
-                            {testAdCount >= MIN_TEST_ADS && (
-                              <button
-                                type="button"
-                                className="btn-outline btn-gold"
-                                onClick={() =>
-                                  navigate(
-                                    `/businesses/${businessId}/campaigns/${campaign.id}/ad`,
-                                  )
-                                }
-                              >
-                                <UploadIcon />
-                                Review &amp; publish
-                              </button>
-                            )}
                           </div>
                         )}
                         <section
@@ -2338,6 +2323,31 @@ export function CampaignsSection({
                             </li>
                           ))}
                         </ul>
+                        {!isPublished && (isCreativeTest || selectedCreative) && (
+                          <div className="creative-next">
+                            {isCreativeTest && testAdCount < MIN_TEST_ADS && (
+                              <p id={`creative-next-hint-${campaign.id}`} className="field-hint">
+                                Select at least {MIN_TEST_ADS} ads to continue.
+                              </p>
+                            )}
+                            <button
+                              type="button"
+                              className="btn-next"
+                              disabled={isCreativeTest && testAdCount < MIN_TEST_ADS}
+                              aria-describedby={
+                                isCreativeTest && testAdCount < MIN_TEST_ADS
+                                  ? `creative-next-hint-${campaign.id}`
+                                  : undefined
+                              }
+                              onClick={() =>
+                                navigate(`/businesses/${businessId}/campaigns/${campaign.id}/ad`)
+                              }
+                            >
+                              Next
+                              <ArrowRightIcon />
+                            </button>
+                          </div>
+                        )}
                         </section>
                         </>
                       ))}

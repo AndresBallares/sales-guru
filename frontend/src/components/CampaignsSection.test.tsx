@@ -2868,6 +2868,35 @@ describe('CampaignsSection', () => {
       expect(screen.queryByRole('button', { name: 'Select this ad' })).not.toBeInTheDocument()
     })
 
+    it('offers no Next until an ad is selected, then a Next that opens the preview', async () => {
+      mockedApi.listCreatives.mockResolvedValue(twoCreatives())
+
+      const { unmount } = renderWithPreviewRoute()
+      await screen.findByRole('heading', { name: 'Choose your ad creative' })
+      // Each card has its own Continue; there is no ad to go on with yet.
+      expect(screen.queryByRole('button', { name: 'Next' })).not.toBeInTheDocument()
+      unmount()
+
+      mockedApi.listCreatives.mockResolvedValue(twoCreatives('SELECTED'))
+      const user = userEvent.setup()
+      renderWithPreviewRoute()
+      await user.click(await screen.findByRole('button', { name: 'Choose a different ad' }))
+
+      const next = await screen.findByRole('button', { name: 'Next' })
+      expect(next).toBeEnabled()
+      expect(next).toHaveClass('btn-next')
+      expect(next.closest('.creative-next')).not.toBeNull()
+      expect(next.querySelector('svg')).toHaveAttribute('aria-hidden', 'true')
+      // The bottom of the choices, after every card.
+      const cards = screen.getAllByRole('article')
+      expect(
+        cards[cards.length - 1].compareDocumentPosition(next) & Node.DOCUMENT_POSITION_FOLLOWING,
+      ).toBeTruthy()
+
+      await user.click(next)
+      expect(await screen.findByText('Ad preview page')).toBeInTheDocument()
+    })
+
     it('opens each card’s creative details on its own, with the full prompt', async () => {
       mockedApi.listCreatives.mockResolvedValue(twoCreatives())
       const user = userEvent.setup()
@@ -4952,10 +4981,12 @@ describe('CampaignsSection creative test (CREATIVE_TEST_PLAN)', () => {
     // The other ads are still listed (not rejected, not hidden).
     expect(screen.getByText('Headline B')).toBeInTheDocument()
     expect(screen.getByText('Headline D')).toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: 'Review & publish' })).not.toBeInTheDocument()
+    // Next is there but waits for three ads, and says why.
+    expect(screen.getByRole('button', { name: 'Next' })).toBeDisabled()
+    expect(screen.getByText('Select at least 3 ads to continue.')).toBeInTheDocument()
   })
 
-  it('offers Review & publish once three ads are selected, and opens the ad page', async () => {
+  it('enables Next once three ads are selected, and opens the ad page', async () => {
     mockedApi.listCampaigns.mockResolvedValue([{ ...CAMPAIGN, status: 'PENDING_APPROVAL' }])
     mockedApi.listCreatives.mockResolvedValue(
       fourCreatives(['creative-1', 'creative-2', 'creative-3']),
@@ -4976,7 +5007,10 @@ describe('CampaignsSection creative test (CREATIVE_TEST_PLAN)', () => {
     await screen.findByText('Headline A')
     expect(screen.getByText('3 of 3–4 ads selected')).toBeInTheDocument()
 
-    await user.click(screen.getByRole('button', { name: 'Review & publish' }))
+    const next = screen.getByRole('button', { name: 'Next' })
+    expect(next).toBeEnabled()
+    expect(screen.queryByText(/Select at least 3 ads/)).not.toBeInTheDocument()
+    await user.click(next)
 
     expect(await screen.findByText('AD PAGE REACHED')).toBeInTheDocument()
   })

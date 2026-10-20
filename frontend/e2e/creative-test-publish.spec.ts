@@ -23,9 +23,7 @@ test('a SALES campaign publishes a creative test of 3 ads, paused by default', a
 
   await page.getByRole('button', { name: 'Generate ads' }).click()
   await expect(page.getByText('0 of 3–4 ads selected')).toBeVisible()
-  await expect(
-    page.getByRole('button', { name: 'Review & publish' }),
-  ).toHaveCount(0)
+  await expect(page.getByRole('button', { name: 'Next' })).toBeDisabled()
 
   for (let n = 1; n <= 3; n++) {
     await page.getByRole('button', { name: 'Add to test' }).first().click()
@@ -36,7 +34,8 @@ test('a SALES campaign publishes a creative test of 3 ads, paused by default', a
     1,
   )
 
-  await page.getByRole('button', { name: 'Review & publish' }).click()
+  await expect(page.getByRole('button', { name: 'Next' })).toBeEnabled()
+  await page.getByRole('button', { name: 'Next' }).click()
   await expect(page.getByRole('heading', { name: 'Ad preview' })).toBeVisible()
   await expect(page.getByText('3 ads in this test')).toBeVisible()
 
