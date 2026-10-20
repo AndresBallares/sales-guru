@@ -1317,10 +1317,9 @@ export function CampaignsSection({
             const isDraft = campaign.status === 'DRAFT'
             const objectiveLabel = objectiveLabels[campaign.objective] ?? campaign.objective
             const cardTitle = campaign.name ?? objectiveLabel
-            const cardSubtitle =
-              [campaign.name ? objectiveLabel : null, isDraft ? null : currentProduct?.description]
-                .filter(Boolean)
-                .join(' · ')
+            // Just the objective, under a campaign's own name; the product is shown by its
+            // thumbnail and, where it matters, in the setup panel, not as a long line here.
+            const cardSubtitle = campaign.name ? objectiveLabel : null
             const removeAction = !confirmingAction[campaign.id] && (
               campaign.hasDelivered || deliveredOverride[campaign.id] ? (
                 <button
@@ -1645,12 +1644,13 @@ export function CampaignsSection({
                 {archiveErrors[campaign.id] && (
                   <p role="alert">{archiveErrors[campaign.id]}</p>
                 )}
-                {(isPublished || campaign.needsDestinationUrl) && (
+                {((isPublished && !strategy) || campaign.needsDestinationUrl) && (
                 <div
                   className="campaign-block"
                   aria-label={`Product for ${campaign.name ?? campaign.id}`}
                 >
-                  {isPublished && <p className="field-hint">{ADS_LOCKED_NOTE}</p>}
+                  {/* With a strategy, the ads block below carries this note, so it shows once. */}
+                  {isPublished && !strategy && <p className="field-hint">{ADS_LOCKED_NOTE}</p>}
                   {campaign.needsDestinationUrl && (
                     <p className="form-error" role="alert">
                       This product needs a destination link before you can publish a Sales or
