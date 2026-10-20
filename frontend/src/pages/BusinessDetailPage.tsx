@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Link, useParams, useSearchParams } from 'react-router-dom'
+import { useParams, useSearchParams } from 'react-router-dom'
+import { BackButton } from '../components/BackButton'
 import { AudiencesSection } from '../components/AudiencesSection'
 import { BrandRequiredNotice } from '../components/BrandRequiredNotice'
 import { ArrowRightIcon } from '../components/icons'
@@ -154,9 +155,7 @@ export function BusinessDetailPage() {
 
   return (
     <main className="business-detail">
-      <p>
-        <Link to="/">&larr; Back to dashboard</Link>
-      </p>
+      <BackButton to="/" label="Back to dashboard" />
       <h1>{business ? business.name : 'Loading…'}</h1>
       {business?.industry && (
         <p className="field-hint">

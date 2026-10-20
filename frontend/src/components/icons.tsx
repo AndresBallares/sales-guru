@@ -338,3 +338,11 @@ export function ExclamationIcon() {
     </Icon>
   )
 }
+
+export function ChevronLeftIcon() {
+  return (
+    <Icon size={24}>
+      <path d="m15 5-7 7 7 7" />
+    </Icon>
+  )
+}

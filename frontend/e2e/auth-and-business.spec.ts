@@ -142,7 +142,7 @@ test('sign up, create a business, log out, log back in', async ({ page }) => {
   await expect(page.getByRole('heading', { name: 'Campaigns' })).toBeVisible()
   await expect(page.getByRole('heading', { name: 'Meta Ads' })).not.toBeVisible()
 
-  await page.getByRole('link', { name: '← Back to dashboard' }).click()
+  await page.getByRole('button', { name: 'Back to dashboard' }).click()
   await expect(page.getByRole('heading', { name: 'Sales Guru' })).toBeVisible()
   await expect(page.getByText('Acme Widgets — Fashion / Jewelry · CDMX')).toBeVisible()
 
