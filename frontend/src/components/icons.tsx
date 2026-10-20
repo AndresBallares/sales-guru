@@ -310,3 +310,31 @@ export function ChevronDownIcon() {
     </Icon>
   )
 }
+
+export function UsersIcon() {
+  return (
+    <Icon>
+      <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" />
+      <circle cx="9" cy="7" r="4" />
+      <path d="M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75" />
+    </Icon>
+  )
+}
+
+export function TargetIcon() {
+  return (
+    <Icon>
+      <circle cx="12" cy="12" r="9" />
+      <circle cx="12" cy="12" r="5" />
+      <circle cx="12" cy="12" r="1" />
+    </Icon>
+  )
+}
+
+export function ExclamationIcon() {
+  return (
+    <Icon>
+      <path d="M12 6.5v7M12 17.5h.01" />
+    </Icon>
+  )
+}

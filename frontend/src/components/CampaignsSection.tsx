@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type ChangeEvent, type FormEvent } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { ADS_LOCKED_NOTE, isPublished as isPublishedCampaign } from '../lib/publishedCampaign'
+import { CampaignSetup, type SetupStep } from './CampaignSetup'
 import { CreativeCard } from './CreativeCard'
 import { CreativeEditor } from './CreativeEditor'
 import { ActionRow } from './ActionRow'
@@ -14,6 +15,8 @@ import {
   CloseIcon,
   ImageIcon,
   PackageIcon,
+  TargetIcon,
+  UsersIcon,
   PauseIcon,
   PlayIcon,
   PlusIcon,
@@ -1265,7 +1268,7 @@ export function CampaignsSection({
             const pausedChoice = publishPaused[campaign.id] ?? getPublishPaused(campaign.id)
             const isPublishing = approvingId === campaign.id || campaign.id in publishStatuses
             const editingActions: ToolbarAction[] = []
-            if (!isPublished) {
+            if (!isPublished && !(campaign.status === 'DRAFT' && !currentProduct)) {
               editingActions.push({
                 key: 'product',
                 label: currentProduct ? 'Change product' : 'Attach a product',
@@ -1307,55 +1310,179 @@ export function CampaignsSection({
                 })
               }
             }
+            const isDraft = campaign.status === 'DRAFT'
+            const objectiveLabel = objectiveLabels[campaign.objective] ?? campaign.objective
+            const cardTitle = campaign.name ?? objectiveLabel
+            const cardSubtitle =
+              [campaign.name ? objectiveLabel : null, isDraft ? null : currentProduct?.description]
+                .filter(Boolean)
+                .join(' · ')
+            const removeAction = !confirmingAction[campaign.id] && (
+              campaign.hasDelivered || deliveredOverride[campaign.id] ? (
+                <button
+                  type="button"
+                  className="campaign-card-link"
+                  aria-label="Archive campaign"
+                  onClick={() =>
+                    setConfirmingAction((prev) => ({ ...prev, [campaign.id]: 'archive' }))
+                  }
+                >
+                  <ArchiveIcon size={16} />
+                  Archive
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  className="campaign-card-link campaign-card-link-danger"
+                  aria-label="Delete campaign"
+                  onClick={() =>
+                    setConfirmingAction((prev) => ({ ...prev, [campaign.id]: 'delete' }))
+                  }
+                >
+                  <TrashIcon size={16} />
+                  Delete
+                </button>
+              )
+            )
+            const openProductPicker = () => {
+              setEditingProductForCampaignId(null)
+              setReuseProductForCampaignId(null)
+              setProductPickerId(campaign.id)
+            }
+            const openAudiencePicker = () => {
+              setReuseAudienceForCampaignId(null)
+              setAudiencePickerId(campaign.id)
+            }
+            const audienceFormOpen = !campaign.audienceId && audiencePickerId === campaign.id
+            const setupSteps: SetupStep[] = [
+              {
+                key: 'objective',
+                label: 'Campaign objective',
+                icon: <TargetIcon />,
+                done: true,
+                doneText: `${objectiveLabel} selected`,
+                missingText: '',
+                actionLabel: '',
+                onAction: () => {},
+              },
+              {
+                key: 'product',
+                label: 'Choose a product',
+                icon: <PackageIcon />,
+                done: campaign.productId !== null,
+                doneText: currentProduct?.description ?? 'Product selected',
+                missingText: 'Select what you want to advertise',
+                actionLabel: 'Add product',
+                actionAriaLabel: 'Add product to this campaign',
+                onAction: openProductPicker,
+                actionHidden: productPickerId === campaign.id,
+              },
+              {
+                key: 'audience',
+                label: 'Attach an audience',
+                icon: <UsersIcon />,
+                done: campaign.audienceId !== null,
+                doneText:
+                  audiences.find((audience) => audience.id === campaign.audienceId)?.description ??
+                  'Audience attached',
+                missingText: 'Choose who should see your ads',
+                actionLabel: 'Complete setup',
+                onAction: openAudiencePicker,
+                actionHidden: audienceFormOpen,
+                children: !campaign.audienceId && audiencePickerId === campaign.id
+                  ? (
+                  reuseAudienceForCampaignId === campaign.id ? (
+                    <div className="button-row">
+                      <select
+                        aria-label="Which audience?"
+                        value={pickAudienceId[campaign.id] ?? ''}
+                        onChange={(event) =>
+                          setPickAudienceId((prev) => ({
+                            ...prev,
+                            [campaign.id]: event.target.value,
+                          }))
+                        }
+                      >
+                        <option value="">Which audience?</option>
+                        {audiences.map((audience) => (
+                          <option key={audience.id} value={audience.id}>
+                            {audience.description}
+                          </option>
+                        ))}
+                      </select>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          void handleAttachToCampaign(campaign.id, {
+                            audienceId: pickAudienceId[campaign.id],
+                          })
+                          setAudiencePickerId(null)
+                        }}
+                        disabled={!pickAudienceId[campaign.id] || attachingId === campaign.id}
+                      >
+                        Attach
+                      </button>
+                      <button type="button" onClick={() => setReuseAudienceForCampaignId(null)}>
+                        Add a new audience instead
+                      </button>
+                    </div>
+                  ) : (
+                    <div>
+                      <AudienceForm
+                        businessId={businessId}
+                        campaignId={campaign.id}
+                        onSaved={(created) => {
+                          setReuseAudienceForCampaignId(null)
+                          setAudiencePickerId(null)
+                          void handleAttachToCampaign(campaign.id, {
+                            audienceId: created.id,
+                          })
+                        }}
+                        onCancel={() => setAudiencePickerId(null)}
+                      />
+                      {audiences.length > 0 && (
+                        <button
+                          type="button"
+                          onClick={() => setReuseAudienceForCampaignId(campaign.id)}
+                        >
+                          Use an existing audience instead
+                        </button>
+                      )}
+                    </div>
+                  )
+                ) : null,
+              },
+            ]
+            const nextSetupStep = setupSteps.find((step) => !step.done)
             return (
               <li key={campaign.id} className="campaign-card">
                 <div className="campaign-card-header">
-                  {currentProduct?.primaryImageUrl && (
+                  {currentProduct?.primaryImageUrl ? (
                     <img
                       src={currentProduct.primaryImageUrl}
                       alt={currentProduct.description}
-                      width={72}
-                      height={72}
+                      width={80}
+                      height={80}
                       className="campaign-thumb"
                     />
+                  ) : (
+                    currentProduct && (
+                      <span className="campaign-thumb campaign-thumb-empty" aria-hidden="true">
+                        <PackageIcon />
+                      </span>
+                    )
                   )}
                   <div className="campaign-card-heading">
-                    <h3 className="campaign-card-title">
-                      {campaign.name ? `${campaign.name} — ` : ''}
-                      {objectiveLabels[campaign.objective] ?? campaign.objective} —{' '}
-                      {statusLabels[campaign.status] ?? campaign.status}
-                    </h3>
+                    <h3 className="campaign-card-title">{cardTitle}</h3>
+                    {cardSubtitle && <p className="campaign-card-subtitle">{cardSubtitle}</p>}
+                  </div>
+                  <div className="campaign-card-side">
                     <span className="status-pill" data-status={campaign.status}>
                       <StatusIcon status={campaign.status} />
                       {statusLabels[campaign.status] ?? campaign.status}
                     </span>
+                    {!isDraft && removeAction}
                   </div>
-                  {!confirmingAction[campaign.id] &&
-                    (campaign.hasDelivered || deliveredOverride[campaign.id] ? (
-                      <button
-                        type="button"
-                        className="campaign-card-action btn-outline"
-                        aria-label="Archive campaign"
-                        onClick={() =>
-                          setConfirmingAction((prev) => ({ ...prev, [campaign.id]: 'archive' }))
-                        }
-                      >
-                        <ArchiveIcon size={18} />
-                        Archive
-                      </button>
-                    ) : (
-                      <button
-                        type="button"
-                        className="campaign-card-action btn-outline btn-outline-danger"
-                        aria-label="Delete campaign"
-                        onClick={() =>
-                          setConfirmingAction((prev) => ({ ...prev, [campaign.id]: 'delete' }))
-                        }
-                      >
-                        <TrashIcon size={18} />
-                        Delete
-                      </button>
-                    ))}
                 </div>
                 {campaign.eventVenueKey && (
                   <p>
@@ -1432,13 +1559,11 @@ export function CampaignsSection({
                 {archiveErrors[campaign.id] && (
                   <p role="alert">{archiveErrors[campaign.id]}</p>
                 )}
+                {(isPublished || campaign.needsDestinationUrl) && (
                 <div
                   className="campaign-block"
                   aria-label={`Product for ${campaign.name ?? campaign.id}`}
                 >
-                  <p className="campaign-description">
-                    Product: {currentProduct ? currentProduct.description : 'No product selected'}
-                  </p>
                   {isPublished && <p className="field-hint">{ADS_LOCKED_NOTE}</p>}
                   {campaign.needsDestinationUrl && (
                     <p className="form-error" role="alert">
@@ -1457,97 +1582,12 @@ export function CampaignsSection({
                     </p>
                   )}
                 </div>
-                {campaign.status === 'DRAFT' ? (
-                  <div aria-label={`Campaign readiness for ${campaign.name ?? campaign.id}`}>
-                    <p>Campaign needs:</p>
-                    <ul>
-                      <li>✓ Objective</li>
-                      <li>{campaign.productId ? '✓' : '✗'} Product</li>
-                      <li>
-                        {campaign.audienceId ? '✓' : '✗'} Audience
-                        {!campaign.audienceId && audiencePickerId !== campaign.id && (
-                          <>
-                            {' '}
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setReuseAudienceForCampaignId(null)
-                                setAudiencePickerId(campaign.id)
-                              }}
-                            >
-                              Attach an audience
-                            </button>
-                          </>
-                        )}
-                        {!campaign.audienceId &&
-                          audiencePickerId === campaign.id &&
-                          (reuseAudienceForCampaignId === campaign.id ? (
-                            <div className="button-row">
-                              <select
-                                aria-label="Which audience?"
-                                value={pickAudienceId[campaign.id] ?? ''}
-                                onChange={(event) =>
-                                  setPickAudienceId((prev) => ({
-                                    ...prev,
-                                    [campaign.id]: event.target.value,
-                                  }))
-                                }
-                              >
-                                <option value="">Which audience?</option>
-                                {audiences.map((audience) => (
-                                  <option key={audience.id} value={audience.id}>
-                                    {audience.description}
-                                  </option>
-                                ))}
-                              </select>
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  void handleAttachToCampaign(campaign.id, {
-                                    audienceId: pickAudienceId[campaign.id],
-                                  })
-                                  setAudiencePickerId(null)
-                                }}
-                                disabled={
-                                  !pickAudienceId[campaign.id] || attachingId === campaign.id
-                                }
-                              >
-                                Attach
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => setReuseAudienceForCampaignId(null)}
-                              >
-                                Add a new audience instead
-                              </button>
-                            </div>
-                          ) : (
-                            <div>
-                              <AudienceForm
-                                businessId={businessId}
-                                campaignId={campaign.id}
-                                onSaved={(created) => {
-                                  setReuseAudienceForCampaignId(null)
-                                  setAudiencePickerId(null)
-                                  void handleAttachToCampaign(campaign.id, {
-                                    audienceId: created.id,
-                                  })
-                                }}
-                                onCancel={() => setAudiencePickerId(null)}
-                              />
-                              {audiences.length > 0 && (
-                                <button
-                                  type="button"
-                                  onClick={() => setReuseAudienceForCampaignId(campaign.id)}
-                                >
-                                  Use an existing audience instead
-                                </button>
-                              )}
-                            </div>
-                          ))}
-                      </li>
-                    </ul>
-                  </div>
+                )}
+                {isDraft ? (
+                  <CampaignSetup
+                    ariaLabel={`Campaign readiness for ${campaign.name ?? campaign.id}`}
+                    steps={setupSteps}
+                  />
                 ) : (
                   <>
                     {campaign.objective === 'SALES' && !strategy && (
@@ -2326,6 +2366,21 @@ export function CampaignsSection({
                     </p>
                   )}
                 </div>
+                {isDraft && (
+                  <div className="campaign-card-footer">
+                    {nextSetupStep && (
+                      <button
+                        type="button"
+                        className="campaign-card-continue"
+                        onClick={nextSetupStep.onAction}
+                      >
+                        Continue setup
+                        <ArrowRightIcon />
+                      </button>
+                    )}
+                    {removeAction}
+                  </div>
+                )}
                 {canPublish && (
                   <PublishFooter
                     ariaLabel={`Publish ${campaign.name ?? campaign.id}`}

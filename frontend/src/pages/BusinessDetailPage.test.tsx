@@ -240,7 +240,7 @@ describe('BusinessDetailPage', () => {
       expect(
         await screen.findByRole('heading', { name: 'Complete the Brand profile first' }),
       ).toBeInTheDocument()
-      expect(screen.queryByText('Sales — Draft')).not.toBeInTheDocument()
+      expect(screen.queryByRole('heading', { name: 'Sales' })).not.toBeInTheDocument()
     })
 
     it('does not flash the gate or the campaign step while it is still checking', async () => {
@@ -578,7 +578,7 @@ describe('BusinessDetailPage', () => {
     // instance has the same heading — so wait for the whole settled state
     // instead of any single element appearing.
     await waitFor(() => {
-      expect(screen.getByText('Sales — Draft')).toBeInTheDocument()
+      expect(screen.getByRole('heading', { name: 'Sales' })).toBeInTheDocument()
       expect(screen.queryByRole('heading', { name: 'Create a campaign' })).not.toBeInTheDocument()
       expect(screen.queryByRole('heading', { name: 'Products' })).not.toBeInTheDocument()
       expect(screen.queryByRole('heading', { name: 'Audiences' })).not.toBeInTheDocument()
@@ -591,7 +591,7 @@ describe('BusinessDetailPage', () => {
     const results = screen.getByRole('heading', { name: 'Results' })
     expect(await screen.findByText(/No published campaigns yet/)).toBeInTheDocument()
     expect(
-      results.compareDocumentPosition(screen.getByText('Sales — Draft')) &
+      results.compareDocumentPosition(screen.getByRole('heading', { name: 'Sales' })) &
         Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy()
   })
