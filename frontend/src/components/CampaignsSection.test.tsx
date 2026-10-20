@@ -2918,6 +2918,18 @@ describe('CampaignsSection', () => {
       expect(toggleA).toHaveAttribute('aria-expanded', 'false')
     })
 
+    it('groups the edit controls into Images and Ad copy, with no Test settings outside a test', async () => {
+      mockedApi.listCreatives.mockResolvedValue(twoCreatives())
+      renderCampaigns(<CampaignsSection businessId="biz-1" />)
+      await screen.findByText('Headline A')
+
+      await openEditCreative()
+
+      expect(screen.getAllByRole('region', { name: 'Images' })).toHaveLength(2)
+      expect(screen.getAllByRole('region', { name: 'Ad copy' })).toHaveLength(2)
+      expect(screen.queryByRole('region', { name: 'Test settings' })).not.toBeInTheDocument()
+    })
+
     it('keeps the editing controls in a separate, collapsed "Edit creative" section', async () => {
       mockedApi.listCreatives.mockResolvedValue(twoCreatives())
       const user = userEvent.setup()
@@ -4977,6 +4989,7 @@ describe('CampaignsSection creative test (CREATIVE_TEST_PLAN)', () => {
 
     expect(mockedApi.selectCreative).toHaveBeenCalledWith('biz-1', 'camp-1', 'creative-1')
     expect(await screen.findByText('1 of 3–4 ads selected')).toBeInTheDocument()
+    await openEditCreative()
     expect(screen.getByRole('button', { name: 'Remove from test' })).toBeInTheDocument()
     // The other ads are still listed (not rejected, not hidden).
     expect(screen.getByText('Headline B')).toBeInTheDocument()
@@ -5084,7 +5097,30 @@ describe('CampaignsSection creative test (CREATIVE_TEST_PLAN)', () => {
 
     expect(screen.getByText('4 of 3–4 ads selected')).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Add to test' })).not.toBeInTheDocument()
+    await openEditCreative()
     expect(screen.getAllByRole('button', { name: 'Remove from test' })).toHaveLength(4)
+  })
+
+  it('keeps Remove from test in the Test settings of an ad that is in the test, not on the card', async () => {
+    mockedApi.listCampaigns.mockResolvedValue([{ ...CAMPAIGN, status: 'PENDING_APPROVAL' }])
+    mockedApi.listCreatives.mockResolvedValue(fourCreatives(['creative-1']))
+    renderCampaigns(<CampaignsSection businessId="biz-1" />)
+    await screen.findByText('Headline A')
+
+    // Collapsed: the card offers Add to test for the ads outside the test, and no Remove.
+    expect(screen.getAllByRole('button', { name: 'Add to test' })).toHaveLength(3)
+    expect(screen.queryByRole('button', { name: 'Remove from test' })).not.toBeInTheDocument()
+
+    await openEditCreative()
+
+    // Only the ad that is in the test has Test settings, with a plain-language note.
+    const settings = screen.getAllByRole('region', { name: 'Test settings' })
+    expect(settings).toHaveLength(1)
+    expect(settings[0]).toHaveTextContent('not deleted')
+    expect(within(settings[0]).getByRole('button', { name: 'Remove from test' })).toBeEnabled()
+    // Every ad gets the Images and Ad copy groups.
+    expect(screen.getAllByRole('region', { name: 'Images' })).toHaveLength(4)
+    expect(screen.getAllByRole('region', { name: 'Ad copy' })).toHaveLength(4)
   })
 
   it('removes an ad from the test', async () => {
@@ -5101,6 +5137,7 @@ describe('CampaignsSection creative test (CREATIVE_TEST_PLAN)', () => {
     renderCampaigns(<CampaignsSection businessId="biz-1" />)
     await screen.findByText('Headline A')
 
+    await openEditCreative()
     await user.click(screen.getAllByRole('button', { name: 'Remove from test' })[0])
 
     expect(mockedApi.deselectCreative).toHaveBeenCalledWith('biz-1', 'camp-1', 'creative-1')
@@ -5120,6 +5157,7 @@ describe('CampaignsSection creative test (CREATIVE_TEST_PLAN)', () => {
     await user.click(screen.getAllByRole('button', { name: 'Add to test' })[0])
     expect(await screen.findByText('Could not add ad.')).toBeInTheDocument()
 
+    await openEditCreative()
     await user.click(screen.getByRole('button', { name: 'Remove from test' }))
     expect(await screen.findByText('Could not remove ad.')).toBeInTheDocument()
   })

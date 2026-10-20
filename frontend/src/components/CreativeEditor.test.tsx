@@ -1136,3 +1136,126 @@ describe('CreativeEditor', () => {
     })
   })
 })
+
+describe('CreativeEditor, grouped for a creative card', () => {
+  beforeEach(() => {
+    vi.resetAllMocks()
+    vi.mocked(api.listProductImages).mockResolvedValue(photos)
+  })
+
+  function renderGrouped(extra: Partial<Parameters<typeof CreativeEditor>[0]> = {}) {
+    const onUpdated = vi.fn<(c: api.Creative) => void>()
+    render(
+      <CreativeEditor
+        businessId="b1"
+        campaignId="c1"
+        productId="prod1"
+        creative={creative}
+        onUpdated={onUpdated}
+        grouped
+        {...extra}
+      />,
+    )
+    return onUpdated
+  }
+
+  it('organises the controls into Images and Ad copy groups, each with a heading', () => {
+    renderGrouped()
+
+    const images = screen.getByRole('region', { name: 'Images' })
+    const copy = screen.getByRole('region', { name: 'Ad copy' })
+    expect(screen.getByRole('heading', { name: 'Images' })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Ad copy' })).toBeInTheDocument()
+    expect(screen.getByText('Regenerate any part of your ad copy.')).toBeInTheDocument()
+    // Image rows in the first group, regeneration in the second.
+    expect(images).toContainElement(screen.getByRole('button', { name: 'Change image' }))
+    expect(images).toContainElement(screen.getByRole('button', { name: 'Add Stories & Reels image' }))
+    expect(images).toContainElement(screen.getByRole('button', { name: 'Add Square image' }))
+    expect(copy).toContainElement(screen.getByRole('button', { name: 'Regenerate headline' }))
+    // No Test settings group unless there is a test setting to show.
+    expect(screen.queryByRole('heading', { name: 'Test settings' })).not.toBeInTheDocument()
+  })
+
+  it('shows the optional rows with their title and shape, as neutral rows with a chevron', () => {
+    renderGrouped()
+
+    const story = screen.getByRole('button', { name: 'Add Stories & Reels image' })
+    expect(story).toHaveClass('setting-row')
+    expect(story).toHaveTextContent('Stories & Reels')
+    expect(story).toHaveTextContent('9:16 · Optional')
+    expect(story.querySelector('.action-row-chevron')).not.toBeNull()
+    const square = screen.getByRole('button', { name: 'Add Square image' })
+    expect(square).toHaveTextContent('Square image')
+    expect(square).toHaveTextContent('1:1 · Optional')
+    // The feed row names itself and offers Change, without the purple action row.
+    const feed = screen.getByRole('button', { name: 'Change image' })
+    expect(feed).toHaveClass('setting-row')
+    expect(feed).toHaveTextContent('Feed image')
+    expect(feed).toHaveTextContent('Change')
+  })
+
+  it('still swaps the feed image through the same picker', async () => {
+    const updated = { ...creative, imageUrl: '/product-images/p2' }
+    vi.mocked(api.setCreativeImage).mockResolvedValue(updated)
+    const onUpdated = renderGrouped()
+
+    const row = screen.getByRole('button', { name: 'Change image' })
+    expect(row).toHaveAttribute('aria-expanded', 'false')
+    await userEvent.click(row)
+    expect(row).toHaveAttribute('aria-expanded', 'true')
+    await userEvent.click(screen.getByRole('button', { name: 'Choose from library' }))
+    await userEvent.click((await screen.findAllByAltText('Product option'))[1])
+
+    await waitFor(() => expect(onUpdated).toHaveBeenCalledWith(updated))
+    expect(api.setCreativeImage).toHaveBeenCalledWith('b1', 'c1', 'cr1', 'p2')
+  })
+
+  it('opens the Stories & Reels picker from its row', async () => {
+    renderGrouped()
+
+    await userEvent.click(screen.getByRole('button', { name: 'Add Stories & Reels image' }))
+
+    expect(await screen.findByLabelText('Choose the Stories & Reels version')).toBeInTheDocument()
+  })
+
+  it.each([
+    ['headline', 'Regenerate headline'],
+    ['bodyText', 'Regenerate primary text'],
+    ['description', 'Regenerate description'],
+  ])('regenerates only the %s from its own button', async (field, name) => {
+    vi.mocked(api.regenerateCreativeCopy).mockResolvedValue(creative)
+    renderGrouped()
+
+    await userEvent.click(screen.getByRole('button', { name }))
+
+    expect(api.regenerateCreativeCopy).toHaveBeenCalledTimes(1)
+    expect(api.regenerateCreativeCopy).toHaveBeenCalledWith('b1', 'c1', 'cr1', [field])
+  })
+
+  it('disables every regeneration button while one is running', async () => {
+    vi.mocked(api.regenerateCreativeCopy).mockReturnValue(new Promise(() => {}))
+    renderGrouped()
+
+    await userEvent.click(screen.getByRole('button', { name: 'Regenerate headline' }))
+
+    expect(await screen.findByRole('button', { name: 'Regenerating…' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Regenerate primary text' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Regenerate description' })).toBeDisabled()
+  })
+
+  it('leaves out Ad copy when the copy controls are off', () => {
+    renderGrouped({ showCopyControls: false })
+
+    expect(screen.queryByRole('heading', { name: 'Ad copy' })).not.toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Images' })).toBeInTheDocument()
+  })
+
+  it('adds a Test settings group when given a test setting, below Ad copy', () => {
+    renderGrouped({ testSettings: <button type="button">Remove from test</button> })
+
+    const settings = screen.getByRole('region', { name: 'Test settings' })
+    expect(settings).toContainElement(screen.getByRole('button', { name: 'Remove from test' }))
+    const copy = screen.getByRole('region', { name: 'Ad copy' })
+    expect(copy.compareDocumentPosition(settings) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
+})
