@@ -34,7 +34,7 @@ test('a draft card shows its setup progress and continues the missing step', asy
   const setup = page.getByRole('region', { name: /Campaign readiness for/ })
   await expect(setup).toContainText('1 of 3 setup steps complete')
   await expect(setup).toContainText('33%')
-  await expect(setup.getByRole('button', { name: 'Add product to this campaign' })).toBeVisible()
+  await expect(setup.getByRole('button')).toHaveCount(0)
 
   await page.getByRole('button', { name: 'Continue setup' }).click()
   await expect(page.getByLabel('What do you sell?')).toBeVisible()

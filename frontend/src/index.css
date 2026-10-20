@@ -3482,38 +3482,6 @@ a.btn-outline {
   color: var(--success);
 }
 
-.setup-step-action {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.4rem;
-  flex: none;
-  min-height: 38px;
-  margin-left: auto;
-  padding: 0 0.9rem;
-  border: 1px solid color-mix(in srgb, var(--create-bg) 80%, #000);
-  border-radius: 10px;
-  background: var(--create-bg);
-  color: var(--create-text);
-  box-shadow: none;
-  font-size: 0.875rem;
-  font-weight: 500;
-}
-
-.setup-step-action svg {
-  width: 16px;
-  height: 16px;
-}
-
-.setup-step-action:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--create-bg) 90%, #000);
-  border-color: color-mix(in srgb, var(--create-bg) 70%, #000);
-  color: var(--create-text);
-}
-
-.setup-step-action:active:not(:disabled) {
-  background: color-mix(in srgb, var(--create-bg) 82%, #000);
-}
-
 .setup-step:last-child {
   padding-bottom: 0;
 }
@@ -3527,17 +3495,10 @@ a.btn-outline {
     min-height: 56px;
   }
 
-  /* Icons stay beside the text; the action wraps under it instead of overflowing. */
   .setup-step-text {
     flex: 1 1 0;
   }
 
-  .setup-step-action {
-    margin-left: calc(26px + 20px + 1.5rem);
-    width: calc(100% - 26px - 20px - 1.5rem);
-    justify-content: center;
-    min-height: 44px;
-  }
 }
 
 /* On a draft the panel above already separates this area from the header. */

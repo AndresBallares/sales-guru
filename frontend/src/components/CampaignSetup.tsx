@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react'
-import { ArrowRightIcon, CheckIcon, ExclamationIcon } from './icons'
+import { CheckIcon, ExclamationIcon } from './icons'
 
 export interface SetupStep {
   key: string
@@ -10,12 +10,8 @@ export interface SetupStep {
   // Supporting text: what was chosen once done, what is missing otherwise.
   doneText: string
   missingText: string
-  actionLabel: string
-  // Fuller accessible name when the visible label alone would be ambiguous on the page.
-  actionAriaLabel?: string
+  // Opens this step's form; the card's Continue setup button calls it for the first missing step.
   onAction: () => void
-  // Hides the inline action while its form is already open below the step.
-  actionHidden?: boolean
   // The step's own form/picker, shown under its row.
   children?: ReactNode
 }
@@ -63,23 +59,11 @@ export function CampaignSetup({
                 <strong>{step.label}</strong>
                 <span>{step.done ? step.doneText : step.missingText}</span>
               </div>
-              {step.done ? (
+              {step.done && (
                 <span className="setup-step-done">
                   <CheckIcon />
                   <span className="visually-hidden">Complete</span>
                 </span>
-              ) : (
-                !step.actionHidden && (
-                  <button
-                    type="button"
-                    className="setup-step-action"
-                    aria-label={step.actionAriaLabel}
-                    onClick={step.onAction}
-                  >
-                    {step.actionLabel}
-                    <ArrowRightIcon />
-                  </button>
-                )
               )}
             </div>
             {step.children}
