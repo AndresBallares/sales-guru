@@ -1,6 +1,6 @@
-import { useState, type ChangeEvent } from 'react'
+import { useId, useState, type ChangeEvent, type ReactNode } from 'react'
 import { ActionRow } from './ActionRow'
-import { ImageIcon, VideoIcon } from './icons'
+import { FlaskIcon, ImageIcon, RefreshIcon, TextIcon, VideoIcon } from './icons'
 import {
   ApiError,
   listProductImages,
@@ -17,6 +17,7 @@ import { BlackFrameFallback } from './BlackFrameFallback'
 import { DifferentItemsNote } from './DifferentItemsNote'
 import { ExtraAssetSlot } from './ExtraAssetSlot'
 import { MediaBadges } from './MediaBadges'
+import { SettingRow } from './SettingRow'
 
 const COPY_FIELDS: { field: RegenerableCopyField; label: string }[] = [
   { field: 'headline', label: 'headline' },
@@ -36,6 +37,13 @@ interface CreativeEditorProps {
   // Renders the change-image / change-video control as a campaign-card action
   // row instead of a plain button; behavior is identical.
   rowStyle?: boolean
+  // Lays the controls out in the creative card's Edit creative section: Images,
+  // Ad copy and Test settings groups, each with its own heading. Same controls,
+  // same handlers; other views keep the plain layout.
+  grouped?: boolean
+  // The Test settings group's content (the card's "Remove from test" action);
+  // the group is left out when this is not given.
+  testSettings?: ReactNode
 }
 
 // Per-ad edit controls shown while the user reviews generated ads: swap the
@@ -50,7 +58,10 @@ export function CreativeEditor({
   onUpdated,
   showCopyControls = true,
   rowStyle = false,
+  grouped = false,
+  testSettings,
 }: CreativeEditorProps) {
+  const headingId = useId()
   const [menuOpen, setMenuOpen] = useState(false)
   const [library, setLibrary] = useState<ProductImage[] | null>(null)
   const [loadingLibrary, setLoadingLibrary] = useState(false)
@@ -162,12 +173,21 @@ export function CreativeEditor({
 
   const shownError = error || intake.error
 
-  return (
-    <div className="creative-editor">
-      {!isCarousel && <h4>Feed (4:5)</h4>}
+  const imageControls = (
+    <>
       {productId !== null && isVideo && (
         <div className="image-picker">
-          {rowStyle ? (
+          {grouped ? (
+            <SettingRow
+              icon={<VideoIcon />}
+              title="Feed video"
+              description="4:5 recommended"
+              actionText="Change"
+              ariaLabel="Change video"
+              expanded={menuOpen}
+              onClick={toggleVideoPicker}
+            />
+          ) : rowStyle ? (
             <ActionRow
               primary
               icon={<VideoIcon />}
@@ -237,7 +257,23 @@ export function CreativeEditor({
       )}
       {productId !== null && !isVideo && (
         <div className="image-picker">
-          {rowStyle ? (
+          {grouped ? (
+            <SettingRow
+              icon={
+                creative.imageUrl ? (
+                  <img src={creative.imageUrl} alt="" width={36} height={36} />
+                ) : (
+                  <ImageIcon />
+                )
+              }
+              title="Feed image"
+              description="4:5 recommended"
+              actionText={creative.imageUrl ? 'Change' : 'Upload'}
+              ariaLabel={creative.imageUrl ? 'Change image' : 'Upload Image'}
+              expanded={menuOpen}
+              onClick={() => setMenuOpen((open) => !open)}
+            />
+          ) : rowStyle ? (
             <ActionRow primary icon={<ImageIcon />} onClick={() => setMenuOpen((open) => !open)}>
               {creative.imageUrl ? 'Change image' : 'Upload Image'}
             </ActionRow>
@@ -285,6 +321,7 @@ export function CreativeEditor({
         <>
           <ExtraAssetSlot
             slot="story"
+            variant={grouped ? 'setting' : 'action'}
             businessId={businessId}
             campaignId={campaignId}
             productId={productId}
@@ -293,6 +330,7 @@ export function CreativeEditor({
           />
           <ExtraAssetSlot
             slot="square"
+            variant={grouped ? 'setting' : 'action'}
             businessId={businessId}
             campaignId={campaignId}
             productId={productId}
@@ -302,19 +340,58 @@ export function CreativeEditor({
           <DifferentItemsNote creative={creative} />
         </>
       )}
-      {showCopyControls && (
-        <div className="copy-regenerate">
-          {COPY_FIELDS.map(({ field, label }) => (
-            <button
-              key={field}
-              type="button"
-              onClick={() => void regenerate(field)}
-              disabled={regenerating !== null}
-            >
-              {regenerating === field ? 'Regenerating…' : `Regenerate ${label}`}
-            </button>
-          ))}
-        </div>
+    </>
+  )
+  const copyButtons = COPY_FIELDS.map(({ field, label }) => (
+    <button
+      key={field}
+      type="button"
+      className={grouped ? 'edit-copy-button' : undefined}
+      onClick={() => void regenerate(field)}
+      disabled={regenerating !== null}
+    >
+      {grouped && regenerating !== field && <RefreshIcon size={16} />}
+      {regenerating === field ? 'Regenerating…' : `Regenerate ${label}`}
+    </button>
+  ))
+
+  return (
+    <div className={grouped ? 'creative-editor creative-editor-grouped' : 'creative-editor'}>
+      {grouped ? (
+        <>
+          <section className="edit-group" aria-labelledby={`${headingId}-images`}>
+            <h4 id={`${headingId}-images`} className="edit-group-heading">
+              <ImageIcon />
+              Images
+            </h4>
+            {imageControls}
+          </section>
+          {showCopyControls && (
+            <section className="edit-group" aria-labelledby={`${headingId}-copy`}>
+              <h4 id={`${headingId}-copy`} className="edit-group-heading">
+                <TextIcon />
+                Ad copy
+              </h4>
+              <p className="field-hint">Regenerate any part of your ad copy.</p>
+              <div className="copy-regenerate">{copyButtons}</div>
+            </section>
+          )}
+          {testSettings && (
+            <section className="edit-group" aria-labelledby={`${headingId}-test`}>
+              <h4 id={`${headingId}-test`} className="edit-group-heading">
+                <FlaskIcon />
+                Test settings
+              </h4>
+              {testSettings}
+            </section>
+          )}
+        </>
+      ) : (
+        <>
+          {!isCarousel && <h4>Feed (4:5)</h4>}
+          {imageControls}
+          {showCopyControls && <div className="copy-regenerate">{copyButtons}</div>}
+        </>
       )}
       {shownError && (
         <p className="form-error" role="alert">

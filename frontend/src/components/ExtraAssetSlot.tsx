@@ -14,6 +14,7 @@ import { ActionRow } from './ActionRow'
 import { BlackFrameFallback } from './BlackFrameFallback'
 import { SquareIcon, StoryIcon } from './icons'
 import { MediaBadges } from './MediaBadges'
+import { SettingRow } from './SettingRow'
 
 export type ExtraSlotKind = 'story' | 'square'
 
@@ -61,6 +62,9 @@ interface ExtraAssetSlotProps {
   onUpdated: (creative: Creative) => void
   // A published campaign's ads are fixed: the row is shown but can't be used.
   locked?: boolean
+  // 'setting' draws the neutral settings row used inside a creative card's Edit
+  // creative section; the default is the campaign card's action row.
+  variant?: 'action' | 'setting'
 }
 
 // One optional extra asset of an ad: its Stories & Reels (9:16) version or its
@@ -75,6 +79,7 @@ export function ExtraAssetSlot({
   creative,
   onUpdated,
   locked = false,
+  variant = 'action',
 }: ExtraAssetSlotProps) {
   const config = ROLES[slot]
   const isVideo = creative.format === 'SINGLE_VIDEO'
@@ -164,24 +169,46 @@ export function ExtraAssetSlot({
 
   return (
     <div className="story-slot">
-      <h4 className="visually-hidden">{config.heading}</h4>
-      <ActionRow
-        icon={
-          assetId && imageUrl ? (
-            <img src={imageUrl} alt={config.currentAlt} width={36} height={36} />
-          ) : slot === 'story' ? (
-            <StoryIcon />
-          ) : (
-            <SquareIcon />
-          )
-        }
-        hint={config.heading}
-        disabled={locked}
-        expanded={open}
-        onClick={() => void toggle()}
-      >
-        {assetId ? `Change ${config.name} ${noun}` : `Add ${config.name} ${noun}`}
-      </ActionRow>
+      {variant === 'setting' ? (
+        <SettingRow
+          icon={
+            assetId && imageUrl ? (
+              <img src={imageUrl} alt={config.currentAlt} width={36} height={36} />
+            ) : slot === 'story' ? (
+              <StoryIcon />
+            ) : (
+              <SquareIcon />
+            )
+          }
+          title={slot === 'story' ? config.name : `Square ${noun}`}
+          description={`${config.ratio} · Optional`}
+          ariaLabel={assetId ? `Change ${config.name} ${noun}` : `Add ${config.name} ${noun}`}
+          disabled={locked}
+          expanded={open}
+          onClick={() => void toggle()}
+        />
+      ) : (
+        <>
+          <h4 className="visually-hidden">{config.heading}</h4>
+          <ActionRow
+            icon={
+              assetId && imageUrl ? (
+                <img src={imageUrl} alt={config.currentAlt} width={36} height={36} />
+              ) : slot === 'story' ? (
+                <StoryIcon />
+              ) : (
+                <SquareIcon />
+              )
+            }
+            hint={config.heading}
+            disabled={locked}
+            expanded={open}
+            onClick={() => void toggle()}
+          >
+            {assetId ? `Change ${config.name} ${noun}` : `Add ${config.name} ${noun}`}
+          </ActionRow>
+        </>
+      )}
       {assetId && !locked && (
         <button type="button" className="link-button" onClick={() => void assign(null)}>
           {config.removeLabel}

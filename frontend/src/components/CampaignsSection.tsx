@@ -2256,24 +2256,20 @@ export function CampaignsSection({
                                 ctaLabel={ctaLabels[c.cta] ?? c.cta}
                                 action={
                                   isPublished ? undefined : isCreativeTest ? (
-                                    (c.status === 'SELECTED' || testAdCount < MAX_TEST_ADS) && (
+                                    // Adding is the card's visible action. Removing lives in the
+                                    // Edit creative section's Test settings, as it is a setting
+                                    // of an ad that is already in the test.
+                                    c.status !== 'SELECTED' &&
+                                    testAdCount < MAX_TEST_ADS && (
                                       <button
                                         type="button"
                                         className="btn-outline creative-card-button"
                                         onClick={() =>
-                                          handleToggleTestAd(
-                                            campaign.id,
-                                            c.id,
-                                            c.status === 'SELECTED',
-                                          )
+                                          handleToggleTestAd(campaign.id, c.id, false)
                                         }
                                         disabled={selectingId === c.id}
                                       >
-                                        {selectingId === c.id
-                                          ? 'Updating…'
-                                          : c.status === 'SELECTED'
-                                            ? 'Remove from test'
-                                            : 'Add to test'}
+                                        {selectingId === c.id ? 'Updating…' : 'Add to test'}
                                       </button>
                                     )
                                   ) : (
@@ -2306,6 +2302,27 @@ export function CampaignsSection({
                                     campaignId={campaign.id}
                                     productId={campaignProductId ?? null}
                                     creative={c}
+                                    grouped
+                                    testSettings={
+                                      isCreativeTest && c.status === 'SELECTED' ? (
+                                        <>
+                                          <p className="field-hint">
+                                            Takes this ad out of the test. The ad itself is not
+                                            deleted, and you can add it back.
+                                          </p>
+                                          <button
+                                            type="button"
+                                            className="btn-outline btn-outline-danger test-remove-button"
+                                            onClick={() =>
+                                              handleToggleTestAd(campaign.id, c.id, true)
+                                            }
+                                            disabled={selectingId === c.id}
+                                          >
+                                            {selectingId === c.id ? 'Updating…' : 'Remove from test'}
+                                          </button>
+                                        </>
+                                      ) : undefined
+                                    }
                                     onUpdated={(updated) => {
                                       setCreatives((prev) => ({
                                         ...prev,
