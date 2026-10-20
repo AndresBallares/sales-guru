@@ -1644,6 +1644,160 @@ describe('CampaignsSection', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent('Product not found')
   })
 
+  describe('the split card before a strategy is generated', () => {
+    const readyCampaign: api.Campaign = {
+      id: 'camp-1',
+      name: null,
+      objective: 'SALES',
+      status: 'READY',
+      productId: 'prod-1',
+      audienceId: 'aud-1',
+      metaCampaignId: null,
+      eventVenueKey: null,
+      startDate: null,
+      endDate: null,
+      pausedReason: null,
+      dailySpendFlag: null,
+      needsDestinationUrl: false,
+    }
+    const ring: api.Product = {
+      id: 'prod-1',
+      description: 'Bombshell Ring',
+      price: null,
+      margin: null,
+      features: null,
+      benefits: null,
+      primaryImageUrl: 'https://img.example/ring.jpg',
+      url: null,
+    }
+
+    it('shows the product, the real settings and the strategy panel', async () => {
+      mockedApi.listCampaigns.mockResolvedValue([readyCampaign])
+      mockedApi.listProducts.mockResolvedValue([ring])
+
+      const { container } = renderCampaigns(<CampaignsSection businessId="biz-1" />)
+
+      expect(await screen.findByRole('heading', { name: 'Bombshell Ring' })).toBeInTheDocument()
+      expect(screen.getByRole('img', { name: 'Bombshell Ring' })).toHaveAttribute(
+        'src',
+        'https://img.example/ring.jpg',
+      )
+      const card = container.querySelector('.config-card') as HTMLElement
+      // Objective as a badge and as the Campaign type row, in readable form.
+      expect(card.querySelector('.config-badge')).toHaveTextContent('Sales')
+      expect(card).toHaveTextContent('Campaign type')
+      expect(card).toHaveTextContent('Test format')
+      expect(card).toHaveTextContent('Media')
+      expect(screen.getByRole('radio', { name: /Creative test/ })).toBeChecked()
+      expect(screen.getByRole('radio', { name: 'Images' })).toBeChecked()
+      // The panel: heading, explanation, and the gold primary action.
+      expect(
+        within(card).getByRole('heading', { name: 'Ready to generate your strategy?' }),
+      ).toBeInTheDocument()
+      expect(card).toHaveTextContent('create a campaign strategy based on your settings')
+      expect(within(card).getByRole('button', { name: 'Generate strategy' })).toHaveClass(
+        'btn-generate',
+      )
+      // Status and the single Delete action sit in the card's upper right.
+      expect(within(card).getByText('Ready')).toHaveClass('status-pill')
+      expect(screen.getAllByRole('button', { name: 'Delete campaign' })).toHaveLength(1)
+    })
+
+    it('uses the campaign name as a secondary line and falls back to it without a product', async () => {
+      mockedApi.listCampaigns.mockResolvedValue([{ ...readyCampaign, name: 'Spring Sale' }])
+      mockedApi.listProducts.mockResolvedValue([ring])
+
+      renderCampaigns(<CampaignsSection businessId="biz-1" />)
+
+      await screen.findByRole('heading', { name: 'Bombshell Ring' })
+      expect(screen.getByText('Spring Sale')).toBeInTheDocument()
+    })
+
+    it('shows a placeholder, not an unrelated image, when the product has no photo', async () => {
+      mockedApi.listCampaigns.mockResolvedValue([readyCampaign])
+      mockedApi.listProducts.mockResolvedValue([{ ...ring, primaryImageUrl: null }])
+
+      const { container } = renderCampaigns(<CampaignsSection businessId="biz-1" />)
+
+      await screen.findByRole('heading', { name: 'Bombshell Ring' })
+      expect(screen.queryByRole('img')).not.toBeInTheDocument()
+      expect(container.querySelector('.config-product .campaign-thumb-empty')).not.toBeNull()
+    })
+
+    it('updates the Media row when the test format changes', async () => {
+      mockedApi.listCampaigns.mockResolvedValue([readyCampaign])
+      mockedApi.listProducts.mockResolvedValue([ring])
+      const user = userEvent.setup()
+
+      renderCampaigns(<CampaignsSection businessId="biz-1" />)
+      await screen.findByRole('heading', { name: 'Bombshell Ring' })
+
+      await user.click(screen.getByRole('radio', { name: 'Videos' }))
+      expect(screen.getByRole('radio', { name: 'Videos' })).toBeChecked()
+
+      await user.click(screen.getByRole('radio', { name: /Standard campaign/ }))
+      expect(screen.queryByRole('radio', { name: 'Videos' })).not.toBeInTheDocument()
+      expect(screen.getByText(/chosen per ad after the strategy/)).toBeInTheDocument()
+    })
+
+    it('shows only the Campaign type row for an objective with no test format', async () => {
+      mockedApi.listCampaigns.mockResolvedValue([{ ...readyCampaign, objective: 'TRAFFIC' }])
+      mockedApi.listProducts.mockResolvedValue([ring])
+
+      const { container } = renderCampaigns(<CampaignsSection businessId="biz-1" />)
+
+      await screen.findByRole('heading', { name: 'Bombshell Ring' })
+      const card = container.querySelector('.config-card') as HTMLElement
+      expect(card).toHaveTextContent('Campaign type')
+      expect(card).toHaveTextContent('Traffic')
+      expect(card).not.toHaveTextContent('Test format')
+      expect(screen.queryByRole('radio')).not.toBeInTheDocument()
+    })
+
+    it('keeps the loading state and blocks a second click while generating', async () => {
+      mockedApi.listCampaigns.mockResolvedValue([readyCampaign])
+      mockedApi.listProducts.mockResolvedValue([ring])
+      mockedApi.createStrategy.mockReturnValue(new Promise(() => {}))
+      const user = userEvent.setup()
+
+      renderCampaigns(<CampaignsSection businessId="biz-1" />)
+      await screen.findByRole('heading', { name: 'Bombshell Ring' })
+
+      await user.click(screen.getByRole('button', { name: 'Generate strategy' }))
+
+      expect(await screen.findByRole('button', { name: 'Generating…' })).toBeDisabled()
+      expect(mockedApi.createStrategy).toHaveBeenCalledTimes(1)
+    })
+
+    it('shows the existing error message when generating fails', async () => {
+      mockedApi.listCampaigns.mockResolvedValue([readyCampaign])
+      mockedApi.listProducts.mockResolvedValue([ring])
+      mockedApi.createStrategy.mockRejectedValue(new api.ApiError(500, 'Strategy failed'))
+      const user = userEvent.setup()
+
+      renderCampaigns(<CampaignsSection businessId="biz-1" />)
+      await screen.findByRole('heading', { name: 'Bombshell Ring' })
+      await user.click(screen.getByRole('button', { name: 'Generate strategy' }))
+
+      expect(await screen.findByRole('alert')).toHaveTextContent('Strategy failed')
+    })
+
+    it('goes back to the compact header once a strategy exists', async () => {
+      mockedApi.listCampaigns.mockResolvedValue([readyCampaign])
+      mockedApi.listProducts.mockResolvedValue([ring])
+      mockedApi.createStrategy.mockResolvedValue(FAKE_STRATEGY)
+      const user = userEvent.setup()
+
+      const { container } = renderCampaigns(<CampaignsSection businessId="biz-1" />)
+      await screen.findByRole('heading', { name: 'Bombshell Ring' })
+      await user.click(screen.getByRole('button', { name: 'Generate strategy' }))
+
+      expect(await screen.findByText(/Custom emerald rings/)).toBeInTheDocument()
+      expect(container.querySelector('.config-card')).toBeNull()
+      expect(screen.getByRole('button', { name: 'Regenerate strategy' })).toBeInTheDocument()
+    })
+  })
+
   it('generates a strategy for a campaign and displays it', async () => {
     mockedApi.listCampaigns.mockResolvedValue([
       {
