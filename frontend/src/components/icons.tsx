@@ -346,3 +346,19 @@ export function ChevronLeftIcon() {
     </Icon>
   )
 }
+
+export function FlaskIcon() {
+  return (
+    <Icon>
+      <path d="M10 2v7.5a2 2 0 0 1-.2.9L4.7 20.5a1 1 0 0 0 .9 1.5h12.8a1 1 0 0 0 .9-1.5l-5.1-10.1a2 2 0 0 1-.2-.9V2M8.5 2h7M7 16h10" />
+    </Icon>
+  )
+}
+
+export function LightbulbIcon() {
+  return (
+    <Icon>
+      <path d="M15 14c.2-1 .7-1.7 1.5-2.5 1-.9 1.5-2.2 1.5-3.5A6 6 0 0 0 6 8c0 1 .2 2.2 1.5 3.5.7.7 1.3 1.5 1.5 2.5M9 18h6M10 22h4" />
+    </Icon>
+  )
+}

@@ -16,6 +16,8 @@ import {
   ImageIcon,
   PackageIcon,
   TargetIcon,
+  FlaskIcon,
+  LightbulbIcon,
   UsersIcon,
   PauseIcon,
   PlayIcon,
@@ -1143,10 +1145,18 @@ export function CampaignsSection({
                       !strategy && (
                         <button
                           type="button"
+                          className="btn-generate"
                           onClick={() => handleGenerateStrategy(campaign.id)}
                           disabled={generatingId === campaign.id}
                         >
-                          {generatingId === campaign.id ? 'Generating…' : 'Generate strategy'}
+                          {generatingId === campaign.id ? (
+                            'Generating…'
+                          ) : (
+                            <>
+                              Generate strategy
+                              <ArrowRightIcon />
+                            </>
+                          )}
                         </button>
                       )
                     )}
@@ -1391,36 +1401,176 @@ export function CampaignsSection({
               },
             ]
             const nextSetupStep = setupSteps.find((step) => !step.done)
+            const productThumb = currentProduct?.primaryImageUrl ? (
+              <img
+                src={currentProduct.primaryImageUrl}
+                alt={currentProduct.description}
+                width={80}
+                height={80}
+                className="campaign-thumb"
+              />
+            ) : (
+              currentProduct && (
+                <span className="campaign-thumb campaign-thumb-empty" aria-hidden="true">
+                  <PackageIcon />
+                </span>
+              )
+            )
+            // Ready to generate a strategy: no strategy yet and nothing published to Meta.
+            const preStrategy = !isDraft && !strategy && campaign.metaCampaignId === null
+            const isSalesCampaign = campaign.objective === 'SALES'
+            const standardMode = strategyMode[campaign.id] === 'STANDARD'
+            const statusPill = (
+              <span className="status-pill" data-status={campaign.status}>
+                <StatusIcon status={campaign.status} />
+                {statusLabels[campaign.status] ?? campaign.status}
+              </span>
+            )
+            const splitCard = preStrategy ? (
+              <div className="config-card">
+                <div className="config-main">
+                  <div className="config-product">
+                    {productThumb}
+                    <div className="config-product-text">
+                      <h3 className="campaign-card-title">
+                        {currentProduct?.description ?? cardTitle}
+                      </h3>
+                      <p className="config-meta">
+                        <span className="config-badge">{objectiveLabel}</span>
+                        {campaign.name && <span>{campaign.name}</span>}
+                      </p>
+                    </div>
+                  </div>
+                  <div className="config-rows">
+                    <div className="config-row">
+                      <span className="config-row-icon" aria-hidden="true">
+                        <TargetIcon />
+                      </span>
+                      <span className="config-row-label">Campaign type</span>
+                      <div className="config-row-value">{objectiveLabel}</div>
+                    </div>
+                    {isSalesCampaign && (
+                      <fieldset className="config-row">
+                        <legend className="visually-hidden">Test format</legend>
+                        <span className="config-row-icon" aria-hidden="true">
+                          <FlaskIcon />
+                        </span>
+                        <span className="config-row-label" aria-hidden="true">
+                          Test format
+                        </span>
+                        <div className="config-row-value config-choices">
+                          <label>
+                            <input
+                              type="radio"
+                              name={`strategy-mode-${campaign.id}`}
+                              checked={(strategyMode[campaign.id] ?? 'CREATIVE_TEST') === 'CREATIVE_TEST'}
+                              onChange={() =>
+                                setStrategyMode((prev) => ({ ...prev, [campaign.id]: 'CREATIVE_TEST' }))
+                              }
+                            />
+                            Creative test (recommended for a first campaign)
+                          </label>
+                          <label>
+                            <input
+                              type="radio"
+                              name={`strategy-mode-${campaign.id}`}
+                              checked={standardMode}
+                              onChange={() =>
+                                setStrategyMode((prev) => ({ ...prev, [campaign.id]: 'STANDARD' }))
+                              }
+                            />
+                            Standard campaign (allows carousel)
+                          </label>
+                        </div>
+                      </fieldset>
+                    )}
+                    {isSalesCampaign &&
+                      (standardMode ? (
+                        <div className="config-row">
+                          <span className="config-row-icon" aria-hidden="true">
+                            <ImageIcon />
+                          </span>
+                          <span className="config-row-label">Media</span>
+                          <div className="config-row-value">
+                            Image, video or carousel, chosen per ad after the strategy
+                          </div>
+                        </div>
+                      ) : (
+                        <fieldset className="config-row">
+                          <legend className="visually-hidden">Media</legend>
+                          <span className="config-row-icon" aria-hidden="true">
+                            <ImageIcon />
+                          </span>
+                          <span className="config-row-label" aria-hidden="true">
+                            Media
+                          </span>
+                          <div className="config-row-value config-choices">
+                            <label>
+                              <input
+                                type="radio"
+                                name={`test-format-${campaign.id}`}
+                                checked={(testFormat[campaign.id] ?? 'IMAGE') === 'IMAGE'}
+                                onChange={() =>
+                                  setTestFormat((prev) => ({ ...prev, [campaign.id]: 'IMAGE' }))
+                                }
+                              />
+                              Images
+                            </label>
+                            <label>
+                              <input
+                                type="radio"
+                                name={`test-format-${campaign.id}`}
+                                checked={testFormat[campaign.id] === 'VIDEO'}
+                                onChange={() =>
+                                  setTestFormat((prev) => ({ ...prev, [campaign.id]: 'VIDEO' }))
+                                }
+                              />
+                              Videos
+                            </label>
+                            <p className="field-hint">
+                              Every ad in the test shares one format, so any difference in results
+                              comes from the message, not the format. A video test can reuse one
+                              video across all its ads with different copy.
+                            </p>
+                          </div>
+                        </fieldset>
+                      ))}
+                  </div>
+                </div>
+                <div className="config-top">
+                  {statusPill}
+                  {removeAction}
+                </div>
+                <div className="config-panel">
+                  <div className="config-panel-head">
+                    <span className="config-bulb" aria-hidden="true">
+                      <LightbulbIcon />
+                    </span>
+                    <h4>Ready to generate your strategy?</h4>
+                  </div>
+                  <p>
+                    You&apos;ve selected your product, objective and audience. Now let Sales Guru
+                    create a campaign strategy based on your settings.
+                  </p>
+                  {strategyControls}
+                </div>
+              </div>
+            ) : null
             return (
               <li key={campaign.id} className="campaign-card">
+                {splitCard ?? (
                 <div className="campaign-card-header">
-                  {currentProduct?.primaryImageUrl ? (
-                    <img
-                      src={currentProduct.primaryImageUrl}
-                      alt={currentProduct.description}
-                      width={80}
-                      height={80}
-                      className="campaign-thumb"
-                    />
-                  ) : (
-                    currentProduct && (
-                      <span className="campaign-thumb campaign-thumb-empty" aria-hidden="true">
-                        <PackageIcon />
-                      </span>
-                    )
-                  )}
+                  {productThumb}
                   <div className="campaign-card-heading">
                     <h3 className="campaign-card-title">{cardTitle}</h3>
                     {cardSubtitle && <p className="campaign-card-subtitle">{cardSubtitle}</p>}
                   </div>
                   <div className="campaign-card-side">
-                    <span className="status-pill" data-status={campaign.status}>
-                      <StatusIcon status={campaign.status} />
-                      {statusLabels[campaign.status] ?? campaign.status}
-                    </span>
+                    {statusPill}
                     {!isDraft && removeAction}
                   </div>
                 </div>
+                )}
                 {campaign.eventVenueKey && (
                   <p>
                     Event:{' '}
@@ -1527,6 +1677,8 @@ export function CampaignsSection({
                   />
                 ) : (
                   <>
+                    {!preStrategy && (
+                      <>
                     {campaign.objective === 'SALES' && !strategy && (
                       <fieldset className="strategy-mode-picker">
                         <legend>Campaign type</legend>
@@ -1589,6 +1741,8 @@ export function CampaignsSection({
                         </fieldset>
                       )}
                     {!strategy && strategyControls}
+                      </>
+                    )}
                   </>
                 )}
                 {/* Once ads exist, the creatives are what the user acts on —
