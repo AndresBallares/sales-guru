@@ -51,12 +51,27 @@
 # Meta OAuth connection broken (no error at deploy time, just a runtime
 # "not configured" failure the first time a business tried to use them).
 # META_REDIRECT_URI must match app/api/meta.py's callback_router route
-# exactly (GET /meta/callback) plus BACKEND_URL — i.e.
-# https://sales-guru-backend.onrender.com/meta/callback on a default
+# exactly (GET /meta/callback), reached through the frontend's /api rewrite
+# (see "Same-site API" above) — i.e.
+# https://sales-guru-frontend.onrender.com/api/meta/callback on a default
 # Render hostname — and that same URL must also be added to the Meta
 # app's own OAuth redirect URI allowlist (developers.facebook.com's Meta
 # Login product settings), or the OAuth round-trip 400s on Meta's side
 # before ever reaching this backend.
+
+# Same-site API (2026-10-21): the frontend and backend are separate onrender.com
+# subdomains, which a browser treats as different sites. iOS Safari (and Chrome and
+# Firefox on iOS, which use its engine) never keeps a cookie set by a different site, so
+# login worked but every later request answered 401 "Not authenticated" on iPhones. The
+# frontend therefore calls /api on its own address (VITE_API_URL=/api) and this blueprint
+# rewrites /api/* to the backend, which makes the session cookie first-party.
+#
+# This moves one thing: Meta's OAuth callback must come back through the same address so
+# the session cookie arrives with it. Before (or when) this deploys:
+#   1. In the Meta app's Valid OAuth Redirect URIs, add
+#      https://sales-guru-frontend.onrender.com/api/meta/callback
+#   2. Set META_REDIRECT_URI on sales-guru-backend to that same URL.
+# Until both are done, connecting Meta ads fails; everything else is unaffected.
 
 services:
   - type: web
@@ -106,9 +121,17 @@ services:
     buildCommand: "npm ci && npm run build"
     staticPublishPath: dist
     envVars:
+      # Relative, so the browser only ever talks to this site: the /api/* rewrite
+      # below forwards to the backend. See the "Same-site API" note at the top.
       - key: VITE_API_URL
-        value: https://sales-guru-backend.onrender.com
+        value: /api
     routes:
+      # The API under the frontend's own address, so the session cookie the backend
+      # sets is first-party. A rewrite (not a redirect) keeps the URL in the browser.
+      # It must come before the catch-all below or index.html would answer /api/*.
+      - type: rewrite
+        source: /api/*
+        destination: https://sales-guru-backend.onrender.com/*
       # App.tsx uses react-router's BrowserRouter (real History API routes,
       # not hash-based) — a static host serving files directly 404s on any
       # deep link or hard refresh (e.g. /businesses/:id) since no such file
