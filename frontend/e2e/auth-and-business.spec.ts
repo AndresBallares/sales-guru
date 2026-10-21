@@ -144,7 +144,8 @@ test('sign up, create a business, log out, log back in', async ({ page }) => {
 
   await page.getByRole('button', { name: 'Back to dashboard' }).click()
   await expect(page.getByRole('heading', { name: 'Sales Guru' })).toBeVisible()
-  await expect(page.getByText('Acme Widgets — Fashion / Jewelry · CDMX')).toBeVisible()
+  await expect(page.getByRole('link', { name: 'Acme Widgets' })).toBeVisible()
+  await expect(page.getByText('Fashion / Jewelry · CDMX')).toBeVisible()
 
   const dashboardResults = await new AxeBuilder({ page }).analyze()
   expect(dashboardResults.violations).toEqual([])
@@ -157,7 +158,8 @@ test('sign up, create a business, log out, log back in', async ({ page }) => {
   await page.getByRole('button', { name: 'Log in' }).click()
 
   await expect(page.getByText(`Signed in as ${email}`)).toBeVisible()
-  await expect(page.getByText('Acme Widgets — Fashion / Jewelry · CDMX')).toBeVisible()
+  await expect(page.getByRole('link', { name: 'Acme Widgets' })).toBeVisible()
+  await expect(page.getByText('Fashion / Jewelry · CDMX')).toBeVisible()
 })
 
 // Dedicated coverage for the Brand ("brand DNA") profile (PRD.md §5 step 3.5),
@@ -179,7 +181,7 @@ test('the Brand section blocks on required fields, then is editable later', asyn
   await page.getByRole('button', { name: 'Save Business' }).click()
 
   // Saving the business leaves you in its Brand form on the dashboard.
-  await expect(page.getByRole('heading', { name: 'Brand' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Brand DNA' })).toBeVisible()
   await expect(page.getByLabel(/Brand overview/)).toBeFocused()
 
   // The browser's own required-field validation blocks submission with
@@ -250,7 +252,7 @@ test('a business without a brand profile cannot start a campaign until it has on
   await page.getByRole('link', { name: 'Gated Co' }).click()
 
   await expect(
-    page.getByRole('heading', { name: 'Complete the Brand profile first' }),
+    page.getByRole('heading', { name: 'Complete the Brand DNA first' }),
   ).toBeVisible()
   await expect(page.getByText(/Campaigns can't be created until it does/)).toBeVisible()
   await expect(page.getByRole('heading', { name: 'Meta Ads' })).not.toBeVisible()
@@ -260,7 +262,7 @@ test('a business without a brand profile cannot start a campaign until it has on
   expect(gateResults.violations).toEqual([])
 
   // The link goes back to that business's Brand form, ready to complete.
-  await page.getByRole('link', { name: 'Complete the Brand profile' }).click()
+  await page.getByRole('link', { name: 'Complete the Brand DNA' }).click()
   await expect(page.getByLabel(/Brand overview/)).toBeFocused()
   await expect(page).toHaveURL(/\/$/)
 })

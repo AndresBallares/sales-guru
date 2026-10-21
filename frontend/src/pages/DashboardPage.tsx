@@ -20,6 +20,7 @@ import { BrandBusinessSection, type BrandFocusRequest } from '../components/Bran
 import { DeleteBusinessSection } from '../components/DeleteBusinessSection'
 import { EditBusinessSection } from '../components/EditBusinessSection'
 import { PlusIcon, SaveIcon } from '../components/icons'
+import { ThemeToggle } from '../components/ThemeToggle'
 import { OptionsLoadError } from '../components/OptionsLoadError'
 import { useOptions } from '../lib/useOptions'
 import { validateImageFile } from '../lib/imageValidation'
@@ -247,10 +248,18 @@ export function DashboardPage() {
     <main className="dashboard">
       <header className="dashboard-header">
         <h1>Sales Guru</h1>
-        <p>Signed in as {user?.email}</p>
-        <button type="button" onClick={() => void logout()}>
-          Log out
-        </button>
+        <div className="dashboard-header-actions">
+          <ThemeToggle />
+          <button type="button" className="logout-button" onClick={() => void logout()}>
+            Log out
+          </button>
+        </div>
+        <p className="dashboard-signed-in">
+          <span>Signed in as</span>{' '}
+          <span className="dashboard-email" title={user?.email}>
+            {user?.email}
+          </span>
+        </p>
       </header>
 
       <section>
@@ -266,10 +275,17 @@ export function DashboardPage() {
         )}
         <ul>
           {businesses.map((business) => (
-            <li key={business.id}>
-              <Link to={`/businesses/${business.id}`}>{business.name}</Link>
-              {business.industry && <span> — {industryLabel(business.industry)}</span>}
-              {business.location && <span> · {business.location}</span>}
+            <li key={business.id} className="business-item">
+              <Link className="business-item-name" to={`/businesses/${business.id}`}>
+                {business.name}
+              </Link>
+              {(business.industry || business.location) && (
+                <span className="business-item-meta">
+                  {[business.industry ? industryLabel(business.industry) : null, business.location]
+                    .filter(Boolean)
+                    .join(' · ')}
+                </span>
+              )}
             </li>
           ))}
         </ul>
@@ -278,16 +294,6 @@ export function DashboardPage() {
       <section ref={formSectionRef}>
         <div className="section-header">
           <h2>Company Information</h2>
-          <button
-            type="button"
-            className="section-action-button"
-            aria-expanded={formVisible}
-            aria-controls="company-information-fields"
-            onClick={handleAddBusiness}
-          >
-            <PlusIcon />
-            Add Business
-          </button>
         </div>
         <form onSubmit={handleSubmit} noValidate>
           {formVisible && (
@@ -444,7 +450,17 @@ export function DashboardPage() {
               )}
             </div>
           )}
-          <div className="button-row">
+          <div className="button-row company-actions">
+            <button
+              type="button"
+              className="section-action-button"
+              aria-expanded={formVisible}
+              aria-controls="company-information-fields"
+              onClick={handleAddBusiness}
+            >
+              <PlusIcon />
+              Add Business
+            </button>
             {formVisible && (
               <button type="submit" className="btn-outline btn-gold" disabled={submitting}>
                 <SaveIcon />

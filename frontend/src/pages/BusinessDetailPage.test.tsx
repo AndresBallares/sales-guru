@@ -207,7 +207,7 @@ describe('BusinessDetailPage', () => {
       renderPage()
 
       expect(
-        await screen.findByRole('heading', { name: 'Complete the Brand profile first' }),
+        await screen.findByRole('heading', { name: 'Complete the Brand DNA first' }),
       ).toBeInTheDocument()
       expect(screen.getByText(/Campaigns can't be created until it does/)).toBeInTheDocument()
       expect(screen.getByText(/Acme Widgets doesn't have a brand profile yet/)).toBeInTheDocument()
@@ -216,7 +216,7 @@ describe('BusinessDetailPage', () => {
     it('offers a link to that business\'s Brand form on the dashboard', async () => {
       renderPage()
 
-      const link = await screen.findByRole('link', { name: 'Complete the Brand profile' })
+      const link = await screen.findByRole('link', { name: 'Complete the Brand DNA' })
       expect(link).toHaveAttribute('href', '/?brand=biz-1')
     })
 
@@ -224,7 +224,7 @@ describe('BusinessDetailPage', () => {
       mockedApi.getMetaConnection.mockResolvedValue(completeMeta)
 
       renderPage()
-      await screen.findByRole('heading', { name: 'Complete the Brand profile first' })
+      await screen.findByRole('heading', { name: 'Complete the Brand DNA first' })
 
       expect(screen.queryByRole('heading', { name: 'Create a campaign' })).not.toBeInTheDocument()
       expect(screen.queryByRole('heading', { name: 'Campaigns' })).not.toBeInTheDocument()
@@ -238,7 +238,7 @@ describe('BusinessDetailPage', () => {
       renderPage()
 
       expect(
-        await screen.findByRole('heading', { name: 'Complete the Brand profile first' }),
+        await screen.findByRole('heading', { name: 'Complete the Brand DNA first' }),
       ).toBeInTheDocument()
       expect(screen.queryByRole('heading', { name: 'Sales' })).not.toBeInTheDocument()
     })
@@ -250,7 +250,7 @@ describe('BusinessDetailPage', () => {
 
       expect(await screen.findByText('Loading…')).toBeInTheDocument()
       expect(
-        screen.queryByRole('heading', { name: 'Complete the Brand profile first' }),
+        screen.queryByRole('heading', { name: 'Complete the Brand DNA first' }),
       ).not.toBeInTheDocument()
       expect(screen.queryByRole('heading', { name: 'Create a campaign' })).not.toBeInTheDocument()
     })
@@ -425,7 +425,7 @@ describe('BusinessDetailPage', () => {
       renderPage('/businesses/biz-1?skipMeta=1')
 
       expect(
-        await screen.findByRole('heading', { name: 'Complete the Brand profile first' }),
+        await screen.findByRole('heading', { name: 'Complete the Brand DNA first' }),
       ).toBeInTheDocument()
       expect(screen.queryByRole('heading', { name: 'Create a campaign' })).not.toBeInTheDocument()
     })
