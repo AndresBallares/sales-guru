@@ -33,8 +33,10 @@ test('the ad preview has a round back button that returns to the ad choices with
   expect(box!.width).toBe(48)
   expect(box!.height).toBe(48)
   expect(await back.evaluate((el) => getComputedStyle(el).borderRadius)).toBe('50%')
-  expect(box!.y + box!.height).toBeLessThanOrEqual(titleBox!.y)
-  expect(Math.abs(box!.x - titleBox!.x)).toBeLessThanOrEqual(1)
+  // In the page header, at the left, beside the campaign title.
+  expect(box!.x + box!.width).toBeLessThanOrEqual(titleBox!.x)
+  expect(box!.x).toBeLessThan(titleBox!.x)
+  expect(Math.abs(box!.y + box!.height / 2 - (titleBox!.y + titleBox!.height / 2))).toBeLessThan(40)
   await expect(page.getByRole('link', { name: /Back to dashboard/ })).toHaveCount(0)
 
   // Keyboard: focus ring, and Enter goes back.

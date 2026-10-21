@@ -370,3 +370,46 @@ export function TextIcon() {
     </Icon>
   )
 }
+
+export function FacebookIcon() {
+  return (
+    <Icon>
+      <path d="M14 8h2.5V4.5H14C11.8 4.5 10.5 5.9 10.5 8v2H8v3.5h2.5V20H14v-6.5h2.4l.6-3.5H14V8.6c0-.4.2-.6.6-.6" />
+    </Icon>
+  )
+}
+
+export function InstagramIcon() {
+  return (
+    <Icon>
+      <rect x="4" y="4" width="16" height="16" rx="4.5" />
+      <circle cx="12" cy="12" r="3.6" />
+      <path d="M16.9 7.1h.01" />
+    </Icon>
+  )
+}
+
+export function ChevronLeftSmallIcon() {
+  return (
+    <Icon size={18}>
+      <path d="m15 5-7 7 7 7" />
+    </Icon>
+  )
+}
+
+export function ChevronRightSmallIcon() {
+  return (
+    <Icon size={18}>
+      <path d="m9 5 7 7-7 7" />
+    </Icon>
+  )
+}
+
+export function CopyIcon() {
+  return (
+    <Icon size={18}>
+      <rect x="9" y="9" width="11" height="11" rx="2" />
+      <path d="M5 15V6a2 2 0 0 1 2-2h9" />
+    </Icon>
+  )
+}

@@ -4168,3 +4168,894 @@ a.btn-outline {
     font-size: 0.8rem;
   }
 }
+
+/* ---------- Ad preview workspace ---------- */
+
+.ad-workspace-page {
+  max-width: 1440px;
+}
+
+.ad-workspace {
+  display: grid;
+  grid-template-columns: minmax(0, 1.35fr) minmax(300px, 0.65fr);
+  grid-template-areas:
+    'head head'
+    'notices notices'
+    'stage side'
+    'stage publish';
+  grid-template-rows: auto auto auto 1fr;
+  column-gap: 2rem;
+  row-gap: 1.25rem;
+  align-items: start;
+}
+
+.ad-header {
+  grid-area: head;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.5rem 1rem;
+}
+
+.ad-header-text {
+  flex: 1 1 10rem;
+  min-width: 0;
+}
+
+.ad-header h1 {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.ad-subtitle {
+  margin: 0.15rem 0 0;
+  color: var(--text-secondary);
+  font-size: 0.95rem;
+}
+
+.review-badge {
+  flex: none;
+  padding: 0.25rem 0.75rem;
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+
+.ad-notices {
+  grid-area: notices;
+}
+
+.ad-notices:empty {
+  display: none;
+}
+
+.ad-notices p {
+  margin: 0;
+}
+
+.ad-stage-area {
+  grid-area: stage;
+  min-width: 0;
+}
+
+.ad-side-area {
+  grid-area: side;
+  min-width: 0;
+}
+
+.ad-publish {
+  grid-area: publish;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  padding: 1rem 1.25rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+}
+
+.ad-publish p {
+  margin: 0;
+}
+
+.ad-publish-paused {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  font-size: 0.9rem;
+}
+
+.ad-publish-paused input {
+  width: auto;
+  flex: none;
+  margin-top: 0.2rem;
+}
+
+.ad-publish-button {
+  justify-content: center;
+  min-height: 52px;
+  font-size: 1.05rem;
+  font-weight: 600;
+}
+
+/* Stage: platform tabs, placement, pager, simulated post, thumbnails, details. */
+
+.preview-stage {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  min-width: 0;
+  padding: 1.25rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+}
+
+.platform-tabs {
+  display: flex;
+  gap: 0.5rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.platform-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-height: 44px;
+  padding: 0 1rem;
+  border: none;
+  border-bottom: 3px solid transparent;
+  border-radius: 10px 10px 0 0;
+  background: transparent;
+  color: var(--text-secondary);
+  box-shadow: none;
+  font-weight: 600;
+}
+
+.platform-tab svg {
+  width: 20px;
+  height: 20px;
+}
+
+.platform-tab:hover:not(:disabled) {
+  background: var(--surface-hover);
+  color: var(--text);
+  box-shadow: none;
+}
+
+/* The active tab is marked by its underline and weight, not by colour alone. */
+.platform-tab[aria-selected='true'] {
+  border-bottom-color: var(--create-bg);
+  background: transparent;
+  color: var(--text);
+  font-weight: 700;
+}
+
+.placement-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+}
+
+.placement-options {
+  display: flex;
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 0;
+  padding: 0;
+  border: none;
+}
+
+output.preview-missing {
+  display: block;
+}
+
+.placement-option {
+  min-height: 44px;
+  padding: 0 0.9rem;
+  border: 1px solid var(--border-strong);
+  border-radius: 12px;
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: none;
+  font-size: 0.9rem;
+  font-weight: 500;
+}
+
+.placement-option:hover:not(:disabled) {
+  background: var(--surface-hover);
+  color: var(--text);
+  box-shadow: none;
+}
+
+.placement-option[aria-pressed='true'] {
+  border-color: var(--create-bg);
+  background: var(--create-bg);
+  color: var(--create-text);
+  font-weight: 700;
+}
+
+.creative-pager {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.pager-button {
+  display: inline-grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  min-height: 44px;
+  padding: 0;
+  border: 1px solid var(--border-strong);
+  border-radius: 50%;
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: none;
+}
+
+.pager-button:hover:not(:disabled) {
+  background: var(--surface-hover);
+  color: var(--text);
+  box-shadow: none;
+}
+
+.pager-button:disabled {
+  background: var(--surface);
+  color: var(--text-disabled);
+  border-color: var(--border);
+  opacity: 0.6;
+}
+
+.pager-position {
+  min-width: 4rem;
+  text-align: center;
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+
+.preview-canvas {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 1.25rem 0.5rem;
+  border-radius: 14px;
+  background: var(--row-bg);
+}
+
+.preview-canvas .platform-sim {
+  width: 100%;
+  display: flex;
+  justify-content: center;
+}
+
+.preview-canvas .social-post {
+  width: 100%;
+  max-width: 520px;
+}
+
+.preview-canvas .story-preview,
+.preview-canvas .square-preview {
+  width: 100%;
+  max-width: 340px;
+}
+
+.preview-canvas .story-frame {
+  max-width: 340px;
+}
+
+.preview-canvas .square-frame {
+  max-width: 420px;
+}
+
+.preview-disclaimer,
+.preview-missing {
+  margin: 0;
+  max-width: 520px;
+  color: var(--text-secondary);
+  font-size: 0.8rem;
+  text-align: center;
+}
+
+.preview-missing {
+  padding: 2rem 1rem;
+  border: 1px dashed var(--border-strong);
+  border-radius: 12px;
+  font-size: 0.95rem;
+}
+
+/* The simulated platform keeps its own look whatever theme Sales Guru is in: its tokens are
+   pinned here, so the shared social-post styles resolve the same in light and dark. */
+.platform-sim-light {
+  color-scheme: light;
+  --surface: #ffffff;
+  --surface-hover: #f0f2f5;
+  --border: #dddfe2;
+  --border-strong: #8a8d91;
+  --text: #1c1e21;
+  --text-secondary: #65676b;
+  color: var(--text);
+}
+
+.platform-sim-dark {
+  color-scheme: dark;
+  --surface: #000000;
+  --surface-hover: #262626;
+  --border: #262626;
+  --border-strong: #5c5c5c;
+  --text: #f5f5f5;
+  --text-secondary: #b5b5b5;
+  color: var(--text);
+}
+
+.platform-sim-dark .field-hint {
+  color: var(--text-secondary);
+}
+
+/* Instagram feed post. */
+.ig-post {
+  width: 100%;
+  max-width: 520px;
+  background: #ffffff;
+  color: #262626;
+  border: 1px solid #dbdbdb;
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.ig-post-header {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.6rem 0.75rem;
+}
+
+.ig-avatar {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 2.25rem;
+  height: 2.25rem;
+  overflow: hidden;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #f9a825, #d62976 55%, #4f5bd5);
+  color: #ffffff;
+  font-weight: 700;
+}
+
+.ig-avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.ig-post-account {
+  flex: 1;
+  min-width: 0;
+}
+
+.ig-post-account p,
+.ig-post-caption {
+  margin: 0;
+}
+
+.ig-post-name {
+  font-size: 0.9rem;
+  font-weight: 700;
+}
+
+.ig-post-sponsored {
+  color: #737373;
+  font-size: 0.75rem;
+}
+
+.ig-post-menu {
+  color: #262626;
+  letter-spacing: 0.1em;
+}
+
+.ig-post-cta-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.65rem 0.75rem;
+  background: #efefef;
+  color: #262626;
+  font-size: 0.9rem;
+}
+
+.ig-post-cta-headline {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-weight: 600;
+}
+
+.ig-post-cta-label {
+  flex: none;
+  color: #0095f6;
+  font-weight: 700;
+}
+
+.ig-post-icons {
+  display: flex;
+  gap: 1rem;
+  padding: 0.6rem 0.75rem 0;
+  font-size: 1.25rem;
+}
+
+.ig-post-save {
+  margin-left: auto;
+}
+
+.ig-post-caption {
+  padding: 0.4rem 0.75rem 0.85rem;
+  font-size: 0.9rem;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.ig-post .social-post-image-frame {
+  width: 100%;
+}
+
+/* Instagram Stories and Reels: always the dark full-screen interface. */
+.ig-vertical {
+  position: relative;
+  width: 100%;
+  max-width: 340px;
+  aspect-ratio: 9 / 16;
+  overflow: hidden;
+  border-radius: 14px;
+  background: #000000;
+  color: #ffffff;
+}
+
+.ig-vertical-media,
+.ig-vertical-media img,
+.ig-vertical-media .social-post-image-frame,
+.ig-vertical-media .social-post-image {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.ig-vertical-media {
+  position: absolute;
+  inset: 0;
+}
+
+.ig-vertical-top {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 0.6rem 0.75rem 1.5rem;
+  background: linear-gradient(rgba(0, 0, 0, 0.55), transparent);
+}
+
+.ig-vertical-progress {
+  display: block;
+  height: 3px;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.85);
+}
+
+.ig-vertical-account {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.85rem;
+}
+
+.ig-vertical-account .ig-avatar {
+  width: 1.75rem;
+  height: 1.75rem;
+  font-size: 0.8rem;
+}
+
+.ig-vertical-name {
+  font-weight: 700;
+}
+
+.ig-vertical-sponsored {
+  color: rgba(255, 255, 255, 0.8);
+  font-size: 0.75rem;
+}
+
+.ig-vertical-side {
+  position: absolute;
+  right: 0.6rem;
+  bottom: 6.5rem;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1rem;
+  font-size: 1.4rem;
+}
+
+.ig-vertical-bottom {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.6rem;
+  padding: 2rem 0.75rem 0.9rem;
+  background: linear-gradient(transparent, rgba(0, 0, 0, 0.6));
+}
+
+.ig-vertical-caption {
+  margin: 0;
+  max-width: 85%;
+  font-size: 0.85rem;
+  line-height: 1.4;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.ig-vertical-cta {
+  align-self: stretch;
+  padding: 0.55rem 1rem;
+  border-radius: 999px;
+  background: #ffffff;
+  color: #000000;
+  font-size: 0.9rem;
+  font-weight: 700;
+  text-align: center;
+}
+
+/* Thumbnail strip. */
+.creative-thumbs {
+  display: flex;
+  flex-direction: row;
+  flex-wrap: nowrap;
+  gap: 0.75rem;
+  margin: 0;
+  padding: 0.35rem 0.25rem 0.5rem;
+  overflow-x: auto;
+  list-style: none;
+}
+
+.creative-thumbs li {
+  display: block;
+  flex: none;
+  padding: 0;
+  background: none;
+  border: none;
+}
+
+.creative-thumb {
+  position: relative;
+  display: block;
+  width: 72px;
+  height: 72px;
+  min-height: 72px;
+  padding: 0;
+  overflow: hidden;
+  border: 2px solid var(--border-strong);
+  border-radius: 12px;
+  background: var(--row-bg);
+  box-shadow: none;
+}
+
+.creative-thumb:hover:not(:disabled) {
+  background: var(--row-bg);
+  box-shadow: none;
+}
+
+/* The chosen thumbnail has a thicker gold ring and a filled number, so it differs in more than hue. */
+.creative-thumb[aria-current='true'] {
+  border: 3px solid var(--create-bg);
+  outline: 2px solid var(--text);
+  outline-offset: 1px;
+}
+
+.creative-thumb img,
+.creative-thumb-empty {
+  display: grid;
+  place-items: center;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  color: var(--text-secondary);
+}
+
+.creative-thumb-number {
+  position: absolute;
+  left: 4px;
+  bottom: 4px;
+  display: grid;
+  place-items: center;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 4px;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.7);
+  color: #ffffff;
+  font-size: 0.75rem;
+  font-weight: 700;
+}
+
+.creative-thumb[aria-current='true'] .creative-thumb-number {
+  background: var(--create-bg);
+  color: var(--create-text);
+}
+
+/* Creative details disclosure. */
+.creative-details {
+  border-top: 1px solid var(--border);
+  padding-top: 0.75rem;
+}
+
+.creative-details summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 44px;
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.creative-details dl {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  margin: 0.5rem 0 0;
+}
+
+.creative-details-row dt {
+  color: var(--text-secondary);
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+
+.creative-details-row dd {
+  margin: 0.1rem 0 0;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+/* Details column. */
+.preview-details {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  min-width: 0;
+  padding: 1.25rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+}
+
+.detail-group {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0.75rem;
+  padding: 1.1rem 0;
+  border-top: 1px solid var(--border);
+}
+
+.detail-group:first-child {
+  padding-top: 0;
+  border-top: none;
+}
+
+.detail-group p {
+  margin: 0;
+}
+
+.detail-heading {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 600;
+}
+
+.detail-heading svg {
+  width: 20px;
+  height: 20px;
+  color: var(--text-secondary);
+}
+
+.detail-list {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.75rem 1rem;
+  margin: 0;
+}
+
+.detail-list dt {
+  color: var(--text-secondary);
+  font-size: 0.8rem;
+}
+
+.detail-list dd {
+  margin: 0.1rem 0 0;
+  font-weight: 600;
+}
+
+.ad-summary {
+  display: flex;
+  gap: 0.75rem;
+}
+
+.ad-summary-thumb {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 64px;
+  height: 64px;
+  overflow: hidden;
+  border-radius: 10px;
+  background: var(--row-bg);
+  color: var(--text-secondary);
+}
+
+.ad-summary-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.ad-summary-text {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.ad-summary-headline {
+  font-weight: 700;
+}
+
+.ad-summary-body {
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  color: var(--text-secondary);
+  font-size: 0.9rem;
+}
+
+.copy-text-button {
+  display: inline-flex;
+  align-items: center;
+  align-self: flex-start;
+  gap: 0.4rem;
+  min-height: 44px;
+  padding: 0 0.9rem;
+  border: 1px solid var(--border-strong);
+  border-radius: 12px;
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: none;
+  font-size: 0.9rem;
+  font-weight: 500;
+}
+
+.copy-text-button:hover:not(:disabled) {
+  background: var(--surface-hover);
+  color: var(--text);
+  box-shadow: none;
+}
+
+.preview-details .story-slot,
+.preview-details .image-picker {
+  align-items: stretch;
+  width: 100%;
+}
+
+/* Tablet and phone: one column, preview first, and the publish action pinned to the bottom. */
+@media (max-width: 900px) {
+  .ad-workspace {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas:
+      'head'
+      'notices'
+      'stage'
+      'side'
+      'publish';
+    grid-template-rows: auto;
+  }
+
+  .ad-publish {
+    position: sticky;
+    bottom: 0;
+    z-index: 5;
+    margin: 0 -0.5rem;
+    padding: 0.85rem 1rem calc(0.85rem + env(safe-area-inset-bottom));
+    border-radius: 14px 14px 0 0;
+    box-shadow: 0 -6px 18px rgba(0, 0, 0, 0.12);
+  }
+
+  .preview-stage {
+    padding: 0.875rem;
+  }
+
+  .platform-tab {
+    flex: 1;
+    justify-content: center;
+    min-width: 0;
+    padding: 0 0.5rem;
+  }
+
+  .placement-options {
+    width: 100%;
+  }
+
+  .ad-header .back-button {
+    flex: none;
+  }
+}
+
+@media (max-width: 480px) {
+  .preview-canvas {
+    padding: 0.875rem 0.25rem;
+  }
+
+  .detail-list {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .preview-details {
+    padding: 1rem;
+  }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .creative-thumb {
+    transition: border-color 0.15s;
+  }
+}
+
+.creative-details summary {
+  list-style: none;
+}
+
+.creative-details summary::-webkit-details-marker {
+  display: none;
+}
+
+.creative-details-chevron {
+  display: inline-flex;
+  color: var(--text-secondary);
+}
+
+.creative-details[open] .creative-details-chevron {
+  transform: rotate(180deg);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .creative-details-chevron {
+    transition: transform 0.15s;
+  }
+}
+
+.ig-post p {
+  color: inherit;
+}
+
+.ig-post .ig-post-sponsored {
+  color: #737373;
+}

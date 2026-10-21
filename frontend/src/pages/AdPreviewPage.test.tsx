@@ -38,6 +38,7 @@ vi.mock('../lib/api', async (importOriginal) => {
     setCreativeStoryAsset: vi.fn<typeof actual.setCreativeStoryAsset>(),
     reorderCreativeCards: vi.fn<typeof actual.reorderCreativeCards>(),
     removeCreativeCard: vi.fn<typeof actual.removeCreativeCard>(),
+    deselectCreative: vi.fn<typeof actual.deselectCreative>(),
   }
 })
 const mockedApi = vi.mocked(api)
@@ -166,15 +167,226 @@ describe('AdPreviewPage', () => {
     ).toBeInTheDocument()
   })
 
+  describe('the preview workspace', () => {
+    const three = [
+      makeCreative({ id: 'creative-1', headline: 'Angle one headline', imageUrl: '/img-1' }),
+      makeCreative({ id: 'creative-2', headline: 'Angle two headline', imageUrl: '/img-2' }),
+      makeCreative({ id: 'creative-3', headline: 'Angle three headline', imageUrl: '/img-3' }),
+    ]
+
+    beforeEach(() => {
+      mockedApi.getOptions.mockResolvedValue({
+        industries: [],
+        objectives: [{ value: 'SALES', label: 'Sales' }],
+        campaignStatuses: [{ value: 'PAUSED', label: 'Paused' }],
+        ctas: [{ value: 'SHOP_NOW', label: 'Shop Now' }],
+        actionTypes: [],
+        eventVenues: [],
+        voiceTraits: [],
+        pricePositionings: [],
+      })
+    })
+
+    it('titles the page with the campaign, its type and its ad count, and a review badge that matches its state', async () => {
+      mockedApi.listCreatives.mockResolvedValue(three)
+
+      renderPage()
+
+      expect(await screen.findByRole('heading', { level: 1, name: 'first campaign' })).toBeInTheDocument()
+      expect(await screen.findByText('Sales campaign · 3 ads')).toBeInTheDocument()
+      expect(screen.getByText('Ready for review')).toBeInTheDocument()
+    })
+
+    it('shows no review badge when the campaign is not awaiting review', async () => {
+      mockedApi.listCampaigns.mockResolvedValue([makeCampaign({ status: 'ADS_GENERATED' })])
+
+      renderPage()
+      await screen.findByRole('tabpanel')
+
+      expect(screen.queryByText('Ready for review')).not.toBeInTheDocument()
+    })
+
+    it('shows the status instead for a published campaign', async () => {
+      mockedApi.listCampaigns.mockResolvedValue([
+        makeCampaign({ status: 'PAUSED', metaCampaignId: 'meta-1' }),
+      ])
+
+      renderPage()
+
+      expect(await screen.findByText('Paused')).toHaveClass('review-badge')
+      expect(screen.queryByText('Ready for review')).not.toBeInTheDocument()
+    })
+
+    it('fills the details panel from the ad being previewed and updates it with the platform and creative', async () => {
+      mockedApi.listCreatives.mockResolvedValue(three)
+      const user = userEvent.setup()
+
+      renderPage()
+      const details = within(await screen.findByRole('complementary', { name: 'Preview details' }))
+
+      expect(details.getByText('Facebook')).toBeInTheDocument()
+      expect(details.getByText('Feed')).toBeInTheDocument()
+      expect(details.getByText('4:5')).toBeInTheDocument()
+      expect(details.getByText('1 of 3')).toBeInTheDocument()
+      expect(details.getByText('Angle one headline')).toBeInTheDocument()
+
+      await user.click(screen.getByRole('tab', { name: 'Instagram' }))
+      await user.click(screen.getByRole('button', { name: 'Next creative' }))
+
+      expect(details.getByText('Instagram')).toBeInTheDocument()
+      expect(details.getByText('2 of 3')).toBeInTheDocument()
+      expect(details.getByText('Angle two headline')).toBeInTheDocument()
+      expect(mockedApi.selectCreative).not.toHaveBeenCalled()
+      expect(mockedApi.publishCampaign).not.toHaveBeenCalled()
+    })
+
+    it('shows the ratio of the placement being previewed', async () => {
+      mockedApi.listCreatives.mockResolvedValue([
+        makeCreative({ imageUrl: '/f', storyAssetId: 's1', storyImageUrl: '/s' }),
+      ])
+      const user = userEvent.setup()
+
+      renderPage()
+      await screen.findByRole('tabpanel')
+      await user.click(screen.getByRole('button', { name: 'Stories & Reels' }))
+
+      const details = within(screen.getByRole('complementary', { name: 'Preview details' }))
+      expect(details.getByText('9:16')).toBeInTheDocument()
+      expect(details.getByText('Placement').nextElementSibling).toHaveTextContent('Stories & Reels')
+    })
+
+    it('puts Remove from test in Test settings for an ad in a test, and takes only that ad out', async () => {
+      mockedApi.listCreatives.mockResolvedValueOnce(three)
+      mockedApi.listCreatives.mockResolvedValue(three.slice(1))
+      mockedApi.deselectCreative.mockResolvedValue(makeCreative({ id: 'creative-1', status: 'GENERATED' }))
+      const user = userEvent.setup()
+
+      renderPage()
+      const settings = within(await screen.findByRole('region', { name: 'Test settings' }))
+      expect(settings.getByText(/does not delete it/)).toBeInTheDocument()
+
+      await user.click(settings.getByRole('button', { name: 'Remove from test' }))
+
+      await waitFor(() =>
+        expect(mockedApi.deselectCreative).toHaveBeenCalledWith('biz-1', 'camp-1', 'creative-1'),
+      )
+      // The list refreshes, so the removed ad is gone and the next one is previewed.
+      expect(await screen.findByText('2 ads in this test')).toBeInTheDocument()
+      expect(within(screen.getByRole('tabpanel')).getByText('Angle two headline')).toBeInTheDocument()
+    })
+
+    it('shows why removing an ad from the test failed', async () => {
+      mockedApi.listCreatives.mockResolvedValue(three)
+      mockedApi.deselectCreative.mockRejectedValue(new api.ApiError(400, 'Cannot remove'))
+      const user = userEvent.setup()
+
+      renderPage()
+      await user.click(await screen.findByRole('button', { name: 'Remove from test' }))
+
+      expect(await screen.findByRole('alert')).toHaveTextContent('Cannot remove')
+    })
+
+    it('has no Test settings for a single ad, and none for a published test', async () => {
+      renderPage()
+      await screen.findByRole('tabpanel')
+      expect(screen.queryByRole('region', { name: 'Test settings' })).not.toBeInTheDocument()
+    })
+
+    it('offers no Remove from test once the test is published', async () => {
+      mockedApi.listCreatives.mockResolvedValue(three)
+      mockedApi.listCampaigns.mockResolvedValue([
+        makeCampaign({ status: 'PAUSED', metaCampaignId: 'meta-1' }),
+      ])
+
+      renderPage()
+
+      expect(await screen.findByRole('region', { name: 'Test settings' })).toBeInTheDocument()
+      expect(screen.queryByRole('button', { name: 'Remove from test' })).not.toBeInTheDocument()
+    })
+
+    it('puts Approve & Publish in its own bar, with the paused choice beside it', async () => {
+      renderPage()
+
+      const button = await screen.findByRole('button', { name: 'Approve & Publish' })
+      const bar = button.closest('.ad-publish') as HTMLElement
+      expect(bar).not.toBeNull()
+      expect(within(bar).getByLabelText(/Publish paused/)).toBeChecked()
+      // Not inside the details panel; the page decides where the bar sits.
+      expect(screen.getByRole('complementary', { name: 'Preview details' })).not.toContainElement(button)
+    })
+
+    it('says plainly that publishing live can spend, once paused is turned off', async () => {
+      const user = userEvent.setup()
+      renderPage()
+
+      await user.click(await screen.findByLabelText(/Publish paused/))
+
+      expect(screen.getByText(/can start spending as soon as Meta approves it/)).toBeInTheDocument()
+    })
+
+    it('explains why there is nothing to publish yet, instead of an empty gap', async () => {
+      mockedApi.listCampaigns.mockResolvedValue([makeCampaign({ status: 'ADS_GENERATED' })])
+
+      renderPage()
+
+      expect(await screen.findByText(/isn.t ready to publish yet/)).toBeInTheDocument()
+      expect(screen.queryByRole('button', { name: 'Approve & Publish' })).not.toBeInTheDocument()
+    })
+
+    it('copies the ad text when the browser allows it', async () => {
+      const user = userEvent.setup()
+      // user-event installs its own clipboard, so put ours in after it.
+      const writeText = vi.fn<(text: string) => Promise<void>>().mockResolvedValue(undefined)
+      Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true })
+
+      renderPage()
+      await user.click(await screen.findByRole('button', { name: 'Copy ad text' }))
+
+      expect(writeText).toHaveBeenCalledWith(
+        'Handmade wallets, made to last\n\nFull-grain leather, hand-stitched.\n\nShop the collection today.',
+      )
+      expect(await screen.findByRole('button', { name: 'Copied' })).toBeInTheDocument()
+      Object.defineProperty(navigator, 'clipboard', { value: undefined, configurable: true })
+    })
+
+    it('hides the copy action where the browser has no clipboard', async () => {
+      Object.defineProperty(navigator, 'clipboard', { value: undefined, configurable: true })
+
+      renderPage()
+      await screen.findByRole('tabpanel')
+
+      expect(screen.queryByRole('button', { name: 'Copy ad text' })).not.toBeInTheDocument()
+    })
+
+    it('keeps the carousel editor for a single carousel ad, without platform tabs', async () => {
+      mockedApi.listCreatives.mockResolvedValue([
+        makeCreative({
+          format: 'CAROUSEL',
+          cards: [
+            { id: 'k1', position: 0, imageUrl: '/k1', headline: 'Card one', description: null, linkUrl: 'https://x.example' },
+            { id: 'k2', position: 1, imageUrl: '/k2', headline: 'Card two', description: null, linkUrl: 'https://x.example' },
+          ],
+        }),
+      ])
+
+      renderPage()
+
+      expect((await screen.findAllByText('Card one')).length).toBeGreaterThan(0)
+      expect(screen.queryByRole('tablist', { name: 'Platform' })).not.toBeInTheDocument()
+      expect(screen.getByText('Feed (carousel)')).toBeInTheDocument()
+    })
+  })
+
   it('shows the selected ad as a social-post preview', async () => {
     renderPage()
 
-    expect(await screen.findByText('Handmade wallets, made to last')).toBeInTheDocument()
-    expect(screen.getByText('Full-grain leather, hand-stitched.')).toBeInTheDocument()
-    expect(screen.getByText('Shop the collection today.')).toBeInTheDocument()
-    expect(screen.getByText('Shop Now')).toBeInTheDocument()
-    expect(screen.getByText('Acme Widgets')).toBeInTheDocument()
-    expect(screen.getByText('Sponsored')).toBeInTheDocument()
+    const post = within(await screen.findByRole('tabpanel'))
+    expect(post.getByText('Handmade wallets, made to last')).toBeInTheDocument()
+    expect(post.getByText('Full-grain leather, hand-stitched.')).toBeInTheDocument()
+    expect(post.getByText('Shop the collection today.')).toBeInTheDocument()
+    expect(post.getByText('Shop Now')).toBeInTheDocument()
+    expect(post.getByText('Acme Widgets')).toBeInTheDocument()
+    expect(post.getByText('Sponsored')).toBeInTheDocument()
   })
 
   it("shows the business's own logo as the post avatar when one is uploaded", async () => {
@@ -227,7 +439,7 @@ describe('AdPreviewPage', () => {
     const file = new File(['fake'], 'wallet.jpg', { type: 'image/jpeg' })
 
     renderPage()
-    await screen.findByText('Handmade wallets, made to last')
+    await screen.findByRole('tabpanel')
     await user.click(screen.getByRole('button', { name: 'Upload Image' }))
     await user.upload(screen.getByLabelText('Upload from computer'), file)
 
@@ -256,7 +468,7 @@ describe('AdPreviewPage', () => {
     const file = new File(['fake'], 'wallet.jpg', { type: 'image/jpeg' })
 
     renderPage()
-    await screen.findByText('Handmade wallets, made to last')
+    await screen.findByRole('tabpanel')
     await user.click(screen.getByRole('button', { name: 'Upload Image' }))
     await user.upload(screen.getByLabelText('Upload from computer'), file)
 
@@ -456,25 +668,33 @@ describe('AdPreviewPage', () => {
       makeCreative({ id: 'creative-4', headline: 'Not in the test', status: 'GENERATED' }),
     ]
 
-    it('previews every selected ad and none of the unselected ones', async () => {
+    it('previews the selected ads one at a time and none of the unselected ones', async () => {
       mockedApi.listCreatives.mockResolvedValue(three)
+      const user = userEvent.setup()
 
       renderPage()
+      const preview = within(await screen.findByRole('tabpanel'))
 
-      expect(await screen.findByText('Angle one headline')).toBeInTheDocument()
-      expect(screen.getByText('Angle two headline')).toBeInTheDocument()
-      expect(screen.getByText('Angle three headline')).toBeInTheDocument()
+      // The first ad is previewed; the others are a click away, and the unselected one is not offered.
+      expect(preview.getByText('Angle one headline')).toBeInTheDocument()
+      expect(document.querySelector('.pager-position')).toHaveTextContent('1 of 3')
+      expect(screen.getAllByRole('button', { name: /^View creative/ })).toHaveLength(3)
       expect(screen.queryByText('Not in the test')).not.toBeInTheDocument()
       expect(screen.getByText('3 ads in this test')).toBeInTheDocument()
+
+      await user.click(screen.getByRole('button', { name: 'Next creative' }))
+      expect(within(screen.getByRole('tabpanel')).getByText('Angle two headline')).toBeInTheDocument()
+      expect(document.querySelector('.pager-position')).toHaveTextContent('2 of 3')
+      expect(mockedApi.selectCreative).not.toHaveBeenCalled()
     })
 
-    it('has no single-image picker, since each ad keeps its own image', async () => {
+    it('offers the image picker for the ad being previewed', async () => {
       mockedApi.listCreatives.mockResolvedValue(three)
 
       renderPage()
-      await screen.findByText('Angle one headline')
+      await screen.findByRole('tabpanel')
 
-      expect(screen.queryByRole('button', { name: /Upload Image|Change image/ })).not.toBeInTheDocument()
+      expect(await screen.findByRole('button', { name: /Upload Image|Change image/ })).toBeInTheDocument()
     })
 
     it('approves and publishes the whole test paused', async () => {
@@ -523,7 +743,7 @@ describe('AdPreviewPage', () => {
     mockedApi.listCampaigns.mockResolvedValue([makeCampaign({ status: 'DRAFT' })])
 
     renderPage()
-    await screen.findByText('Handmade wallets, made to last')
+    await screen.findByRole('tabpanel')
 
     expect(screen.queryByRole('button', { name: /Approve & Publish|Retry publish/ })).not.toBeInTheDocument()
   })
@@ -532,7 +752,7 @@ describe('AdPreviewPage', () => {
     mockedApi.listCampaigns.mockResolvedValue([makeCampaign({ productId: null })])
 
     renderPage()
-    await screen.findByText('Handmade wallets, made to last')
+    await screen.findByRole('tabpanel')
 
     expect(screen.queryByRole('button', { name: 'Upload Image' })).not.toBeInTheDocument()
   })
@@ -856,7 +1076,13 @@ describe('AdPreviewPage', () => {
 
     expect(await screen.findByRole('button', { name: 'Add Stories & Reels image' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Add Square image' })).toBeInTheDocument()
-    expect(screen.getByRole('heading', { name: 'Stories & Reels (9:16)' })).toBeInTheDocument()
+    // The optional rows say what they are and that they are optional.
+    expect(screen.getByRole('button', { name: 'Add Stories & Reels image' })).toHaveTextContent(
+      '9:16 · Optional',
+    )
+    expect(screen.getByRole('button', { name: 'Add Square image' })).toHaveTextContent(
+      '1:1 · Optional',
+    )
   })
 
   it('shows the Feed / Story toggle once the ad has a story asset', async () => {
@@ -870,6 +1096,7 @@ describe('AdPreviewPage', () => {
 
     renderPage()
 
-    expect(await screen.findByRole('button', { name: 'Story' })).toBeInTheDocument()
+    // Its own placement, available on both platforms.
+    expect(await screen.findByRole('button', { name: 'Stories & Reels' })).toBeInTheDocument()
   })
 })
