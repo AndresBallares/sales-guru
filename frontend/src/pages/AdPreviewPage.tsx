@@ -4,6 +4,7 @@ import { BackButton } from '../components/BackButton'
 import {
   ApiError,
   approveCampaign,
+  deselectCreative,
   getBusiness,
   getOptions,
   listCampaigns,
@@ -26,8 +27,19 @@ import { describePublishStatus, PublishJobError, waitForPublishJob } from '../li
 import { ADS_LOCKED_NOTE, isPublished } from '../lib/publishedCampaign'
 import { CarouselEditor } from '../components/CarouselEditor'
 import { CreativeEditor } from '../components/CreativeEditor'
+import { PreviewDetailsPanel } from '../components/PreviewDetailsPanel'
+import { PreviewStage } from '../components/PreviewStage'
+import { SettingRow } from '../components/SettingRow'
+import { FlaskIcon, ImageIcon } from '../components/icons'
+import {
+  assetUrlFor,
+  findPlacement,
+  placementAfterPlatformChange,
+  type PlacementId,
+  type Platform,
+} from '../lib/previewPlacements'
+import { useAssetRatio } from '../lib/useAssetRatio'
 import { ExtraAssetSlot } from '../components/ExtraAssetSlot'
-import { SocialPostPreview } from '../components/SocialPostPreview'
 import { InstagramNote } from '../components/InstagramNote'
 import { clearPublishPaused, getPublishPaused, setPublishPaused } from '../lib/publishPaused'
 
@@ -41,10 +53,23 @@ export function AdPreviewPage() {
 
   const [business, setBusiness] = useState<Business | null>(null)
   const [campaign, setCampaign] = useState<Campaign | null>(null)
-  const [creative, setCreative] = useState<Creative | null>(null)
   // Every selected ad. One for the original single-ad flow; 3-4 for a
   // creative test (CREATIVE_TEST_PLAN), where they all publish together.
   const [selectedCreatives, setSelectedCreatives] = useState<Creative[]>([])
+  // Which of them is being previewed. Moving it never selects or changes an ad.
+  const [activeIndex, setActiveIndex] = useState(0)
+  const creative: Creative | null = selectedCreatives[activeIndex] ?? null
+  function replaceCreative(updated: Creative) {
+    setSelectedCreatives((prev) => prev.map((item) => (item.id === updated.id ? updated : item)))
+  }
+  const [platform, setPlatform] = useState<Platform>('facebook')
+  const [placementId, setPlacementId] = useState<PlacementId>('feed')
+  function changePlatform(next: Platform) {
+    setPlatform(next)
+    setPlacementId((current) => placementAfterPlatformChange(next, current))
+  }
+  const placement = findPlacement(platform, placementId)
+  const measuredRatio = useAssetRatio(creative ? assetUrlFor(creative, placement.asset) : null)
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState<string | null>(null)
 
@@ -79,6 +104,8 @@ export function AdPreviewPage() {
   // label — the fixed CTA list is static, so there's no reason to
   // re-fetch it as part of refresh() below.
   const [ctaLabels, setCtaLabels] = useState<Record<string, string>>({})
+  const [objectiveLabels, setObjectiveLabels] = useState<Record<string, string>>({})
+  const [statusLabels, setStatusLabels] = useState<Record<string, string>>({})
 
   const refresh = useCallback(async () => {
     if (!businessId || !campaignId) return
@@ -93,7 +120,7 @@ export function AdPreviewPage() {
       setCampaign(campaigns.find((c) => c.id === campaignId) ?? null)
       const selected = creatives.filter((c) => c.status === 'SELECTED')
       setSelectedCreatives(selected)
-      setCreative(selected[0] ?? null)
+      setActiveIndex((index) => Math.min(index, Math.max(selected.length - 1, 0)))
       setLoadError(null)
     } catch (err) {
       setLoadError(err instanceof ApiError ? err.message : 'Could not load this ad.')
@@ -108,8 +135,16 @@ export function AdPreviewPage() {
 
   useEffect(() => {
     getOptions()
-      .then((options) => setCtaLabels(toLabelMap(options.ctas)))
-      .catch(() => setCtaLabels({}))
+      .then((options) => {
+        setCtaLabels(toLabelMap(options.ctas))
+        setObjectiveLabels(toLabelMap(options.objectives))
+        setStatusLabels(toLabelMap(options.campaignStatuses))
+      })
+      .catch(() => {
+        setCtaLabels({})
+        setObjectiveLabels({})
+        setStatusLabels({})
+      })
   }, [])
 
   function toggleImageMenu() {
@@ -127,7 +162,7 @@ export function AdPreviewPage() {
     try {
       const image = await uploadProductImage(businessId, campaign.productId, file)
       const updated = await selectCreative(businessId, campaignId, creative.id, image.id)
-      setCreative(updated)
+      replaceCreative(updated)
       setImageMenuOpen(false)
     } catch (err) {
       setImageError(err instanceof ApiError ? err.message : 'Could not upload image.')
@@ -155,7 +190,7 @@ export function AdPreviewPage() {
     setImageError(null)
     try {
       const updated = await selectCreative(businessId, campaignId, creative.id, productImageId)
-      setCreative(updated)
+      replaceCreative(updated)
       setImageMenuOpen(false)
       setLibraryOpen(false)
     } catch (err) {
@@ -169,7 +204,7 @@ export function AdPreviewPage() {
     setCardError(null)
     try {
       const updated = await reorderCreativeCards(businessId, campaignId, creative.id, cardIds)
-      setCreative(updated)
+      replaceCreative(updated)
     } catch (err) {
       setCardError(err instanceof ApiError ? err.message : 'Could not reorder cards.')
     } finally {
@@ -183,7 +218,7 @@ export function AdPreviewPage() {
     setCardError(null)
     try {
       const updated = await removeCreativeCard(businessId, campaignId, creative.id, cardId)
-      setCreative(updated)
+      replaceCreative(updated)
     } catch (err) {
       setCardError(err instanceof ApiError ? err.message : 'Could not remove this card.')
     } finally {
@@ -244,182 +279,321 @@ export function AdPreviewPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [campaign?.publishing])
 
+  // Takes the previewed ad out of the creative test; the ad itself is not deleted and can be
+  // added back from the ad choices. Same endpoint as the campaign card's "Remove from test".
+  const [removingId, setRemovingId] = useState<string | null>(null)
+  const [removeError, setRemoveError] = useState<string | null>(null)
+  async function handleRemoveFromTest() {
+    if (!businessId || !campaignId || !creative) return
+    setRemovingId(creative.id)
+    setRemoveError(null)
+    try {
+      await deselectCreative(businessId, campaignId, creative.id)
+      await refresh()
+    } catch (err) {
+      setRemoveError(err instanceof ApiError ? err.message : 'Could not remove this ad from the test.')
+    } finally {
+      setRemovingId(null)
+    }
+  }
+
   const published = isPublished(campaign)
   const canPublish =
     campaign !== null && !published && _PUBLISHABLE_STATUSES.includes(campaign.status)
+  const isTest = selectedCreatives.length > 1
+  const isCarousel = creative?.format === 'CAROUSEL' && !isTest
+  const canEditAssets =
+    creative !== null &&
+    !published &&
+    !isCarousel &&
+    Boolean(campaign?.productId) &&
+    Boolean(businessId) &&
+    Boolean(campaignId) &&
+    campaign !== null &&
+    _PUBLISHABLE_STATUSES.includes(campaign.status)
+  const objectiveLabel = campaign
+    ? (objectiveLabels[campaign.objective] ?? campaign.objective)
+    : ''
+  const adCount = selectedCreatives.length
+  // A review badge only when the campaign's real state says so.
+  const reviewBadge = !campaign
+    ? null
+    : published
+      ? (statusLabels[campaign.status] ?? campaign.status)
+      : campaign.status === 'PENDING_APPROVAL'
+        ? 'Ready for review'
+        : campaign.status === 'APPROVED'
+          ? 'Approved'
+          : campaign.status === 'FAILED'
+            ? 'Publishing failed'
+            : null
+  const ctaLabel = creative ? (ctaLabels[creative.cta] ?? creative.cta) : ''
+
+  // The Feed image row: the page's own handlers, drawn as the neutral settings row.
+  const feedImageControls =
+    creative && campaign?.productId && creative.format === 'SINGLE_IMAGE' ? (
+      <div className="image-picker">
+        <SettingRow
+          icon={
+            creative.imageUrl ? (
+              <img src={creative.imageUrl} alt="" width={36} height={36} />
+            ) : (
+              <ImageIcon />
+            )
+          }
+          title="Feed image"
+          description="4:5 recommended"
+          actionText={creative.imageUrl ? 'Change' : 'Upload'}
+          ariaLabel={creative.imageUrl ? 'Change image' : 'Upload Image'}
+          expanded={imageMenuOpen}
+          onClick={toggleImageMenu}
+        />
+        {imageMenuOpen && (
+          <div className="image-menu">
+            <label htmlFor="ad-image-upload">Upload from computer</label>
+            <input
+              id="ad-image-upload"
+              type="file"
+              accept="image/jpeg,image/png,image/webp"
+              disabled={uploading}
+              onChange={(event) => void handleUpload(event)}
+            />
+            <button type="button" onClick={() => void handleOpenLibrary()}>
+              Choose from library
+            </button>
+          </div>
+        )}
+        {uploading && <p>Uploading…</p>}
+        {libraryOpen && (
+          <div aria-label="Choose a photo from your library">
+            <p className="field-hint">{PHOTOS_ONLY_HINT}</p>
+            {loadingLibrary && <p>Loading…</p>}
+            {!loadingLibrary && productImages.length === 0 && (
+              <p>No photos uploaded for this product yet.</p>
+            )}
+            {productImages.map((image) => (
+              <button
+                key={image.id}
+                type="button"
+                onClick={() => void handleChooseFromLibrary(image.id)}
+              >
+                <img
+                  src={image.url}
+                  alt="Product option"
+                  width={60}
+                  height={60}
+                  style={{ objectFit: 'cover' }}
+                />
+              </button>
+            ))}
+          </div>
+        )}
+        {imageError && (
+          <p className="form-error" role="alert">
+            {imageError}
+          </p>
+        )}
+      </div>
+    ) : null
 
   return (
-    <main className="business-detail">
-      {businessId && (
-        <BackButton to={`/businesses/${businessId}?metaLater=1`} label="Back to ad choices" />
-      )}
-      <h1>{campaign?.name ?? 'Ad preview'}</h1>
-
-      {loading && <p>Loading…</p>}
-      {loadError && (
-        <p className="form-error" role="alert">
-          {loadError}
-        </p>
-      )}
-
-      {!loading && !loadError && !creative && (
-        <p>No ad selected for this campaign yet — go back and choose one first.</p>
-      )}
-
-      {creative && (
-        <section>
-          <h2>Preview</h2>
-          {selectedCreatives.length > 1 ? (
-            <>
-              <p>{selectedCreatives.length} ads in this test</p>
-              {selectedCreatives.map((selected) => (
-                <SocialPostPreview
-                  key={selected.id}
-                  business={business}
-                  creative={selected}
-                  ctaLabel={ctaLabels[selected.cta] ?? selected.cta}
-                />
-              ))}
-            </>
-          ) : creative.format === 'CAROUSEL' ? (
-            <CarouselEditor
-              business={business}
-              creative={creative}
-              ctaLabel={ctaLabels[creative.cta] ?? creative.cta}
-              busy={cardActionId !== null}
-              locked={published}
-              error={cardError}
-              onReorder={handleReorderCards}
-              onRemove={handleRemoveCard}
-            />
-          ) : (
-            <SocialPostPreview
-              business={business}
-              creative={creative}
-              ctaLabel={ctaLabels[creative.cta] ?? creative.cta}
-            />
+    <main className="business-detail ad-workspace-page">
+      <div className="ad-workspace">
+        <header className="ad-header">
+          {businessId && (
+            <BackButton to={`/businesses/${businessId}?metaLater=1`} label="Back to ad choices" />
           )}
+          <div className="ad-header-text">
+            <h1>{campaign?.name ?? 'Ad preview'}</h1>
+            {campaign && adCount > 0 && (
+              <p className="ad-subtitle">
+                {objectiveLabel} campaign · {adCount} {adCount === 1 ? 'ad' : 'ads'}
+              </p>
+            )}
+          </div>
+          {reviewBadge && <span className="review-badge">{reviewBadge}</span>}
+        </header>
 
-          {published ? (
-            <p className="field-hint">{ADS_LOCKED_NOTE}</p>
-          ) : selectedCreatives.length > 1 || creative.format === 'CAROUSEL' ? null
-          : creative.format === 'SINGLE_VIDEO' ? (
-            <CreativeEditor
-              businessId={businessId ?? ''}
-              campaignId={campaignId ?? ''}
-              productId={campaign?.productId ?? null}
-              creative={creative}
-              showCopyControls={false}
-              onUpdated={() => void refresh()}
-            />
-          ) : (
-            campaign?.productId && (
-              <div className="image-picker">
-                <button type="button" onClick={toggleImageMenu}>
-                  {creative.imageUrl ? 'Change image' : 'Upload Image'}
-                </button>
-                {imageMenuOpen && (
-                  <div className="image-menu">
-                    <label htmlFor="ad-image-upload">Upload from computer</label>
-                    <input
-                      id="ad-image-upload"
-                      type="file"
-                      accept="image/jpeg,image/png,image/webp"
-                      disabled={uploading}
-                      onChange={(event) => void handleUpload(event)}
-                    />
-                    <button type="button" onClick={() => void handleOpenLibrary()}>
-                      Choose from library
-                    </button>
-                  </div>
-                )}
-                {uploading && <p>Uploading…</p>}
-                {libraryOpen && (
-                  <div aria-label="Choose a photo from your library">
-                    <p className="field-hint">{PHOTOS_ONLY_HINT}</p>
-                    {loadingLibrary && <p>Loading…</p>}
-                    {!loadingLibrary && productImages.length === 0 && (
-                      <p>No photos uploaded for this product yet.</p>
-                    )}
-                    {productImages.map((image) => (
-                      <button
-                        key={image.id}
-                        type="button"
-                        onClick={() => void handleChooseFromLibrary(image.id)}
-                      >
-                        <img
-                          src={image.url}
-                          alt="Product option"
-                          width={60}
-                          height={60}
-                          style={{ objectFit: 'cover' }}
+        <div className="ad-notices">
+          {loading && <p>Loading…</p>}
+          {loadError && (
+            <p className="form-error" role="alert">
+              {loadError}
+            </p>
+          )}
+          {!loading && !loadError && !creative && (
+            <p>No ad selected for this campaign yet — go back and choose one first.</p>
+          )}
+        </div>
+
+        {creative && (
+          <>
+            <div className="ad-stage-area">
+              {isCarousel ? (
+                <section className="preview-stage" aria-label="Ad preview">
+                  <CarouselEditor
+                    business={business}
+                    creative={creative}
+                    ctaLabel={ctaLabel}
+                    busy={cardActionId !== null}
+                    locked={published}
+                    error={cardError}
+                    onReorder={handleReorderCards}
+                    onRemove={handleRemoveCard}
+                  />
+                </section>
+              ) : (
+                <PreviewStage
+                  business={business}
+                  creatives={selectedCreatives}
+                  index={activeIndex}
+                  onIndexChange={setActiveIndex}
+                  ctaLabels={ctaLabels}
+                  platform={platform}
+                  onPlatformChange={changePlatform}
+                  placementId={placementId}
+                  onPlacementChange={setPlacementId}
+                />
+              )}
+            </div>
+
+            <div className="ad-side-area">
+              <PreviewDetailsPanel
+                platformLabel={platform === 'facebook' ? 'Facebook' : 'Instagram'}
+                placementLabel={isCarousel ? 'Feed (carousel)' : placement.label}
+                ratio={isCarousel ? 'Per card' : (measuredRatio ?? placement.ratio)}
+                position={activeIndex + 1}
+                total={adCount}
+                creative={creative}
+                ctaLabel={ctaLabel}
+              >
+                {published && <p className="field-hint">{ADS_LOCKED_NOTE}</p>}
+
+                {canEditAssets && creative.format === 'SINGLE_IMAGE' && (
+                  <section className="detail-group" aria-labelledby="image-assets-heading">
+                    <h2 id="image-assets-heading" className="detail-heading">
+                      Image assets
+                    </h2>
+                    {feedImageControls}
+                    {businessId &&
+                      campaignId &&
+                      campaign?.productId &&
+                      (['story', 'square'] as const).map((slot) => (
+                        <ExtraAssetSlot
+                          key={slot}
+                          slot={slot}
+                          variant="setting"
+                          businessId={businessId}
+                          campaignId={campaignId}
+                          productId={campaign.productId as string}
+                          creative={creative}
+                          onUpdated={() => void refresh()}
                         />
-                      </button>
-                    ))}
-                  </div>
+                      ))}
+                  </section>
                 )}
-                {imageError && (
-                  <p className="form-error" role="alert">
-                    {imageError}
+
+                {canEditAssets && creative.format === 'SINGLE_VIDEO' && (
+                  <section className="detail-group" aria-labelledby="image-assets-heading">
+                    <h2 id="image-assets-heading" className="detail-heading">
+                      Video assets
+                    </h2>
+                    <CreativeEditor
+                      businessId={businessId ?? ''}
+                      campaignId={campaignId ?? ''}
+                      productId={campaign?.productId ?? null}
+                      creative={creative}
+                      showCopyControls={false}
+                      onUpdated={() => void refresh()}
+                    />
+                  </section>
+                )}
+
+                {isTest && (
+                  <section className="detail-group" aria-labelledby="test-settings-heading">
+                    <h2 id="test-settings-heading" className="detail-heading">
+                      <FlaskIcon />
+                      Test settings
+                    </h2>
+                    <p>{adCount} ads in this test</p>
+                    {!published && (
+                      <>
+                        <p className="field-hint">
+                          Taking an ad out of the test does not delete it; you can add it back from
+                          the ad choices.
+                        </p>
+                        <button
+                          type="button"
+                          className="btn-outline btn-outline-danger test-remove-button"
+                          onClick={() => void handleRemoveFromTest()}
+                          disabled={removingId !== null}
+                        >
+                          {removingId === creative.id ? 'Removing…' : 'Remove from test'}
+                        </button>
+                        {removeError && (
+                          <p className="form-error" role="alert">
+                            {removeError}
+                          </p>
+                        )}
+                      </>
+                    )}
+                  </section>
+                )}
+
+                {canPublish && businessId && <InstagramNote businessId={businessId} />}
+              </PreviewDetailsPanel>
+            </div>
+
+            {!published && (
+              <div className="ad-publish">
+                {canPublish ? (
+                  <>
+                    <label htmlFor="publish-paused" className="ad-publish-paused">
+                      <input
+                        id="publish-paused"
+                        type="checkbox"
+                        checked={publishPaused}
+                        onChange={(event) => handlePublishPausedChange(event.target.checked)}
+                      />
+                      Publish paused (nothing spends until you click Activate)
+                    </label>
+                    {!publishPaused && (
+                      <p className="field-hint">
+                        This sends the campaign to Meta set to run. It can start spending as soon
+                        as Meta approves it.
+                      </p>
+                    )}
+                    <button
+                      type="button"
+                      className="btn-outline btn-gold ad-publish-button"
+                      onClick={() => void handleApproveAndPublish()}
+                      disabled={publishing || publishStatus !== null}
+                    >
+                      {publishStatus
+                        ? describePublishStatus(publishStatus)
+                        : publishing
+                          ? 'Publishing…'
+                          : campaign?.status === 'FAILED'
+                            ? 'Retry publish'
+                            : 'Approve & Publish'}
+                    </button>
+                    {publishError && (
+                      <p className="form-error" role="alert">
+                        {publishError}
+                      </p>
+                    )}
+                  </>
+                ) : (
+                  <p className="field-hint">
+                    This campaign isn&apos;t ready to publish yet. Go back to the ad choices to
+                    finish selecting its ads.
                   </p>
                 )}
               </div>
-            )
-          )}
-          {creative.format === 'SINGLE_IMAGE' &&
-            !published &&
-            selectedCreatives.length <= 1 &&
-            campaign?.productId &&
-            businessId &&
-            campaignId &&
-            _PUBLISHABLE_STATUSES.includes(campaign.status) &&
-            (['story', 'square'] as const).map((slot) => (
-              <ExtraAssetSlot
-                key={slot}
-                slot={slot}
-                businessId={businessId}
-                campaignId={campaignId}
-                productId={campaign.productId as string}
-                creative={creative}
-                onUpdated={() => void refresh()}
-              />
-            ))}
-
-          {canPublish && (
-            <div>
-              {businessId && <InstagramNote businessId={businessId} />}
-              <label htmlFor="publish-paused">
-                <input
-                  id="publish-paused"
-                  type="checkbox"
-                  checked={publishPaused}
-                  onChange={(event) => handlePublishPausedChange(event.target.checked)}
-                />
-                Publish paused (nothing spends until you click Activate)
-              </label>
-              <button
-                type="button"
-                className="btn-outline btn-gold"
-                onClick={() => void handleApproveAndPublish()}
-                disabled={publishing || publishStatus !== null}
-              >
-                {publishStatus
-                  ? describePublishStatus(publishStatus)
-                  : publishing
-                    ? 'Publishing…'
-                    : campaign?.status === 'FAILED'
-                      ? 'Retry publish'
-                      : 'Approve & Publish'}
-              </button>
-              {publishError && (
-                <p className="form-error" role="alert">
-                  {publishError}
-                </p>
-              )}
-            </div>
-          )}
-        </section>
-      )}
+            )}
+          </>
+        )}
+      </div>
     </main>
   )
 }

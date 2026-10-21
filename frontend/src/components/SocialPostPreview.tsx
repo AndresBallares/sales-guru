@@ -19,7 +19,7 @@ function useFeedFrame() {
   return { style, onLoad, className: 'social-post-image-frame social-post-image-frame-feed' }
 }
 
-function FeedImage({ src, alt }: { src: string; alt: string }) {
+export function FeedImage({ src, alt }: { src: string; alt: string }) {
   const frame = useFeedFrame()
   return (
     <div className={frame.className} style={frame.style}>
@@ -33,7 +33,7 @@ function FeedImage({ src, alt }: { src: string; alt: string }) {
 // (the compact "Selected ad" view on BusinessDetailPage) so the two never
 // drift apart the way the old, CampaignsSection-only `.ad-preview` (a
 // plain data card with no logo/page-name/Sponsored chrome at all) did.
-function FeedPost({
+export function FeedPost({
   business,
   creative,
   ctaLabel,
@@ -130,7 +130,7 @@ function FeedPost({
 
 // A video: its thumbnail with a play button; clicking swaps in the real player
 // (so nothing is downloaded until the user asks to watch).
-function VideoFrame({
+export function VideoFrame({
   imageUrl,
   videoUrl,
   alt,
@@ -200,7 +200,7 @@ const STORY_SAFE_TOP_PERCENT = 14
 const STORY_SAFE_BOTTOM_PERCENT = 20
 
 // The story placement: the 9:16 asset full-screen, with the covered areas shaded.
-function StoryPreview({ creative }: { creative: Creative }) {
+export function StoryPreview({ creative }: { creative: Creative }) {
   const isVideo = creative.format === 'SINGLE_VIDEO'
   return (
     <div className="story-preview">
@@ -241,7 +241,7 @@ function StoryPreview({ creative }: { creative: Creative }) {
 
 // The square asset: shown for every placement the feed and story assets don't
 // cover (right column, Marketplace, search, Messenger, Audience Network, ...).
-function SquarePreview({ creative }: { creative: Creative }) {
+export function SquarePreview({ creative }: { creative: Creative }) {
   const isVideo = creative.format === 'SINGLE_VIDEO'
   return (
     <div className="square-preview">
@@ -303,4 +303,20 @@ export function SocialPostPreview(props: {
       )}
     </div>
   )
+}
+
+// The ad's feed asset on its own, at its own shape: a photo, or a video's thumbnail with
+// the play button. Used by the Instagram feed preview, which draws its own post around it.
+export function FeedMedia({ creative }: { creative: Creative }) {
+  if (creative.format === 'SINGLE_VIDEO') {
+    return (
+      <VideoFrame
+        imageUrl={creative.imageUrl}
+        videoUrl={creative.videoUrl}
+        alt={creative.headline}
+        feed
+      />
+    )
+  }
+  return creative.imageUrl ? <FeedImage src={creative.imageUrl} alt={creative.headline} /> : null
 }
