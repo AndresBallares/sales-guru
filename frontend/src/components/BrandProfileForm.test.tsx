@@ -71,7 +71,7 @@ describe('BrandProfileForm — when the option lists cannot load', () => {
   it('loads the choices when Try again works', async () => {
     mockedApi.getOptions.mockRejectedValueOnce(new Error('offline'))
     const user = userEvent.setup()
-    render(<BrandProfileForm businessId="biz-1" onSaved={vi.fn()} />)
+    render(<BrandProfileForm businessId="biz-1" onSaved={vi.fn<(profile: api.BrandProfile) => void>()} />)
 
     await user.click(await screen.findByRole('button', { name: 'Try again' }))
 
