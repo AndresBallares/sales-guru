@@ -12,6 +12,7 @@ import {
 } from '../lib/api'
 import { requiresDestinationUrl } from '../lib/urlValidation'
 import { AudienceForm } from './AudienceForm'
+import { OptionsLoadError } from './OptionsLoadError'
 import { ProductForm } from './ProductForm'
 
 type Step = 'details' | 'product' | 'audience' | 'strategy'
@@ -34,6 +35,8 @@ export function NewCampaignFlow({
   audiences,
   objectiveOptions,
   eventVenueOptions,
+  optionsError,
+  onRetryOptions,
   onCancel,
   onDone,
 }: {
@@ -42,6 +45,9 @@ export function NewCampaignFlow({
   audiences: Audience[]
   objectiveOptions: Option[]
   eventVenueOptions: Option[]
+  // Set when the option lists above could not be loaded, so the form can say so.
+  optionsError?: string | null
+  onRetryOptions?: () => void
   onCancel: () => void
   onDone: () => void
 }) {
@@ -171,6 +177,9 @@ export function NewCampaignFlow({
                 </option>
               ))}
             </select>
+            {optionsError && onRetryOptions && (
+              <OptionsLoadError message={optionsError} onRetry={onRetryOptions} />
+            )}
           </div>
           <div className="field">
             <label htmlFor="new-campaign-event-venue">Event venue</label>

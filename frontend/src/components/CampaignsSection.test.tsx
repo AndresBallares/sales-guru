@@ -455,6 +455,28 @@ function fakeRecommendation(overrides: Partial<api.Recommendation> = {}): api.Re
   }
 }
 
+describe('CampaignsSection, when the option lists cannot load', () => {
+  it('keeps Objective a native select and says why it has no choices, with a way to retry', async () => {
+    mockedApi.listCampaigns.mockResolvedValue([])
+    mockedApi.getOptions.mockRejectedValueOnce(new api.ApiError(401, 'Not authenticated'))
+    const user = userEvent.setup()
+
+    renderCampaigns(<CampaignsSection businessId="biz-1" />)
+
+    const objective = await screen.findByLabelText('Objective')
+    expect(objective.tagName).toBe('SELECT')
+    const field = objective.closest('.field') as HTMLElement
+    expect(await within(field).findByRole('alert')).toHaveTextContent(/not signed in/)
+
+    await user.click(within(field).getByRole('button', { name: 'Try again' }))
+
+    await waitFor(() =>
+      expect(within(objective).getAllByRole('option').length).toBeGreaterThan(0),
+    )
+    expect(within(field).queryByRole('alert')).not.toBeInTheDocument()
+  })
+})
+
 describe('CampaignsSection', () => {
   it('shows the campaigns for a business, with a human-readable objective', async () => {
     mockedApi.listCampaigns.mockResolvedValue([

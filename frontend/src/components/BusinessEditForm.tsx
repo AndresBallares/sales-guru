@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState, type ChangeEvent, type DragEvent, type FormEvent } from 'react'
 import {
   ApiError,
-  getOptions,
   updateBusiness,
   uploadBusinessLogo,
   type Business,
@@ -9,6 +8,8 @@ import {
 } from '../lib/api'
 import { validateImageFile } from '../lib/imageValidation'
 import { SaveIcon } from './icons'
+import { OptionsLoadError } from './OptionsLoadError'
+import { useOptions } from '../lib/useOptions'
 
 // Mirrors the backend's own cap (app/schemas/business.py) — description is
 // pasted verbatim into the Strategist/Creative Agent prompts, so a pasted-in
@@ -35,7 +36,8 @@ export function BusinessEditForm({
   const [name, setName] = useState(business.name)
   const [website, setWebsite] = useState(business.website ?? '')
   const [industry, setIndustry] = useState(business.industry ?? '')
-  const [industries, setIndustries] = useState<Option[]>([])
+  const { options, error: optionsError, retry: retryOptions } = useOptions()
+  const industries: Option[] = options?.industries ?? []
   const [location, setLocation] = useState(business.location ?? '')
   const [description, setDescription] = useState(business.description ?? '')
   const [formError, setFormError] = useState<string | null>(null)
@@ -54,12 +56,6 @@ export function BusinessEditForm({
   const logoInputRef = useRef<HTMLInputElement>(null)
 
   const displayedLogoUrl = stagedLogoPreviewUrl ?? business.logoUrl
-
-  useEffect(() => {
-    getOptions()
-      .then((options) => setIndustries(options.industries))
-      .catch(() => setIndustries([]))
-  }, [])
 
   useEffect(() => {
     // Revoke the staged logo's object URL when the form unmounts —
@@ -263,6 +259,7 @@ export function BusinessEditForm({
             </option>
           ))}
         </select>
+        {optionsError && <OptionsLoadError message={optionsError} onRetry={retryOptions} />}
       </div>
       <div className="field">
         <label htmlFor="business-location">Location</label>

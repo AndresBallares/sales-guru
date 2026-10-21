@@ -982,6 +982,84 @@ describe('DashboardPage', () => {
     })
   })
 
+  describe('when the option lists cannot load (for example an iPhone that lost its session)', () => {
+    const acme: api.Business = {
+      id: 'biz-1',
+      name: 'Acme Widgets',
+      website: null,
+      industry: null,
+      location: null,
+      logoUrl: null,
+      description: null,
+    }
+
+    it('keeps the Industry dropdown a native select and says why it is empty, instead of staying silent', async () => {
+      mockedApi.listBusinesses.mockResolvedValue([acme])
+      mockedApi.getOptions.mockRejectedValue(new api.ApiError(401, 'Not authenticated'))
+      const user = userEvent.setup()
+
+      renderDashboard()
+      await screen.findByText('Acme Widgets')
+      await user.click(screen.getByRole('button', { name: 'Add Business' }))
+
+      const industry = screen.getByLabelText('Industry')
+      expect(industry.tagName).toBe('SELECT')
+      expect(within(industry).getAllByRole('option')).toHaveLength(1)
+      // The message sits with the dropdown it explains.
+      const field = industry.closest('.field') as HTMLElement
+      expect(await within(field).findByRole('alert')).toHaveTextContent(/not signed in/)
+    })
+
+    it('fills the Industry list once Try again succeeds', async () => {
+      mockedApi.listBusinesses.mockResolvedValue([acme])
+      mockedApi.getOptions.mockRejectedValueOnce(new api.ApiError(401, 'Not authenticated'))
+      const user = userEvent.setup()
+
+      renderDashboard()
+      await screen.findByText('Acme Widgets')
+      await user.click(screen.getByRole('button', { name: 'Add Business' }))
+      const field = screen.getByLabelText('Industry').closest('.field') as HTMLElement
+      await user.click(await within(field).findByRole('button', { name: 'Try again' }))
+
+      await waitFor(() =>
+        expect(within(screen.getByLabelText('Industry')).getAllByRole('option').length).toBe(
+          INDUSTRY_OPTIONS.length + 1,
+        ),
+      )
+      expect(within(field).queryByRole('button', { name: 'Try again' })).not.toBeInTheDocument()
+    })
+
+    it('says so in the edit form too', async () => {
+      mockedApi.listBusinesses.mockResolvedValue([acme])
+      mockedApi.getOptions.mockRejectedValue(new Error('offline'))
+      const user = userEvent.setup()
+
+      renderDashboard()
+      await screen.findByText('Acme Widgets')
+      await user.click(screen.getByRole('button', { name: 'Edit Business' }))
+
+      const panel = within(await screen.findByRole('region', { name: 'Edit business' }))
+      const field = panel.getByLabelText('Industry').closest('.field') as HTMLElement
+      expect(await within(field).findByRole('alert')).toHaveTextContent(/Check your connection/)
+      expect(panel.getByLabelText('Industry').tagName).toBe('SELECT')
+    })
+
+    it('shows no message when the lists load', async () => {
+      mockedApi.listBusinesses.mockResolvedValue([acme])
+      const user = userEvent.setup()
+
+      renderDashboard()
+      await screen.findByText('Acme Widgets')
+      await user.click(screen.getByRole('button', { name: 'Add Business' }))
+
+      await waitFor(() =>
+        expect(within(screen.getByLabelText('Industry')).getAllByRole('option').length).toBeGreaterThan(1),
+      )
+      const field = screen.getByLabelText('Industry').closest('.field') as HTMLElement
+      expect(within(field).queryByRole('alert')).not.toBeInTheDocument()
+    })
+  })
+
   describe('delete business', () => {
     const acme: api.Business = {
       id: 'biz-1',

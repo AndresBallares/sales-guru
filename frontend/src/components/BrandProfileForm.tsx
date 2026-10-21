@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { SaveIcon } from './icons'
+import { OptionsLoadError } from './OptionsLoadError'
+import { useOptions } from '../lib/useOptions'
 import {
   ApiError,
   createBrandProfile,
-  getOptions,
   updateBrandProfile,
   type BrandProfile,
   type Option,
@@ -88,20 +89,9 @@ export function BrandProfileForm({
   const [formError, setFormError] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
 
-  const [voiceTraitOptions, setVoiceTraitOptions] = useState<Option[]>([])
-  const [pricePositioningOptions, setPricePositioningOptions] = useState<Option[]>([])
-
-  useEffect(() => {
-    getOptions()
-      .then((options) => {
-        setVoiceTraitOptions(options.voiceTraits)
-        setPricePositioningOptions(options.pricePositionings)
-      })
-      .catch(() => {
-        setVoiceTraitOptions([])
-        setPricePositioningOptions([])
-      })
-  }, [])
+  const { options, error: optionsError, retry: retryOptions } = useOptions()
+  const voiceTraitOptions: Option[] = options?.voiceTraits ?? []
+  const pricePositioningOptions: Option[] = options?.pricePositionings ?? []
 
   function toggleVoiceTrait(value: string) {
     setVoiceTraits((prev) =>
@@ -224,6 +214,7 @@ export function BrandProfileForm({
             </option>
           ))}
         </select>
+        {optionsError && <OptionsLoadError message={optionsError} onRetry={retryOptions} />}
       </div>
       <div className="field">
         <label htmlFor="brand-phrases">
