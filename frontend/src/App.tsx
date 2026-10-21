@@ -2,7 +2,7 @@ import { BrowserRouter, Route, Routes } from 'react-router-dom'
 import { GuestRoute } from './components/GuestRoute'
 import { ProtectedRoute } from './components/ProtectedRoute'
 import { SiteFooter } from './components/SiteFooter'
-import { ThemeToggle } from './components/ThemeToggle'
+import { GlobalTopbar } from './components/GlobalTopbar'
 import { AuthProvider } from './context/AuthContext'
 import { ThemeProvider } from './context/ThemeContext'
 import { AdPreviewPage } from './pages/AdPreviewPage'
@@ -21,9 +21,7 @@ function App() {
     <ThemeProvider>
       <BrowserRouter>
         <AuthProvider>
-          <div className="global-topbar">
-            <ThemeToggle />
-          </div>
+          <GlobalTopbar />
           <Routes>
             <Route element={<GuestRoute />}>
               <Route path="/login" element={<LoginPage />} />

@@ -282,26 +282,72 @@ main {
 }
 
 .dashboard-header {
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-areas:
+    'logo actions'
+    'who who';
   align-items: center;
-  justify-content: space-between;
-  gap: 1rem;
-  flex-wrap: wrap;
+  gap: 0.5rem 1rem;
   padding-bottom: 1.5rem;
   border-bottom: 1px solid var(--border);
   margin-bottom: 0.5rem;
 }
 
 .dashboard-header h1 {
+  grid-area: logo;
+  margin: 0;
+  min-width: 0;
   background: linear-gradient(135deg, var(--text) 0%, var(--primary) 140%);
   -webkit-background-clip: text;
   background-clip: text;
   color: transparent;
 }
 
-.dashboard-header p {
-  flex: 1;
+.dashboard-header-actions {
+  grid-area: actions;
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+/* Small and muted, on its own row on a phone so a long email never meets Log out. */
+.dashboard-signed-in {
+  grid-area: who;
+  display: flex;
+  flex-direction: column;
   min-width: 0;
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 0.85rem;
+}
+
+.dashboard-email {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: inherit;
+  text-decoration: none;
+}
+
+@media (min-width: 721px) {
+  .dashboard-header {
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    grid-template-areas: 'logo who actions';
+    gap: 1rem 1.25rem;
+  }
+
+  .dashboard-signed-in {
+    flex-direction: row;
+    align-items: baseline;
+    gap: 0.35rem;
+    font-size: 0.95rem;
+  }
+
+  .dashboard-signed-in > span:first-child {
+    flex: none;
+    white-space: nowrap;
+  }
 }
 
 .business-detail > .back-button:first-child {
@@ -776,7 +822,7 @@ button:disabled {
    Attach, Approve, etc.) deliberately do NOT get this treatment (confirmed
    2026-09-08) — they use the same solid color-background/white-text style
    as the primary "Save Business" pill everywhere else on the site. */
-.dashboard-header button {
+.dashboard-header .logout-button {
   background: transparent;
   color: var(--text-secondary);
   border: 1px solid var(--border-strong);
@@ -784,7 +830,7 @@ button:disabled {
   font-weight: 500;
 }
 
-.dashboard-header button:hover:not(:disabled) {
+.dashboard-header .logout-button:hover:not(:disabled) {
   background: var(--surface-hover);
   border-color: var(--border-hover);
   color: var(--text);
@@ -5058,4 +5104,73 @@ output.preview-missing {
 
 .ig-post .ig-post-sponsored {
   color: #737373;
+}
+
+/* Company Information: Add, Edit and Delete as one group of equal buttons. */
+.company-actions > button {
+  min-height: 48px;
+}
+
+.company-actions .section-action-button {
+  align-self: auto;
+  margin-left: 0;
+}
+
+/* The business list: the name, then the industry and place as one muted line. */
+.business-item {
+  flex-wrap: wrap;
+  gap: 0.2rem 1rem;
+}
+
+.business-item-name {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-weight: 600;
+}
+
+.business-item-meta {
+  min-width: 0;
+  color: var(--text-secondary);
+  font-size: 0.9rem;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 720px) {
+  .company-actions {
+    flex-direction: column;
+    align-items: stretch;
+    flex-wrap: nowrap;
+    gap: 0.75rem;
+  }
+
+  .company-actions > button {
+    width: 100%;
+    justify-content: center;
+  }
+
+  .company-actions > section {
+    flex-basis: auto;
+  }
+
+  .business-item {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.15rem;
+  }
+}
+
+/* The narrowest phones: keep the logo on one line next to the toggle and Log out. */
+@media (max-width: 380px) {
+  .dashboard-header h1 {
+    font-size: 1.55rem;
+    white-space: nowrap;
+  }
+
+  .dashboard-header-actions {
+    gap: 0.5rem;
+  }
+
+  .dashboard-header .logout-button {
+    padding: 0.4rem 0.7rem;
+  }
 }

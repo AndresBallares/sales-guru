@@ -4,6 +4,7 @@ import { MemoryRouter, Route, Routes, useParams } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { DashboardPage } from './DashboardPage'
 import { AuthProvider } from '../context/AuthContext'
+import { ThemeProvider } from '../context/ThemeContext'
 import * as api from '../lib/api'
 
 vi.mock('../lib/api', async (importOriginal) => {
@@ -71,14 +72,16 @@ function BusinessStub() {
 
 function renderDashboard(entry = '/') {
   render(
-    <MemoryRouter initialEntries={[entry]}>
-      <AuthProvider>
-        <Routes>
-          <Route path="/" element={<DashboardPage />} />
-          <Route path="/businesses/:businessId" element={<BusinessStub />} />
-        </Routes>
-      </AuthProvider>
-    </MemoryRouter>,
+    <ThemeProvider>
+      <MemoryRouter initialEntries={[entry]}>
+        <AuthProvider>
+          <Routes>
+            <Route path="/" element={<DashboardPage />} />
+            <Route path="/businesses/:businessId" element={<BusinessStub />} />
+          </Routes>
+        </AuthProvider>
+      </MemoryRouter>
+    </ThemeProvider>,
   )
 }
 
@@ -118,21 +121,99 @@ describe('DashboardPage', () => {
 
     await waitFor(() => expect(screen.getByText(/owner@example.com/)).toBeInTheDocument())
     expect(await screen.findByText('Acme')).toBeInTheDocument()
-    // The friendly label, not the raw enum value — from the fetched
-    // industries list, not hard-coded. Matched with the "— " prefix to
-    // disambiguate from the same label inside the create-form's <option>.
-    expect(await screen.findByText(/— Fashion \/ Jewelry/)).toBeInTheDocument()
+    // The friendly label, not the raw enum value (from the fetched industries list, not
+    // hard-coded), with the place after it on the same muted line under the name.
+    expect(await screen.findByText('Fashion / Jewelry · CDMX')).toHaveClass('business-item-meta')
+  })
+
+  describe('the business list', () => {
+    const biz = (extra: Partial<api.Business>): api.Business => ({
+      id: 'biz-1',
+      name: 'VENZI JEWELRY',
+      website: null,
+      industry: null,
+      location: null,
+      logoUrl: null,
+      description: null,
+      ...extra,
+    })
+
+    it('puts the name first and the industry and place together on one muted line beneath it', async () => {
+      mockedApi.listBusinesses.mockResolvedValue([
+        biz({ industry: 'FASHION_JEWELRY', location: 'New York' }),
+      ])
+
+      renderDashboard()
+
+      const item = (await screen.findByRole('link', { name: 'VENZI JEWELRY' })).closest('li') as HTMLElement
+      expect(item.children).toHaveLength(2)
+      expect(item.children[0]).toHaveTextContent('VENZI JEWELRY')
+      expect(item.children[1]).toHaveTextContent('Fashion / Jewelry · New York')
+    })
+
+    it('shows just the place, or just the industry, without a stray separator', async () => {
+      mockedApi.listBusinesses.mockResolvedValue([
+        biz({ id: 'a', name: 'Only place', location: 'Austin' }),
+        biz({ id: 'b', name: 'Only industry', industry: 'FASHION_JEWELRY' }),
+        biz({ id: 'c', name: 'Neither' }),
+      ])
+
+      renderDashboard()
+
+      const place = (await screen.findByRole('link', { name: 'Only place' })).closest('li') as HTMLElement
+      expect(place.children[1]).toHaveTextContent(/^Austin$/)
+      const industry = screen.getByRole('link', { name: 'Only industry' }).closest('li') as HTMLElement
+      expect(industry.children[1]).toHaveTextContent(/^Fashion \/ Jewelry$/)
+      const neither = screen.getByRole('link', { name: 'Neither' }).closest('li') as HTMLElement
+      expect(neither.children).toHaveLength(1)
+    })
+  })
+
+  describe('the page header', () => {
+    it('has the logo, then the theme toggle and Log out together on the right, and one theme toggle on the page', async () => {
+      mockedApi.listBusinesses.mockResolvedValue([])
+
+      renderDashboard()
+
+      const header = (await screen.findByRole('heading', { name: 'Sales Guru' })).closest('header') as HTMLElement
+      const actions = header.querySelector('.dashboard-header-actions') as HTMLElement
+      expect(within(actions).getByRole('button', { name: /Switch to (dark|light) mode/ })).toBeInTheDocument()
+      expect(within(actions).getByRole('button', { name: 'Log out' })).toBeInTheDocument()
+      // The global top bar steps aside, so there is exactly one toggle.
+      expect(screen.getAllByRole('button', { name: /Switch to (dark|light) mode/ })).toHaveLength(1)
+    })
+
+    it('shows "Signed in as" with the email truncatable and its full text on hover', async () => {
+      mockedApi.listBusinesses.mockResolvedValue([])
+
+      renderDashboard()
+
+      const email = await screen.findByText('owner@example.com')
+      expect(email).toHaveClass('dashboard-email')
+      expect(email).toHaveAttribute('title', 'owner@example.com')
+      expect(email.closest('p')).toHaveTextContent('Signed in as owner@example.com')
+      expect(email.closest('a')).toBeNull()
+    })
   })
 
   describe('the Add Business button', () => {
-    it('sits in the Company Information heading row with a plus icon', async () => {
+    it('leads the Company Information button group, with a plus icon', async () => {
       mockedApi.listBusinesses.mockResolvedValue([])
 
       renderDashboard()
 
       const button = await screen.findByRole('button', { name: 'Add Business' })
-      const header = button.closest('.section-header') as HTMLElement
-      expect(within(header).getByRole('heading', { name: 'Company Information' })).toBeInTheDocument()
+      // The heading sits alone; Add Business leads the same button group as Edit and Delete.
+      expect(screen.getByRole('heading', { name: 'Company Information' })).toBeInTheDocument()
+      const group = button.closest('.company-actions') as HTMLElement
+      const buttons = within(group).getAllByRole('button')
+      // (An account with no business yet sees the form, so Save sits second.)
+      expect(buttons.map((b) => b.textContent)).toEqual([
+        'Add Business',
+        'Save Business',
+        'Edit Business',
+        'Delete Business',
+      ])
       expect(button).toHaveClass('section-action-button')
       expect(button.firstElementChild?.tagName.toLowerCase()).toBe('svg')
       expect(button.firstElementChild).toHaveAttribute('aria-hidden', 'true')
@@ -437,7 +518,7 @@ describe('DashboardPage', () => {
 
       renderDashboard()
 
-      const brandHeading = await screen.findByRole('heading', { name: 'Brand' })
+      const brandHeading = await screen.findByRole('heading', { name: 'Brand DNA' })
       const company = screen.getByRole('heading', { name: 'Company Information' })
       expect(
         company.compareDocumentPosition(brandHeading) & Node.DOCUMENT_POSITION_FOLLOWING,

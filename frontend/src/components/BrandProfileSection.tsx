@@ -64,7 +64,7 @@ export function BrandProfileSection({
   if (loading) {
     return (
       <section id="brand">
-        <h2>Brand</h2>
+        <h2>Brand DNA</h2>
         {headerExtra}
         <p>Loading…</p>
       </section>
@@ -74,7 +74,7 @@ export function BrandProfileSection({
   if (error) {
     return (
       <section id="brand">
-        <h2>Brand</h2>
+        <h2>Brand DNA</h2>
         {headerExtra}
         <p className="form-error" role="alert">
           {error}
@@ -86,7 +86,7 @@ export function BrandProfileSection({
   if (profile && !editing) {
     return (
       <section id="brand">
-        <h2>Brand</h2>
+        <h2>Brand DNA</h2>
         {headerExtra}
         <p>{profile.description}</p>
         <button type="button" className="btn-outline" onClick={() => setEditing(true)}>
@@ -100,7 +100,7 @@ export function BrandProfileSection({
 
   return (
     <section id="brand">
-      <h2>Brand</h2>
+      <h2>Brand DNA</h2>
       {headerExtra}
       <p>
         A couple of quick questions so the AI writes strategy and ad copy in

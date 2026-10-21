@@ -53,7 +53,7 @@ export function BrandBusinessSection({
   if (businesses.length === 0) {
     return (
       <section>
-        <h2>Brand</h2>
+        <h2>Brand DNA</h2>
         <p>Add a business above, then set up its brand profile here.</p>
       </section>
     )
