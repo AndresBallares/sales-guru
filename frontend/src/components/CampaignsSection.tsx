@@ -50,7 +50,6 @@ import {
   deleteCampaign,
   getBrandProfile,
   getBusiness,
-  getOptions,
   getStrategy,
   restoreCampaign,
   listAudiences,
@@ -79,7 +78,6 @@ import {
   type CreativeFormat,
   type Metric,
   type Objective,
-  type OptionsResponse,
   type Product,
   type ProductImage,
   type Recommendation,
@@ -91,6 +89,8 @@ import { InstagramNote } from './InstagramNote'
 import { clearPublishPaused, getPublishPaused, setPublishPaused } from '../lib/publishPaused'
 import { requiresDestinationUrl } from '../lib/urlValidation'
 import { AudienceForm } from './AudienceForm'
+import { OptionsLoadError } from './OptionsLoadError'
+import { useOptions } from '../lib/useOptions'
 import { NewCampaignFlow } from './NewCampaignFlow'
 import { ProductForm } from './ProductForm'
 import { SocialPostPreview } from './SocialPostPreview'
@@ -148,7 +148,7 @@ export function CampaignsSection({
   // action types, event venues) is static, so there's no reason to
   // re-fetch it after every campaign mutation the way campaigns/products/
   // audiences need to be.
-  const [options, setOptions] = useState<OptionsResponse | null>(null)
+  const { options, error: optionsError, retry: retryOptions } = useOptions()
 
   // The manual fallback for the readiness checklist below — reuses
   // handleAttachToCampaign above for the actual swap.
@@ -409,12 +409,6 @@ export function CampaignsSection({
   useEffect(() => {
     void refresh()
   }, [refresh])
-
-  useEffect(() => {
-    getOptions()
-      .then(setOptions)
-      .catch(() => setOptions(null))
-  }, [])
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
@@ -1040,6 +1034,8 @@ export function CampaignsSection({
             audiences={audiences}
             objectiveOptions={objectiveOptions}
             eventVenueOptions={eventVenueOptions}
+            optionsError={optionsError}
+            onRetryOptions={retryOptions}
             onCancel={handleCancelCreate}
             onDone={() => {
               setShowCreateForm(false)
@@ -2810,6 +2806,7 @@ export function CampaignsSection({
                   </option>
                 ))}
               </select>
+              {optionsError && <OptionsLoadError message={optionsError} onRetry={retryOptions} />}
             </div>
             <div className="field">
               <label htmlFor="event-venue">Event venue</label>

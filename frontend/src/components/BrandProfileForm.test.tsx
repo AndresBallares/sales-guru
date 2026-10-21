@@ -56,6 +56,30 @@ beforeEach(() => {
   mockedApi.getOptions.mockResolvedValue(ALL_OPTIONS)
 })
 
+describe('BrandProfileForm — when the option lists cannot load', () => {
+  it('keeps Price positioning a native select and says why it is empty', async () => {
+    mockedApi.getOptions.mockRejectedValue(new api.ApiError(401, 'Not authenticated'))
+
+    render(<BrandProfileForm businessId="biz-1" onSaved={vi.fn<(profile: api.BrandProfile) => void>()} />)
+
+    const select = screen.getByLabelText('Price positioning')
+    expect(select.tagName).toBe('SELECT')
+    expect(await screen.findByRole('alert')).toHaveTextContent(/not signed in/)
+    expect(screen.queryByLabelText('Warm')).not.toBeInTheDocument()
+  })
+
+  it('loads the choices when Try again works', async () => {
+    mockedApi.getOptions.mockRejectedValueOnce(new Error('offline'))
+    const user = userEvent.setup()
+    render(<BrandProfileForm businessId="biz-1" onSaved={vi.fn()} />)
+
+    await user.click(await screen.findByRole('button', { name: 'Try again' }))
+
+    expect(await screen.findByLabelText('Warm')).toBeInTheDocument()
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+  })
+})
+
 describe('BrandProfileForm — create mode', () => {
   it('creates a brand profile with the required fields', async () => {
     mockedApi.createBrandProfile.mockResolvedValue(profile)

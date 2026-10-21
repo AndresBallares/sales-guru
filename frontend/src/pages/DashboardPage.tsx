@@ -11,7 +11,6 @@ import { useAuth } from '../context/AuthContext'
 import {
   ApiError,
   createBusiness,
-  getOptions,
   listBusinesses,
   uploadBusinessLogo,
   type Business,
@@ -21,6 +20,8 @@ import { BrandBusinessSection, type BrandFocusRequest } from '../components/Bran
 import { DeleteBusinessSection } from '../components/DeleteBusinessSection'
 import { EditBusinessSection } from '../components/EditBusinessSection'
 import { PlusIcon, SaveIcon } from '../components/icons'
+import { OptionsLoadError } from '../components/OptionsLoadError'
+import { useOptions } from '../lib/useOptions'
 import { validateImageFile } from '../lib/imageValidation'
 
 // Mirrors the backend's own cap (app/schemas/business.py) — description is
@@ -44,7 +45,8 @@ export function DashboardPage() {
   // this list can never drift from app/schemas/business.py's fixed set
   // (confirmed 2026-09-08 — every fixed option list in the app now
   // follows this same fetch-from-backend pattern, EVENT_VENUES included).
-  const [industries, setIndustries] = useState<Option[]>([])
+  const { options, error: optionsError, retry: retryOptions } = useOptions()
+  const industries: Option[] = options?.industries ?? []
 
   const [name, setName] = useState('')
   const [website, setWebsite] = useState('')
@@ -123,9 +125,6 @@ export function DashboardPage() {
 
   useEffect(() => {
     void refreshBusinesses()
-    getOptions()
-      .then((options) => setIndustries(options.industries))
-      .catch(() => setIndustries([]))
   }, [])
 
   useEffect(() => {
@@ -406,6 +405,7 @@ export function DashboardPage() {
                     </option>
                   ))}
                 </select>
+                {optionsError && <OptionsLoadError message={optionsError} onRetry={retryOptions} />}
               </div>
               <div className="field">
                 <label htmlFor="location">Location</label>

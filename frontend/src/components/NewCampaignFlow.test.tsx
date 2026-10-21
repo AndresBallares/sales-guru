@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react'
+import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { NewCampaignFlow } from './NewCampaignFlow'
@@ -90,6 +90,41 @@ function renderFlow({
 
 beforeEach(() => {
   vi.resetAllMocks()
+})
+
+describe('NewCampaignFlow, when the option lists could not load', () => {
+  it('says so under Objective and offers a retry', async () => {
+    const onRetry = vi.fn<() => void>()
+    const user = userEvent.setup()
+    render(
+      <NewCampaignFlow
+        businessId="biz-1"
+        products={[]}
+        audiences={[]}
+        objectiveOptions={[]}
+        eventVenueOptions={[]}
+        optionsError="This list couldn't load. Check your connection and try again."
+        onRetryOptions={onRetry}
+        onCancel={vi.fn<() => void>()}
+        onDone={vi.fn<() => void>()}
+      />,
+    )
+
+    const objective = screen.getByLabelText('Objective')
+    expect(objective.tagName).toBe('SELECT')
+    const field = objective.closest('.field') as HTMLElement
+    expect(within(field).getByRole('alert')).toHaveTextContent(/couldn't load/)
+
+    await user.click(within(field).getByRole('button', { name: 'Try again' }))
+
+    expect(onRetry).toHaveBeenCalledTimes(1)
+  })
+
+  it('shows nothing extra when the lists loaded', () => {
+    renderFlow()
+
+    expect(screen.queryByRole('button', { name: 'Try again' })).not.toBeInTheDocument()
+  })
 })
 
 describe('NewCampaignFlow', () => {
