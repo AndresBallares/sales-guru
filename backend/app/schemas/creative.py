@@ -8,6 +8,7 @@ from pydantic import Field, ValidationInfo, field_validator, model_validator
 
 from app.schemas.base import CamelCaseModel
 from app.schemas.campaign import Objective
+from app.services.ad_quality import copy_field_problems
 
 CtaType = Literal[
     "SHOP_NOW",
@@ -204,6 +205,30 @@ class GeneratedCreativeVariant(CamelCaseModel):
             )
         if overruns:
             raise ValueError("; ".join(overruns))
+        return self
+
+    @model_validator(mode="after")
+    def _check_no_engagement_bait(self) -> Self:
+        """No engagement bait or withheld-information phrasing in any copy slot.
+
+        Unconditional, like the length limits: it is a fact about the copy
+        itself, so it also holds during _coerce_batch's structural re-check
+        and a batch that still has it after the retry fails rather than being
+        stored. The message names the phrases so the retry prompt can say
+        exactly what to remove.
+        """
+        problems = [
+            *copy_field_problems("headline", self.headline),
+            *copy_field_problems("primary text", self.body_text),
+            *copy_field_problems("description", self.description),
+        ]
+        for position, card in enumerate(self.cards or [], start=1):
+            problems += copy_field_problems(f"card {position} headline", card.headline)
+            problems += copy_field_problems(
+                f"card {position} description", card.description
+            )
+        if problems:
+            raise ValueError("; ".join(problems))
         return self
 
     @model_validator(mode="after")

@@ -1131,7 +1131,11 @@ def test_build_prompt_requires_a_scroll_stopping_hook_in_the_first_line() -> Non
 
     assert "Ad quality rules" in prompt
     assert "first line" in prompt
-    assert "question, a bold claim, a specific benefit, or social proof" in prompt
+    assert (
+        "question, a specific, concrete claim, a specific benefit, or social proof"
+        in prompt
+    )
+    assert "bold claim" not in prompt
     assert "125" in prompt
 
 
@@ -1596,3 +1600,68 @@ async def test_fake_mode_gives_a_creative_test_its_structured_angles(
         get_settings.cache_clear()
 
     assert variants[0].creative_angle == "Self-purchaser – Everyday wear"
+
+
+# ── Meta ad-quality grounding and the banned-phrase guard ──
+
+
+def test_build_prompt_carries_the_meta_ad_quality_rules() -> None:
+    prompt = creative._build_prompt(
+        _fake_business(industry="FASHION_JEWELRY"), _fake_product(), _FAKE_STRATEGY
+    )
+
+    assert "Meta ad quality rules (apply to every variant):" in prompt
+    assert "No engagement bait" in prompt
+    assert "Never withhold information" in prompt
+    assert "18k gold, hand-set" in prompt
+    # After the existing quality rules, before the closing instructions.
+    assert prompt.index("Ad quality rules (apply") < prompt.index("Meta ad quality")
+    assert prompt.index("Meta ad quality") < prompt.index("Business website")
+
+
+def test_build_prompt_has_no_jewelry_line_for_another_industry() -> None:
+    prompt = creative._build_prompt(
+        _fake_business(industry="RESTAURANT"), _fake_product(), _FAKE_STRATEGY
+    )
+
+    assert "Meta ad quality rules" in prompt
+    assert "18k gold" not in prompt
+
+
+def _bait_batch() -> dict[str, Any]:
+    batch = _batch_with("SHOP_NOW")
+    batch["variants"][2]["bodyText"] = "Tag a friend who loves gold."
+    return batch
+
+
+@pytest.mark.asyncio
+async def test_generate_creatives_regenerates_copy_with_engagement_bait(
+    anthropic_api_key: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Bait in the first response is sent back, named, for one regeneration."""
+    create = _sequenced_client(monkeypatch, _bait_batch(), _batch_with("SHOP_NOW"))
+
+    result = await creative.generate_creatives(
+        business=_fake_business(), product=_fake_product(), strategy=_FAKE_STRATEGY
+    )
+
+    assert create.call_count == 2
+    retry_text = create.call_args.kwargs["messages"][0]["content"]
+    assert "primary text contains 'tag a'" in retry_text
+    assert all("tag a" not in v.body_text.lower() for v in result)
+
+
+@pytest.mark.asyncio
+async def test_generate_creatives_fails_rather_than_store_persistent_bait(
+    anthropic_api_key: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The CTA/length coercion can't fix bait, so a second bait response fails
+    generation instead of saving copy the publish guard would only block later."""
+    create = _sequenced_client(monkeypatch, _bait_batch(), _bait_batch())
+
+    with pytest.raises(creative.CreativeAgentError, match="engagement bait"):
+        await creative.generate_creatives(
+            business=_fake_business(), product=_fake_product(), strategy=_FAKE_STRATEGY
+        )
+
+    assert create.call_count == 2
