@@ -4384,3 +4384,341 @@ async def test_approving_the_saturation_response_cannot_create_anything_yet(
         _run(client, optimization_jobs.apply_recommendation, rec)
 
     assert (await _saturation_recs(campaign_id))[0].status == "PENDING"
+
+
+# --- Budget level: one campaign budget (CBO) vs a budget on each ad set -------
+
+
+async def _add_ad_sets(campaign_id: str, count: int, *, budget: float = 0.0) -> None:
+    """Add `count` published ad sets (packs) to a campaign, with this budget."""
+    seeder = Prisma()
+    await seeder.connect()
+    try:
+        for n in range(count):
+            await seeder.adset.create(
+                data={
+                    "campaignId": campaign_id,
+                    "name": f"Pack {n + 2}",
+                    "budget": budget,
+                    "optimizationGoal": "OFFSITE_CONVERSIONS",
+                    "status": "LIVE",
+                    "metaAdSetId": f"meta_pack_{n + 2}",
+                }
+            )
+    finally:
+        await seeder.disconnect()
+
+
+async def _make_campaign_budget(campaign_id: str, *, packs: int = 2) -> None:
+    """Turn a campaign into a CBO one with `packs` more ad sets that hold no budget."""
+    seeder = Prisma()
+    await seeder.connect()
+    try:
+        await seeder.campaign.update(
+            where={"id": campaign_id}, data={"budgetLevel": "CAMPAIGN"}
+        )
+    finally:
+        await seeder.disconnect()
+    await _add_ad_sets(campaign_id, packs)
+
+
+async def _seed_baseline(campaign_id: str, *, days_ago: float) -> None:
+    await _seed_metric(
+        campaign_id,
+        fetched_at=datetime.now(UTC) - timedelta(days=days_ago),
+        spend=0.0,
+        conversions=0,
+        purchases=0,
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_single_ad_set_campaign_flags_against_its_ad_sets_own_budget(
+    client: TestClient, mock_services: dict[str, AsyncMock]
+) -> None:
+    """Unchanged for every existing campaign: the daily flag reads the ad set's
+    budget, not the plan's. The Optimizer raised this ad set to $40 (plan: $25),
+    so $45 in a day is under 1.25 x $40 and raises nothing."""
+    business_id, campaign_id = _live_campaign(client)
+    seeder = Prisma()
+    await seeder.connect()
+    try:
+        await seeder.adset.update_many(
+            where={"campaignId": campaign_id}, data={"budget": 40.0}
+        )
+    finally:
+        await seeder.disconnect()
+    await _seed_baseline(campaign_id, days_ago=1.05)
+    mock_services["insights"].return_value = CampaignInsights(
+        impressions=1000, clicks=100, spend=45.0, conversions=2
+    )
+
+    _run(client, optimization_jobs.collect_metrics_for_all_live_campaigns)
+
+    assert _campaign_status(client, business_id, campaign_id)["dailySpendFlag"] is None
+
+
+@pytest.mark.asyncio
+async def test_a_campaign_budget_flags_against_the_campaign_budget_not_ad_set_budgets(
+    client: TestClient, mock_services: dict[str, AsyncMock]
+) -> None:
+    """Three ad sets holding no budget of their own used to switch the flag off.
+    Now the day's campaign spend ($40) is judged against the one campaign
+    budget (the plan's $25/day, so the line is $31.25)."""
+    business_id, campaign_id = _live_campaign(client)
+    await _make_campaign_budget(campaign_id)
+    await _seed_baseline(campaign_id, days_ago=1.05)
+    mock_services["insights"].return_value = CampaignInsights(
+        impressions=1000, clicks=100, spend=40.0, conversions=2
+    )
+
+    _run(client, optimization_jobs.collect_metrics_for_all_live_campaigns)
+
+    campaign = _campaign_status(client, business_id, campaign_id)
+    assert campaign["status"] == "LIVE"
+    flag = str(campaign["dailySpendFlag"])
+    assert "1.25x" in flag
+    assert "$40.00 vs $25.00/day budget" in flag
+
+
+@pytest.mark.asyncio
+async def test_a_campaign_budget_stays_clear_within_budget_and_clears_a_stale_flag(
+    client: TestClient, mock_services: dict[str, AsyncMock]
+) -> None:
+    business_id, campaign_id = _live_campaign(client)
+    await _make_campaign_budget(campaign_id)
+    seeder = Prisma()
+    await seeder.connect()
+    try:
+        await seeder.campaign.update(
+            where={"id": campaign_id}, data={"dailySpendFlag": "stale"}
+        )
+    finally:
+        await seeder.disconnect()
+    await _seed_baseline(campaign_id, days_ago=1.05)
+    mock_services["insights"].return_value = CampaignInsights(
+        impressions=1000, clicks=100, spend=30.0, conversions=2
+    )
+
+    _run(client, optimization_jobs.collect_metrics_for_all_live_campaigns)
+
+    assert _campaign_status(client, business_id, campaign_id)["dailySpendFlag"] is None
+
+
+@pytest.mark.asyncio
+async def test_a_campaign_budget_without_history_or_strategy_raises_no_flag(
+    client: TestClient, mock_services: dict[str, AsyncMock]
+) -> None:
+    """One snapshot is no day's spend; a missing strategy is no budget to judge by."""
+    business_id, campaign_id = _live_campaign(client)
+    await _make_campaign_budget(campaign_id)
+    mock_services["insights"].return_value = CampaignInsights(
+        impressions=1000, clicks=100, spend=400.0, conversions=2, purchases=10
+    )
+
+    _run(client, optimization_jobs.collect_metrics_for_all_live_campaigns)
+    assert _campaign_status(client, business_id, campaign_id)["dailySpendFlag"] is None
+
+    seeder = Prisma()
+    await seeder.connect()
+    try:
+        await seeder.strategy.delete_many(where={"campaignId": campaign_id})
+    finally:
+        await seeder.disconnect()
+    await _seed_baseline(campaign_id, days_ago=1.05)
+    _run(client, optimization_jobs.collect_metrics_for_all_live_campaigns)
+    assert _campaign_status(client, business_id, campaign_id)["dailySpendFlag"] is None
+
+
+@pytest.mark.asyncio
+async def test_a_campaign_budget_flag_ignores_pack_rows(
+    client: TestClient, mock_services: dict[str, AsyncMock]
+) -> None:
+    """A pack's own row is a share of the campaign's spend, never a second
+    stream: $500 of pack-level growth beside $20 of campaign spend flags nothing."""
+    business_id, campaign_id = _live_campaign(client)
+    await _make_campaign_budget(campaign_id)
+    pack_ids = [
+        a.id for a in await _fetch_ad_sets(campaign_id) if a.metaAdSetId is not None
+    ]
+    await _seed_baseline(campaign_id, days_ago=1.05)
+    await _seed_metric(
+        campaign_id,
+        fetched_at=datetime.now(UTC) - timedelta(days=1.05),
+        spend=0.0,
+        ad_set_id=pack_ids[0],
+    )
+    await _seed_metric(
+        campaign_id, fetched_at=datetime.now(UTC), spend=500.0, ad_set_id=pack_ids[0]
+    )
+    mock_services["insights"].return_value = CampaignInsights(
+        impressions=1000, clicks=100, spend=20.0, conversions=2
+    )
+
+    _run(client, optimization_jobs.collect_metrics_for_all_live_campaigns)
+
+    assert _campaign_status(client, business_id, campaign_id)["dailySpendFlag"] is None
+
+
+async def _fetch_ad_sets(campaign_id: str) -> list[Any]:
+    seeder = Prisma()
+    await seeder.connect()
+    try:
+        return list(await seeder.adset.find_many(where={"campaignId": campaign_id}))
+    finally:
+        await seeder.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_a_campaign_budget_creative_test_has_one_ceiling_not_one_per_ad_set(
+    client: TestClient, mock_services: dict[str, AsyncMock]
+) -> None:
+    """$50/day for 10 days is a $500 ceiling however many ad sets share it.
+    Three ad sets used to raise it to $1,500, so $600 now pauses."""
+    campaign_id = await _make_creative_plan_campaign(
+        client, optimization_event="PURCHASE", daily_budget=50.0
+    )
+    await _make_campaign_budget(campaign_id)
+    mock_services["insights"].return_value = CampaignInsights(
+        impressions=1000, clicks=100, spend=600.0, conversions=2, purchases=20
+    )
+
+    _run(client, optimization_jobs.collect_metrics_for_all_live_campaigns)
+
+    campaign = await _fetch_campaign(campaign_id)
+    assert campaign.status == "PAUSED"
+    assert "500.00" in str(campaign.pausedReason)
+
+
+@pytest.mark.asyncio
+async def test_ad_set_budgets_keep_one_ceiling_per_ad_set(
+    client: TestClient, mock_services: dict[str, AsyncMock]
+) -> None:
+    """Unchanged for budgets that sit on the ad sets: each can spend the daily
+    rate, so three ad sets allow $1,500 and $600 pauses nothing."""
+    campaign_id = await _make_creative_plan_campaign(
+        client, optimization_event="PURCHASE", daily_budget=50.0
+    )
+    await _add_ad_sets(campaign_id, 2, budget=50.0)
+    mock_services["insights"].return_value = CampaignInsights(
+        impressions=1000, clicks=100, spend=600.0, conversions=2, purchases=20
+    )
+
+    _run(client, optimization_jobs.collect_metrics_for_all_live_campaigns)
+
+    assert (await _fetch_campaign(campaign_id)).status == "LIVE"
+
+
+@pytest.mark.asyncio
+async def test_a_campaign_budget_evergreen_pauses_past_its_weekly_ceiling(
+    client: TestClient, mock_services: dict[str, AsyncMock]
+) -> None:
+    """The plan's $25/day makes the 7-day ceiling 25 x 7 x 1.25 = $218.75;
+    $300 over the last 7 days pauses the campaign."""
+    business_id, campaign_id = _live_campaign(client)
+    await _make_campaign_budget(campaign_id)
+    await _seed_baseline(campaign_id, days_ago=8)
+    mock_services["insights"].return_value = CampaignInsights(
+        impressions=1000, clicks=100, spend=300.0, conversions=2, purchases=10
+    )
+
+    _run(client, optimization_jobs.collect_metrics_for_all_live_campaigns)
+
+    campaign = _campaign_status(client, business_id, campaign_id)
+    assert campaign["status"] == "PAUSED"
+    reason = str(campaign["pausedReason"])
+    assert "$300.00 over the last 7 days" in reason
+    assert "$218.75 ceiling" in reason
+    mock_services["pause_ad_set"].assert_awaited()
+
+
+@pytest.mark.asyncio
+async def test_a_campaign_budget_evergreen_within_its_weekly_ceiling_keeps_running(
+    client: TestClient, mock_services: dict[str, AsyncMock]
+) -> None:
+    business_id, campaign_id = _live_campaign(client)
+    await _make_campaign_budget(campaign_id)
+    await _seed_baseline(campaign_id, days_ago=8)
+    mock_services["insights"].return_value = CampaignInsights(
+        impressions=1000, clicks=100, spend=200.0, conversions=2, purchases=10
+    )
+
+    _run(client, optimization_jobs.collect_metrics_for_all_live_campaigns)
+
+    assert _campaign_status(client, business_id, campaign_id)["status"] == "LIVE"
+    mock_services["pause_ad_set"].assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_a_campaign_budget_evergreen_needs_a_week_of_history_for_its_ceiling(
+    client: TestClient, mock_services: dict[str, AsyncMock]
+) -> None:
+    business_id, campaign_id = _live_campaign(client)
+    await _make_campaign_budget(campaign_id)
+    await _seed_baseline(campaign_id, days_ago=2)
+    mock_services["insights"].return_value = CampaignInsights(
+        impressions=1000, clicks=100, spend=300.0, conversions=2, purchases=10
+    )
+
+    _run(client, optimization_jobs.collect_metrics_for_all_live_campaigns)
+
+    assert _campaign_status(client, business_id, campaign_id)["status"] == "LIVE"
+
+
+@pytest.mark.asyncio
+async def test_an_ad_set_budget_evergreen_still_has_no_spend_ceiling(
+    client: TestClient, mock_services: dict[str, AsyncMock]
+) -> None:
+    """Unchanged: a DATA_DRIVEN_STRATEGY whose budget sits on its ad set stays
+    open-ended, however much the week cost."""
+    business_id, campaign_id = _live_campaign(client)
+    await _seed_baseline(campaign_id, days_ago=8)
+    mock_services["insights"].return_value = CampaignInsights(
+        impressions=1000, clicks=100, spend=900.0, conversions=2, purchases=100
+    )
+
+    _run(client, optimization_jobs.collect_metrics_for_all_live_campaigns)
+
+    assert _campaign_status(client, business_id, campaign_id)["status"] == "LIVE"
+
+
+@pytest.mark.asyncio
+async def test_a_campaign_budget_totals_never_add_pack_rows_to_campaign_rows(
+    client: TestClient, mock_services: dict[str, AsyncMock]
+) -> None:
+    """Spend and purchases come from the campaign-level rows alone: the same
+    $300 and 5 purchases, with $120 + $180 of pack rows beside them."""
+    _, campaign_id = _live_campaign(client)
+    await _make_campaign_budget(campaign_id)
+    pack_a, pack_b = [a.id for a in await _fetch_ad_sets(campaign_id)][:2]
+    now = datetime.now(UTC)
+    await _seed_metric(campaign_id, fetched_at=now, spend=300.0, purchases=5)
+    await _seed_metric(
+        campaign_id, fetched_at=now, spend=120.0, purchases=2, ad_set_id=pack_a
+    )
+    await _seed_metric(
+        campaign_id, fetched_at=now, spend=180.0, purchases=3, ad_set_id=pack_b
+    )
+
+    spend = _run(client, optimization_jobs._latest_total_spend, campaign_id)
+    purchases = _run(client, optimization_jobs._latest_total_purchases, campaign_id)
+
+    assert (spend, purchases) == (300.0, 5)
+
+
+@pytest.mark.asyncio
+async def test_ad_set_budget_totals_still_add_each_ad_sets_latest_row(
+    client: TestClient, mock_services: dict[str, AsyncMock]
+) -> None:
+    """Unchanged: a campaign whose budgets sit on its ad sets sums each group."""
+    _, campaign_id = _live_campaign(client)
+    await _add_ad_sets(campaign_id, 1, budget=25.0)
+    pack = (await _fetch_ad_sets(campaign_id))[-1].id
+    first = (await _fetch_ad_sets(campaign_id))[0].id
+    now = datetime.now(UTC)
+    await _seed_metric(campaign_id, fetched_at=now, spend=100.0, ad_set_id=first)
+    await _seed_metric(campaign_id, fetched_at=now, spend=40.0, ad_set_id=pack)
+
+    spend = _run(client, optimization_jobs._latest_total_spend, campaign_id)
+
+    assert spend == 140.0

@@ -82,9 +82,12 @@ from app.core.db import db
 from app.core.meta_connection import get_meta_connection
 from app.schemas.creative import MIN_CAROUSEL_CARDS
 from app.schemas.strategy import (
+    CAMPAIGN_BUDGET_LEVEL,
     CreativeTestPlanContent,
+    DataDrivenStrategyContent,
     StrategyContentAdapter,
     TestPlanContent,
+    daily_budget,
     planned_total_budget,
 )
 from app.schemas.test_evaluation import StopReason
@@ -444,6 +447,41 @@ async def pause_campaign_and_capture(
     return paused
 
 
+async def _spend_metric_rows(campaign_id: str) -> list[Metric]:
+    """The campaign- and ad-set-level Metric rows that make up its spend, oldest first.
+
+    A campaign whose budget lives on its ad sets (Campaign.budgetLevel
+    "AD_SET", every campaign so far) is the sum of its groups: one campaign-
+    level stream, or one stream per ad set. A campaign budget (CBO,
+    "CAMPAIGN") already has its whole spend in the campaign-level stream;
+    any per-ad-set rows next to it (a pack's own numbers) are a breakdown of
+    that same spend, so they are left out rather than added on top of it.
+
+    Args:
+        campaign_id: The campaign to read.
+
+    Returns:
+        Ad-level rows are always excluded.
+    """
+    campaign = await db.campaign.find_unique(where={"id": campaign_id})
+    if campaign is not None and campaign.budgetLevel == CAMPAIGN_BUDGET_LEVEL:
+        return await db.metric.find_many(
+            where={"campaignId": campaign_id, "adId": None, "adSetId": None},
+            order={"fetchedAt": "asc"},
+        )
+    return await db.metric.find_many(
+        where={"campaignId": campaign_id, "adId": None}, order={"fetchedAt": "asc"}
+    )
+
+
+async def _latest_by_group(campaign_id: str) -> list[Metric]:
+    """The most recent Metric row of each group (see _spend_metric_rows)."""
+    latest: dict[str | None, Metric] = {}
+    for metric in await _spend_metric_rows(campaign_id):
+        latest[metric.adSetId] = metric  # oldest first, so the newest wins
+    return list(latest.values())
+
+
 async def _latest_total_spend(campaign_id: str) -> float:
     """Sum the most recent spend snapshot per AdSet (or the campaign-level one).
 
@@ -455,7 +493,8 @@ async def _latest_total_spend(campaign_id: str) -> float:
     variant; summing both variants' latest gives the campaign's true
     combined spend. Any other campaign has exactly one group (adSetId
     None, the campaign-level aggregate), so this reduces to that one
-    row's own spend.
+    row's own spend. A campaign budget (CBO) only ever counts its
+    campaign-level group (see _spend_metric_rows).
 
     Args:
         campaign_id: The campaign to sum.
@@ -464,13 +503,7 @@ async def _latest_total_spend(campaign_id: str) -> float:
         Total spend across the latest snapshot of every AdSet (or 0.0 if
         nothing has been collected yet).
     """
-    metrics = await db.metric.find_many(
-        where={"campaignId": campaign_id, "adId": None}, order={"fetchedAt": "desc"}
-    )
-    latest_by_group: dict[str | None, Metric] = {}
-    for metric in metrics:
-        latest_by_group.setdefault(metric.adSetId, metric)
-    return sum(metric.spend for metric in latest_by_group.values())
+    return sum(metric.spend for metric in await _latest_by_group(campaign_id))
 
 
 async def _latest_total_purchases(campaign_id: str) -> int:
@@ -479,13 +512,7 @@ async def _latest_total_purchases(campaign_id: str) -> int:
     Same shape as _latest_total_spend: Metric.purchases is Meta's own
     lifetime-to-date figure, so the latest row per group is that group's total.
     """
-    metrics = await db.metric.find_many(
-        where={"campaignId": campaign_id, "adId": None}, order={"fetchedAt": "desc"}
-    )
-    latest_by_group: dict[str | None, Metric] = {}
-    for metric in metrics:
-        latest_by_group.setdefault(metric.adSetId, metric)
-    return sum(metric.purchases or 0 for metric in latest_by_group.values())
+    return sum(metric.purchases or 0 for metric in await _latest_by_group(campaign_id))
 
 
 async def _propose_switch_to_purchase(
@@ -568,7 +595,8 @@ async def _enforce_spend_circuit_breaker(
     right for a two-variant TEST_PLAN ($1,000 at $50/day) and a one-ad-set
     creative test ($500). A DATA_DRIVEN_STRATEGY has no such ceiling
     (open-ended by design, scaled up/down by its own scaling_trigger
-    instead) and is skipped entirely. Never an LLM judgment call, same
+    instead) and is skipped entirely — except under a campaign budget (CBO),
+    which gets _enforce_weekly_budget_ceiling. Never an LLM judgment call, same
     "backend rules apply before/instead of the LLM" principle as
     apply_budget_guardrail (app/services/optimizer.py) — this doesn't even
     involve the Optimizer Agent.
@@ -588,11 +616,18 @@ async def _enforce_spend_circuit_breaker(
     if strategy is None:
         return
     content = StrategyContentAdapter.validate_json(strategy.content)
+    is_campaign_budget = campaign.budgetLevel == CAMPAIGN_BUDGET_LEVEL
     if content.plan_type == "DATA_DRIVEN_STRATEGY":
+        if is_campaign_budget:
+            await _enforce_weekly_budget_ceiling(campaign, connection, content)
         return
 
-    ad_sets = await db.adset.find_many(where={"campaignId": campaign.id})
-    real_ad_set_count = sum(1 for a in ad_sets if a.metaAdSetId is not None)
+    # Ad sets under one campaign budget share it, so they don't each add a
+    # daily budget to the ceiling.
+    real_ad_set_count = 1
+    if not is_campaign_budget:
+        ad_sets = await db.adset.find_many(where={"campaignId": campaign.id})
+        real_ad_set_count = sum(1 for a in ad_sets if a.metaAdSetId is not None)
     planned_budget = planned_total_budget(content, real_ad_set_count)
     total_spend = await _latest_total_spend(campaign.id)
     if total_spend <= planned_budget:
@@ -616,14 +651,62 @@ async def _enforce_spend_circuit_breaker(
         await _auto_evaluate_after_pause(paused, content, "TOTAL_SPEND_CIRCUIT_BREAKER")
 
 
-async def _grouped_metrics(campaign_id: str) -> dict[str | None, list[Metric]]:
-    """Every Metric snapshot for a campaign, grouped by adSetId.
+_WEEKLY_BUDGET_WINDOW = timedelta(days=7)
+_WEEKLY_OVERSPEND_MULTIPLE = 1.25
 
-    None is the group key for the campaign-level aggregate stream.
+
+async def _enforce_weekly_budget_ceiling(
+    campaign: Campaign, connection: MetaConnection, content: DataDrivenStrategyContent
+) -> None:
+    """Pause an open-ended campaign-budget (CBO) campaign that outspent its week.
+
+    An evergreen campaign has no total to exceed, so its ceiling is a rolling
+    one: the last 7 days' spend over 1.25x seven daily budgets (Meta lets a
+    single day run up to ~25% over and evens it out across the week). It needs
+    7 days of history and never fires on a campaign whose budget sits on its ad
+    sets, which are judged by the daily flag and their own plan.
+
+    Args:
+        campaign: The live campaign, already known to use a campaign budget.
+        connection: The business's Meta connection, for the pause call.
+        content: The campaign's strategy (its daily budget is the campaign budget).
+
+    Raises:
+        MetaConnectionError: If pausing fails partway through.
     """
-    metrics = await db.metric.find_many(where={"campaignId": campaign_id, "adId": None})
+    window = await _rolling_spend_and_purchases(campaign.id, _WEEKLY_BUDGET_WINDOW)
+    if window is None:
+        return
+    weekly_spend = window[0]
+    daily = daily_budget(content)
+    ceiling = daily * _WEEKLY_BUDGET_WINDOW.days * _WEEKLY_OVERSPEND_MULTIPLE
+    if weekly_spend <= ceiling:
+        return
+    logger.warning(
+        "Circuit breaker: campaign %s spent $%.2f in 7 days, over its $%.2f ceiling",
+        campaign.id,
+        weekly_spend,
+        ceiling,
+    )
+    await pause_campaign_and_capture(
+        campaign=campaign,
+        connection=connection,
+        reason=(
+            f"Spend ${weekly_spend:,.2f} over the last 7 days exceeded the "
+            f"${ceiling:,.2f} ceiling ({_WEEKLY_OVERSPEND_MULTIPLE:g}x "
+            f"7 days of the ${daily:,.2f}/day campaign budget)"
+        ),
+    )
+
+
+async def _grouped_metrics(campaign_id: str) -> dict[str | None, list[Metric]]:
+    """Every spend Metric snapshot for a campaign, grouped by adSetId.
+
+    None is the group key for the campaign-level aggregate stream. A campaign
+    budget (CBO) only has that group (see _spend_metric_rows).
+    """
     groups: dict[str | None, list[Metric]] = {}
-    for metric in metrics:
+    for metric in await _spend_metric_rows(campaign_id):
         groups.setdefault(metric.adSetId, []).append(metric)
     return groups
 
@@ -745,6 +828,29 @@ def _real_ad_set_group_key(ad_set: AdSet, real_ad_set_count: int) -> str | None:
     return ad_set.id if real_ad_set_count >= 2 else None
 
 
+async def _campaign_budget_overspend(
+    campaign: Campaign, groups: dict[str | None, list[Metric]], cutoff: datetime
+) -> list[str]:
+    """The overspend note for a campaign-budget (CBO) campaign, or an empty list.
+
+    Its ad sets carry no budget of their own (or only a minimum), so the one
+    campaign-level stream's last day is compared with the campaign budget.
+    """
+    strategy = await db.strategy.find_unique(where={"campaignId": campaign.id})
+    group_metrics = groups.get(None, [])
+    if strategy is None or not group_metrics:
+        return []
+    budget = daily_budget(StrategyContentAdapter.validate_json(strategy.content))
+    latest = max(group_metrics, key=lambda m: m.fetchedAt)
+    baseline = optimizer.nearest_metric_at_or_before(group_metrics, cutoff)
+    if baseline is None or baseline.id == latest.id:
+        return []
+    delta_spend = latest.spend - baseline.spend
+    if delta_spend <= budget * _DAILY_OVERSPEND_MULTIPLE:
+        return []
+    return [f"{campaign.name}: ${delta_spend:,.2f} vs ${budget:,.2f}/day budget"]
+
+
 async def _enforce_daily_spend_flag(campaign: Campaign) -> None:
     """Deterministic monitoring signal — never pauses, just flags.
 
@@ -759,12 +865,16 @@ async def _enforce_daily_spend_flag(campaign: Campaign) -> None:
     Args:
         campaign: The live campaign to check.
     """
-    ad_sets = await db.adset.find_many(where={"campaignId": campaign.id})
-    real_ad_sets = [a for a in ad_sets if a.metaAdSetId is not None]
     groups = await _grouped_metrics(campaign.id)
     cutoff = datetime.now(UTC) - _DAILY_SPEND_WINDOW
 
     overspending: list[str] = []
+    if campaign.budgetLevel == CAMPAIGN_BUDGET_LEVEL:
+        overspending = await _campaign_budget_overspend(campaign, groups, cutoff)
+        real_ad_sets: list[AdSet] = []
+    else:
+        ad_sets = await db.adset.find_many(where={"campaignId": campaign.id})
+        real_ad_sets = [a for a in ad_sets if a.metaAdSetId is not None]
     for ad_set in real_ad_sets:
         group_metrics = groups.get(
             _real_ad_set_group_key(ad_set, len(real_ad_sets)), []

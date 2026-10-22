@@ -430,6 +430,13 @@ model Campaign {
   saturationStreak    Int       @default(0)
   saturationCheckedAt DateTime?
   saturationWarning   String?
+  // Where this campaign's daily budget lives: "AD_SET" (every campaign so far,
+  // each ad set carries its own budget) or "CAMPAIGN" (a CBO campaign: one
+  // campaign budget, ad-set budgets absent or only minimums). The spend
+  // breakers, the daily-spend flag and the dashboard read it, so a campaign
+  // with several ad sets is judged against its one real budget and its
+  // per-ad-set rows are never summed on top of the campaign-level ones.
+  budgetLevel         String    @default("AD_SET")
   createdAt               DateTime                     @default(now())
   updatedAt               DateTime                     @updatedAt
 }
