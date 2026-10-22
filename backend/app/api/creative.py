@@ -29,7 +29,6 @@ from app.schemas.creative import (
 )
 from app.schemas.strategy import (
     MAX_CREATIVE_ANGLES,
-    MIN_CREATIVE_ANGLES,
     StrategyContentAdapter,
 )
 from app.services.campaign_readiness import is_ready
@@ -38,7 +37,9 @@ from app.services.creative import (
     VideoInput,
     generate_creatives,
     is_creative_stale,
+    test_ads_required,
 )
+from app.services.creative_naming import angle_label
 from app.services.media_info import is_square
 
 router = APIRouter(
@@ -454,6 +455,15 @@ async def create_creatives(
             where={"creativeId": {"in": stale_creative_ids}}
         )
     await db.creative.delete_many(where={"campaignId": campaign.id})
+    plan_angles = (
+        {
+            angle_label(str(a.avatar), a.concept): a
+            for a in plan.creative_angles
+            if a.avatar
+        }
+        if plan.plan_type == "CREATIVE_TEST_PLAN"
+        else {}
+    )
     for variant in variants:
         data: CreativeCreateInput = {
             "campaignId": campaign.id,
@@ -462,6 +472,10 @@ async def create_creatives(
             "description": variant.description,
             "cta": variant.cta,
             "creativeAngle": variant.creative_angle,
+            "avatar": plan_angle.avatar
+            if (plan_angle := plan_angles.get(variant.creative_angle))
+            else None,
+            "concept": plan_angle.concept if plan_angle else None,
             "imagePrompt": variant.image_prompt,
             "videoPrompt": variant.video_prompt,
             "format": creative_format,
@@ -556,19 +570,23 @@ async def _check_ads_can_change(campaign: Campaign) -> None:
 async def _sync_creative_test_status(campaign: Campaign) -> None:
     """Move the campaign to match how many ads are selected.
 
-    PENDING_APPROVAL once at least MIN_CREATIVE_ANGLES are selected (the test
-    is ready for the approval gate), otherwise back to ADS_GENERATED.
+    PENDING_APPROVAL once the number of ads the test needs is selected (four,
+    or three for a product without a fourth photo or video; the test is ready
+    for the approval gate), otherwise back to ADS_GENERATED.
     """
     selected = await db.creative.count(
         where={"campaignId": campaign.id, "status": "SELECTED"}
     )
+    strategy = await db.strategy.find_unique(where={"campaignId": campaign.id})
+    assert strategy is not None  # a creative test always has its plan
+    plan = StrategyContentAdapter.validate_json(strategy.content)
+    assert plan.plan_type == "CREATIVE_TEST_PLAN"
+    required_ads = await test_ads_required(campaign, plan)
     await db.campaign.update(
         where={"id": campaign.id},
         data={
             "status": (
-                "PENDING_APPROVAL"
-                if selected >= MIN_CREATIVE_ANGLES
-                else "ADS_GENERATED"
+                "PENDING_APPROVAL" if selected >= required_ads else "ADS_GENERATED"
             )
         },
     )

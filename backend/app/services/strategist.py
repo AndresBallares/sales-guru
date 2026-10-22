@@ -46,6 +46,7 @@ from prisma.models import Audience, BrandProfile, Business, Product
 from app.core.config import get_settings
 from app.schemas.brand_profile import DEFAULT_AD_LANGUAGES
 from app.schemas.strategy import (
+    ADD_TO_CART_MAX_DAILY_BUDGET,
     BROAD_BASELINE_HYPOTHESIS,
     BROAD_BASELINE_ID,
     BROAD_BASELINE_NAME,
@@ -67,6 +68,7 @@ from app.schemas.strategy import (
     CreativeTestHypothesis,
     CreativeTestPlanContent,
     DataDrivenStrategyContent,
+    GeneratedCreativeAngle,
     GeneratedCreativeTestPlanFields,
     GeneratedDataDrivenStrategyFields,
     GeneratedTestPlanFields,
@@ -136,9 +138,26 @@ _FAKE_CREATIVE_TEST_PLAN_FIELDS = GeneratedCreativeTestPlanFields(
     offer="Fake offer copy (FAKE_LLM mode).",
     positioning="Fake positioning copy (FAKE_LLM mode).",
     creative_angles=[
-        "Fake creative angle A",
-        "Fake creative angle B",
-        "Fake creative angle C",
+        GeneratedCreativeAngle(
+            avatar="self_purchaser",
+            concept="everyday-wear",
+            description="Fake angle: a piece for every day (FAKE_LLM mode).",
+        ),
+        GeneratedCreativeAngle(
+            avatar="self_purchaser",
+            concept="craftsmanship",
+            description="Fake angle: the craftsmanship (FAKE_LLM mode).",
+        ),
+        GeneratedCreativeAngle(
+            avatar="gift_buyer",
+            concept="the-perfect-gift",
+            description="Fake angle: the gift she will keep (FAKE_LLM mode).",
+        ),
+        GeneratedCreativeAngle(
+            avatar="gift_buyer",
+            concept="social-proof",
+            description="Fake angle: loved by other buyers (FAKE_LLM mode).",
+        ),
     ],
     copy_strategy="Fake copy strategy (FAKE_LLM mode).",
 ).model_dump()
@@ -628,21 +647,23 @@ def _build_data_driven_strategy_prompt(
 
 
 def _choose_optimization_event(
-    product: Product | None, high_ticket_threshold: float
+    product: Product | None, high_ticket_threshold: float, daily_budget: float
 ) -> OptimizationEvent:
-    """AddToCart for a high-ticket product, else Purchase — decided once.
+    """AddToCart for a high-ticket product on a small budget, else Purchase.
 
     A product priced at or above the threshold rarely produces enough
     purchases on a test budget for Meta (or us) to learn from, so the ad set
-    optimizes for AddToCart instead. A product with no price on file stays on
-    Purchase. The choice is made at plan creation and never switched
-    mid-flight (changing an ad set's optimization event after creation isn't
-    something Meta documents as supported; a switch is a future Optimizer
-    proposal).
+    optimizes for AddToCart instead, as long as the daily budget is under
+    ADD_TO_CART_MAX_DAILY_BUDGET (a bigger budget buys enough purchases to
+    learn from). A product with no price on file stays on Purchase. The
+    choice is made at plan creation and never switched mid-flight (changing
+    an ad set's optimization event after creation isn't something Meta
+    documents as supported; the Optimizer proposes a new ad set instead).
 
     Args:
         product: The campaign's product, if any.
         high_ticket_threshold: Price at or above which AddToCart is used.
+        daily_budget: The test's daily budget, in dollars.
 
     Returns:
         "ADD_TO_CART" or "PURCHASE".
@@ -651,6 +672,7 @@ def _choose_optimization_event(
         product is not None
         and product.price is not None
         and product.price >= high_ticket_threshold
+        and daily_budget < ADD_TO_CART_MAX_DAILY_BUDGET
     ):
         return "ADD_TO_CART"
     return "PURCHASE"
@@ -804,9 +826,10 @@ def _build_creative_test_plan_prompt(
         "broad, automated Meta audience (Advantage+), with only hard "
         "constraints (country, minimum age, language). Nobody is targeted "
         "by interest or demographic. The thing being tested is the "
-        "CREATIVE: 3 or 4 ads in that one ad set, each built on a "
-        "distinct creative angle, competing to produce the lowest cost "
-        "per add-to-cart.",
+        "CREATIVE: 4 ads in that one ad set, each built on a distinct "
+        "creative angle, competing to produce the lowest cost per "
+        "add-to-cart. The ad set bids for the lowest cost, with no cost "
+        "cap.",
         "",
         _vertical_grounding(),
         "",
@@ -825,11 +848,17 @@ def _build_creative_test_plan_prompt(
         "the ad copywriter and designer, not used for targeting — don't "
         "describe interests or demographics as if they would be selected "
         "in the ad set.",
-        "- creative_angles: 3 or 4 distinct angles to test (for example "
-        "product worn on skin, social proof, gifting, craftsmanship). Each "
-        "must differ in what it says or shows, not just in wording, and "
-        "each must be something this product's real details support. "
-        + _creative_format_instruction(creative_format),
+        "- creative_angles: exactly 4 distinct angles to test, organized as "
+        "avatars x concepts. Each angle has an avatar (self_purchaser: "
+        "someone buying for themselves; gift_buyer: someone buying for "
+        "another person), a concept (a short lowercase slug of one to "
+        "three words joined by hyphens, such as everyday-wear, "
+        "craftsmanship, the-perfect-gift or social-proof) and a "
+        "description of what the ad shows and promises. Use both avatars, "
+        "typically two concepts each, and never repeat an avatar and "
+        "concept pair. Each must differ in what it says or shows, not "
+        "just in wording, and each must be something this product's real "
+        "details support. " + _creative_format_instruction(creative_format),
         "- hypothesis_statement: a falsifiable statement naming which "
         "angle you expect to win on cost per add-to-cart and why — not a "
         'vague claim like "this should perform well."',
@@ -985,7 +1014,7 @@ async def generate_strategy(
         daily_budget = _compute_test_daily_budget(unit_economics)
         duration_days = DEFAULT_TEST_DURATION
         optimization_event = _choose_optimization_event(
-            product, settings.high_ticket_price_threshold
+            product, settings.high_ticket_price_threshold, daily_budget
         )
         target_cost_per_add_to_cart = (
             _compute_target_cost_per_add_to_cart(
@@ -1033,8 +1062,11 @@ async def generate_strategy(
                 ],
                 "offer": generated_creative.offer,
                 "positioning": generated_creative.positioning,
-                "creative_angles": generated_creative.creative_angles,
+                "creative_angles": [
+                    angle.model_dump() for angle in generated_creative.creative_angles
+                ],
                 "copy_strategy": generated_creative.copy_strategy,
+                "bid_strategy": "LOWEST_COST",
                 "daily_budget": daily_budget,
                 # One ad set: the full daily rate, once per day.
                 "duration_days": duration_days,

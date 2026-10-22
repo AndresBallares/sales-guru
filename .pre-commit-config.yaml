@@ -87,6 +87,8 @@ repos:
         name: backend · pytest (tests related to staged files)
         entry: scripts/related-backend-tests.py
         language: system
+        # One pytest run at a time: parallel chunks share ./test.db and collide.
+        require_serial: true
         files: ^backend/(app|tests)/.*\.py$
 
       - id: frontend-oxlint

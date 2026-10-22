@@ -229,6 +229,7 @@ async def fake_connect(
                 "accessToken": encrypted_access_token,
                 "tokenExpiresAt": datetime.now(UTC) + _FAKE_META_TOKEN_LIFETIME,
                 "adAccountId": None,
+                "purchasersAudienceId": None,
                 "pageId": None,
                 "instagramUserId": None,
                 "instagramUserIdManual": None,
@@ -346,6 +347,12 @@ async def finalize(
             "adAccountId": payload.ad_account_id,
             "pageId": payload.page_id,
             "instagramUserId": instagram_user_id,
+            # The purchasers audience lives in one ad account.
+            **(
+                {"purchasersAudienceId": None}
+                if connection.adAccountId != payload.ad_account_id
+                else {}
+            ),
             # A hand-entered id belongs to the Page it was entered for.
             **(
                 {"instagramUserIdManual": None}
@@ -529,7 +536,16 @@ async def set_pixel(
         where={"id": connection.id},
         # Setting a real Pixel supersedes an earlier "skip" — a business
         # can't be both "explicitly has none" and "chose to have one".
-        data={"pixelId": payload.pixel_id, "pixelSkipped": False},
+        data={
+            "pixelId": payload.pixel_id,
+            "pixelSkipped": False,
+            # The purchasers audience is built from one Pixel's events.
+            **(
+                {"purchasersAudienceId": None}
+                if connection.pixelId != payload.pixel_id
+                else {}
+            ),
+        },
     )
     assert updated is not None  # just fetched above, can't vanish mid-request
     return _to_response(updated)
@@ -645,6 +661,7 @@ async def _apply_reconnect(
             data.update(
                 {
                     "adAccountId": None,
+                    "purchasersAudienceId": None,
                     "pageId": None,
                     "instagramUserId": None,
                     "instagramUserIdManual": None,
@@ -743,6 +760,7 @@ async def meta_callback(
                 "accessToken": encrypted_access_token,
                 "tokenExpiresAt": expires_at,
                 "adAccountId": None,
+                "purchasersAudienceId": None,
                 "pageId": None,
                 "instagramUserId": None,
                 "instagramUserIdManual": None,

@@ -25,14 +25,15 @@ from app.schemas.campaign import (
     PublishCampaignRequest,
     PublishStatusResponse,
 )
-from app.schemas.strategy import (
-    MAX_CREATIVE_ANGLES,
-    MIN_CREATIVE_ANGLES,
-    StrategyContentAdapter,
-)
+from app.schemas.strategy import MAX_CREATIVE_ANGLES, StrategyContentAdapter
 from app.services import campaign_lifecycle, publish_jobs
 from app.services.campaign_readiness import advance_to_ready_if_complete, is_ready
-from app.services.creative import copy_problems, is_creative_stale, media_problems
+from app.services.creative import (
+    copy_problems,
+    is_creative_stale,
+    media_problems,
+    test_ads_required,
+)
 from app.services.event_venues import EVENT_VENUES, default_event_window
 from app.services.meta import MetaConnectionError
 from app.services.optimization_jobs import pause_campaign_and_capture
@@ -65,7 +66,7 @@ _META_NOT_CONNECTED_TO_ACTIVATE = (
     "No Meta connection found for this campaign's business"
 )
 _CREATIVE_TEST_AD_COUNT = (
-    "A creative test needs {min} to {max} selected ads before it can be published"
+    "A creative test needs {count} selected ads before it can be published"
 )
 _COPY_NOT_PUBLISHABLE = (
     "Can't publish yet — fix the ad copy first: {failures}. Regenerate the ads "
@@ -669,12 +670,11 @@ async def publish_campaign(
             order={"createdAt": "asc"},
             include={"cards": {"order_by": {"position": "asc"}}},
         )
-        if not (MIN_CREATIVE_ANGLES <= len(creatives) <= MAX_CREATIVE_ANGLES):
+        required_ads = await test_ads_required(campaign, strategy_content)
+        if not (required_ads <= len(creatives) <= MAX_CREATIVE_ANGLES):
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail=_CREATIVE_TEST_AD_COUNT.format(
-                    min=MIN_CREATIVE_ANGLES, max=MAX_CREATIVE_ANGLES
-                ),
+                detail=_CREATIVE_TEST_AD_COUNT.format(count=required_ads),
             )
         if any(c.format != strategy_content.creative_format for c in creatives):
             raise HTTPException(

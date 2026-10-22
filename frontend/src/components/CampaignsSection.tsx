@@ -8,6 +8,7 @@ import { ActionRow } from './ActionRow'
 import { ExtraAssetSlot } from './ExtraAssetSlot'
 import { CardToolbar, type ToolbarAction } from './CardToolbar'
 import { CarouselEditor } from './CarouselEditor'
+import { angleLabel } from '../lib/creativeAngle'
 import {
   ArrowRightIcon,
   ArchiveIcon,
@@ -109,6 +110,8 @@ const FORMAT_TAG_LABELS: Record<string, string> = {
   CAROUSEL: 'Carousel ad',
 }
 
+// The fewest ads a creative test can have: four, or three for a product without a
+// fourth photo or video. The backend sends the number this campaign needs.
 const MIN_TEST_ADS = 3
 const MAX_TEST_ADS = 4
 
@@ -190,6 +193,8 @@ export function CampaignsSection({
   const [showCreateForm, setShowCreateForm] = useState(false)
 
   const [strategies, setStrategies] = useState<Record<string, StrategyContent>>({})
+  // How many ads each creative test needs selected (four, or three for a thin product).
+  const [requiredAds, setRequiredAds] = useState<Record<string, number>>({})
   const [generatingId, setGeneratingId] = useState<string | null>(null)
   const [strategyErrors, setStrategyErrors] = useState<Record<string, string>>({})
   // Set when the backend responds 428 — it needs the one-time "has this
@@ -318,7 +323,7 @@ export function CampaignsSection({
       const fetched = await Promise.all(
         generated.map((c) =>
           getStrategy(businessId, c.id)
-            .then((strategy) => [c.id, strategy.content] as const)
+            .then((strategy) => [c.id, strategy.content, strategy.requiredTestAds] as const)
             .catch(() => null),
         ),
       )
@@ -326,6 +331,13 @@ export function CampaignsSection({
         const next = { ...prev }
         for (const entry of fetched) {
           if (entry) next[entry[0]] = entry[1]
+        }
+        return next
+      })
+      setRequiredAds((prev) => {
+        const next = { ...prev }
+        for (const entry of fetched) {
+          if (entry?.[2]) next[entry[0]] = entry[2]
         }
         return next
       })
@@ -503,6 +515,10 @@ export function CampaignsSection({
         strategyMode[campaignId] === 'STANDARD' ? undefined : testFormat[campaignId],
       )
       setStrategies((prev) => ({ ...prev, [campaignId]: strategy.content }))
+      if (strategy.requiredTestAds) {
+        const needed = strategy.requiredTestAds
+        setRequiredAds((prev) => ({ ...prev, [campaignId]: needed }))
+      }
       setNeedsAdExperienceAnswerId(null)
       await refresh()
     } catch (err) {
@@ -1119,6 +1135,7 @@ export function CampaignsSection({
               campaignCreatives[0]?.format ??
               'SINGLE_IMAGE'
             const testAdCount = campaignCreatives.filter((c) => c.status === 'SELECTED').length
+            const minTestAds = requiredAds[campaign.id] ?? MIN_TEST_ADS
             // Own name (not just campaign.productId inline below) so its
             // narrowed non-null type survives into the JSX callbacks that
             // close over it — a plain property access re-widens to
@@ -1876,7 +1893,9 @@ export function CampaignsSection({
                         </p>
                         <ul>
                           {strategy.creativeAngles.map((angle) => (
-                            <li key={angle}>{angle}</li>
+                            <li key={angleLabel(angle)}>
+                              <strong>{angleLabel(angle)}</strong> — {angle.description}
+                            </li>
                           ))}
                         </ul>
                         <p>
@@ -2209,7 +2228,7 @@ export function CampaignsSection({
                         {isCreativeTest && (
                           <div>
                             <p>
-                              {testAdCount} of {MIN_TEST_ADS}–{MAX_TEST_ADS} ads selected
+                              {testAdCount} of {minTestAds === MAX_TEST_ADS ? MAX_TEST_ADS : `${minTestAds}–${MAX_TEST_ADS}`} ads selected
                             </p>
                             <p>
                               These ads run together in one ad set, so the test shows which
@@ -2332,17 +2351,17 @@ export function CampaignsSection({
                         </ul>
                         {!isPublished && (isCreativeTest || selectedCreative) && (
                           <div className="creative-next">
-                            {isCreativeTest && testAdCount < MIN_TEST_ADS && (
+                            {isCreativeTest && testAdCount < minTestAds && (
                               <p id={`creative-next-hint-${campaign.id}`} className="field-hint">
-                                Select at least {MIN_TEST_ADS} ads to continue.
+                                Select {minTestAds === MAX_TEST_ADS ? 'all' : 'at least'} {minTestAds} ads to continue.
                               </p>
                             )}
                             <button
                               type="button"
                               className="btn-next"
-                              disabled={isCreativeTest && testAdCount < MIN_TEST_ADS}
+                              disabled={isCreativeTest && testAdCount < minTestAds}
                               aria-describedby={
-                                isCreativeTest && testAdCount < MIN_TEST_ADS
+                                isCreativeTest && testAdCount < minTestAds
                                   ? `creative-next-hint-${campaign.id}`
                                   : undefined
                               }

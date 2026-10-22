@@ -153,6 +153,7 @@ path the rule above requires explicit confirmation for).
   `backend/.env.test`'s database and refuses to run if that value doesn't
   contain `test.db`; use it (or `make backup-dev` first) rather than
   calling `prisma` directly.
+- **`validate_only` is not honored on every Meta endpoint** (`customaudiences` creates real objects) — treat any validate-only call against an unverified endpoint as a real write and announce it first.
 - **Products are reusable across campaigns.** If the item being sold is the
   same, edit the product (`PATCH .../products/{id}`, `app/api/product.py`).
   If it's a different item, swap the campaign's product instead

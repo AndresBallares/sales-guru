@@ -1429,3 +1429,88 @@ def test_disconnecting_then_fake_reconnecting_resets_a_skipped_pixel(
         assert fetched.json()["pixelSkipped"] is False
     finally:
         get_settings.cache_clear()
+
+
+# ── The remembered purchasers audience belongs to one ad account and Pixel ──
+
+
+async def _purchasers_audience_of(business_id: str) -> str | None:
+    seeder = Prisma()
+    await seeder.connect()
+    try:
+        connection = await seeder.metaconnection.find_first(
+            where={"businessId": business_id}
+        )
+        assert connection is not None
+        return connection.purchasersAudienceId
+    finally:
+        await seeder.disconnect()
+
+
+async def _remember_audience(business_id: str) -> None:
+    seeder = Prisma()
+    await seeder.connect()
+    try:
+        await seeder.metaconnection.update_many(
+            where={"businessId": business_id},
+            data={"purchasersAudienceId": "aud_1"},
+        )
+    finally:
+        await seeder.disconnect()
+
+
+def _set_pixel(client: TestClient, business_id: str, pixel_id: str) -> None:
+    client.post(f"/businesses/{business_id}/meta/pixel", json={"pixelId": pixel_id})
+
+
+@pytest.mark.asyncio
+async def test_choosing_a_different_pixel_forgets_the_purchasers_audience(
+    client: TestClient,
+) -> None:
+    business_id = _connected_and_finalized(client)
+    _set_pixel(client, business_id, "pixel_1")
+    await _remember_audience(business_id)
+
+    _set_pixel(client, business_id, "pixel_2")
+
+    assert await _purchasers_audience_of(business_id) is None
+
+
+@pytest.mark.asyncio
+async def test_choosing_the_same_pixel_again_keeps_the_purchasers_audience(
+    client: TestClient,
+) -> None:
+    business_id = _connected_and_finalized(client)
+    _set_pixel(client, business_id, "pixel_1")
+    await _remember_audience(business_id)
+
+    _set_pixel(client, business_id, "pixel_1")
+
+    assert await _purchasers_audience_of(business_id) == "aud_1"
+
+
+@pytest.mark.asyncio
+async def test_choosing_a_different_ad_account_forgets_the_purchasers_audience(
+    client: TestClient,
+) -> None:
+    business_id = _connected_and_finalized(client)
+    await _remember_audience(business_id)
+
+    client.post(
+        f"/businesses/{business_id}/meta/finalize",
+        json={"adAccountId": "act_other", "pageId": "page_1"},
+    )
+
+    assert await _purchasers_audience_of(business_id) is None
+
+
+@pytest.mark.asyncio
+async def test_finalizing_the_same_ad_account_keeps_the_purchasers_audience(
+    client: TestClient,
+) -> None:
+    business_id = _connected_and_finalized(client)
+    await _remember_audience(business_id)
+
+    _finalize(client, business_id)
+
+    assert await _purchasers_audience_of(business_id) == "aud_1"

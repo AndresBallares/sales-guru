@@ -11,6 +11,7 @@ Campaign.objective being fixed input rather than something the agent
 invents.
 """
 
+import re
 from datetime import datetime
 from typing import TYPE_CHECKING, Annotated, Literal, Self
 
@@ -487,8 +488,44 @@ class TestPlanContent(CamelCaseModel):
 
 MIN_CREATIVE_ANGLES = 3
 MAX_CREATIVE_ANGLES = 4
+# A creative test runs exactly this many ads; MIN_CREATIVE_ANGLES is the floor
+# only for a product that genuinely lacks a fourth photo or video
+# (required_test_ads). The two bounds stay the limits on a stored plan, which
+# may be an older three-angle one.
+CREATIVE_TEST_AD_COUNT = 4
+
+# Who a creative test ad speaks to. A fixed pair, not free text, so the ad's
+# name on Meta and its UTM parameters can be derived from it.
+Avatar = Literal["self_purchaser", "gift_buyer"]
+
+# Ad set budget under which an expensive product optimizes for AddToCart, and
+# the purchase count at which the Optimizer proposes moving to Purchase.
+ADD_TO_CART_MAX_DAILY_BUDGET = 150.0
+SWITCH_TO_PURCHASE_MIN_PURCHASES = 25
+
+
+def required_test_ads(media_count: int) -> int:
+    """How many ads a creative test needs, given the product's photos or videos.
+
+    Four, unless the product genuinely lacks a fourth photo (or video) of the
+    test's media type, in which case three.
+
+    Args:
+        media_count: How many photos (or videos, for a video test) the
+            campaign's product has.
+
+    Returns:
+        CREATIVE_TEST_AD_COUNT, or MIN_CREATIVE_ANGLES for a thin product.
+    """
+    return (
+        CREATIVE_TEST_AD_COUNT
+        if media_count >= CREATIVE_TEST_AD_COUNT
+        else MIN_CREATIVE_ANGLES
+    )
+
 
 OptimizationEvent = Literal["PURCHASE", "ADD_TO_CART"]
+BidStrategy = Literal["LOWEST_COST", "COST_CAP"]
 
 CREATIVE_TEST_HYPOTHESIS_ID = "creative_angle"
 CREATIVE_TEST_PRIMARY_METRIC = "cost_per_add_to_cart"
@@ -500,6 +537,36 @@ CREATIVE_TEST_SECONDARY_METRICS: list[str] = [
     "conversion_rate",
     "roas",
 ]
+
+
+_CONCEPT_PATTERN = r"^[a-z0-9]+(-[a-z0-9]+)*$"
+
+
+class GeneratedCreativeAngle(CamelCaseModel):
+    """One angle of a creative test: who it speaks to and the idea it tests.
+
+    avatar is one of two fixed buyers; concept is a short lowercase slug (for
+    example "everyday-wear") that names the idea and ends up in the ad's name
+    and UTM parameters; description says what the ad shows and promises.
+    """
+
+    avatar: Avatar
+    concept: Annotated[str, Field(pattern=_CONCEPT_PATTERN, max_length=30)]
+    description: str
+
+
+class CreativeAngle(GeneratedCreativeAngle):
+    """A stored angle. An older plan's free-text angle has no avatar."""
+
+    avatar: Avatar | None = None  # type: ignore[assignment]
+
+    @model_validator(mode="before")
+    @classmethod
+    def _from_legacy_text(cls, data: object) -> object:
+        if isinstance(data, str):
+            slug = re.sub(r"[^a-z0-9]+", "-", data.lower()).strip("-")[:30].strip("-")
+            return {"concept": slug or "angle", "description": data}
+        return data
 
 
 class AudienceConstraints(CamelCaseModel):
@@ -573,6 +640,13 @@ CREATIVE_TEST_PLAN_DECISION_RULES: list[DecisionRule] = [
         action="continue_testing",
     ),
     DecisionRule(
+        condition=(
+            "an AddToCart test reaches about "
+            f"{SWITCH_TO_PURCHASE_MIN_PURCHASES} purchases"
+        ),
+        action="propose_switch_to_purchase",
+    ),
+    DecisionRule(
         condition="every angle has a weak CTR",
         action="test_new_creative",
     ),
@@ -617,10 +691,21 @@ class GeneratedCreativeTestPlanFields(CamelCaseModel):
     offer: str
     positioning: str
     creative_angles: Annotated[
-        list[str],
-        Field(min_length=MIN_CREATIVE_ANGLES, max_length=MAX_CREATIVE_ANGLES),
+        list[GeneratedCreativeAngle],
+        Field(min_length=CREATIVE_TEST_AD_COUNT, max_length=CREATIVE_TEST_AD_COUNT),
     ]
     copy_strategy: str
+
+    @model_validator(mode="after")
+    def _check_angles(self) -> Self:
+        pairs = [(a.avatar, a.concept) for a in self.creative_angles]
+        if len(set(pairs)) != len(pairs):
+            raise ValueError("Every angle needs its own avatar and concept pair")
+        if {a.avatar for a in self.creative_angles} != {"self_purchaser", "gift_buyer"}:
+            raise ValueError(
+                "The angles must cover both avatars (self_purchaser and gift_buyer)"
+            )
+        return self
 
 
 class CreativeTestPlanContent(CamelCaseModel):
@@ -648,7 +733,7 @@ class CreativeTestPlanContent(CamelCaseModel):
     offer: str
     positioning: str
     creative_angles: Annotated[
-        list[str],
+        list[CreativeAngle],
         Field(min_length=MIN_CREATIVE_ANGLES, max_length=MAX_CREATIVE_ANGLES),
     ]
     copy_strategy: str
@@ -656,6 +741,11 @@ class CreativeTestPlanContent(CamelCaseModel):
     duration_days: int
     total_budget: float
     optimization_event: OptimizationEvent
+    # How the ad set bids. A new first test bids for the lowest cost with no
+    # cap (nothing yet says what a result should cost); a plan stored before
+    # that change was published with a cost cap, and keeps that value so its
+    # cap-specific delivery check and proposal still apply.
+    bid_strategy: BidStrategy = "COST_CAP"
     target_cost_per_add_to_cart: float | None = None
     success_criteria: SuccessCriteria
     decision_rules: list[DecisionRule] = CREATIVE_TEST_PLAN_DECISION_RULES
@@ -770,6 +860,9 @@ class StrategyResponse(CamelCaseModel):
     campaign_id: str
     content: StrategyContent
     created_at: datetime
+    # For a creative test only: how many ads must be selected before it can be
+    # approved (four, or three for a product without a fourth photo or video).
+    required_test_ads: int | None = None
 
 
 class CreateStrategyRequest(CamelCaseModel):

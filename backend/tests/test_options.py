@@ -181,6 +181,7 @@ def test_get_options_action_types(client: TestClient) -> None:
         {"value": "RAISE_COST_CAP", "label": "Raise cost cap"},
         {"value": "START_RETARGETING", "label": "Start retargeting"},
         {"value": "TEST_CAROUSEL", "label": "Test a carousel"},
+        {"value": "SWITCH_TO_PURCHASE", "label": "Switch to Purchase"},
     ]
 
 

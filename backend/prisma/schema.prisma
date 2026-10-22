@@ -312,6 +312,10 @@ model MetaConnection {
   // needs an ad account to query against — see app/api/meta.py), not
   // bundled into the initial finalize picker.
   pixelId        String?
+  // The Meta custom audience of this Pixel's purchasers over the last 180
+  // days, created on the first creative-test publish and excluded from its
+  // ad set so a test never pays to reach existing buyers. Null until then.
+  purchasersAudienceId String?
   // True once the user explicitly dismissed the Pixel step for *this*
   // connection ("Skip for now" — MetaConnectionSection) rather than never
   // having gotten to it yet. Lives here, not on Business, so it resets
@@ -508,6 +512,12 @@ model Creative {
   description               String?
   cta                       String
   creativeAngle             String?
+  // Who the ad speaks to and its concept, set for a CREATIVE_TEST_PLAN's ads
+  // (avatar: self_purchaser | gift_buyer; concept: a short lowercase slug).
+  // The ad's name on Meta and its utm_medium / utm_content derive from the
+  // pair (app/services/creative_naming.py). Null on older creatives.
+  avatar                    String?
+  concept                   String?
   imagePrompt               String?
   videoPrompt               String?
   imageUrl                  String?

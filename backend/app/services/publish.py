@@ -45,7 +45,7 @@ from app.schemas.strategy import (
     daily_budget,
     primary_audience,
 )
-from app.services import geo, locales, meta
+from app.services import creative_naming, geo, locales, meta
 from app.services.event_venues import EVENT_VENUES
 from app.services.interests import INTERESTS
 from app.services.meta import CustomLocation, MetaConnectionError, ResolvedGeoLocation
@@ -618,6 +618,7 @@ async def _create_video_meta_creative(
     page_id: str,
     destination_url: str,
     instagram_user_id: str | None,
+    url_tags: str | None = None,
 ) -> str:
     """Create the Meta creative (video_data) for a SINGLE_VIDEO creative."""
     assert creative.productImageId is not None
@@ -635,6 +636,7 @@ async def _create_video_meta_creative(
         video_id=asset.video_id,
         image_hash=asset.image_hash,
         instagram_user_id=instagram_user_id,
+        url_tags=url_tags,
     )
 
 
@@ -647,6 +649,7 @@ async def _create_pair_meta_creative(
     page_id: str,
     destination_url: str,
     instagram_user_id: str | None,
+    url_tags: str | None = None,
 ) -> str:
     """Create the one Meta creative for an ad with a story and/or square asset.
 
@@ -699,6 +702,7 @@ async def _create_pair_meta_creative(
         story=story,
         square=square,
         instagram_user_id=instagram_user_id,
+        url_tags=url_tags,
     )
 
 
@@ -922,6 +926,49 @@ async def publish_campaign_to_meta(
     return updated
 
 
+async def _purchasers_audience_id(connection: MetaConnection) -> str | None:
+    """The custom audience of the Pixel's last-180-day purchasers, made once.
+
+    A creative test excludes it so the test never pays to reach existing
+    buyers. Created on the first publish and remembered on the connection
+    (cleared again when the ad account or Pixel changes). A business with no
+    Pixel has no purchasers to exclude. If Meta refuses to create it, for
+    example because the ad account owner hasn't accepted Meta's custom
+    audience terms, the test still publishes, without the exclusion, and the
+    reason is logged.
+
+    Args:
+        connection: The business's Meta connection (account, Pixel).
+
+    Returns:
+        The audience id, or None when there is nothing to exclude or Meta
+        refused to create it.
+    """
+    if connection.pixelId is None:
+        return None
+    if connection.purchasersAudienceId is not None:
+        return connection.purchasersAudienceId
+    assert connection.adAccountId is not None
+    try:
+        audience_id = await meta.create_purchasers_audience(
+            access_token=connection.accessToken,
+            ad_account_id=connection.adAccountId,
+            pixel_id=connection.pixelId,
+            name="Sales Guru - purchasers, last 180 days",
+        )
+    except MetaConnectionError as exc:
+        logger.warning(
+            "Publishing without the purchasers exclusion for connection %s: %s",
+            connection.id,
+            exc,
+        )
+        return None
+    await db.metaconnection.update(
+        where={"id": connection.id}, data={"purchasersAudienceId": audience_id}
+    )
+    return audience_id
+
+
 async def _publish_creative_test_plan(
     *,
     campaign: Campaign,
@@ -973,17 +1020,22 @@ async def _publish_creative_test_plan(
         access_token=access_token, languages=constraints.languages
     )
 
-    if strategy.optimization_event == "ADD_TO_CART":
-        assert strategy.target_cost_per_add_to_cart is not None
-        bid_cents = round(strategy.target_cost_per_add_to_cart * 100)
-    else:
-        bid_cents = round(resolve_target_cac(strategy.unit_economics) * 100)
+    # A first test bids for the lowest cost, with no cap: nothing yet says what
+    # a result should cost. A plan stored before that change keeps its cap.
+    bid_cents: int | None = None
+    if strategy.bid_strategy == "COST_CAP":
+        if strategy.optimization_event == "ADD_TO_CART":
+            assert strategy.target_cost_per_add_to_cart is not None
+            bid_cents = round(strategy.target_cost_per_add_to_cart * 100)
+        else:
+            bid_cents = round(resolve_target_cac(strategy.unit_economics) * 100)
 
     end_time = campaign.endDate or (
         datetime.now(UTC) + timedelta(days=strategy.duration_days)
     )
     object_name = campaign.name or f"Sales Guru campaign {campaign.id}"
     pixel_id = connection.pixelId if requires_pixel(campaign.objective) else None
+    purchasers_audience_id = await _purchasers_audience_id(connection)
 
     meta_campaign_id = await meta.create_meta_campaign(
         access_token=access_token,
@@ -1015,6 +1067,10 @@ async def _publish_creative_test_plan(
             if strategy.optimization_event == "ADD_TO_CART"
             else "PURCHASE"
         ),
+        excluded_custom_audience_ids=(
+            [purchasers_audience_id] if purchasers_audience_id else None
+        ),
+        attribution_spec=meta.ATTRIBUTION_SPEC,
     )
     ad_set = await db.adset.create(
         data={
@@ -1028,6 +1084,15 @@ async def _publish_creative_test_plan(
     )
 
     for creative in creatives:
+        ad_name = creative_naming.ad_name(
+            creative.avatar, creative.concept, creative.headline
+        )
+        url_tags = creative_naming.url_tags(
+            campaign_name=object_name,
+            avatar=creative.avatar,
+            concept=creative.concept,
+            name=ad_name,
+        )
         if (
             creative.storyProductImageId or creative.squareProductImageId
         ) and creative.format != "CAROUSEL":
@@ -1039,6 +1104,7 @@ async def _publish_creative_test_plan(
                 page_id=connection.pageId,
                 destination_url=destination_url,
                 instagram_user_id=effective_instagram_user_id(connection),
+                url_tags=url_tags,
             )
         elif creative.format == "SINGLE_VIDEO":
             meta_creative_id = await _create_video_meta_creative(
@@ -1049,6 +1115,7 @@ async def _publish_creative_test_plan(
                 page_id=connection.pageId,
                 instagram_user_id=effective_instagram_user_id(connection),
                 destination_url=destination_url,
+                url_tags=url_tags,
             )
         else:
             image_hash = await _resolve_image_hash(
@@ -1066,11 +1133,12 @@ async def _publish_creative_test_plan(
                 cta=creative.cta,
                 link=destination_url,
                 image_hash=image_hash,
+                url_tags=url_tags,
             )
         meta_ad_id = await meta.create_meta_ad(
             access_token=access_token,
             ad_account_id=ad_account_id,
-            name=creative.headline,
+            name=ad_name,
             meta_ad_set_id=meta_ad_set_id,
             meta_creative_id=meta_creative_id,
             status=meta_status,
@@ -1078,7 +1146,7 @@ async def _publish_creative_test_plan(
         ad = await db.ad.create(
             data={
                 "adSetId": ad_set.id,
-                "name": creative.headline,
+                "name": ad_name,
                 "status": local_status,
                 "metaAdId": meta_ad_id,
             }
