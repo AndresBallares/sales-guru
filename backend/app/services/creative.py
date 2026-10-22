@@ -90,6 +90,7 @@ from app.schemas.strategy import (
     primary_audience,
     required_test_ads,
 )
+from app.services import ad_quality
 from app.services.brand_voice import brand_voice_lines
 from app.services.creative_naming import angle_label
 from app.services.media_info import is_square
@@ -342,7 +343,9 @@ def copy_problems(creative: Creative) -> list[str]:
     primary text must fit Facebook's 125-character preview, end on a complete
     sentence (. ! or ?, optionally followed by a closing quote or bracket) and
     not be cut off mid-phrase ("...Shop the", seen in the first live run);
-    the headline, description and every carousel card must fit their limits.
+    the headline, description and every carousel card must fit their limits;
+    and no slot may contain engagement bait or withheld-information phrasing
+    (app/services/ad_quality.py), which Meta's ad ranking penalizes.
 
     Args:
         creative: The creative about to be published.
@@ -375,7 +378,16 @@ def copy_problems(creative: Creative) -> list[str]:
             f"description is {len(description)} characters "
             f"(max {MAX_DESCRIPTION_LENGTH})"
         )
+    problems += ad_quality.copy_field_problems("primary text", body)
+    problems += ad_quality.copy_field_problems("headline", creative.headline)
+    problems += ad_quality.copy_field_problems("description", description)
     for position, card in enumerate(creative.cards or [], start=1):
+        problems += ad_quality.copy_field_problems(
+            f"card {position} headline", card.headline
+        )
+        problems += ad_quality.copy_field_problems(
+            f"card {position} description", card.description
+        )
         if len(card.headline) > MAX_HEADLINE_LENGTH:
             problems.append(
                 f"card {position} headline is {len(card.headline)} characters "
@@ -784,6 +796,8 @@ def _build_prompt(
     lines += _quality_rule_lines(
         business.industry, has_proof_points=bool(proof_points), format=format
     )
+
+    lines += ad_quality.rule_lines(business.industry)
 
     lines += [
         "",
