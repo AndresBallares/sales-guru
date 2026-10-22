@@ -61,6 +61,7 @@ from app.services.meta import (
     MetaDeliveryStatus,
 )
 from app.services.retargeting import RetargetingNotBuiltError
+from app.services.saturation import SaturationResponseNotBuiltError
 from app.services.switch_to_purchase import SwitchToPurchaseNotBuiltError
 from fastapi.testclient import TestClient
 from prisma import Base64, Prisma
@@ -338,6 +339,8 @@ async def _seed_metric(
     ad_set_id: str | None = None,
     cac: float | None = None,
     purchases: int | None = None,
+    reach: int | None = None,
+    frequency7d: float | None = None,
 ) -> None:
     """Insert a Metric snapshot with a controlled fetchedAt via a fresh connection."""
     seeder = Prisma()
@@ -352,6 +355,8 @@ async def _seed_metric(
             "conversions": conversions,
             "cac": cac,
             "purchases": purchases,
+            "reach": reach,
+            "frequency7d": frequency7d,
             "fetchedAt": fetched_at,
         }
     )
@@ -431,6 +436,14 @@ def mock_services(monkeypatch: pytest.MonkeyPatch) -> dict[str, AsyncMock]:
     delivery = AsyncMock(return_value=None)
     monkeypatch.setattr(meta_service_module, "fetch_meta_delivery_status", delivery)
     return {"insights": insights, "pause_ad_set": pause_ad_set, "delivery": delivery}
+
+
+@pytest.fixture(autouse=True)
+def window_insights(monkeypatch: pytest.MonkeyPatch) -> AsyncMock:
+    """The windowed reach/frequency call: no delivery unless a test says so."""
+    mock = AsyncMock(return_value=None)
+    monkeypatch.setattr(optimization_jobs, "fetch_campaign_window_insights", mock)
+    return mock
 
 
 # --- collect_metrics_for_all_live_campaigns ---------------------------------
@@ -3974,3 +3987,400 @@ async def test_approving_the_switch_cannot_create_anything_yet(
         _run(client, optimization_jobs.apply_recommendation, rec)
 
     assert (await _switch_recs(campaign_id))[0].status == "PENDING"
+
+
+# --- Audience saturation: windowed reach, daily evaluation, proposal -----------
+
+DAY = timedelta(days=1)
+
+
+async def _seed_saturated_history(
+    campaign_id: str, *, frequency: float | None = 4.2, reach_now: int = 16_500
+) -> None:
+    """30 days of delivery whose last week reached almost no new people."""
+    now = datetime.now(UTC)
+    rows = [
+        (30.0, 1.0, 100, 90, None),
+        (16.0, 700.0, 70_000, 14_000, None),
+        (14.0, 800.0, 80_000, 14_500, None),
+        (7.0, 1150.0, 100_000, 16_000, None),
+        (0.0, 1500.0, 130_000, reach_now, frequency),
+    ]
+    for days_ago, spend, impressions, reach, freq in rows:
+        await _seed_metric(
+            campaign_id,
+            fetched_at=now
+            - timedelta(days=days_ago, minutes=1 if days_ago == 0 else 0),
+            spend=spend,
+            impressions=impressions,
+            reach=reach,
+            frequency7d=freq,
+        )
+
+
+async def _campaign_row(campaign_id: str) -> Any:
+    seeder = Prisma()
+    await seeder.connect()
+    try:
+        return await seeder.campaign.find_unique(where={"id": campaign_id})
+    finally:
+        await seeder.disconnect()
+
+
+async def _backdate_check(campaign_id: str, hours: int = 25) -> None:
+    seeder = Prisma()
+    await seeder.connect()
+    try:
+        await seeder.campaign.update(
+            where={"id": campaign_id},
+            data={"saturationCheckedAt": datetime.now(UTC) - timedelta(hours=hours)},
+        )
+    finally:
+        await seeder.disconnect()
+
+
+async def _saturation_recs(campaign_id: str) -> list[Any]:
+    return [
+        r
+        for r in await _recommendations(campaign_id)
+        if r.actionType == "DUPLICATE_WINNERS_ADJACENT_INTEREST"
+    ]
+
+
+async def _run_saturation(client: TestClient, campaign_id: str) -> None:
+    campaign = await _campaign_row(campaign_id)
+    _run(client, optimization_jobs._check_audience_saturation, campaign)
+
+
+@pytest.mark.asyncio
+async def test_saturation_needs_two_evaluations_in_a_row_before_anything_shows(
+    client: TestClient, mock_services: dict[str, AsyncMock]
+) -> None:
+    _, campaign_id = _live_campaign(client)
+    await _seed_saturated_history(campaign_id)
+
+    await _run_saturation(client, campaign_id)
+
+    first = await _campaign_row(campaign_id)
+    assert first.saturationStreak == 1
+    assert first.saturationWarning is None
+    assert await _saturation_recs(campaign_id) == []
+
+    await _backdate_check(campaign_id)
+    await _run_saturation(client, campaign_id)
+
+    second = await _campaign_row(campaign_id)
+    assert second.saturationStreak == 2
+    assert second.saturationWarning is not None
+    assert "Audience saturation" in second.saturationWarning
+    recs = await _saturation_recs(campaign_id)
+    assert len(recs) == 1
+    assert (recs[0].status, recs[0].requiresApproval, recs[0].risk) == (
+        "PENDING",
+        True,
+        "MEDIUM",
+    )
+    assert "500 new people" in recs[0].reasoning
+    assert "adjacent-interest ad set" in recs[0].reasoning
+
+
+@pytest.mark.asyncio
+async def test_saturation_is_evaluated_at_most_once_a_day(
+    client: TestClient, mock_services: dict[str, AsyncMock]
+) -> None:
+    _, campaign_id = _live_campaign(client)
+    await _seed_saturated_history(campaign_id)
+
+    await _run_saturation(client, campaign_id)
+    await _run_saturation(client, campaign_id)
+
+    assert (await _campaign_row(campaign_id)).saturationStreak == 1
+
+
+@pytest.mark.asyncio
+async def test_a_day_the_rule_fails_resets_the_streak_and_clears_everything(
+    client: TestClient, mock_services: dict[str, AsyncMock]
+) -> None:
+    _, campaign_id = _live_campaign(client)
+    await _seed_saturated_history(campaign_id)
+    await _run_saturation(client, campaign_id)
+    await _backdate_check(campaign_id)
+    await _run_saturation(client, campaign_id)
+    assert len(await _saturation_recs(campaign_id)) == 1
+
+    # Fresh new-reach data: the latest snapshot now shows plenty of new people.
+    await _seed_metric(
+        campaign_id,
+        fetched_at=datetime.now(UTC),
+        spend=1500.0,
+        impressions=130_000,
+        reach=30_000,
+        frequency7d=4.2,
+    )
+    await _backdate_check(campaign_id)
+    await _run_saturation(client, campaign_id)
+
+    row = await _campaign_row(campaign_id)
+    assert row.saturationStreak == 0
+    assert row.saturationWarning is None
+    assert [r.status for r in await _saturation_recs(campaign_id)] == ["SUPERSEDED"]
+
+
+@pytest.mark.asyncio
+async def test_a_proposal_is_not_duplicated_while_one_is_pending(
+    client: TestClient, mock_services: dict[str, AsyncMock]
+) -> None:
+    _, campaign_id = _live_campaign(client)
+    await _seed_saturated_history(campaign_id)
+    for _ in range(4):
+        await _run_saturation(client, campaign_id)
+        await _backdate_check(campaign_id)
+
+    assert len(await _saturation_recs(campaign_id)) == 1
+
+
+async def _decide_saturation_rec(campaign_id: str, status: str, days_ago: int) -> None:
+    seeder = Prisma()
+    await seeder.connect()
+    try:
+        await seeder.optimizationrecommendation.update_many(
+            where={
+                "campaignId": campaign_id,
+                "actionType": "DUPLICATE_WINNERS_ADJACENT_INTEREST",
+            },
+            data={
+                "status": status,
+                "updatedAt": datetime.now(UTC) - timedelta(days=days_ago),
+            },
+        )
+    finally:
+        await seeder.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_no_new_proposal_during_the_cooldown_after_a_decision(
+    client: TestClient, mock_services: dict[str, AsyncMock]
+) -> None:
+    _, campaign_id = _live_campaign(client)
+    await _seed_saturated_history(campaign_id)
+    await _run_saturation(client, campaign_id)
+    await _backdate_check(campaign_id)
+    await _run_saturation(client, campaign_id)
+    await _decide_saturation_rec(campaign_id, "REJECTED", days_ago=3)
+
+    await _backdate_check(campaign_id)
+    await _run_saturation(client, campaign_id)
+
+    assert [r.status for r in await _saturation_recs(campaign_id)] == ["REJECTED"]
+    assert (await _campaign_row(campaign_id)).saturationWarning is not None
+
+
+@pytest.mark.asyncio
+async def test_a_new_proposal_once_the_cooldown_has_passed(
+    client: TestClient, mock_services: dict[str, AsyncMock]
+) -> None:
+    _, campaign_id = _live_campaign(client)
+    await _seed_saturated_history(campaign_id)
+    await _run_saturation(client, campaign_id)
+    await _backdate_check(campaign_id)
+    await _run_saturation(client, campaign_id)
+    await _decide_saturation_rec(campaign_id, "REJECTED", days_ago=20)
+
+    await _backdate_check(campaign_id)
+    await _run_saturation(client, campaign_id)
+
+    assert sorted(r.status for r in await _saturation_recs(campaign_id)) == [
+        "PENDING",
+        "REJECTED",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_a_campaign_that_cannot_be_evaluated_yet_is_left_alone(
+    client: TestClient, mock_services: dict[str, AsyncMock]
+) -> None:
+    _, campaign_id = _live_campaign(client)
+    await _seed_metric(campaign_id, fetched_at=datetime.now(UTC), reach=100)
+
+    await _run_saturation(client, campaign_id)
+
+    row = await _campaign_row(campaign_id)
+    assert row.saturationCheckedAt is None and row.saturationStreak == 0
+
+
+@pytest.mark.asyncio
+async def test_a_creative_test_is_never_checked_for_saturation(
+    client: TestClient, mock_services: dict[str, AsyncMock]
+) -> None:
+    campaign_id = await _make_creative_plan_campaign(
+        client, optimization_event="PURCHASE"
+    )
+    await _seed_saturated_history(campaign_id)
+
+    await _run_saturation(client, campaign_id)
+
+    row = await _campaign_row(campaign_id)
+    assert row.saturationCheckedAt is None and row.saturationWarning is None
+
+
+# -- windowed reach and frequency (collector) --
+
+
+def _window(frequency: float | None = 4.0) -> Any:
+    from app.services.meta import WindowInsights
+
+    return WindowInsights(reach=3000, impressions=12_000, frequency=frequency)
+
+
+async def _newest_metric(campaign_id: str) -> Any:
+    seeder = Prisma()
+    await seeder.connect()
+    try:
+        return await seeder.metric.find_first(
+            where={"campaignId": campaign_id}, order={"fetchedAt": "desc"}
+        )
+    finally:
+        await seeder.disconnect()
+
+
+async def _run_window(client: TestClient, campaign_id: str) -> None:
+    campaign = await _campaign_row(campaign_id)
+    _run(client, optimization_jobs._collect_window_metrics, campaign, "token")
+
+
+@pytest.mark.asyncio
+async def test_the_windowed_frequency_is_stored_on_the_newest_snapshot(
+    client: TestClient,
+    mock_services: dict[str, AsyncMock],
+    window_insights: AsyncMock,
+) -> None:
+    _, campaign_id = _live_campaign(client)
+    await _seed_saturated_history(campaign_id, frequency=None)
+    window_insights.return_value = _window(3.9)
+
+    await _run_window(client, campaign_id)
+
+    newest = await _newest_metric(campaign_id)
+    assert (newest.reach7d, newest.frequency7d) == (3000, 3.9)
+    assert window_insights.await_args is not None
+    kwargs = window_insights.await_args.kwargs
+    assert (kwargs["until"] - kwargs["since"]).days == 6  # seven days, inclusive
+
+
+@pytest.mark.asyncio
+async def test_a_recent_windowed_reading_is_not_fetched_again(
+    client: TestClient,
+    mock_services: dict[str, AsyncMock],
+    window_insights: AsyncMock,
+) -> None:
+    _, campaign_id = _live_campaign(client)
+    await _seed_saturated_history(campaign_id)  # newest already has frequency7d
+
+    await _run_window(client, campaign_id)
+
+    window_insights.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_no_windowed_fetch_before_14_days_of_delivery(
+    client: TestClient,
+    mock_services: dict[str, AsyncMock],
+    window_insights: AsyncMock,
+) -> None:
+    _, campaign_id = _live_campaign(client)
+    await _seed_metric(campaign_id, fetched_at=datetime.now(UTC) - 5 * DAY, spend=50.0)
+    await _seed_metric(campaign_id, fetched_at=datetime.now(UTC), spend=90.0)
+
+    await _run_window(client, campaign_id)
+
+    window_insights.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_no_windowed_fetch_for_a_creative_test(
+    client: TestClient,
+    mock_services: dict[str, AsyncMock],
+    window_insights: AsyncMock,
+) -> None:
+    campaign_id = await _make_creative_plan_campaign(
+        client, optimization_event="PURCHASE"
+    )
+    await _seed_saturated_history(campaign_id, frequency=None)
+
+    await _run_window(client, campaign_id)
+
+    window_insights.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_a_failed_windowed_fetch_changes_nothing(
+    client: TestClient,
+    mock_services: dict[str, AsyncMock],
+    window_insights: AsyncMock,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    _, campaign_id = _live_campaign(client)
+    await _seed_saturated_history(campaign_id, frequency=None)
+    window_insights.side_effect = MetaConnectionError("boom")
+
+    with caplog.at_level("WARNING"):
+        await _run_window(client, campaign_id)
+
+    assert (await _newest_metric(campaign_id)).frequency7d is None
+    assert "Windowed reach failed" in caplog.text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("result", [None, "no_frequency"])
+async def test_a_window_with_no_delivery_stores_nothing(
+    client: TestClient,
+    mock_services: dict[str, AsyncMock],
+    window_insights: AsyncMock,
+    result: str | None,
+) -> None:
+    _, campaign_id = _live_campaign(client)
+    await _seed_saturated_history(campaign_id, frequency=None)
+    window_insights.return_value = None if result is None else _window(None)
+
+    await _run_window(client, campaign_id)
+
+    assert (await _newest_metric(campaign_id)).reach7d is None
+
+
+@pytest.mark.asyncio
+async def test_a_snapshot_stores_meta_frequency(
+    client: TestClient,
+    mock_services: dict[str, AsyncMock],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _, campaign_id = _live_campaign(client)
+    monkeypatch.setattr(
+        optimization_jobs,
+        "fetch_campaign_insights",
+        AsyncMock(
+            return_value=CampaignInsights(
+                impressions=1000, clicks=10, spend=5.0, conversions=1, frequency=2.5
+            )
+        ),
+    )
+
+    _run(client, optimization_jobs.collect_metrics_for_all_live_campaigns)
+
+    assert (await _newest_metric(campaign_id)).frequency == 2.5
+
+
+@pytest.mark.asyncio
+async def test_approving_the_saturation_response_cannot_create_anything_yet(
+    client: TestClient, mock_services: dict[str, AsyncMock]
+) -> None:
+    _, campaign_id = _live_campaign(client)
+    await _seed_saturated_history(campaign_id)
+    await _run_saturation(client, campaign_id)
+    await _backdate_check(campaign_id)
+    await _run_saturation(client, campaign_id)
+    rec = (await _saturation_recs(campaign_id))[0]
+
+    with pytest.raises(SaturationResponseNotBuiltError, match="not built"):
+        _run(client, optimization_jobs.apply_recommendation, rec)
+
+    assert (await _saturation_recs(campaign_id))[0].status == "PENDING"

@@ -76,6 +76,7 @@ async def campaign_dashboard(
             ads=data.ads,
             recommendations=data.recommendations,
             pixel_warning=data.pixel_warning,
+            saturation_warning=data.saturation_warning,
             is_sample=True,
         )
 
@@ -107,6 +108,7 @@ async def campaign_dashboard(
             for r in recommendations
         ],
         pixel_warning=campaign.pixelWarning,
+        saturation_warning=campaign.saturationWarning,
         is_sample=False,
         paused_at=campaign.pausedAt,
         paused_reason=campaign.pausedReason,

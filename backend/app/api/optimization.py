@@ -13,8 +13,7 @@ from app.services.optimization_jobs import (
     generate_and_store_recommendation,
 )
 from app.services.optimizer import OptimizerError
-from app.services.retargeting import RetargetingNotBuiltError
-from app.services.switch_to_purchase import SwitchToPurchaseNotBuiltError
+from app.services.proposals import ProposalNotBuiltError
 
 router = APIRouter(
     prefix="/businesses/{business_id}/campaigns/{campaign_id}/optimize",
@@ -209,7 +208,7 @@ async def approve_recommendation(
 
     try:
         updated = await apply_recommendation(rec)
-    except (RetargetingNotBuiltError, SwitchToPurchaseNotBuiltError) as exc:
+    except ProposalNotBuiltError as exc:
         # Documented but unbuilt: refuse clearly, leave the proposal pending.
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT, detail=str(exc)

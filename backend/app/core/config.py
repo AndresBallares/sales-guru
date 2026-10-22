@@ -127,6 +127,25 @@ class Settings(BaseSettings):
     # target CAC into a target cost per add-to-cart for the cost cap. An
     # assumption, not measured data: tune it as real funnel data arrives.
     add_to_cart_to_purchase_rate: float = 0.10
+    # Audience saturation (app/services/saturation.py). The rule fires when,
+    # on two evaluations in a row (one per day): new reach per dollar over the
+    # last 7 days is at most `saturation_reach_per_dollar_ratio` of the first
+    # 14 days' rate, AND frequency over the last 7 days is at least
+    # `saturation_min_frequency`, AND fewer than `saturation_max_first_time_ratio`
+    # of the last 7 days' impressions went to people reached for the first
+    # time, with spend holding up (at least `saturation_min_spend_7d`, and at
+    # least `saturation_spend_floor_ratio` of the week before). Public guidance
+    # on frequency is vendor blogs, not Meta, and disagrees (about 2.5-4 for a
+    # cold audience), so every number here is a starting point to tune.
+    saturation_min_days: int = 14
+    saturation_min_spend_7d: float = 150.0
+    saturation_min_impressions_7d: int = 10_000
+    saturation_spend_floor_ratio: float = 0.9
+    saturation_reach_per_dollar_ratio: float = 0.5
+    saturation_min_frequency: float = 3.5
+    saturation_max_first_time_ratio: float = 0.25
+    saturation_consecutive_evaluations: int = 2
+    saturation_cooldown_days: int = 14
     # What counts as "this business has run ads before" (Meta ad-account
     # history): lifetime spend AND clicks across the account at or above both.
     # Any spend used to count, which pushed an account off its first creative

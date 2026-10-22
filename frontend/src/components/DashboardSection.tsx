@@ -206,6 +206,13 @@ export function DashboardSection({
                 </p>
               )}
 
+              {shown.saturationWarning && (
+                <p className="dash-warning" role="alert">
+                  <strong>Audience saturation:</strong>{' '}
+                  {shown.saturationWarning.replace(/^Audience saturation:\s*/, '')}
+                </p>
+              )}
+
               {shown.proposals.length > 0 && (
                 <section className="dash-proposals" aria-label="Pending optimizer proposals">
                   <h3>Waiting for your decision</h3>

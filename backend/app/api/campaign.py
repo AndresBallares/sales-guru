@@ -158,6 +158,7 @@ async def _to_response(campaign: Campaign) -> CampaignResponse:
         paused_at=campaign.pausedAt,
         daily_spend_flag=campaign.dailySpendFlag,
         pixel_warning=campaign.pixelWarning,
+        saturation_warning=campaign.saturationWarning,
         needs_destination_url=await _needs_destination_url(campaign),
         has_delivered=await campaign_lifecycle.has_delivered(campaign.id),
     )

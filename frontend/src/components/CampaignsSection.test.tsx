@@ -4553,6 +4553,31 @@ describe('CampaignsSection', () => {
     expect(await screen.findByText(/Purchase event may not be firing/)).toBeInTheDocument()
   })
 
+  it('shows the audience saturation warning on a live campaign', async () => {
+    mockedApi.listCampaigns.mockResolvedValue([
+      {
+        id: 'camp-1',
+        name: null,
+        objective: 'SALES',
+        status: 'LIVE',
+        productId: null,
+        audienceId: null,
+        metaCampaignId: 'meta_campaign_1',
+        eventVenueKey: null,
+        startDate: null,
+        endDate: null,
+        pausedReason: null,
+        dailySpendFlag: null,
+        saturationWarning: 'Audience saturation: reach has plateaued while frequency climbs.',
+        needsDestinationUrl: false,
+      },
+    ])
+
+    renderCampaigns(<CampaignsSection businessId="biz-1" />)
+
+    expect(await screen.findByText(/Audience saturation: reach has plateaued/)).toBeInTheDocument()
+  })
+
   it('shows a retargeting proposal and surfaces the refusal when it cannot be created yet', async () => {
     mockedApi.getOptions.mockResolvedValue({
       ...ALL_OPTIONS,

@@ -525,6 +525,33 @@ describe('DashboardSection', () => {
     expect(alert.compareDocumentPosition(cards) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
   })
 
+  it('shows the audience saturation warning with its numbers, above the cards', async () => {
+    mockedApi.getCampaignDashboard.mockResolvedValue(
+      dashboard('c1', {
+        saturationWarning:
+          'Audience saturation: reach has plateaued while frequency climbs. Frequency was 4.2.',
+      }),
+    )
+
+    renderSection()
+
+    const alert = await screen.findByRole('alert')
+    expect(alert).toHaveTextContent(
+      'Audience saturation: reach has plateaued while frequency climbs. Frequency was 4.2.',
+    )
+    // The warning's own prefix is not repeated next to the bold label.
+    expect(alert.textContent?.match(/Audience saturation/g)).toHaveLength(1)
+    const cards = screen.getByLabelText('Campaign results')
+    expect(alert.compareDocumentPosition(cards) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
+
+  it('shows no saturation warning when there is none', async () => {
+    renderSection()
+
+    await screen.findByLabelText('Campaign results')
+    expect(screen.queryByText(/Audience saturation/)).not.toBeInTheDocument()
+  })
+
   it('shows pending optimizer proposals, even before the first results', async () => {
     mockedApi.getCampaignDashboard.mockResolvedValue(
       dashboard('c1', {

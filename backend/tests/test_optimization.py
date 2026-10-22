@@ -788,6 +788,31 @@ async def test_approving_a_switch_to_purchase_returns_409_and_stays_pending(
     assert listed[0]["actionType"] == "SWITCH_TO_PURCHASE"
 
 
+@pytest.mark.asyncio
+async def test_approving_the_saturation_response_returns_409_and_stays_pending(
+    client: TestClient, mock_services: dict[str, AsyncMock]
+) -> None:
+    """Duplicating the winners into an adjacent-interest ad set isn't built:
+    approval is refused with a clear message, and the proposal stays pending."""
+    business_id, campaign_id = _live_campaign(client)
+    rec_id = await _seed_recommendation(
+        campaign_id,
+        actionType="DUPLICATE_WINNERS_ADJACENT_INTEREST",
+        reasoning="Audience saturation detected.",
+    )
+
+    response = client.post(
+        f"/businesses/{business_id}/campaigns/{campaign_id}/optimize/{rec_id}/approve"
+    )
+
+    assert response.status_code == 409
+    assert "not built yet" in response.json()["detail"]
+    listed = client.get(
+        f"/businesses/{business_id}/campaigns/{campaign_id}/optimize"
+    ).json()
+    assert listed[0]["status"] == "PENDING"
+
+
 def test_the_campaign_response_carries_the_pixel_warning(client: TestClient) -> None:
     business_id, _ = _live_campaign(client)
 
