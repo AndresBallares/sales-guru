@@ -206,8 +206,8 @@ def _quality_rule_lines(
         "1. Hook: Facebook cuts primary text off after about "
         f'{MAX_BODY_TEXT_LENGTH} characters with "See more", so the '
         "first line of body_text has to stop the scroll on its own: open "
-        "with a question, a bold claim, a specific benefit, or social "
-        "proof. Don't open with the brand name or a greeting.",
+        "with a question, a specific, concrete claim, a specific benefit, "
+        "or social proof. Don't open with the brand name or a greeting.",
         f"2. {visual}",
         "3. One message: one product, one benefit, one reason to act per "
         "variant. Don't try to say everything.",

@@ -1131,7 +1131,11 @@ def test_build_prompt_requires_a_scroll_stopping_hook_in_the_first_line() -> Non
 
     assert "Ad quality rules" in prompt
     assert "first line" in prompt
-    assert "question, a bold claim, a specific benefit, or social proof" in prompt
+    assert (
+        "question, a specific, concrete claim, a specific benefit, or social proof"
+        in prompt
+    )
+    assert "bold claim" not in prompt
     assert "125" in prompt
 
 
