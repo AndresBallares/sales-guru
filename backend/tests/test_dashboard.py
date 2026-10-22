@@ -112,6 +112,7 @@ async def _seed_campaign(
     published: bool = True,
     strategy: str | None = None,
     pixel_warning: str | None = None,
+    saturation_warning: str | None = None,
     ad_sets: int = 1,
     paused_at: datetime | None = None,
     paused_reason: str | None = None,
@@ -127,6 +128,7 @@ async def _seed_campaign(
                 "status": status,
                 "metaCampaignId": "meta_campaign" if published else None,
                 "pixelWarning": pixel_warning,
+                "saturationWarning": saturation_warning,
                 "pausedAt": paused_at,
                 "pausedReason": paused_reason,
             }
@@ -758,6 +760,24 @@ def test_proposals_and_pixel_warning_show_even_before_any_snapshot(
     assert body["hasData"] is False
     assert body["pixelWarning"] == "Purchase event may not be firing"
     assert len(body["proposals"]) == 1
+
+
+def test_a_saturation_warning_shows_on_the_dashboard(client: TestClient) -> None:
+    business_id, campaign_id = _setup(
+        client, saturation_warning="Audience saturation: reach has plateaued."
+    )
+
+    body = client.get(_url(business_id, campaign_id)).json()
+
+    assert body["saturationWarning"] == "Audience saturation: reach has plateaued."
+
+
+def test_no_saturation_warning_by_default(client: TestClient) -> None:
+    business_id, campaign_id = _setup(client)
+
+    assert (
+        client.get(_url(business_id, campaign_id)).json()["saturationWarning"] is None
+    )
 
 
 # --- business summary ------------------------------------------------

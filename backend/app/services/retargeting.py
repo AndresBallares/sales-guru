@@ -21,6 +21,8 @@ range; that is what creating the audience (the unbuilt part) would unlock.
 
 from typing import NamedTuple
 
+from app.services.proposals import ProposalNotBuiltError
+
 # Over the last WINDOW_DAYS days, propose retargeting once both are reached.
 WINDOW_DAYS = 30
 MIN_PAGE_VIEWS_30D = 1000
@@ -29,7 +31,7 @@ MIN_VIEW_CONTENT_30D = 500
 RETARGETING_BUDGET_FRACTION = 0.20
 
 
-class RetargetingNotBuiltError(NotImplementedError):
+class RetargetingNotBuiltError(ProposalNotBuiltError):
     """Raised by create_retargeting_campaign: creating it isn't built yet."""
 
 

@@ -4308,3 +4308,140 @@ async def test_an_unrelated_ad_set_error_is_not_retried(
         await _ad_set(meta.ATTRIBUTION_SPEC)
 
     assert len(client.calls) == 1
+
+
+# ── Frequency and the windowed reach query ──
+
+
+@pytest.mark.asyncio
+async def test_insights_carry_metas_frequency(monkeypatch: pytest.MonkeyPatch) -> None:
+    client = _mock_client_returning(
+        monkeypatch,
+        _FakeResponse(
+            {
+                "data": [
+                    {
+                        "impressions": "1000",
+                        "reach": "400",
+                        "frequency": "2.5",
+                        "clicks": "5",
+                        "spend": "10",
+                    }
+                ]
+            }
+        ),
+    )
+
+    insights = await meta.fetch_campaign_insights(
+        access_token="token", meta_campaign_id="campaign_1"
+    )
+
+    assert insights.frequency == 2.5
+    assert "frequency" in client.calls[0][1]["fields"].split(",")
+
+
+@pytest.mark.asyncio
+async def test_insights_without_frequency_leave_it_unset(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _mock_client_returning(
+        monkeypatch,
+        _FakeResponse({"data": [{"impressions": "10", "clicks": "1", "spend": "1"}]}),
+    )
+
+    insights = await meta.fetch_campaign_insights(
+        access_token="token", meta_campaign_id="campaign_1"
+    )
+
+    assert insights.frequency is None
+
+
+@pytest.mark.asyncio
+async def test_window_insights_ask_for_the_dates_and_parse_reach_and_frequency(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from datetime import date
+
+    client = _mock_client_returning(
+        monkeypatch,
+        _FakeResponse(
+            {"data": [{"reach": "3000", "impressions": "12000", "frequency": "4.0"}]}
+        ),
+    )
+
+    window = await meta.fetch_campaign_window_insights(
+        access_token="token",
+        meta_campaign_id="campaign_1",
+        since=date(2026, 10, 14),
+        until=date(2026, 10, 20),
+    )
+
+    assert window == meta.WindowInsights(reach=3000, impressions=12000, frequency=4.0)
+    params = client.calls[0][1]
+    assert json.loads(params["time_range"]) == {
+        "since": "2026-10-14",
+        "until": "2026-10-20",
+    }
+    assert params["fields"] == "reach,impressions,frequency"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("body", [{"data": []}, {"data": [{"impressions": "5"}]}])
+async def test_a_window_without_delivery_is_none(
+    monkeypatch: pytest.MonkeyPatch, body: dict[str, Any]
+) -> None:
+    from datetime import date
+
+    _mock_client_returning(monkeypatch, _FakeResponse(body))
+
+    assert (
+        await meta.fetch_campaign_window_insights(
+            access_token="token",
+            meta_campaign_id="campaign_1",
+            since=date(2026, 10, 14),
+            until=date(2026, 10, 20),
+        )
+        is None
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_window_without_frequency_still_reports_reach(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from datetime import date
+
+    _mock_client_returning(
+        monkeypatch, _FakeResponse({"data": [{"reach": "10", "impressions": "20"}]})
+    )
+
+    window = await meta.fetch_campaign_window_insights(
+        access_token="token",
+        meta_campaign_id="campaign_1",
+        since=date(2026, 10, 14),
+        until=date(2026, 10, 20),
+    )
+
+    assert window is not None and window.frequency is None
+
+
+@pytest.mark.asyncio
+async def test_window_insights_are_none_in_fake_mode(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from datetime import date
+
+    monkeypatch.setenv("FAKE_META", "true")
+    get_settings.cache_clear()
+    try:
+        window = await meta.fetch_campaign_window_insights(
+            access_token="token",
+            meta_campaign_id="campaign_1",
+            since=date(2026, 10, 14),
+            until=date(2026, 10, 20),
+        )
+    finally:
+        monkeypatch.delenv("FAKE_META")
+        get_settings.cache_clear()
+
+    assert window is None

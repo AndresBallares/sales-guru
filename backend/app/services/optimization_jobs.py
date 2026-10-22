@@ -77,6 +77,7 @@ from prisma.models import (
 )
 from prisma.types import MetricCreateInput
 
+from app.core.config import get_settings
 from app.core.db import db
 from app.core.meta_connection import get_meta_connection
 from app.schemas.creative import MIN_CAROUSEL_CARDS
@@ -87,7 +88,13 @@ from app.schemas.strategy import (
     planned_total_budget,
 )
 from app.schemas.test_evaluation import StopReason
-from app.services import creative_test_rules, optimizer, retargeting, switch_to_purchase
+from app.services import (
+    creative_test_rules,
+    optimizer,
+    retargeting,
+    saturation,
+    switch_to_purchase,
+)
 from app.services.campaign_status_sync import sync_campaign_statuses
 from app.services.meta import (
     CampaignInsights,
@@ -95,6 +102,7 @@ from app.services.meta import (
     fetch_ad_insights,
     fetch_ad_set_insights,
     fetch_campaign_insights,
+    fetch_campaign_window_insights,
     fetch_pixel_event_counts,
     pause_meta_ad,
     update_meta_ad_set_bid,
@@ -130,6 +138,7 @@ def metric_create_data(
         "spend": insights.spend,
         "conversions": insights.conversions,
         "reach": insights.reach,
+        "frequency": insights.frequency,
         "cpm": insights.cpm,
         "ctr": insights.ctr,
         "cpc": insights.cpc,
@@ -244,6 +253,145 @@ async def _collect_metrics_for_campaign(campaign: Campaign, access_token: str) -
                 campaign_id=campaign.id, insights=insights, ad_set_id=ad_set.id
             )
         )
+
+
+async def _is_past_creative_test(campaign: Campaign) -> bool:
+    """Whether the campaign is an open-ended one past its creative test.
+
+    A creative test and a TEST_PLAN both end at their planned duration, well
+    before 14 days of delivery, so in practice only a DATA_DRIVEN_STRATEGY
+    campaign is old enough for the saturation rule.
+    """
+    strategy = await db.strategy.find_unique(where={"campaignId": campaign.id})
+    if strategy is None:
+        return False
+    plan = StrategyContentAdapter.validate_json(strategy.content)
+    return plan.plan_type == "DATA_DRIVEN_STRATEGY"
+
+
+async def _campaign_level_metrics(campaign_id: str) -> list[Metric]:
+    return await db.metric.find_many(
+        where={"campaignId": campaign_id, "adId": None, "adSetId": None},
+        order={"fetchedAt": "asc"},
+    )
+
+
+async def _collect_window_metrics(campaign: Campaign, access_token: str) -> None:
+    """Attach the last 7 days' unique reach and frequency to the newest snapshot.
+
+    Unique reach isn't additive, so a window's frequency needs its own Insights
+    query. It's made at most about once a day, and only for a campaign past its
+    creative test with the saturation rule's minimum days of delivery. A failed
+    call leaves everything as it was.
+
+    Args:
+        campaign: The live campaign.
+        access_token: The business's Meta access token.
+    """
+    settings = get_settings()
+    if campaign.metaCampaignId is None or not await _is_past_creative_test(campaign):
+        return
+    metrics = await _campaign_level_metrics(campaign.id)
+    delivering = [m for m in metrics if m.spend > 0 and m.impressions > 0]
+    now = datetime.now(UTC)
+    if not delivering or now - delivering[0].fetchedAt < timedelta(
+        days=settings.saturation_min_days
+    ):
+        return
+    if any(
+        m.frequency7d is not None and now - m.fetchedAt < timedelta(hours=20)
+        for m in metrics
+    ):
+        return
+    today = now.date()
+    try:
+        window = await fetch_campaign_window_insights(
+            access_token=access_token,
+            meta_campaign_id=campaign.metaCampaignId,
+            since=today - timedelta(days=7),
+            until=today - timedelta(days=1),
+        )
+    except MetaConnectionError:
+        logger.warning("Windowed reach failed for campaign %s", campaign.id)
+        return
+    if window is None or window.frequency is None:
+        return
+    await db.metric.update(
+        where={"id": metrics[-1].id},
+        data={"reach7d": window.reach, "frequency7d": window.frequency},
+    )
+
+
+async def _check_audience_saturation(campaign: Campaign) -> None:
+    """Evaluate the saturation rule once a day; warn and propose, never act.
+
+    The rule (app/services/saturation.py) must hold on
+    `saturation_consecutive_evaluations` daily evaluations in a row before
+    anything shows: then Campaign.saturationWarning carries the numbers and
+    one PENDING DUPLICATE_WINNERS_ADJACENT_INTEREST proposal exists. When the
+    rule stops holding the streak resets, the warning clears and a still-pending
+    proposal is withdrawn (SUPERSEDED). After the user decides a proposal, no
+    new one is made for `saturation_cooldown_days` (the time its effect takes
+    to show). A campaign that can't be evaluated yet is left untouched.
+
+    Args:
+        campaign: The live campaign.
+    """
+    settings = get_settings()
+    now = datetime.now(UTC)
+    if (
+        campaign.saturationCheckedAt is not None
+        and now - campaign.saturationCheckedAt < timedelta(hours=24)
+    ):
+        return
+    if not await _is_past_creative_test(campaign):
+        return
+    reading = saturation.evaluate(
+        await _campaign_level_metrics(campaign.id), settings, now=now
+    )
+    if reading is None:
+        return
+
+    streak = campaign.saturationStreak + 1 if reading.fired else 0
+    shown = streak >= settings.saturation_consecutive_evaluations
+    await db.campaign.update(
+        where={"id": campaign.id},
+        data={
+            "saturationStreak": streak,
+            "saturationCheckedAt": now,
+            "saturationWarning": saturation.warning_text(reading) if shown else None,
+        },
+    )
+
+    existing = await db.optimizationrecommendation.find_many(
+        where={
+            "campaignId": campaign.id,
+            "actionType": "DUPLICATE_WINNERS_ADJACENT_INTEREST",
+        }
+    )
+    pending = next((r for r in existing if r.status == "PENDING"), None)
+    if not shown:
+        if pending is not None:
+            await db.optimizationrecommendation.update(
+                where={"id": pending.id}, data={"status": "SUPERSEDED"}
+            )
+        return
+    cooldown = timedelta(days=settings.saturation_cooldown_days)
+    if pending is not None or any(
+        r.status in ("APPLIED", "REJECTED") and now - r.updatedAt < cooldown
+        for r in existing
+    ):
+        return
+    await db.optimizationrecommendation.create(
+        data={
+            "campaignId": campaign.id,
+            "actionType": "DUPLICATE_WINNERS_ADJACENT_INTEREST",
+            "reasoning": saturation.proposal_reasoning(reading),
+            "confidence": 1.0,
+            "risk": "MEDIUM",
+            "requiresApproval": True,
+        }
+    )
 
 
 async def collect_final_snapshot(campaign: Campaign, access_token: str) -> None:
@@ -1076,6 +1224,7 @@ async def collect_metrics_for_all_live_campaigns() -> None:
             continue
         await _collect_metrics_for_campaign(campaign, connection.accessToken)
         await _collect_ad_level_metrics(campaign, connection.accessToken)
+        await _collect_window_metrics(campaign, connection.accessToken)
         try:
             await _enforce_spend_circuit_breaker(campaign, connection)
             # Re-fetch: the total-spend breaker above may have just paused
@@ -1091,6 +1240,7 @@ async def collect_metrics_for_all_live_campaigns() -> None:
                 await _check_add_to_cart_delivery(current)
                 await _enforce_creative_test_rules(current, connection)
                 await _check_pixel_signals(current, connection)
+                await _check_audience_saturation(current)
         except MetaConnectionError:
             logger.warning("Circuit breaker pause failed for campaign %s", campaign.id)
 
@@ -1146,6 +1296,14 @@ async def apply_recommendation(
             ),
             access_token=connection.accessToken,
             ad_account_id=connection.adAccountId or "",
+        )
+    elif recommendation.actionType == "DUPLICATE_WINNERS_ADJACENT_INTEREST":
+        # Documented but unbuilt (PRD Part B): raises, so the proposal stays
+        # pending and nothing is created on Meta.
+        raise saturation.SaturationResponseNotBuiltError(
+            "Duplicating the winners into an adjacent-interest ad set is not "
+            "built yet — your approval is recorded as interest only; nothing "
+            "was created on Meta."
         )
     elif recommendation.actionType == "SWITCH_TO_PURCHASE":
         # Documented but unbuilt: raises SwitchToPurchaseNotBuiltError, so the

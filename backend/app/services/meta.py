@@ -38,7 +38,7 @@ import json
 import logging
 import re
 from collections.abc import Callable
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from typing import Any, Literal, NamedTuple, NoReturn
 from uuid import uuid4
 
@@ -1800,6 +1800,8 @@ class CampaignInsights(NamedTuple):
     spend: float
     conversions: int
     reach: int | None = None
+    # Meta's own frequency (impressions / reach) for the same lifetime window.
+    frequency: float | None = None
     cpm: float | None = None
     ctr: float | None = None
     cpc: float | None = None
@@ -1927,7 +1929,7 @@ async def _fetch_insights(
         f"{_GRAPH_BASE_URL}/{meta_object_id}/insights",
         {
             "fields": (
-                "impressions,reach,spend,clicks,cpm,ctr,cpc,"
+                "impressions,reach,frequency,spend,clicks,cpm,ctr,cpc,"
                 "inline_link_clicks,inline_link_click_ctr,actions,action_values"
             ),
             "access_token": access_token,
@@ -1956,6 +1958,7 @@ async def _fetch_insights(
         spend=spend,
         conversions=conversions,
         reach=int(row["reach"]) if "reach" in row else None,
+        frequency=float(row["frequency"]) if "frequency" in row else None,
         cpm=float(row["cpm"]) if "cpm" in row else None,
         ctr=float(row["ctr"]) if "ctr" in row else None,
         cpc=float(row["cpc"]) if "cpc" in row else None,
@@ -2008,6 +2011,59 @@ async def fetch_campaign_insights(
         return CampaignInsights(impressions=0, clicks=0, spend=0.0, conversions=0)
     return await _fetch_insights(
         access_token=access_token, meta_object_id=meta_campaign_id
+    )
+
+
+class WindowInsights(NamedTuple):
+    """Unique reach and frequency over a date window (not lifetime).
+
+    Unique reach is not additive, so it cannot be recovered from two lifetime
+    snapshots: a window's reach and frequency need their own Insights query.
+    """
+
+    reach: int
+    impressions: int
+    frequency: float | None
+
+
+async def fetch_campaign_window_insights(
+    *, access_token: str, meta_campaign_id: str, since: date, until: date
+) -> WindowInsights | None:
+    """Fetch a campaign's unique reach and frequency for a date window.
+
+    Args:
+        access_token: The business's Meta access token.
+        meta_campaign_id: The Meta campaign id.
+        since: First day of the window (the ad account's time zone).
+        until: Last day of the window, inclusive.
+
+    Returns:
+        The window's reach, impressions and frequency, or None when Meta has no
+        delivery for it (and always None in fake mode, which has no delivery).
+
+    Raises:
+        MetaConnectionError: If the call fails.
+    """
+    if get_settings().fake_meta_enabled:
+        return None
+    body = await _get_json(
+        f"{_GRAPH_BASE_URL}/{meta_campaign_id}/insights",
+        {
+            "fields": "reach,impressions,frequency",
+            "time_range": json.dumps(
+                {"since": since.isoformat(), "until": until.isoformat()}
+            ),
+            "access_token": access_token,
+        },
+    )
+    rows = body.get("data", [])
+    if not rows or "reach" not in rows[0]:
+        return None
+    row = rows[0]
+    return WindowInsights(
+        reach=int(row["reach"]),
+        impressions=int(row.get("impressions", 0)),
+        frequency=float(row["frequency"]) if "frequency" in row else None,
     )
 
 

@@ -17,9 +17,10 @@ so the approval is recorded as interest only and nothing changes on Meta.
 """
 
 from app.schemas.strategy import SWITCH_TO_PURCHASE_MIN_PURCHASES
+from app.services.proposals import ProposalNotBuiltError
 
 
-class SwitchToPurchaseNotBuiltError(NotImplementedError):
+class SwitchToPurchaseNotBuiltError(ProposalNotBuiltError):
     """Raised when a switch is approved: creating the Purchase ad set isn't built."""
 
 

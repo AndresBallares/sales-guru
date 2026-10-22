@@ -424,6 +424,12 @@ model Campaign {
   deliverySignal          String?
   // A Pixel-health warning shown on the campaign (e.g. the Purchase event may not be firing); null = none.
   pixelWarning            String?
+  // Audience saturation (app/services/saturation.py): how many daily
+  // evaluations in a row the rule has held, when it was last evaluated, and
+  // the warning shown once it has held twice in a row. Cleared when it stops.
+  saturationStreak    Int       @default(0)
+  saturationCheckedAt DateTime?
+  saturationWarning   String?
   createdAt               DateTime                     @default(now())
   updatedAt               DateTime                     @updatedAt
 }
@@ -679,6 +685,14 @@ model Metric {
   linkClicks        Int?
   linkCtr           Float?
   initiatedCheckout Int?
+  // Meta's frequency (impressions / reach), lifetime-to-date like the rest.
+  frequency         Float?
+  // The same campaign's unique reach and frequency over just the last 7
+  // completed days, fetched about once a day for a campaign with 14+ days
+  // of delivery (the audience-saturation rule needs a windowed frequency,
+  // which two lifetime snapshots cannot give). Null on every other row.
+  reach7d           Int?
+  frequency7d       Float?
   fetchedAt        DateTime @default(now())
 }
 

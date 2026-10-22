@@ -182,6 +182,7 @@ def test_get_options_action_types(client: TestClient) -> None:
         {"value": "START_RETARGETING", "label": "Start retargeting"},
         {"value": "TEST_CAROUSEL", "label": "Test a carousel"},
         {"value": "SWITCH_TO_PURCHASE", "label": "Switch to Purchase"},
+        {"value": "DUPLICATE_WINNERS_ADJACENT_INTEREST", "label": "Reach fresh buyers"},
     ]
 
 

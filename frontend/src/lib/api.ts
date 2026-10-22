@@ -241,6 +241,8 @@ export interface Campaign {
   dailySpendFlag: string | null
   // A Pixel-health warning (e.g. the Purchase event may not be firing).
   pixelWarning?: string | null
+  // Audience saturation, with the numbers behind it; set once the rule has held twice in a row.
+  saturationWarning?: string | null
   // True when a product is attached but lacks a destination URL this
   // campaign's SALES/TRAFFIC objective requires — computed by the
   // backend (app/api/campaign.py's _needs_destination_url), never
@@ -1293,6 +1295,7 @@ export type ActionType =
   | 'START_RETARGETING'
   | 'TEST_CAROUSEL'
   | 'SWITCH_TO_PURCHASE'
+  | 'DUPLICATE_WINNERS_ADJACENT_INTEREST'
 export type RiskLevel = 'LOW' | 'MEDIUM' | 'HIGH'
 export type RecommendationStatus = 'PENDING' | 'APPLIED' | 'REJECTED' | 'SUPERSEDED'
 
@@ -1551,6 +1554,7 @@ export interface CampaignDashboard {
   pausedReason: string | null
   isSample: boolean
   pixelWarning: string | null
+  saturationWarning?: string | null
   proposals: DashboardProposal[]
   tier1: DashboardTier1 | null
   tier2: DashboardTier2 | null

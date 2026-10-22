@@ -204,6 +204,8 @@ class CampaignDashboardResponse(CamelCaseModel):
     paused_reason: str | None
     is_sample: bool
     pixel_warning: str | None
+    # Set while the audience-saturation rule holds (see the Optimizer).
+    saturation_warning: str | None = None
     proposals: list[Proposal]
     tier1: Tier1 | None
     tier2: Tier2 | None

@@ -19,6 +19,12 @@ from app.services.dashboard import (
 )
 
 SAMPLE_PIXEL_WARNING = "Purchase event may not be firing"
+SAMPLE_SATURATION_WARNING = (
+    "Audience saturation: reach has plateaued while frequency climbs. In the last "
+    "7 days you spent $420 ($400 the week before) and reached 2,100 new people, "
+    "5.0 per dollar against 14.0 per dollar in the first 14 days. Frequency was "
+    "3.9, and only 18% of impressions went to people reached for the first time."
+)
 
 
 class _AdFinal(NamedTuple):
@@ -88,6 +94,7 @@ class SampleCampaign(NamedTuple):
     ads: list[AdInfo]
     recommendations: list[RecommendationInfo]
     pixel_warning: str
+    saturation_warning: str
 
 
 def _scaled(
@@ -157,6 +164,7 @@ def sample_campaign(now: datetime | None = None) -> SampleCampaign:
             )
         ],
         pixel_warning=SAMPLE_PIXEL_WARNING,
+        saturation_warning=SAMPLE_SATURATION_WARNING,
     )
 
 
