@@ -10,6 +10,8 @@ from app.services.url_validation import validate_destination_url
 # app/services/prompt_safety.py) — capped so a pasted-in product page
 # can't balloon the prompt, same reasoning as Business.description's cap.
 _MAX_DESCRIPTION_LENGTH = 1000
+# The mechanism is a sentence or two, pasted into the same prompts.
+_MAX_MECHANISM_LENGTH = 300
 
 
 class ProductCreateRequest(CamelCaseModel):
@@ -27,6 +29,7 @@ class ProductCreateRequest(CamelCaseModel):
     margin: float | None = None
     features: str | None = None
     benefits: str | None = None
+    mechanism: str | None = Field(default=None, max_length=_MAX_MECHANISM_LENGTH)
     url: str | None = None
     # The campaign this product is being created for, if any — scopes
     # auto-attach (app/services/campaign_readiness.py's auto_attach_product)
@@ -59,6 +62,7 @@ class ProductUpdateRequest(CamelCaseModel):
     margin: float | None = None
     features: str | None = None
     benefits: str | None = None
+    mechanism: str | None = Field(default=None, max_length=_MAX_MECHANISM_LENGTH)
     url: str | None = None
 
     @field_validator("url")
@@ -76,6 +80,7 @@ class ProductResponse(CamelCaseModel):
     margin: float | None
     features: str | None
     benefits: str | None
+    mechanism: str | None
     url: str | None
     # The product's primary (position 0 — ProductImage.position) uploaded
     # photo, if any — lets a campaign list show a thumbnail without a

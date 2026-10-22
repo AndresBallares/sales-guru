@@ -14,6 +14,7 @@ import pytest
 from app.core.config import get_settings
 from app.schemas.strategy import (
     AudienceConstraints,
+    CreativeAngle,
     CreativeTestPlanContent,
     GeneratedCreativeTestPlanFields,
     NormalizedMetrics,
@@ -44,21 +45,25 @@ _VALID_INPUT: dict[str, Any] = {
         {
             "avatar": "self_purchaser",
             "concept": "product-on-skin",
+            "pillar": "emotion",
             "description": "Product on skin",
         },
         {
             "avatar": "self_purchaser",
             "concept": "craftsmanship",
+            "pillar": "mechanism",
             "description": "The craftsmanship",
         },
         {
             "avatar": "gift_buyer",
             "concept": "gifting",
+            "pillar": "emotion",
             "description": "The gift she keeps",
         },
         {
             "avatar": "gift_buyer",
             "concept": "social-proof",
+            "pillar": "offer",
             "description": "Loved by other buyers",
         },
     ],
@@ -86,6 +91,7 @@ def _product(**overrides: object) -> Product:
         "margin": None,
         "features": None,
         "benefits": None,
+        "mechanism": None,
     }
     defaults.update(overrides)
     return cast(Product, SimpleNamespace(**defaults))
@@ -636,10 +642,20 @@ async def test_an_image_test_plan_is_unchanged_and_says_single_image(
 # ── Structured angles (avatar x concept) ─────────────────────
 
 
-def _angles(*pairs: tuple[str, str]) -> list[dict[str, str]]:
+_PILLARS = ("emotion", "mechanism", "offer", "education")
+
+
+def _angles(
+    *pairs: tuple[str, str], pillars: tuple[str, ...] = _PILLARS
+) -> list[dict[str, str]]:
     return [
-        {"avatar": avatar, "concept": concept, "description": f"{avatar} {concept}"}
-        for avatar, concept in pairs
+        {
+            "avatar": avatar,
+            "concept": concept,
+            "pillar": pillars[position % len(pillars)],
+            "description": f"{avatar} {concept}",
+        }
+        for position, (avatar, concept) in enumerate(pairs)
     ]
 
 
@@ -680,6 +696,134 @@ def test_generated_angles_cannot_repeat_an_avatar_and_concept_pair() -> None:
         GeneratedCreativeTestPlanFields.model_validate(
             {**_VALID_INPUT, "creative_angles": twice}
         )
+
+
+# ── Pillars (offer | mechanism | education | emotion) ─────────
+
+
+def test_a_generated_plan_with_three_distinct_pillars_is_valid() -> None:
+    fields = GeneratedCreativeTestPlanFields.model_validate(
+        {
+            **_VALID_INPUT,
+            "creative_angles": _angles(
+                *_FOUR, pillars=("emotion", "mechanism", "emotion", "offer")
+            ),
+        }
+    )
+
+    assert {a.pillar for a in fields.creative_angles} == {
+        "emotion",
+        "mechanism",
+        "offer",
+    }
+
+
+def test_a_generated_plan_with_four_distinct_pillars_is_valid() -> None:
+    fields = GeneratedCreativeTestPlanFields.model_validate(
+        {**_VALID_INPUT, "creative_angles": _angles(*_FOUR)}
+    )
+
+    assert len({a.pillar for a in fields.creative_angles}) == 4
+
+
+@pytest.mark.parametrize(
+    "pillars",
+    [
+        ("emotion", "emotion", "emotion", "emotion"),
+        ("emotion", "mechanism", "emotion", "mechanism"),
+    ],
+)
+def test_the_angles_must_span_at_least_three_pillars(
+    pillars: tuple[str, ...],
+) -> None:
+    """Not four beauty shots: one or two pillars is one lever, tested repeatedly."""
+    with pytest.raises(ValidationError, match="at least 3 distinct pillars"):
+        GeneratedCreativeTestPlanFields.model_validate(
+            {**_VALID_INPUT, "creative_angles": _angles(*_FOUR, pillars=pillars)}
+        )
+
+
+def test_an_angle_needs_a_known_pillar() -> None:
+    angles = _angles(*_FOUR)
+    angles[0]["pillar"] = "beauty"
+    with pytest.raises(ValidationError):
+        GeneratedCreativeTestPlanFields.model_validate(
+            {**_VALID_INPUT, "creative_angles": angles}
+        )
+    del angles[0]["pillar"]
+    with pytest.raises(ValidationError, match="pillar"):
+        GeneratedCreativeTestPlanFields.model_validate(
+            {**_VALID_INPUT, "creative_angles": angles}
+        )
+
+
+def test_a_stored_angle_without_a_pillar_still_loads() -> None:
+    """An older plan's angle, from before pillars, has neither avatar nor pillar."""
+    angle = CreativeAngle.model_validate("Everyday wear")
+
+    assert angle.pillar is None
+    assert angle.avatar is None
+
+
+@pytest.mark.asyncio
+async def test_the_strategist_prompt_asks_for_a_pillar_per_angle_and_three_distinct(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    mock = _mock_agent(monkeypatch, _VALID_INPUT)
+
+    await strategist.generate_strategy(
+        business=_business(),
+        product=_product(),
+        audience=None,
+        objective="SALES",
+        plan_type="CREATIVE_TEST_PLAN",
+    )
+
+    prompt = mock.call_args.kwargs["prompt"]
+    assert "pillar" in prompt
+    for pillar in ("offer", "mechanism", "education", "emotion"):
+        assert pillar in prompt
+    assert "at least 3 distinct pillars" in prompt
+
+
+@pytest.mark.asyncio
+async def test_the_strategist_prompt_carries_the_products_mechanism(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    mock = _mock_agent(monkeypatch, _VALID_INPUT)
+    product = _product()
+    product.mechanism = "Solid 18k gold with hand-applied ceramic inlay"
+
+    await strategist.generate_strategy(
+        business=_business(),
+        product=product,
+        audience=None,
+        objective="SALES",
+        plan_type="CREATIVE_TEST_PLAN",
+    )
+
+    prompt = mock.call_args.kwargs["prompt"]
+    assert (
+        "Mechanism (why the benefit is believable): Solid 18k gold with "
+        "hand-applied ceramic inlay"
+    ) in prompt
+
+
+@pytest.mark.asyncio
+async def test_the_strategist_prompt_has_no_mechanism_line_without_one(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    mock = _mock_agent(monkeypatch, _VALID_INPUT)
+
+    await strategist.generate_strategy(
+        business=_business(),
+        product=_product(),
+        audience=None,
+        objective="SALES",
+        plan_type="CREATIVE_TEST_PLAN",
+    )
+
+    assert "Mechanism (why" not in mock.call_args.kwargs["prompt"]
 
 
 @pytest.mark.parametrize("concept", ["Everyday Wear", "everyday wear", "a" * 31, ""])

@@ -457,7 +457,7 @@ async def create_creatives(
     await db.creative.delete_many(where={"campaignId": campaign.id})
     plan_angles = (
         {
-            angle_label(str(a.avatar), a.concept): a
+            angle_label(str(a.avatar), a.concept, a.pillar): a
             for a in plan.creative_angles
             if a.avatar
         }
@@ -476,6 +476,7 @@ async def create_creatives(
             if (plan_angle := plan_angles.get(variant.creative_angle))
             else None,
             "concept": plan_angle.concept if plan_angle else None,
+            "pillar": plan_angle.pillar if plan_angle else None,
             "imagePrompt": variant.image_prompt,
             "videoPrompt": variant.video_prompt,
             "format": creative_format,

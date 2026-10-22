@@ -344,7 +344,8 @@ def copy_problems(creative: Creative) -> list[str]:
     sentence (. ! or ?, optionally followed by a closing quote or bracket) and
     not be cut off mid-phrase ("...Shop the", seen in the first live run);
     the headline, description and every carousel card must fit their limits;
-    and no slot may contain engagement bait or withheld-information phrasing
+    and no slot may contain engagement bait or withheld-information phrasing,
+    and the primary text may not open with generic praise and nothing concrete
     (app/services/ad_quality.py), which Meta's ad ranking penalizes.
 
     Args:
@@ -379,6 +380,7 @@ def copy_problems(creative: Creative) -> list[str]:
             f"(max {MAX_DESCRIPTION_LENGTH})"
         )
     problems += ad_quality.copy_field_problems("primary text", body)
+    problems += ad_quality.praise_opener_problems("primary text", body)
     problems += ad_quality.copy_field_problems("headline", creative.headline)
     problems += ad_quality.copy_field_problems("description", description)
     for position, card in enumerate(creative.cards or [], start=1):
@@ -710,6 +712,10 @@ def _build_prompt(
             lines.append(f"Features: {product.features}")
         if product.benefits:
             lines.append(f"Benefits: {product.benefits}")
+        if product.mechanism:
+            lines.append(
+                f"Mechanism (why the benefit is believable): {product.mechanism}"
+            )
         if format == "SINGLE_VIDEO" and video_seconds is not None:
             lines.append(
                 f"This ad is a {video_seconds:.0f}-second video of the product. "
@@ -740,8 +746,10 @@ def _build_prompt(
                 if angle.avatar
                 else angle.concept
             )
+            pillar = f" (pillar: {angle.pillar})" if angle.pillar else ""
             lines.append(
-                f"- Variant {chr(ord('A') + position)}: {name} — {angle.description}"
+                f"- Variant {chr(ord('A') + position)}: {name}{pillar} — "
+                f"{angle.description}"
             )
     else:
         lines.append(
@@ -797,6 +805,7 @@ def _build_prompt(
         business.industry, has_proof_points=bool(proof_points), format=format
     )
 
+    lines += ad_quality.structure_lines()
     lines += ad_quality.rule_lines(business.industry)
 
     lines += [
@@ -999,7 +1008,11 @@ def apply_plan_angles(
         return variants
     return [
         variant.model_copy(
-            update={"creative_angle": angle_label(str(angle.avatar), angle.concept)}
+            update={
+                "creative_angle": angle_label(
+                    str(angle.avatar), angle.concept, angle.pillar
+                )
+            }
         )
         for variant, angle in zip(variants, angles, strict=True)
     ]

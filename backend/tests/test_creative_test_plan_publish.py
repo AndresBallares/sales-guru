@@ -943,3 +943,133 @@ async def test_an_older_plan_leaves_avatar_and_concept_empty(
         await seeder.disconnect()
 
     assert rows and all(r.avatar is None and r.concept is None for r in rows)
+
+
+# ── Pillars: stored per ad, and in its name and UTMs ─────────
+
+
+@pytest.mark.asyncio
+async def test_generating_stores_each_ads_pillar_beside_its_avatar(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    mock_services: dict[str, AsyncMock],  # noqa: F811
+) -> None:
+    from app.api import creative as creative_module
+    from app.schemas.strategy import CreativeAngle
+    from app.services.creative import apply_plan_angles
+
+    plan = _creative_plan(
+        creative_angles=[
+            CreativeAngle(
+                avatar="self_purchaser",
+                concept="everyday-wear",
+                pillar="emotion",
+                description="a",
+            ),
+            CreativeAngle(
+                avatar="self_purchaser",
+                concept="craftsmanship",
+                pillar="mechanism",
+                description="b",
+            ),
+            CreativeAngle(
+                avatar="gift_buyer",
+                concept="the-perfect-gift",
+                pillar="offer",
+                description="c",
+            ),
+            CreativeAngle(
+                avatar="gift_buyer",
+                concept="why-gold-lasts",
+                pillar="education",
+                description="d",
+            ),
+        ]
+    )
+    variants = apply_plan_angles(list(_FAKE_VARIANTS), plan)
+    monkeypatch.setattr(
+        creative_module, "generate_creatives", AsyncMock(return_value=variants)
+    )
+    _, campaign_id, _ = _creative_plan_campaign(
+        client, monkeypatch, plan=plan, select=0, approve=False
+    )
+
+    seeder = Prisma()
+    await seeder.connect()
+    try:
+        rows = await seeder.creative.find_many(
+            where={"campaignId": campaign_id}, order={"createdAt": "asc"}
+        )
+    finally:
+        await seeder.disconnect()
+
+    assert [(r.avatar, r.concept, r.pillar) for r in rows] == [
+        ("self_purchaser", "everyday-wear", "emotion"),
+        ("self_purchaser", "craftsmanship", "mechanism"),
+        ("gift_buyer", "the-perfect-gift", "offer"),
+        ("gift_buyer", "why-gold-lasts", "education"),
+    ]
+    assert rows[1].creativeAngle == "Self-purchaser – Craftsmanship – Mechanism"
+
+
+@pytest.mark.asyncio
+async def test_an_older_plan_leaves_the_pillar_empty(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _, campaign_id, _ = _creative_plan_campaign(
+        client, monkeypatch, select=0, approve=False
+    )
+
+    seeder = Prisma()
+    await seeder.connect()
+    try:
+        rows = await seeder.creative.find_many(where={"campaignId": campaign_id})
+    finally:
+        await seeder.disconnect()
+
+    assert rows and all(r.pillar is None for r in rows)
+
+
+@pytest.mark.asyncio
+async def test_a_pillar_is_part_of_the_ads_name_and_utm_term_on_publish(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    mock_services: dict[str, AsyncMock],  # noqa: F811
+) -> None:
+    business_id, campaign_id, _ = _creative_plan_campaign(client, monkeypatch)
+    await _set_angles(
+        campaign_id,
+        [
+            ("self_purchaser", "everyday-wear"),
+            ("gift_buyer", "social-proof"),
+            ("gift_buyer", "gifting"),
+        ],
+    )
+    seeder = Prisma()
+    await seeder.connect()
+    try:
+        creatives = await seeder.creative.find_many(
+            where={"campaignId": campaign_id, "status": "SELECTED"},
+            order={"createdAt": "asc"},
+        )
+        for creative, pillar in zip(creatives, ["emotion", "offer", None], strict=True):
+            await seeder.creative.update(
+                where={"id": creative.id}, data={"pillar": pillar}
+            )
+    finally:
+        await seeder.disconnect()
+
+    client.post(f"/businesses/{business_id}/campaigns/{campaign_id}/publish")
+
+    ad_names = [c.kwargs["name"] for c in mock_services["create_ad"].await_args_list]
+    assert ad_names[0] == "Self-purchaser – Everyday wear – Emotion"
+    assert ad_names[1] == "Gift buyer – Social proof – Offer"
+    assert ad_names[2] == "Gift buyer – Gifting"  # no pillar: named as before
+    tags = [
+        c.kwargs["url_tags"]
+        for c in mock_services["create_ad_creative"].await_args_list
+    ]
+    assert "utm_medium=self-purchaser-everyday-wear" in tags[0]  # avatar part unchanged
+    assert tags[0].endswith("&utm_term=emotion")
+    assert tags[1].endswith("&utm_term=offer")
+    assert "utm_term" not in tags[2]

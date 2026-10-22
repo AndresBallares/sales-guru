@@ -65,3 +65,60 @@ def test_an_ad_without_an_angle_gets_a_generic_medium() -> None:
     )
 
     assert "utm_medium=paid&" in tags
+
+
+# --- pillar (composes with the avatar; an ad without one is named as before) ---
+
+
+@pytest.mark.parametrize(
+    ("pillar", "label"),
+    [
+        ("offer", "Gift buyer – Social proof – Offer"),
+        ("mechanism", "Gift buyer – Social proof – Mechanism"),
+        ("education", "Gift buyer – Social proof – Education"),
+        ("emotion", "Gift buyer – Social proof – Emotion"),
+    ],
+)
+def test_a_pillar_goes_last_in_the_angle_label(pillar: str, label: str) -> None:
+    assert creative_naming.angle_label("gift_buyer", "social-proof", pillar) == label
+
+
+def test_no_pillar_leaves_the_label_exactly_as_before() -> None:
+    assert (
+        creative_naming.angle_label("gift_buyer", "social-proof")
+        == "Gift buyer – Social proof"
+    )
+    assert (
+        creative_naming.angle_label("gift_buyer", "social-proof", None)
+        == "Gift buyer – Social proof"
+    )
+
+
+def test_an_ad_name_includes_the_pillar_when_it_has_one() -> None:
+    assert (
+        creative_naming.ad_name("self_purchaser", "craftsmanship", "H", "mechanism")
+        == "Self-purchaser – Craftsmanship – Mechanism"
+    )
+    assert creative_naming.ad_name(None, None, "Headline", "mechanism") == "Headline"
+
+
+def test_url_tags_add_the_pillar_as_utm_term_and_keep_the_medium() -> None:
+    tags = creative_naming.url_tags(
+        campaign_name="C",
+        avatar="self_purchaser",
+        concept="craftsmanship",
+        name="N",
+        pillar="mechanism",
+    )
+
+    parsed = {key: values[0] for key, values in parse_qs(tags).items()}
+    assert parsed["utm_medium"] == "self-purchaser-craftsmanship"
+    assert parsed["utm_term"] == "mechanism"
+
+
+def test_url_tags_without_a_pillar_have_no_utm_term() -> None:
+    tags = creative_naming.url_tags(
+        campaign_name="C", avatar="gift_buyer", concept="x", name="N"
+    )
+
+    assert "utm_term" not in tags

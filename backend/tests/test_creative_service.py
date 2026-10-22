@@ -80,6 +80,7 @@ def _fake_product(**overrides: object) -> Product:
         "url": None,
         "features": None,
         "benefits": None,
+        "mechanism": None,
     }
     defaults.update(overrides)
     return cast(Product, SimpleNamespace(**defaults))
@@ -1665,3 +1666,99 @@ async def test_generate_creatives_fails_rather_than_store_persistent_bait(
         )
 
     assert create.call_count == 2
+
+
+# ── Pillars, mechanism and the Ad structure block ────────────
+
+
+def _pillar_plan() -> Any:
+    plan = _structured_plan()
+    pillars = ["emotion", "mechanism", "offer", "education"]
+    return plan.model_copy(
+        update={
+            "creative_angles": [
+                angle.model_copy(update={"pillar": pillar})
+                for angle, pillar in zip(plan.creative_angles, pillars, strict=True)
+            ]
+        }
+    )
+
+
+def test_the_prompt_lists_each_variants_pillar() -> None:
+    prompt = creative._build_prompt(_fake_business(), _fake_product(), _pillar_plan())
+
+    assert (
+        "Variant A: Self-purchaser – Everyday wear (pillar: emotion) — "
+        "A piece for every day"
+    ) in prompt
+    assert "Variant B: Self-purchaser – Craftsmanship (pillar: mechanism)" in prompt
+    assert "Variant D: Gift buyer – Social proof (pillar: education)" in prompt
+
+
+def test_an_angle_without_a_pillar_is_listed_exactly_as_before() -> None:
+    prompt = creative._build_prompt(
+        _fake_business(), _fake_product(), _structured_plan()
+    )
+
+    assert "Variant A: Self-purchaser – Everyday wear — A piece for every day" in prompt
+    assert "(pillar:" not in prompt
+
+
+def test_variants_take_the_plans_labels_with_their_pillar() -> None:
+    variants = creative.apply_plan_angles(list(creative._FAKE_VARIANTS), _pillar_plan())
+
+    assert [v.creative_angle for v in variants] == [
+        "Self-purchaser – Everyday wear – Emotion",
+        "Self-purchaser – Craftsmanship – Mechanism",
+        "Gift buyer – The perfect gift – Offer",
+        "Gift buyer – Social proof – Education",
+    ]
+
+
+def test_the_products_mechanism_flows_into_the_creative_prompt() -> None:
+    product = _fake_product(
+        mechanism="Solid 18k gold with hand-applied ceramic inlay; the color can't fade"
+    )
+
+    prompt = creative._build_prompt(_fake_business(), product, _pillar_plan())
+
+    assert (
+        "Mechanism (why the benefit is believable): Solid 18k gold with "
+        "hand-applied ceramic inlay; the color can't fade"
+    ) in prompt
+
+
+def test_a_product_without_a_mechanism_adds_no_mechanism_line() -> None:
+    prompt = creative._build_prompt(_fake_business(), _fake_product(), _pillar_plan())
+
+    assert "Mechanism (why" not in prompt
+
+
+def test_the_prompt_carries_the_ad_structure_block_before_the_meta_rules() -> None:
+    prompt = creative._build_prompt(_fake_business(), _fake_product(), _pillar_plan())
+
+    assert "Ad structure (apply to every variant):" in prompt
+    assert "at least one offer element or risk-reducer" in prompt
+    assert "connect it to the benefit" in prompt
+    assert "No generic praise" in prompt
+    assert "Education is a valid angle" in prompt
+    assert prompt.index("Ad structure (apply") < prompt.index("Meta ad quality rules")
+    # The avatar guidance from the angle system is untouched.
+    assert "speaking to its angle's avatar" in prompt
+
+
+@pytest.mark.asyncio
+async def test_generate_creatives_regenerates_a_praise_only_opener(
+    anthropic_api_key: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    batch = _batch_with("SHOP_NOW")
+    batch["variants"][1]["bodyText"] = "Stunning pieces for her. Shop the collection."
+    create = _sequenced_client(monkeypatch, batch, _batch_with("SHOP_NOW"))
+
+    await creative.generate_creatives(
+        business=_fake_business(), product=_fake_product(), strategy=_FAKE_STRATEGY
+    )
+
+    assert create.call_count == 2
+    retry_text = create.call_args.kwargs["messages"][0]["content"]
+    assert "opens with generic praise ('Stunning')" in retry_text

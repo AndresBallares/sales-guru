@@ -7,6 +7,10 @@ containing engagement bait or withholding patterns is rejected
 (banned_phrases_in), at generation time and again at the pre-publish copy
 guard. Copy only: bidding, pacing and budget belong to the Strategist and the
 Optimizer, never here. Imports nothing from the app, so the schemas can use it.
+
+It also holds the "Ad structure" rules (offer or risk-reducer, mechanism tied
+to the benefit, no generic praise, education as an angle) and the generic-
+praise opener check.
 """
 
 import re
@@ -120,4 +124,133 @@ def copy_field_problems(label: str, text: str | None) -> list[str]:
         f"{label} contains '{phrase}', engagement bait or withheld information "
         "that Meta's ad ranking penalizes"
         for phrase in banned_phrases_in(text)
+    ]
+
+
+def structure_lines() -> list[str]:
+    """The "Ad structure" block of the Creative Agent's prompt: rules, not essay.
+
+    Offer, mechanism, education and avatar are the four pillars an ad is built
+    from; the strategy gives each variant its pillar and avatar, and these
+    rules say how the copy delivers them.
+
+    Returns:
+        The prompt lines, starting with a blank separator line.
+    """
+    return [
+        "",
+        "Ad structure (apply to every variant):",
+        "1. Offer: include at least one offer element or risk-reducer, the "
+        "standing promotion if there is one, otherwise a listed proof point "
+        "that lowers purchase risk (guarantee, free returns, free shipping). "
+        "Never invent one.",
+        "2. Mechanism: if the product has a mechanism, connect it to the "
+        "benefit. It is why the promise is believable, not a spec to list "
+        '("ceramic inlay means the color never fades", not "features '
+        'ceramic").',
+        '3. No generic praise: "beautiful", "stunning" or "amazing" only with '
+        "a concrete specific. Prefer the material plus what it does for the "
+        "wearer.",
+        "4. Education is a valid angle: teach one thing the buyer doesn't "
+        "know (why a material lasts, how to spot quality) and tie it to this "
+        "product.",
+        "5. Follow each variant's pillar (offer, mechanism, education or "
+        "emotion) and its avatar as listed above.",
+    ]
+
+
+# Adjectives that are praise and nothing else. An opener that is only this
+# says nothing the buyer can check, so it is blocked when no concrete detail
+# comes with it in the same sentence.
+GENERIC_PRAISE_WORDS: tuple[str, ...] = (
+    "beautiful",
+    "stunning",
+    "amazing",
+    "gorgeous",
+    "lovely",
+    "incredible",
+)
+
+# What makes an opening sentence concrete: a digit (18k, 2 carats, $450), a
+# material, or a named craft detail. A jewelry-leaning list, extended per
+# industry the same way the other tables are.
+_CONCRETE_WORDS: tuple[str, ...] = (
+    "gold",
+    "silver",
+    "platinum",
+    "diamond",
+    "gemstone",
+    "sapphire",
+    "emerald",
+    "ruby",
+    "pearl",
+    "opal",
+    "ceramic",
+    "enamel",
+    "titanium",
+    "steel",
+    "sterling",
+    "leather",
+    "silk",
+    "cotton",
+    "wool",
+    "cashmere",
+    "hand-set",
+    "handmade",
+    "handcrafted",
+    "hand-applied",
+    "inlay",
+    "carat",
+)
+_CONCRETE = re.compile(
+    r"\d|\b(?:" + "|".join(re.escape(w) for w in _CONCRETE_WORDS) + r")",
+    re.IGNORECASE,
+)
+_PRAISE_OPENER = re.compile(
+    r"^\W*(" + "|".join(GENERIC_PRAISE_WORDS) + r")\b", re.IGNORECASE
+)
+_FIRST_SENTENCE = re.compile(r"[^.!?\n]*")
+
+
+def generic_praise_opener(text: str | None) -> str | None:
+    """The praise word a primary text opens with, if the opener is only praise.
+
+    Only the first sentence is looked at: it must start with a generic praise
+    word and name nothing concrete (no digit, material or craft detail).
+    "Stunning 18k gold, hand-set." passes, and so does praise anywhere after
+    the opener; "Beautiful jewelry." and "Stunning pieces for her" do not.
+
+    Args:
+        text: A primary text.
+
+    Returns:
+        The opening praise word as written, or None when the opener is fine.
+    """
+    if not text:
+        return None
+    opener = _PRAISE_OPENER.match(text.strip())
+    if opener is None:
+        return None
+    sentence = _FIRST_SENTENCE.match(text.strip())
+    if sentence is not None and _CONCRETE.search(sentence.group(0)):
+        return None
+    return opener.group(1)
+
+
+def praise_opener_problems(label: str, text: str | None) -> list[str]:
+    """One problem if a primary text opens with generic praise and nothing concrete.
+
+    Args:
+        label: The field's name as the reader sees it ("primary text").
+        text: The field's copy.
+
+    Returns:
+        Empty when the opener is fine.
+    """
+    word = generic_praise_opener(text)
+    if word is None:
+        return []
+    return [
+        f"{label} opens with generic praise ('{word}') and names no material or "
+        "specific detail; lead with the material and what it does for the wearer"
     ]

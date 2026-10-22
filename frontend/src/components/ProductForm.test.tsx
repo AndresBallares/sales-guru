@@ -48,6 +48,7 @@ const product: api.Product = {
   margin: null,
   features: null,
   benefits: null,
+  mechanism: null,
   url: null,
   primaryImageUrl: null,
 }
@@ -760,5 +761,98 @@ describe('ProductForm — product media (videos and ad-shape badges)', () => {
       expect(await screen.findByRole('alert')).toHaveTextContent('at most 60 seconds')
       expect(screen.queryByLabelText('Upload a thumbnail image')).not.toBeInTheDocument()
     })
+  })
+})
+
+describe('ProductForm — mechanism', () => {
+  const MECHANISM = 'Solid 18k gold with hand-applied ceramic inlay'
+
+  it('has an optional Mechanism field with a one-line helper', () => {
+    render(<ProductForm businessId="biz-1" onSaved={vi.fn<(product: api.Product) => void>()} />)
+
+    const field = screen.getByLabelText(/Mechanism/)
+    expect(field).toBeInTheDocument()
+    expect(field).not.toBeRequired()
+    expect(field).toHaveAttribute('maxlength', '300')
+    expect(screen.getByText(/makes it deliver its benefit/)).toBeInTheDocument()
+    expect(field).toHaveAccessibleDescription(/why the promise is believable/)
+  })
+
+  it('sends the mechanism when creating a product', async () => {
+    mockedApi.createProduct.mockResolvedValue({ ...product, mechanism: MECHANISM })
+    const user = userEvent.setup()
+    render(<ProductForm businessId="biz-1" onSaved={vi.fn<(product: api.Product) => void>()} />)
+
+    await user.type(screen.getByLabelText('What do you sell?'), 'Ceramic ring')
+    await user.type(screen.getByLabelText(/Mechanism/), MECHANISM)
+    await user.click(screen.getByRole('button', { name: 'Add product' }))
+
+    await waitFor(() =>
+      expect(mockedApi.createProduct).toHaveBeenCalledWith(
+        'biz-1',
+        expect.objectContaining({ mechanism: MECHANISM }),
+      ),
+    )
+  })
+
+  it('leaves the mechanism out when it is empty', async () => {
+    mockedApi.createProduct.mockResolvedValue(product)
+    const user = userEvent.setup()
+    render(<ProductForm businessId="biz-1" onSaved={vi.fn<(product: api.Product) => void>()} />)
+
+    await user.type(screen.getByLabelText('What do you sell?'), 'Ceramic ring')
+    await user.click(screen.getByRole('button', { name: 'Add product' }))
+
+    await waitFor(() => expect(mockedApi.createProduct).toHaveBeenCalled())
+    expect(mockedApi.createProduct.mock.calls[0][1].mechanism).toBeUndefined()
+  })
+
+  it('shows the saved mechanism when editing and sends a changed one', async () => {
+    mockedApi.updateProduct.mockResolvedValue({ ...product, mechanism: 'New method' })
+    const user = userEvent.setup()
+    render(
+      <ProductForm
+        businessId="biz-1"
+        product={{ ...product, mechanism: MECHANISM }}
+        onSaved={vi.fn<(product: api.Product) => void>()}
+      />,
+    )
+
+    const field = screen.getByLabelText(/Mechanism/)
+    expect(field).toHaveValue(MECHANISM)
+    await user.clear(field)
+    await user.type(field, 'New method')
+    await user.click(screen.getByRole('button', { name: 'Save' }))
+
+    await waitFor(() =>
+      expect(mockedApi.updateProduct).toHaveBeenCalledWith(
+        'biz-1',
+        'prod-1',
+        expect.objectContaining({ mechanism: 'New method' }),
+      ),
+    )
+  })
+
+  it('clears the mechanism with null when it is emptied on edit', async () => {
+    mockedApi.updateProduct.mockResolvedValue(product)
+    const user = userEvent.setup()
+    render(
+      <ProductForm
+        businessId="biz-1"
+        product={{ ...product, mechanism: MECHANISM }}
+        onSaved={vi.fn<(product: api.Product) => void>()}
+      />,
+    )
+
+    await user.clear(screen.getByLabelText(/Mechanism/))
+    await user.click(screen.getByRole('button', { name: 'Save' }))
+
+    await waitFor(() =>
+      expect(mockedApi.updateProduct).toHaveBeenCalledWith(
+        'biz-1',
+        'prod-1',
+        expect.objectContaining({ mechanism: null }),
+      ),
+    )
   })
 })

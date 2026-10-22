@@ -498,6 +498,14 @@ CREATIVE_TEST_AD_COUNT = 4
 # name on Meta and its UTM parameters can be derived from it.
 Avatar = Literal["self_purchaser", "gift_buyer"]
 
+# The main persuasion lever of a creative test ad, next to its avatar: a deal or
+# risk-reducer (offer), why the product delivers (mechanism), something the
+# buyer didn't know (education), or the feeling and moment (emotion). A test's
+# four ads must span at least MIN_DISTINCT_PILLARS of them, so it never tests
+# four versions of the same lever.
+Pillar = Literal["offer", "mechanism", "education", "emotion"]
+MIN_DISTINCT_PILLARS = 3
+
 # Ad set budget under which an expensive product optimizes for AddToCart, and
 # the purchase count at which the Optimizer proposes moving to Purchase.
 ADD_TO_CART_MAX_DAILY_BUDGET = 150.0
@@ -547,18 +555,21 @@ class GeneratedCreativeAngle(CamelCaseModel):
 
     avatar is one of two fixed buyers; concept is a short lowercase slug (for
     example "everyday-wear") that names the idea and ends up in the ad's name
-    and UTM parameters; description says what the ad shows and promises.
+    and UTM parameters; pillar is the ad's main persuasion lever (Pillar);
+    description says what the ad shows and promises.
     """
 
     avatar: Avatar
     concept: Annotated[str, Field(pattern=_CONCEPT_PATTERN, max_length=30)]
+    pillar: Pillar
     description: str
 
 
 class CreativeAngle(GeneratedCreativeAngle):
-    """A stored angle. An older plan's free-text angle has no avatar."""
+    """A stored angle. An older plan's free-text angle has no avatar or pillar."""
 
     avatar: Avatar | None = None  # type: ignore[assignment]
+    pillar: Pillar | None = None  # type: ignore[assignment]
 
     @model_validator(mode="before")
     @classmethod
@@ -704,6 +715,12 @@ class GeneratedCreativeTestPlanFields(CamelCaseModel):
         if {a.avatar for a in self.creative_angles} != {"self_purchaser", "gift_buyer"}:
             raise ValueError(
                 "The angles must cover both avatars (self_purchaser and gift_buyer)"
+            )
+        pillars = {a.pillar for a in self.creative_angles}
+        if len(pillars) < MIN_DISTINCT_PILLARS:
+            raise ValueError(
+                f"The angles must span at least {MIN_DISTINCT_PILLARS} distinct "
+                f"pillars (offer, mechanism, education, emotion); got {sorted(pillars)}"
             )
         return self
 

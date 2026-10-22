@@ -92,6 +92,7 @@ def _fake_product(**overrides: object) -> Product:
         "margin": None,
         "features": None,
         "benefits": None,
+        "mechanism": None,
     }
     defaults.update(overrides)
     return cast(Product, SimpleNamespace(**defaults))

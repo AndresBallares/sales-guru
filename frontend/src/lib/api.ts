@@ -143,6 +143,9 @@ export interface Product {
   margin: number | null
   features: string | null
   benefits: string | null
+  // The specific design, material or method that makes the product deliver its
+  // benefit — why the promise is believable. Optional.
+  mechanism: string | null
   url: string | null
   // The primary (first, ProductImage position 0) uploaded photo's URL, or
   // null if this product has no photos yet — used for campaign-list
@@ -156,6 +159,7 @@ export interface ProductCreateInput {
   margin?: number
   features?: string
   benefits?: string
+  mechanism?: string
   url?: string
   // The campaign this product is being created for, if any — scopes
   // backend auto-attach to that one campaign (app/services/
@@ -174,6 +178,8 @@ export interface ProductUpdateInput {
   margin?: number
   features?: string
   benefits?: string
+  // null clears it, like url.
+  mechanism?: string | null
   url?: string | null
 }
 
@@ -829,10 +835,14 @@ export interface TestPlanContent {
 // A business with no advertising history running a SALES campaign: one broad
 // ad set, with the creative angle as the test variable.
 // One angle of a creative test: who it speaks to and the idea it tests. Angles
-// stored before avatars existed have no avatar.
+// stored before avatars existed have no avatar, and before pillars no pillar.
+export type CreativePillar = 'offer' | 'mechanism' | 'education' | 'emotion'
+
 export interface CreativeAngle {
   avatar: 'self_purchaser' | 'gift_buyer' | null
   concept: string
+  // The ad's main persuasion lever; the test's four angles span at least three.
+  pillar?: CreativePillar | null
   description: string
 }
 

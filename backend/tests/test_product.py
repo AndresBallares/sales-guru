@@ -80,6 +80,7 @@ def test_create_product_with_only_description(client: TestClient) -> None:
     assert body["margin"] is None
     assert body["features"] is None
     assert body["benefits"] is None
+    assert body["mechanism"] is None
     assert body["url"] is None
     assert "id" in body
 
@@ -614,3 +615,62 @@ def test_list_products_returns_only_this_businesss_products(
     assert response.status_code == 200
     descriptions = [p["description"] for p in response.json()]
     assert descriptions == ["A1"]
+
+
+_MECHANISM = (
+    "Solid 18k gold with hand-applied ceramic inlay; the color can't fade or "
+    "chip like plating"
+)
+
+
+def test_a_products_mechanism_round_trips_on_create(client: TestClient) -> None:
+    _signed_up_client(client)
+    business_id = _create_business(client)
+
+    created = client.post(
+        f"/businesses/{business_id}/products",
+        json={"description": "Ceramic ring", "mechanism": _MECHANISM},
+    )
+
+    assert created.status_code == 201
+    assert created.json()["mechanism"] == _MECHANISM
+    listed = client.get(f"/businesses/{business_id}/products").json()
+    assert listed[0]["mechanism"] == _MECHANISM
+
+
+def test_a_products_mechanism_can_be_set_changed_and_cleared(
+    client: TestClient,
+) -> None:
+    _signed_up_client(client)
+    business_id = _create_business(client)
+    product_id = client.post(
+        f"/businesses/{business_id}/products", json={"description": "Ceramic ring"}
+    ).json()["id"]
+    url = f"/businesses/{business_id}/products/{product_id}"
+
+    assert client.patch(url, json={"mechanism": _MECHANISM}).json()["mechanism"] == (
+        _MECHANISM
+    )
+    # Editing something else leaves it alone.
+    assert client.patch(url, json={"price": 450}).json()["mechanism"] == _MECHANISM
+    assert client.patch(url, json={"mechanism": None}).json()["mechanism"] is None
+
+
+def test_a_mechanism_over_300_characters_is_rejected(client: TestClient) -> None:
+    _signed_up_client(client)
+    business_id = _create_business(client)
+
+    created = client.post(
+        f"/businesses/{business_id}/products",
+        json={"description": "Ring", "mechanism": "x" * 301},
+    )
+    assert created.status_code == 422
+
+    product_id = client.post(
+        f"/businesses/{business_id}/products", json={"description": "Ring"}
+    ).json()["id"]
+    patched = client.patch(
+        f"/businesses/{business_id}/products/{product_id}",
+        json={"mechanism": "x" * 301},
+    )
+    assert patched.status_code == 422
