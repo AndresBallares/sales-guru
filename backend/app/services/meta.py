@@ -655,6 +655,19 @@ async def create_meta_campaign(
 
 PURCHASERS_RETENTION_DAYS = 180
 
+# How a creative test credits a result to an ad: a click within 7 days, an
+# engaged view within 1 day, or any view within 1 day. The engaged-view window
+# is the one Meta may refuse for some objectives or versions, so
+# create_meta_ad_set falls back to ATTRIBUTION_WITHOUT_ENGAGED_VIEW.
+ATTRIBUTION_SPEC: list[dict[str, Any]] = [
+    {"event_type": "CLICK_THROUGH", "window_days": 7},
+    {"event_type": "ENGAGED_VIDEO_VIEW", "window_days": 1},
+    {"event_type": "VIEW_THROUGH", "window_days": 1},
+]
+ATTRIBUTION_WITHOUT_ENGAGED_VIEW: list[dict[str, Any]] = [
+    spec for spec in ATTRIBUTION_SPEC if spec["event_type"] != "ENGAGED_VIDEO_VIEW"
+]
+
 
 async def create_purchasers_audience(
     *, access_token: str, ad_account_id: str, pixel_id: str, name: str
@@ -735,6 +748,7 @@ async def create_meta_ad_set(
     locales: list[int] | None = None,
     custom_event_type: str = "PURCHASE",
     excluded_custom_audience_ids: list[str] | None = None,
+    attribution_spec: list[dict[str, Any]] | None = None,
 ) -> str:
     """Create an AdSet object on Meta, under an already-created campaign.
 
@@ -841,6 +855,9 @@ async def create_meta_ad_set(
         excluded_custom_audience_ids: Custom audiences to keep out of delivery
             (targeting.excluded_custom_audiences), such as past purchasers.
             None or empty sends no exclusion.
+        attribution_spec: The ad set's attribution windows (Meta's `attribution_spec`),
+            such as ATTRIBUTION_SPEC. None leaves Meta's default. If Meta refuses an
+            engaged-view window, the call repeats without it and logs a warning.
 
     Returns:
         The new Meta ad set id.
@@ -908,10 +925,24 @@ async def create_meta_ad_set(
         )
     if end_time is not None:
         data["end_time"] = end_time.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%S+0000")
-    body = await _post_json(
-        f"{_GRAPH_BASE_URL}/{ad_account_id}/adsets",
-        data,
-    )
+    if attribution_spec:
+        data["attribution_spec"] = json.dumps(attribution_spec)
+    try:
+        body = await _post_json(f"{_GRAPH_BASE_URL}/{ad_account_id}/adsets", data)
+    except MetaConnectionError as exc:
+        has_engaged_view = bool(
+            attribution_spec
+            and any(w["event_type"] == "ENGAGED_VIDEO_VIEW" for w in attribution_spec)
+        )
+        if not (has_engaged_view and exc.code == 100 and "attribution" in str(exc)):
+            raise
+        logger.warning(
+            "Meta refused the engaged-view attribution window; "
+            "using 7-day click + 1-day view instead: %s",
+            exc,
+        )
+        data["attribution_spec"] = json.dumps(ATTRIBUTION_WITHOUT_ENGAGED_VIEW)
+        body = await _post_json(f"{_GRAPH_BASE_URL}/{ad_account_id}/adsets", data)
     ad_set_id: str = body["id"]
     return ad_set_id
 

@@ -654,6 +654,23 @@ async def test_publish_refuses_a_test_that_gained_a_photo_after_approval(
 # ── No cost cap on a first test ──────────────────────────────
 
 
+def test_a_creative_test_asks_for_7_day_click_1_day_engaged_and_1_day_view(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    mock_services: dict[str, AsyncMock],  # noqa: F811
+) -> None:
+    business_id, campaign_id, _ = _creative_plan_campaign(client, monkeypatch)
+
+    client.post(f"/businesses/{business_id}/campaigns/{campaign_id}/publish")
+
+    spec = _kwargs(mock_services["create_ad_set"])["attribution_spec"]
+    assert [(w["event_type"], w["window_days"]) for w in spec] == [
+        ("CLICK_THROUGH", 7),
+        ("ENGAGED_VIDEO_VIEW", 1),
+        ("VIEW_THROUGH", 1),
+    ]
+
+
 def test_a_first_test_bids_for_the_lowest_cost_with_no_cap(
     client: TestClient,
     monkeypatch: pytest.MonkeyPatch,

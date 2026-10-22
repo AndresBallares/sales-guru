@@ -4212,3 +4212,99 @@ async def test_an_unrelated_creative_error_is_still_raised(
         await _link_creative()
 
     assert len(client.calls) == 1
+
+
+# ── Attribution windows on the ad set ──
+
+
+async def _ad_set(attribution_spec: list[dict[str, Any]] | None) -> None:
+    await meta.create_meta_ad_set(
+        access_token="token",
+        ad_account_id="act_1",
+        name="Test",
+        meta_campaign_id="campaign_1",
+        daily_budget_cents=5000,
+        optimization_goal="OFFSITE_CONVERSIONS",
+        age_min=18,
+        age_max=None,
+        attribution_spec=attribution_spec,
+    )
+
+
+def _attribution_refusal() -> _FakeResponse:
+    return _FakeResponse(
+        {"error": {"message": "(#100) Invalid attribution_spec", "code": 100}},
+        is_error=True,
+    )
+
+
+@pytest.mark.asyncio
+async def test_an_ad_set_sends_the_attribution_windows_it_is_given(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = _mock_client_returning(monkeypatch, _FakeResponse({"id": "adset_1"}))
+
+    await _ad_set(meta.ATTRIBUTION_SPEC)
+
+    assert json.loads(client.calls[0][1]["attribution_spec"]) == [
+        {"event_type": "CLICK_THROUGH", "window_days": 7},
+        {"event_type": "ENGAGED_VIDEO_VIEW", "window_days": 1},
+        {"event_type": "VIEW_THROUGH", "window_days": 1},
+    ]
+
+
+@pytest.mark.asyncio
+async def test_an_ad_set_leaves_attribution_to_meta_by_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = _mock_client_returning(monkeypatch, _FakeResponse({"id": "adset_1"}))
+
+    await _ad_set(None)
+
+    assert "attribution_spec" not in client.calls[0][1]
+
+
+@pytest.mark.asyncio
+async def test_a_refused_engaged_view_falls_back_to_click_and_view_with_a_warning(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    client = _ResponseQueueClient([_attribution_refusal(), _FakeResponse({"id": "a1"})])
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **_kwargs: client)
+
+    with caplog.at_level("WARNING"):
+        await _ad_set(meta.ATTRIBUTION_SPEC)
+
+    assert json.loads(client.calls[1][1]["attribution_spec"]) == [
+        {"event_type": "CLICK_THROUGH", "window_days": 7},
+        {"event_type": "VIEW_THROUGH", "window_days": 1},
+    ]
+    assert "engaged-view" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_a_refusal_without_an_engaged_view_window_is_raised(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = _ResponseQueueClient([_attribution_refusal()])
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **_kwargs: client)
+
+    with pytest.raises(meta.MetaConnectionError):
+        await _ad_set(meta.ATTRIBUTION_WITHOUT_ENGAGED_VIEW)
+
+    assert len(client.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_an_unrelated_ad_set_error_is_not_retried(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    other = _FakeResponse(
+        {"error": {"message": "Invalid campaign id", "code": 100}}, is_error=True
+    )
+    client = _ResponseQueueClient([other])
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **_kwargs: client)
+
+    with pytest.raises(meta.MetaConnectionError, match="Invalid campaign id"):
+        await _ad_set(meta.ATTRIBUTION_SPEC)
+
+    assert len(client.calls) == 1

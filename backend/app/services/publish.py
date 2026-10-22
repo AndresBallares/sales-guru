@@ -1070,6 +1070,7 @@ async def _publish_creative_test_plan(
         excluded_custom_audience_ids=(
             [purchasers_audience_id] if purchasers_audience_id else None
         ),
+        attribution_spec=meta.ATTRIBUTION_SPEC,
     )
     ad_set = await db.adset.create(
         data={
