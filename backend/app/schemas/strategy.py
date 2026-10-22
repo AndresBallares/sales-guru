@@ -846,6 +846,11 @@ def planned_total_budget(
     return content.daily_budget * max(ad_set_count, 1) * content.duration_days
 
 
+# Campaign.budgetLevel: the budget sits on each ad set ("AD_SET", the default)
+# or on the campaign itself (CBO), with ad sets sharing it.
+CAMPAIGN_BUDGET_LEVEL = "CAMPAIGN"
+
+
 def daily_budget(content: AnyStrategyContent) -> float:
     """The daily budget to actually use, regardless of plan type."""
     if content.plan_type == "DATA_DRIVEN_STRATEGY":

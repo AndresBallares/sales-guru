@@ -7,7 +7,7 @@ from app.core.authz import get_owned_business, get_owned_campaign
 from app.core.config import get_settings
 from app.core.db import db
 from app.schemas.dashboard import BusinessDashboardSummary, CampaignDashboardResponse
-from app.schemas.strategy import StrategyContentAdapter
+from app.schemas.strategy import CAMPAIGN_BUDGET_LEVEL, StrategyContentAdapter
 from app.services import dashboard as dash
 from app.services.dashboard_sample import sample_business, sample_campaign
 
@@ -28,8 +28,17 @@ def _require_sample_allowed() -> None:
         )
 
 
-async def _campaign_snapshots(campaign_id: str) -> list[dash.Snapshot]:
-    metrics = await db.metric.find_many(where={"campaignId": campaign_id})
+async def _campaign_snapshots(campaign: Campaign) -> list[dash.Snapshot]:
+    """The campaign's stored rows, as the dashboard reads them.
+
+    Under a campaign budget (CBO) the campaign-level rows are the whole
+    spend, so per-ad-set (pack) rows are dropped: summed with them the
+    totals would count the same spend twice. Ad-level rows stay, as the
+    per-ad numbers.
+    """
+    metrics = await db.metric.find_many(where={"campaignId": campaign.id})
+    if campaign.budgetLevel == CAMPAIGN_BUDGET_LEVEL:
+        metrics = [m for m in metrics if m.adSetId is None or m.adId is not None]
     return [dash.snapshot_from_metric(m) for m in metrics]
 
 
@@ -60,8 +69,13 @@ async def campaign_dashboard(
         StrategyContentAdapter.validate_json(strategy.content) if strategy else None
     )
     ad_sets = await db.adset.find_many(where={"campaignId": campaign.id})
+    # Ad sets under one campaign budget share it, so the plan's ceiling is not
+    # multiplied by how many there are.
     targets = dash.plan_targets(
-        content, sum(1 for a in ad_sets if a.metaAdSetId is not None)
+        content,
+        1
+        if campaign.budgetLevel == CAMPAIGN_BUDGET_LEVEL
+        else sum(1 for a in ad_sets if a.metaAdSetId is not None),
     )
 
     if sample:
@@ -88,7 +102,7 @@ async def campaign_dashboard(
         campaign_id=campaign.id,
         name=campaign.name,
         status=campaign.status,
-        snapshots=await _campaign_snapshots(campaign.id),
+        snapshots=await _campaign_snapshots(campaign),
         targets=targets,
         ads=[dash.AdInfo(a.id, a.name, a.status) for a in ads],
         recommendations=[
@@ -139,6 +153,6 @@ async def business_dashboard(
         where={"businessId": business.id, "NOT": [{"metaCampaignId": None}]}
     )
     return dash.summarize_business(
-        [(c.id, c.name, c.status, await _campaign_snapshots(c.id)) for c in campaigns],
+        [(c.id, c.name, c.status, await _campaign_snapshots(c)) for c in campaigns],
         is_sample=False,
     )

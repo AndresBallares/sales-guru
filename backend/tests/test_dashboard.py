@@ -114,6 +114,7 @@ async def _seed_campaign(
     pixel_warning: str | None = None,
     saturation_warning: str | None = None,
     ad_sets: int = 1,
+    budget_level: str = "AD_SET",
     paused_at: datetime | None = None,
     paused_reason: str | None = None,
 ) -> str:
@@ -129,6 +130,7 @@ async def _seed_campaign(
                 "metaCampaignId": "meta_campaign" if published else None,
                 "pixelWarning": pixel_warning,
                 "saturationWarning": saturation_warning,
+                "budgetLevel": budget_level,
                 "pausedAt": paused_at,
                 "pausedReason": paused_reason,
             }
@@ -474,6 +476,122 @@ def test_two_ad_set_campaign_adds_each_ad_sets_latest_row_once(
 
     assert body["tier1"]["spend"]["value"] == 50.0
     assert body["tier1"]["spend"]["plannedTotal"] is None
+
+
+def test_a_single_ad_set_campaign_reports_the_numbers_it_always_did(
+    client: TestClient,
+) -> None:
+    """Campaigns are AD_SET budget by default: one ad set's totals, planned
+    daily and planned total are exactly what they were before budgetLevel
+    existed ($50/day x 1 ad set x 10 days = $500)."""
+    business_id, campaign_id = _setup(
+        client, strategy=_creative_plan(daily_budget=50.0)
+    )
+    _run(client, lambda: _seed_metric(campaign_id, spend=142.5, purchases=3))
+
+    t1 = client.get(_url(business_id, campaign_id)).json()["tier1"]
+
+    assert t1["spend"]["value"] == 142.5
+    assert t1["spend"]["plannedDaily"] == 50.0
+    assert t1["spend"]["plannedTotal"] == 500.0
+    assert t1["purchases"]["value"] == 3
+
+
+def test_ad_set_budgets_still_multiply_the_planned_total_by_the_ad_set_count(
+    client: TestClient,
+) -> None:
+    """Three ad sets that each carry their own budget can each spend the plan's
+    daily rate, so the ceiling is $50 x 3 x 10 = $1,500 (unchanged)."""
+    business_id, campaign_id = _setup(
+        client, strategy=_creative_plan(daily_budget=50.0), ad_sets=3
+    )
+    _run(client, lambda: _seed_metric(campaign_id, spend=100.0))
+
+    t1 = client.get(_url(business_id, campaign_id)).json()["tier1"]
+
+    assert t1["spend"]["plannedTotal"] == 1500.0
+
+
+def test_a_campaign_budget_is_not_multiplied_by_its_ad_set_count(
+    client: TestClient,
+) -> None:
+    """Under one campaign budget (CBO) the packs share it, so three ad sets
+    still mean $50 x 10 = $500, not $1,500."""
+    business_id, campaign_id = _setup(
+        client,
+        strategy=_creative_plan(daily_budget=50.0),
+        ad_sets=3,
+        budget_level="CAMPAIGN",
+    )
+    _run(client, lambda: _seed_metric(campaign_id, spend=100.0))
+
+    t1 = client.get(_url(business_id, campaign_id)).json()["tier1"]
+
+    assert t1["spend"]["plannedDaily"] == 50.0
+    assert t1["spend"]["plannedTotal"] == 500.0
+
+
+def test_a_campaign_budget_does_not_count_pack_rows_on_top_of_its_own(
+    client: TestClient,
+) -> None:
+    """The campaign-level row ($300, 5 purchases) already includes every pack.
+    Each pack's own row is a breakdown of it; adding them would show $600."""
+    business_id, campaign_id = _setup(
+        client, ad_sets=2, budget_level="CAMPAIGN", strategy=_data_driven()
+    )
+    pack_a, pack_b = _run(client, lambda: _ad_set_ids(campaign_id))
+    _run(client, lambda: _seed_metric(campaign_id, spend=300.0, purchases=5))
+    _run(
+        client,
+        lambda: _seed_metric(campaign_id, ad_set_id=pack_a, spend=120.0, purchases=2),
+    )
+    _run(
+        client,
+        lambda: _seed_metric(campaign_id, ad_set_id=pack_b, spend=180.0, purchases=3),
+    )
+
+    t1 = client.get(_url(business_id, campaign_id)).json()["tier1"]
+
+    assert t1["spend"]["value"] == 300.0
+    assert t1["purchases"]["value"] == 5
+
+
+def test_a_campaign_budget_keeps_its_ad_level_rows(client: TestClient) -> None:
+    """Dropping pack rows must not drop the per-ad numbers."""
+    business_id, campaign_id = _setup(
+        client, budget_level="CAMPAIGN", strategy=_creative_plan()
+    )
+    [(ad_id, ad_set_id)] = _run(client, lambda: _seed_ads(campaign_id, ["Ad one"]))
+    _run(client, lambda: _seed_metric(campaign_id, spend=80.0))
+    _run(
+        client,
+        lambda: _seed_metric(campaign_id, ad_id=ad_id, ad_set_id=ad_set_id, spend=30.0),
+    )
+
+    body = client.get(_url(business_id, campaign_id)).json()
+
+    assert body["tier1"]["spend"]["value"] == 80.0
+    rows = body["tier3"]["ads"]
+    assert [ad["name"] for ad in rows] == ["Ad one"]
+    assert rows[0]["spend"] == 30.0
+
+
+def test_business_summary_counts_a_campaign_budget_campaign_once(
+    client: TestClient,
+) -> None:
+    _signed_up_client(client)
+    business_id = _create_business(client)
+    campaign_id = _run(
+        client,
+        lambda: _seed_campaign(business_id, ad_sets=2, budget_level="CAMPAIGN"),
+    )
+    pack_a, _ = _run(client, lambda: _ad_set_ids(campaign_id))
+    _run(client, lambda: _seed_metric(campaign_id, spend=300.0))
+    _run(client, lambda: _seed_metric(campaign_id, ad_set_id=pack_a, spend=120.0))
+
+    body = client.get(f"/businesses/{business_id}/dashboard").json()
+
+    assert body["totalSpend"] == 300.0
 
 
 def test_ad_level_rows_do_not_change_the_campaign_totals(client: TestClient) -> None:
