@@ -15,11 +15,13 @@ from app.core.config import get_settings
 from app.schemas.strategy import (
     AudienceConstraints,
     CreativeTestPlanContent,
+    GeneratedCreativeTestPlanFields,
     NormalizedMetrics,
     StrategyContentAdapter,
     UnitEconomicsFields,
     daily_budget,
     primary_audience,
+    required_test_ads,
 )
 from app.services import optimizer, strategist
 from app.services.benchmarks import JEWELRY_META_BENCHMARKS
@@ -39,10 +41,26 @@ _VALID_INPUT: dict[str, Any] = {
     "offer": "Custom emerald rings",
     "positioning": "Premium and personal",
     "creative_angles": [
-        "Product on skin",
-        "Social proof",
-        "Gifting",
-        "Collection carousel",
+        {
+            "avatar": "self_purchaser",
+            "concept": "product-on-skin",
+            "description": "Product on skin",
+        },
+        {
+            "avatar": "self_purchaser",
+            "concept": "craftsmanship",
+            "description": "The craftsmanship",
+        },
+        {
+            "avatar": "gift_buyer",
+            "concept": "gifting",
+            "description": "The gift she keeps",
+        },
+        {
+            "avatar": "gift_buyer",
+            "concept": "social-proof",
+            "description": "Loved by other buyers",
+        },
     ],
     "copy_strategy": "Lead with the story behind each piece",
 }
@@ -175,23 +193,23 @@ def test_daily_budget_of_a_creative_plan_is_its_single_ad_set_budget() -> None:
 
 
 def test_choose_optimization_event_uses_add_to_cart_at_or_above_the_threshold() -> None:
-    assert strategist._choose_optimization_event(_product(price=500.0), 500.0) == (
-        "ADD_TO_CART"
-    )
-    assert strategist._choose_optimization_event(_product(price=2000.0), 500.0) == (
-        "ADD_TO_CART"
-    )
+    assert strategist._choose_optimization_event(
+        _product(price=500.0), 500.0, 50.0
+    ) == ("ADD_TO_CART")
+    assert strategist._choose_optimization_event(
+        _product(price=2000.0), 500.0, 50.0
+    ) == ("ADD_TO_CART")
 
 
 def test_choose_optimization_event_uses_purchase_below_the_threshold() -> None:
-    assert strategist._choose_optimization_event(_product(price=499.99), 500.0) == (
-        "PURCHASE"
-    )
+    assert strategist._choose_optimization_event(
+        _product(price=499.99), 500.0, 50.0
+    ) == ("PURCHASE")
 
 
 def test_choose_optimization_event_uses_purchase_without_a_price() -> None:
-    assert strategist._choose_optimization_event(None, 500.0) == "PURCHASE"
-    assert strategist._choose_optimization_event(_product(price=None), 500.0) == (
+    assert strategist._choose_optimization_event(None, 500.0, 50.0) == "PURCHASE"
+    assert strategist._choose_optimization_event(_product(price=None), 500.0, 50.0) == (
         "PURCHASE"
     )
 
@@ -251,7 +269,9 @@ async def test_generate_strategy_returns_a_creative_test_plan(
 
     assert isinstance(result, CreativeTestPlanContent)
     assert result.plan_type == "CREATIVE_TEST_PLAN"
-    assert result.creative_angles[0] == "Product on skin"
+    assert result.creative_angles[0].concept == "product-on-skin"
+    assert result.creative_angles[0].avatar == "self_purchaser"
+    assert result.bid_strategy == "LOWEST_COST"
     assert result.creative_persona.name == "Milestone gift buyers"
     assert result.audience_constraints == AudienceConstraints()
     assert result.baseline_metrics.cost_per_add_to_cart is None
@@ -401,7 +421,9 @@ async def test_creative_test_plan_prompt_makes_creative_the_test_variable(
     assert "one ad set" in prompt
     assert "creative" in prompt
     assert "not used for targeting" in prompt
-    assert "3 or 4" in prompt
+    assert "exactly 4" in prompt
+    assert "self_purchaser" in prompt and "gift_buyer" in prompt
+    assert "no cost cap" in prompt
 
 
 @pytest.mark.asyncio
@@ -438,7 +460,7 @@ async def test_generate_strategy_returns_a_fake_creative_plan_in_fake_llm_mode(
         get_settings.cache_clear()
 
     assert isinstance(result, CreativeTestPlanContent)
-    assert len(result.creative_angles) >= 3
+    assert len(result.creative_angles) == 4
 
 
 # ── Per-business languages, the 0.10 rate, and the delivery check ──
@@ -609,3 +631,123 @@ async def test_an_image_test_plan_is_unchanged_and_says_single_image(
     assert isinstance(plan, CreativeTestPlanContent)
     assert plan.creative_format == "SINGLE_IMAGE"
     assert "single static image" in mock.call_args.kwargs["prompt"]
+
+
+# ── Structured angles (avatar x concept) ─────────────────────
+
+
+def _angles(*pairs: tuple[str, str]) -> list[dict[str, str]]:
+    return [
+        {"avatar": avatar, "concept": concept, "description": f"{avatar} {concept}"}
+        for avatar, concept in pairs
+    ]
+
+
+_FOUR = (
+    ("self_purchaser", "everyday-wear"),
+    ("self_purchaser", "craftsmanship"),
+    ("gift_buyer", "the-perfect-gift"),
+    ("gift_buyer", "social-proof"),
+)
+
+
+def test_generated_plan_needs_exactly_four_angles() -> None:
+    GeneratedCreativeTestPlanFields.model_validate(
+        {**_VALID_INPUT, "creative_angles": _angles(*_FOUR)}
+    )
+    with pytest.raises(ValidationError):
+        GeneratedCreativeTestPlanFields.model_validate(
+            {**_VALID_INPUT, "creative_angles": _angles(*_FOUR[:3])}
+        )
+
+
+def test_generated_angles_must_cover_both_avatars() -> None:
+    same = _angles(
+        ("self_purchaser", "a"),
+        ("self_purchaser", "b"),
+        ("self_purchaser", "c"),
+        ("self_purchaser", "d"),
+    )
+    with pytest.raises(ValidationError, match="both avatars"):
+        GeneratedCreativeTestPlanFields.model_validate(
+            {**_VALID_INPUT, "creative_angles": same}
+        )
+
+
+def test_generated_angles_cannot_repeat_an_avatar_and_concept_pair() -> None:
+    twice = _angles(*_FOUR[:3], _FOUR[2])
+    with pytest.raises(ValidationError, match="own avatar and concept"):
+        GeneratedCreativeTestPlanFields.model_validate(
+            {**_VALID_INPUT, "creative_angles": twice}
+        )
+
+
+@pytest.mark.parametrize("concept", ["Everyday Wear", "everyday wear", "a" * 31, ""])
+def test_a_concept_is_a_short_lowercase_slug(concept: str) -> None:
+    angles = _angles(*_FOUR)
+    angles[0]["concept"] = concept
+    with pytest.raises(ValidationError):
+        GeneratedCreativeTestPlanFields.model_validate(
+            {**_VALID_INPUT, "creative_angles": angles}
+        )
+
+
+def test_an_avatar_must_be_one_of_the_two() -> None:
+    angles = _angles(*_FOUR)
+    angles[0]["avatar"] = "collector"
+    with pytest.raises(ValidationError):
+        GeneratedCreativeTestPlanFields.model_validate(
+            {**_VALID_INPUT, "creative_angles": angles}
+        )
+
+
+def test_a_stored_plan_with_text_angles_still_loads() -> None:
+    plan = CreativeTestPlanContent.model_validate(
+        _plan_dict(creative_angles=["Product on skin!", "Gifting", "Social proof"])
+    )
+
+    assert plan.creative_angles[0].avatar is None
+    assert plan.creative_angles[0].concept == "product-on-skin"
+    assert plan.creative_angles[0].description == "Product on skin!"
+    assert plan.bid_strategy == "COST_CAP"  # a stored plan keeps its cap
+
+
+def test_a_text_angle_with_no_letters_gets_a_placeholder_concept() -> None:
+    plan = CreativeTestPlanContent.model_validate(
+        _plan_dict(creative_angles=["!!!", "b", "c"])
+    )
+
+    assert plan.creative_angles[0].concept == "angle"
+
+
+# ── Four ads, three only for a thin product ──────────────────
+
+
+@pytest.mark.parametrize(
+    ("media_count", "needed"), [(0, 3), (2, 3), (3, 3), (4, 4), (9, 4)]
+)
+def test_a_test_needs_four_ads_unless_the_product_lacks_a_fourth_asset(
+    media_count: int, needed: int
+) -> None:
+    assert required_test_ads(media_count) == needed
+
+
+# ── Add to Cart only on a small budget ───────────────────────
+
+
+def test_a_big_budget_goes_back_to_purchase_even_for_an_expensive_product() -> None:
+    assert strategist._choose_optimization_event(
+        _product(price=900.0), 500.0, 149.0
+    ) == ("ADD_TO_CART")
+    assert strategist._choose_optimization_event(
+        _product(price=900.0), 500.0, 150.0
+    ) == ("PURCHASE")
+
+
+def test_the_plan_says_when_to_propose_the_switch_to_purchase() -> None:
+    plan = CreativeTestPlanContent.model_validate(_plan_dict())
+
+    assert any(
+        rule.action == "propose_switch_to_purchase" and "25 purchases" in rule.condition
+        for rule in plan.decision_rules
+    )

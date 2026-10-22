@@ -39,6 +39,7 @@ from app.schemas.optimization import GeneratedRecommendation
 from app.schemas.strategy import (
     AudienceConstraints,
     BudgetRecommendation,
+    CreativeAngle,
     CreativePersona,
     CreativeTestPlanContent,
     DataDrivenStrategyContent,
@@ -60,6 +61,7 @@ from app.services.meta import (
     MetaDeliveryStatus,
 )
 from app.services.retargeting import RetargetingNotBuiltError
+from app.services.switch_to_purchase import SwitchToPurchaseNotBuiltError
 from fastapi.testclient import TestClient
 from prisma import Base64, Prisma
 from prisma.models import Campaign
@@ -1946,6 +1948,7 @@ async def _make_creative_plan_campaign(
     optimization_event: str,
     daily_budget: float = 50.0,
     target_cost_per_add_to_cart: float | None = None,
+    bid_strategy: str = "COST_CAP",
 ) -> str:
     """A LIVE campaign whose stored strategy is a CREATIVE_TEST_PLAN."""
     _, campaign_id = _live_campaign(client)
@@ -1957,12 +1960,17 @@ async def _make_creative_plan_campaign(
         hypotheses=[strategist_module._build_creative_hypothesis("A wins.")],
         offer="Offer",
         positioning="Positioning",
-        creative_angles=["a", "b", "c"],
+        creative_angles=[
+            CreativeAngle(concept="a", description="a"),
+            CreativeAngle(concept="b", description="b"),
+            CreativeAngle(concept="c", description="c"),
+        ],
         copy_strategy="Copy",
         daily_budget=daily_budget,
         duration_days=10,
         total_budget=daily_budget * 10,
         optimization_event=cast(Any, optimization_event),
+        bid_strategy=cast(Any, bid_strategy),
         target_cost_per_add_to_cart=target_cost_per_add_to_cart,
         success_criteria=strategist_module._build_creative_success_criteria(
             benchmark_context, None, target_cost_per_add_to_cart
@@ -2077,6 +2085,25 @@ async def test_delivery_check_waits_for_three_days_of_history(
     now = datetime.now(UTC)
     await _seed_metric(campaign_id, fetched_at=now - timedelta(days=1), spend=0.0)
     await _seed_metric(campaign_id, fetched_at=now, spend=5.0)
+
+    await _run_delivery_check(client, campaign_id)
+
+    assert await _delivery_signal(campaign_id) is None
+
+
+@pytest.mark.asyncio
+async def test_delivery_check_ignores_a_plan_that_bids_for_the_lowest_cost(
+    client: TestClient, mock_services: dict[str, AsyncMock]
+) -> None:
+    """With no cost cap there is no cap to be too tight."""
+    campaign_id = await _make_creative_plan_campaign(
+        client, optimization_event="ADD_TO_CART", bid_strategy="LOWEST_COST"
+    )
+    now = datetime.now(UTC)
+    await _seed_metric(
+        campaign_id, fetched_at=now - timedelta(days=3, hours=1), spend=0.0
+    )
+    await _seed_metric(campaign_id, fetched_at=now, spend=1.0)
 
     await _run_delivery_check(client, campaign_id)
 
@@ -3821,3 +3848,129 @@ def test_the_status_sync_asks_meta_about_each_published_campaign(
     kwargs = await_args.kwargs
     assert kwargs["meta_campaign_id"] == "meta_campaign_1"
     assert kwargs["access_token"] == "long-token"
+
+
+# --- Switch to Purchase: a proposal at about 25 purchases, never applied -------
+
+
+async def _switch_recs(campaign_id: str) -> list[Any]:
+    return [
+        r
+        for r in await _recommendations(campaign_id)
+        if r.actionType == "SWITCH_TO_PURCHASE"
+    ]
+
+
+async def _seed_purchases(campaign_id: str, purchases: int) -> None:
+    await _seed_metric(
+        campaign_id, fetched_at=datetime.now(UTC), spend=300.0, purchases=purchases
+    )
+
+
+@pytest.mark.asyncio
+async def test_an_add_to_cart_test_with_25_purchases_gets_a_switch_proposal(
+    client: TestClient,
+    mock_services: dict[str, AsyncMock],
+    pause_ad_mock: AsyncMock,
+) -> None:
+    campaign_id, _ = await _atc_test_with_ads(client)
+    await _seed_purchases(campaign_id, 25)
+
+    await _run_rules(client, campaign_id)
+
+    recs = await _switch_recs(campaign_id)
+    assert len(recs) == 1
+    assert (recs[0].status, recs[0].requiresApproval) == ("PENDING", True)
+    assert "25 purchases" in recs[0].reasoning
+    assert "new ad set" in recs[0].reasoning
+
+
+@pytest.mark.asyncio
+async def test_no_switch_proposal_below_25_purchases(
+    client: TestClient,
+    mock_services: dict[str, AsyncMock],
+    pause_ad_mock: AsyncMock,
+) -> None:
+    campaign_id, _ = await _atc_test_with_ads(client)
+    await _seed_purchases(campaign_id, 24)
+
+    await _run_rules(client, campaign_id)
+
+    assert await _switch_recs(campaign_id) == []
+
+
+@pytest.mark.asyncio
+async def test_a_purchase_test_never_gets_a_switch_proposal(
+    client: TestClient,
+    mock_services: dict[str, AsyncMock],
+    pause_ad_mock: AsyncMock,
+) -> None:
+    campaign_id = await _make_creative_plan_campaign(
+        client, optimization_event="PURCHASE"
+    )
+    await _seed_purchases(campaign_id, 40)
+
+    await _run_rules(client, campaign_id)
+
+    assert await _switch_recs(campaign_id) == []
+
+
+@pytest.mark.asyncio
+async def test_the_switch_proposal_is_not_repeated_or_revived(
+    client: TestClient,
+    mock_services: dict[str, AsyncMock],
+    pause_ad_mock: AsyncMock,
+) -> None:
+    campaign_id, _ = await _atc_test_with_ads(client)
+    await _seed_purchases(campaign_id, 30)
+    await _run_rules(client, campaign_id)
+    await _run_rules(client, campaign_id)
+    assert len(await _switch_recs(campaign_id)) == 1
+
+    seeder = Prisma()
+    await seeder.connect()
+    try:
+        await seeder.optimizationrecommendation.update_many(
+            where={"campaignId": campaign_id, "actionType": "SWITCH_TO_PURCHASE"},
+            data={"status": "REJECTED"},
+        )
+    finally:
+        await seeder.disconnect()
+    await _run_rules(client, campaign_id)
+
+    assert [r.status for r in await _switch_recs(campaign_id)] == ["REJECTED"]
+
+
+@pytest.mark.asyncio
+async def test_the_switch_proposal_is_withdrawn_if_purchases_fall_back(
+    client: TestClient,
+    mock_services: dict[str, AsyncMock],
+    pause_ad_mock: AsyncMock,
+) -> None:
+    campaign_id, _ = await _atc_test_with_ads(client)
+    await _seed_purchases(campaign_id, 30)
+    await _run_rules(client, campaign_id)
+    await _seed_purchases(campaign_id, 10)  # a later, lower snapshot
+
+    await _run_rules(client, campaign_id)
+
+    assert [r.status for r in await _switch_recs(campaign_id)] == ["SUPERSEDED"]
+
+
+@pytest.mark.asyncio
+async def test_approving_the_switch_cannot_create_anything_yet(
+    client: TestClient,
+    mock_services: dict[str, AsyncMock],
+    pause_ad_mock: AsyncMock,
+) -> None:
+    """The new Purchase ad set is documented but unbuilt: approval raises and
+    the proposal stays pending."""
+    campaign_id, _ = await _atc_test_with_ads(client)
+    await _seed_purchases(campaign_id, 25)
+    await _run_rules(client, campaign_id)
+    rec = (await _switch_recs(campaign_id))[0]
+
+    with pytest.raises(SwitchToPurchaseNotBuiltError, match="not built"):
+        _run(client, optimization_jobs.apply_recommendation, rec)
+
+    assert (await _switch_recs(campaign_id))[0].status == "PENDING"

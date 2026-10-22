@@ -14,6 +14,7 @@ from app.core.config import get_settings
 from app.schemas.strategy import (
     AudienceConstraints,
     BudgetRecommendation,
+    CreativeAngle,
     CreativePersona,
     CreativeTestPlanContent,
     DataDrivenStrategyContent,
@@ -84,7 +85,11 @@ def _creative_plan(
         hypotheses=[strategist_module._build_creative_hypothesis("A wins.")],
         offer="Offer",
         positioning="Positioning",
-        creative_angles=["a", "b", "c"],
+        creative_angles=[
+            CreativeAngle(concept="a", description="a"),
+            CreativeAngle(concept="b", description="b"),
+            CreativeAngle(concept="c", description="c"),
+        ],
         copy_strategy="Copy",
         daily_budget=daily_budget,
         duration_days=10,

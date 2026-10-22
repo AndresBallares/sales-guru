@@ -18,6 +18,7 @@ ActionType = Literal[
     "RAISE_COST_CAP",
     "START_RETARGETING",
     "TEST_CAROUSEL",
+    "SWITCH_TO_PURCHASE",
 ]
 RiskLevel = Literal["LOW", "MEDIUM", "HIGH"]
 RecommendationStatus = Literal["PENDING", "APPLIED", "REJECTED", "SUPERSEDED"]
@@ -33,6 +34,7 @@ ACTION_TYPE_LABELS: dict[ActionType, str] = {
     "RAISE_COST_CAP": "Raise cost cap",
     "START_RETARGETING": "Start retargeting",
     "TEST_CAROUSEL": "Test a carousel",
+    "SWITCH_TO_PURCHASE": "Switch to Purchase",
 }
 
 

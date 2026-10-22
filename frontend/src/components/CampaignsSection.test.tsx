@@ -166,7 +166,11 @@ function fakeCreativeTestPlanContent(): api.CreativeTestPlanContent {
     ],
     offer: 'Custom emerald rings',
     positioning: 'Premium and personal',
-    creativeAngles: ['Product on skin', 'Social proof', 'Gifting'],
+    creativeAngles: [
+      { avatar: 'self_purchaser', concept: 'product-on-skin', description: 'Product on skin' },
+      { avatar: 'gift_buyer', concept: 'social-proof', description: 'Social proof' },
+      { avatar: 'gift_buyer', concept: 'gifting', description: 'Gifting' },
+    ],
     copyStrategy: 'Lead with the story behind each piece',
     dailyBudget: 50,
     durationDays: 10,
@@ -2015,7 +2019,11 @@ describe('CampaignsSection', () => {
         ],
         offer: 'Custom emerald rings',
         positioning: 'Premium and personal',
-        creativeAngles: ['Product on skin', 'Social proof', 'Gifting'],
+        creativeAngles: [
+      { avatar: 'self_purchaser', concept: 'product-on-skin', description: 'Product on skin' },
+      { avatar: 'gift_buyer', concept: 'social-proof', description: 'Social proof' },
+      { avatar: 'gift_buyer', concept: 'gifting', description: 'Gifting' },
+    ],
         copyStrategy: 'Lead with the story behind each piece',
         dailyBudget: 50,
         durationDays: 10,
@@ -2042,7 +2050,7 @@ describe('CampaignsSection', () => {
     expect(screen.getByText(/cheapest add-to-cart\./)).toBeInTheDocument()
     expect(screen.getByText(/broad \(Meta Advantage\+\)/)).toBeInTheDocument()
     expect(screen.getByText(/Milestone gift buyers/)).toBeInTheDocument()
-    expect(screen.getByText('Product on skin')).toBeInTheDocument()
+    expect(screen.getByText('Self-purchaser – Product on skin')).toBeInTheDocument()
     expect(screen.getByText(/\$50\/day on one ad set for 10 days/)).toBeInTheDocument()
   })
 
@@ -5092,6 +5100,27 @@ describe('CampaignsSection creative test (CREATIVE_TEST_PLAN)', () => {
     // Next is there but waits for three ads, and says why.
     expect(screen.getByRole('button', { name: 'Next' })).toBeDisabled()
     expect(screen.getByText('Select at least 3 ads to continue.')).toBeInTheDocument()
+  })
+
+  it('needs all four ads when the product has a fourth photo', async () => {
+    mockedApi.getStrategy.mockResolvedValue({
+      id: 'strat-1',
+      campaignId: 'camp-1',
+      createdAt: '2026-10-06T00:00:00Z',
+      content: fakeCreativeTestPlanContent(),
+      requiredTestAds: 4,
+    })
+    mockedApi.listCampaigns.mockResolvedValue([{ ...CAMPAIGN, status: 'PENDING_APPROVAL' }])
+    mockedApi.listCreatives.mockResolvedValue(
+      fourCreatives(['creative-1', 'creative-2', 'creative-3']),
+    )
+
+    renderCampaigns(<CampaignsSection businessId="biz-1" />)
+    await screen.findByText('Headline A')
+
+    expect(screen.getByText('3 of 4 ads selected')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Next' })).toBeDisabled()
+    expect(screen.getByText('Select all 4 ads to continue.')).toBeInTheDocument()
   })
 
   it('enables Next once three ads are selected, and opens the ad page', async () => {

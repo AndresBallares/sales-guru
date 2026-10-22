@@ -84,8 +84,14 @@ from app.schemas.creative import (
     GeneratedCreativeVariant,
 )
 from app.schemas.product_image import MAX_VIDEO_BYTES, MAX_VIDEO_SECONDS
-from app.schemas.strategy import StrategyContent, primary_audience
+from app.schemas.strategy import (
+    CreativeTestPlanContent,
+    StrategyContent,
+    primary_audience,
+    required_test_ads,
+)
 from app.services.brand_voice import brand_voice_lines
+from app.services.creative_naming import angle_label
 from app.services.media_info import is_square
 from app.services.prompt_safety import quarantine
 from app.services.tool_use import ToolInputRecoveryError, parse_tool_input
@@ -713,8 +719,22 @@ def _build_prompt(
         "",
         f"Positioning: {strategy.positioning}",
         f"Copy strategy: {strategy.copy_strategy}",
-        f"Creative angles to draw from: {', '.join(strategy.creative_angles)}",
     ]
+    if strategy.plan_type == "CREATIVE_TEST_PLAN":
+        lines += ["Creative angles, one per variant:"]
+        for position, angle in enumerate(strategy.creative_angles):
+            name = (
+                angle_label(angle.avatar, angle.concept)
+                if angle.avatar
+                else angle.concept
+            )
+            lines.append(
+                f"- Variant {chr(ord('A') + position)}: {name} — {angle.description}"
+            )
+    else:
+        lines.append(
+            f"Creative angles to draw from: {', '.join(strategy.creative_angles)}"
+        )
     if strategy.plan_type == "CREATIVE_TEST_PLAN":
         persona = strategy.creative_persona
         lines += [
@@ -724,9 +744,12 @@ def _build_prompt(
                 "audience selection)",
                 f"{persona.name} — {persona.description}",
             ),
-            "These ads compete against each other in one ad set, so each "
-            "variant must take a clearly different one of the creative "
-            "angles above — the test is which angle wins.",
+            "These ads compete against each other in one ad set, so return "
+            "the variants in the order listed above: variant A is built on "
+            "the first angle, variant B on the second, and so on, each "
+            "speaking to its angle's avatar (a self-purchaser buys for "
+            "themselves, a gift buyer buys for someone else). The test is "
+            "which angle wins.",
         ]
         if format == "SINGLE_IMAGE":
             lines.append(
@@ -921,6 +944,53 @@ def _check_card_counts_match_images(
             )
 
 
+async def test_ads_required(campaign: Campaign, plan: CreativeTestPlanContent) -> int:
+    """How many ads this campaign's creative test must have selected.
+
+    Four, or three when the product genuinely lacks a fourth photo (a video
+    test counts videos) — see schemas.strategy.required_test_ads.
+
+    Args:
+        campaign: The creative test campaign.
+        plan: Its CREATIVE_TEST_PLAN.
+
+    Returns:
+        The number of selected ads the test needs before it can be approved.
+    """
+    if campaign.productId is None:
+        return required_test_ads(0)
+    media_type = "VIDEO" if plan.creative_format == "SINGLE_VIDEO" else "IMAGE"
+    media_count = await db.productimage.count(
+        where={"productId": campaign.productId, "mediaType": media_type}
+    )
+    return required_test_ads(media_count)
+
+
+def apply_plan_angles(
+    variants: list[GeneratedCreativeVariant], strategy: StrategyContent
+) -> list[GeneratedCreativeVariant]:
+    """Give each variant of a creative test the plan's angle at its position.
+
+    The prompt asks for variant A on the first angle, B on the second and so
+    on; this makes that the rule rather than a request, by replacing each
+    variant's free-text creative_angle with the angle's label ("Gift buyer –
+    Social proof"). The label is what api/creative.py maps back to the
+    angle's avatar and concept. Other plans, and an older plan whose angles
+    have no avatar, are returned unchanged.
+    """
+    if strategy.plan_type != "CREATIVE_TEST_PLAN":
+        return variants
+    angles = strategy.creative_angles
+    if len(angles) != len(variants) or any(a.avatar is None for a in angles):
+        return variants
+    return [
+        variant.model_copy(
+            update={"creative_angle": angle_label(str(angle.avatar), angle.concept)}
+        )
+        for variant, angle in zip(variants, angles, strict=True)
+    ]
+
+
 async def generate_creatives(
     *,
     business: Business,
@@ -988,7 +1058,7 @@ async def generate_creatives(
         if is_carousel:
             assert card_images is not None  # caller contract, see docstring
             return _fake_carousel_variants(len(card_images))
-        return list(_FAKE_VARIANTS)
+        return apply_plan_angles(list(_FAKE_VARIANTS), strategy)
     if not settings.anthropic_api_key:
         raise CreativeAgentError("ANTHROPIC_API_KEY is not configured")
 
@@ -1113,7 +1183,7 @@ async def generate_creatives(
 
     if expected_card_count is not None:
         _check_card_counts_match_images(variants, expected_card_count)
-    return variants
+    return apply_plan_angles(variants, strategy)
 
 
 def is_creative_stale(

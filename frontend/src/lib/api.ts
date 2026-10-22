@@ -826,6 +826,14 @@ export interface TestPlanContent {
 
 // A business with no advertising history running a SALES campaign: one broad
 // ad set, with the creative angle as the test variable.
+// One angle of a creative test: who it speaks to and the idea it tests. Angles
+// stored before avatars existed have no avatar.
+export interface CreativeAngle {
+  avatar: 'self_purchaser' | 'gift_buyer' | null
+  concept: string
+  description: string
+}
+
 export interface CreativePersona {
   name: string
   description: string
@@ -850,12 +858,14 @@ export interface CreativeTestPlanContent {
   hypotheses: CreativeTestHypothesis[]
   offer: string
   positioning: string
-  creativeAngles: string[]
+  creativeAngles: CreativeAngle[]
   copyStrategy: string
   dailyBudget: number
   durationDays: number
   totalBudget: number
   optimizationEvent: 'PURCHASE' | 'ADD_TO_CART'
+  // A first test bids for the lowest cost with no cap; an older one has a cap.
+  bidStrategy?: 'LOWEST_COST' | 'COST_CAP'
   targetCostPerAddToCart: number | null
   successCriteria: SuccessCriteria
   decisionRules: DecisionRule[]
@@ -892,6 +902,8 @@ export interface Strategy {
   campaignId: string
   content: StrategyContent
   createdAt: string
+  // A creative test only: how many ads must be selected before it can be approved.
+  requiredTestAds?: number | null
 }
 
 // hasPriorAdvertisingExperience answers the one-time "has this business
@@ -1280,6 +1292,7 @@ export type ActionType =
   | 'RAISE_COST_CAP'
   | 'START_RETARGETING'
   | 'TEST_CAROUSEL'
+  | 'SWITCH_TO_PURCHASE'
 export type RiskLevel = 'LOW' | 'MEDIUM' | 'HIGH'
 export type RecommendationStatus = 'PENDING' | 'APPLIED' | 'REJECTED' | 'SUPERSEDED'
 

@@ -35,6 +35,8 @@ has the full history; flag if this still fails on retry.
 
 import asyncio
 import json
+import logging
+import re
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from typing import Any, Literal, NamedTuple, NoReturn
@@ -44,6 +46,8 @@ import httpx
 
 from app.core.config import get_settings
 from app.schemas.meta import MetaAdAccount, MetaPage, MetaPixel
+
+logger = logging.getLogger(__name__)
 
 _GRAPH_VERSION = "v21.0"
 _GRAPH_BASE_URL = f"https://graph.facebook.com/{_GRAPH_VERSION}"
@@ -649,6 +653,67 @@ async def create_meta_campaign(
     return campaign_id
 
 
+PURCHASERS_RETENTION_DAYS = 180
+
+
+async def create_purchasers_audience(
+    *, access_token: str, ad_account_id: str, pixel_id: str, name: str
+) -> str:
+    """Create a custom audience of the Pixel's purchasers of the last 180 days.
+
+    A website custom audience built from the Pixel's Purchase event, filled
+    from the Pixel's history (`prefill`). Used as an exclusion, so a creative
+    test never pays to reach people who already bought. Meta caps website
+    audiences at 180 days. `subtype` is left out on purpose: Graph v21.0
+    refuses it for a website audience. Meta ignores `validate_only` on this
+    endpoint, so the call creates the audience for real.
+
+    Args:
+        access_token: The business's Meta access token.
+        ad_account_id: The connected ad account.
+        pixel_id: The Pixel whose Purchase events define the audience.
+        name: The audience's display name.
+
+    Returns:
+        The new custom audience id.
+
+    Raises:
+        MetaConnectionError: If the call fails, for example because the ad
+            account's owner hasn't accepted Meta's custom audience terms
+            (see is_business_tools_terms_error).
+    """
+    if get_settings().fake_meta_enabled:
+        return f"fake_audience_{uuid4().hex[:12]}"
+    rule = {
+        "inclusions": {
+            "operator": "or",
+            "rules": [
+                {
+                    "event_sources": [{"id": pixel_id, "type": "pixel"}],
+                    "retention_seconds": PURCHASERS_RETENTION_DAYS * 86400,
+                    "filter": {
+                        "operator": "and",
+                        "filters": [
+                            {"field": "event", "operator": "eq", "value": "Purchase"}
+                        ],
+                    },
+                }
+            ],
+        }
+    }
+    body = await _post_json(
+        f"{_GRAPH_BASE_URL}/{ad_account_id}/customaudiences",
+        {
+            "access_token": access_token,
+            "name": name,
+            "rule": json.dumps(rule),
+            "prefill": "true",
+        },
+    )
+    audience_id: str = body["id"]
+    return audience_id
+
+
 async def create_meta_ad_set(
     *,
     access_token: str,
@@ -669,6 +734,7 @@ async def create_meta_ad_set(
     status: Literal["ACTIVE", "PAUSED"] = "ACTIVE",
     locales: list[int] | None = None,
     custom_event_type: str = "PURCHASE",
+    excluded_custom_audience_ids: list[str] | None = None,
 ) -> str:
     """Create an AdSet object on Meta, under an already-created campaign.
 
@@ -772,6 +838,9 @@ async def create_meta_ad_set(
             on (confirmed against the real API 2026-10-06).
         custom_event_type: The Pixel event the ad set optimizes for in
             promoted_object — PURCHASE (default) or ADD_TO_CART.
+        excluded_custom_audience_ids: Custom audiences to keep out of delivery
+            (targeting.excluded_custom_audiences), such as past purchasers.
+            None or empty sends no exclusion.
 
     Returns:
         The new Meta ad set id.
@@ -813,6 +882,10 @@ async def create_meta_ad_set(
         targeting_spec["locales"] = locales
     if interests:
         targeting_spec["interests"] = interests
+    if excluded_custom_audience_ids:
+        targeting_spec["excluded_custom_audiences"] = [
+            {"id": audience_id} for audience_id in excluded_custom_audience_ids
+        ]
     targeting = json.dumps(targeting_spec)
     data = {
         "access_token": access_token,
@@ -1210,6 +1283,7 @@ async def create_meta_placement_ad_creative(
     story: PlacementAsset | None = None,
     square: PlacementAsset | None = None,
     instagram_user_id: str | None = None,
+    url_tags: str | None = None,
 ) -> str:
     """Create one ad creative with a feed asset plus a story and/or square asset.
 
@@ -1232,6 +1306,8 @@ async def create_meta_placement_ad_creative(
         instagram_user_id: The Page's linked Instagram account, sent as the
             creative's instagram_user_id so the ad can run on Instagram as that
             account. Omitted from the request when None.
+        url_tags: The ad's UTM parameters as a query string, sent as the
+            creative's `url_tags`. Omitted when None.
 
     Returns:
         The new Meta ad creative id.
@@ -1261,14 +1337,13 @@ async def create_meta_placement_ad_creative(
     }
     if instagram_user_id:
         payload["instagram_user_id"] = instagram_user_id
-    body = await _post_json(
-        f"{_GRAPH_BASE_URL}/{ad_account_id}/adcreatives",
+    return await _post_creative(
+        ad_account_id,
         payload,
+        url_tags=url_tags,
         # Meta checks the assets while creating the creative; 5s was not enough.
         timeout=_VIDEO_CREATIVE_TIMEOUT_SECONDS,
     )
-    creative_id: str = body["id"]
-    return creative_id
 
 
 async def create_meta_video_ad_creative(
@@ -1285,6 +1360,7 @@ async def create_meta_video_ad_creative(
     video_id: str,
     image_hash: str,
     instagram_user_id: str | None = None,
+    url_tags: str | None = None,
 ) -> str:
     """Create a single-video ad creative (object_story_spec.video_data).
 
@@ -1306,6 +1382,8 @@ async def create_meta_video_ad_creative(
             creative's instagram_user_id so the ad can run on Instagram as
             that account. Omitted from the request when None (no Instagram
             account linked).
+        url_tags: The ad's UTM parameters as a query string, sent as the
+            creative's `url_tags`. Omitted when None.
 
     Returns:
         The new Meta ad creative id.
@@ -1331,14 +1409,130 @@ async def create_meta_video_ad_creative(
     }
     if instagram_user_id:
         payload["instagram_user_id"] = instagram_user_id
-    body = await _post_json(
-        f"{_GRAPH_BASE_URL}/{ad_account_id}/adcreatives",
+    return await _post_creative(
+        ad_account_id,
         payload,
+        url_tags=url_tags,
         # Meta checks the video while creating the creative; 5s was not enough.
         timeout=_VIDEO_CREATIVE_TIMEOUT_SECONDS,
     )
-    creative_id: str = body["id"]
-    return creative_id
+
+
+# Meta's automatic creative enhancements, all opted out on every ad: the ads
+# should run exactly as built (no auto-crop, touch-ups, animation, generated
+# text or media-type changes). Each is a key of
+# degrees_of_freedom_spec.creative_features_spec; this is the set Meta's
+# validate-only mode accepted on Graph v21.0 (2026-10-21). Meta renames and
+# retires these over time, which is why _post_creative drops any it refuses
+# rather than failing the publish.
+CREATIVE_OPT_OUT_FEATURES: tuple[str, ...] = (
+    "adapt_to_placement",
+    "add_text_overlay",
+    "advantage_plus_creative",
+    "ads_with_benefits",
+    "carousel_to_video",
+    "creative_stickers",
+    "cv_transformation",
+    "description_automation",
+    "enhance_cta",
+    "fb_feed_tag",
+    "ig_video_native_subtitle",
+    "image_animation",
+    "image_auto_crop",
+    "image_brightness_and_contrast",
+    "image_templates",
+    "image_touchups",
+    "image_uncrop",
+    "inline_comment",
+    "media_type_automation",
+    "multi_photo_to_video",
+    "pac_relaxation",
+    "product_extensions",
+    "profile_card",
+    "replace_media_text",
+    "reveal_details_over_time",
+    "show_destination_blurbs",
+    "show_summary",
+    "site_extensions",
+    "text_optimizations",
+    "text_translation",
+    "video_auto_crop",
+)
+
+_REFUSED_FEATURE = re.compile(
+    r"creative_features_spec\] must be one of|Param key '([^']+)'"
+)
+
+
+async def _post_creative(
+    ad_account_id: str,
+    payload: dict[str, str],
+    *,
+    url_tags: str | None = None,
+    timeout: float | None = None,
+) -> str:
+    """Create an ad creative with its UTM tags and every enhancement opted out.
+
+    If Meta refuses an enhancement key (it renames and retires them), that
+    key is dropped with a logged warning and the call repeats, and if the
+    refusal doesn't name a key, every opt-out is dropped. Publishing never
+    fails over an enhancement flag.
+
+    Args:
+        ad_account_id: The connected ad account.
+        payload: The creative's form fields, including the access token.
+        url_tags: The ad's UTM parameters as a query string, if any.
+        timeout: Seconds to allow for the call.
+
+    Returns:
+        The new creative's id.
+
+    Raises:
+        MetaConnectionError: If Meta refuses the creative for any other reason.
+    """
+    data = dict(payload)
+    if url_tags:
+        data["url_tags"] = url_tags
+    features = list(CREATIVE_OPT_OUT_FEATURES)
+    while True:
+        attempt = dict(data)
+        if features:
+            attempt["degrees_of_freedom_spec"] = json.dumps(
+                {
+                    "creative_features_spec": {
+                        name: {"enroll_status": "OPT_OUT"} for name in features
+                    }
+                }
+            )
+        try:
+            body = await _post_json(
+                f"{_GRAPH_BASE_URL}/{ad_account_id}/adcreatives",
+                attempt,
+                timeout=timeout,
+            )
+        except MetaConnectionError as exc:
+            message = str(exc)
+            if (
+                not features
+                or exc.code != 100
+                or "creative_features_spec" not in message
+            ):
+                raise
+            named = _REFUSED_FEATURE.search(message)
+            refused = named.group(1) if named and named.group(1) else None
+            if refused is not None and refused in features:
+                logger.warning(
+                    "Meta refused creative enhancement %r; skipping it", refused
+                )
+                features.remove(refused)
+            else:
+                logger.warning(
+                    "Meta refused the creative enhancement opt-outs; sending none"
+                )
+                features = []
+            continue
+        creative_id: str = body["id"]
+        return creative_id
 
 
 async def create_meta_ad_creative(
@@ -1354,6 +1548,7 @@ async def create_meta_ad_creative(
     link: str,
     image_hash: str | None,
     instagram_user_id: str | None = None,
+    url_tags: str | None = None,
 ) -> str:
     """Create an ad creative object on Meta, ready to attach to an Ad.
 
@@ -1382,6 +1577,8 @@ async def create_meta_ad_creative(
             creative's instagram_user_id so the ad can run on Instagram as
             that account. Omitted from the request when None (no Instagram
             account linked).
+        url_tags: The ad's UTM parameters as a query string, sent as the
+            creative's `url_tags`. Omitted when None.
 
     Returns:
         The new Meta ad creative id.
@@ -1410,9 +1607,7 @@ async def create_meta_ad_creative(
     }
     if instagram_user_id:
         payload["instagram_user_id"] = instagram_user_id
-    body = await _post_json(f"{_GRAPH_BASE_URL}/{ad_account_id}/adcreatives", payload)
-    creative_id: str = body["id"]
-    return creative_id
+    return await _post_creative(ad_account_id, payload, url_tags=url_tags)
 
 
 class CarouselCard(NamedTuple):
@@ -1442,6 +1637,7 @@ async def create_meta_carousel_ad_creative(
     link: str,
     cards: list[CarouselCard],
     instagram_user_id: str | None = None,
+    url_tags: str | None = None,
 ) -> str:
     """Create a CAROUSEL ad creative object on Meta (link_data.child_attachments).
 
@@ -1476,6 +1672,8 @@ async def create_meta_carousel_ad_creative(
             creative's instagram_user_id so the ad can run on Instagram as
             that account. Omitted from the request when None (no Instagram
             account linked).
+        url_tags: The ad's UTM parameters as a query string, sent as the
+            creative's `url_tags`. Omitted when None.
 
     Returns:
         The new Meta ad creative id.
@@ -1507,9 +1705,7 @@ async def create_meta_carousel_ad_creative(
     }
     if instagram_user_id:
         payload["instagram_user_id"] = instagram_user_id
-    body = await _post_json(f"{_GRAPH_BASE_URL}/{ad_account_id}/adcreatives", payload)
-    creative_id: str = body["id"]
-    return creative_id
+    return await _post_creative(ad_account_id, payload, url_tags=url_tags)
 
 
 async def create_meta_ad(

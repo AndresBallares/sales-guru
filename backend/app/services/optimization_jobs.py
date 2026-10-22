@@ -87,7 +87,7 @@ from app.schemas.strategy import (
     planned_total_budget,
 )
 from app.schemas.test_evaluation import StopReason
-from app.services import creative_test_rules, optimizer, retargeting
+from app.services import creative_test_rules, optimizer, retargeting, switch_to_purchase
 from app.services.campaign_status_sync import sync_campaign_statuses
 from app.services.meta import (
     CampaignInsights,
@@ -323,6 +323,63 @@ async def _latest_total_spend(campaign_id: str) -> float:
     for metric in metrics:
         latest_by_group.setdefault(metric.adSetId, metric)
     return sum(metric.spend for metric in latest_by_group.values())
+
+
+async def _latest_total_purchases(campaign_id: str) -> int:
+    """Sum the most recent purchase count per AdSet (or the campaign-level one).
+
+    Same shape as _latest_total_spend: Metric.purchases is Meta's own
+    lifetime-to-date figure, so the latest row per group is that group's total.
+    """
+    metrics = await db.metric.find_many(
+        where={"campaignId": campaign_id, "adId": None}, order={"fetchedAt": "desc"}
+    )
+    latest_by_group: dict[str | None, Metric] = {}
+    for metric in metrics:
+        latest_by_group.setdefault(metric.adSetId, metric)
+    return sum(metric.purchases or 0 for metric in latest_by_group.values())
+
+
+async def _propose_switch_to_purchase(
+    campaign: Campaign, content: CreativeTestPlanContent
+) -> None:
+    """Propose moving an AddToCart creative test to Purchase, once, never applied.
+
+    Once the test has about SWITCH_TO_PURCHASE_MIN_PURCHASES purchases, exactly
+    one PENDING SWITCH_TO_PURCHASE proposal exists for the campaign. It is
+    never repeated or revived after the user has decided, and is withdrawn if
+    the count falls back under the threshold. See app/services/
+    switch_to_purchase.py for why the switch is a new ad set.
+
+    Args:
+        campaign: The live creative test campaign.
+        content: Its CREATIVE_TEST_PLAN.
+    """
+    if content.optimization_event != "ADD_TO_CART":
+        return
+    purchases = await _latest_total_purchases(campaign.id)
+    existing = await db.optimizationrecommendation.find_many(
+        where={"campaignId": campaign.id, "actionType": "SWITCH_TO_PURCHASE"}
+    )
+    pending = next((r for r in existing if r.status == "PENDING"), None)
+    if not switch_to_purchase.switch_ready(purchases):
+        if pending is not None:
+            await db.optimizationrecommendation.update(
+                where={"id": pending.id}, data={"status": "SUPERSEDED"}
+            )
+        return
+    if any(r.status in ("PENDING", "APPLIED", "REJECTED") for r in existing):
+        return
+    await db.optimizationrecommendation.create(
+        data={
+            "campaignId": campaign.id,
+            "actionType": "SWITCH_TO_PURCHASE",
+            "reasoning": switch_to_purchase.proposal_reasoning(purchases),
+            "confidence": 1.0,
+            "risk": "MEDIUM",
+            "requiresApproval": True,
+        }
+    )
 
 
 async def _auto_evaluate_after_pause(
@@ -594,7 +651,9 @@ COST_CAP_MAY_BE_TOO_TIGHT = "COST_CAP_MAY_BE_TOO_TIGHT"
 async def _check_add_to_cart_delivery(campaign: Campaign) -> None:
     """Record whether an AddToCart ad set looks starved by its cost cap.
 
-    Only a CREATIVE_TEST_PLAN optimizing for AddToCart has this check. Once
+    Only a CREATIVE_TEST_PLAN optimizing for AddToCart with a cost cap has
+    this check (a test that bids for the lowest cost has no cap to be too
+    tight). Once
     the campaign has three days of metric history, spend over those three
     days under half of daily budget x 3 sets Campaign.deliverySignal to
     COST_CAP_MAY_BE_TOO_TIGHT; otherwise the signal is cleared, so it always
@@ -611,8 +670,9 @@ async def _check_add_to_cart_delivery(campaign: Campaign) -> None:
     if (
         content.plan_type != "CREATIVE_TEST_PLAN"
         or content.optimization_event != "ADD_TO_CART"
+        or content.bid_strategy != "COST_CAP"
     ):
-        return
+        return  # no cost cap on the ad set, so nothing to be too tight
     window = await _rolling_spend_and_purchases(
         campaign.id, timedelta(days=optimizer.DELIVERY_CHECK_DAYS)
     )
@@ -823,6 +883,7 @@ async def _enforce_creative_test_rules(
         return
 
     await _sync_cost_cap_proposal(campaign, content)
+    await _propose_switch_to_purchase(campaign, content)
 
     snapshots, first_collected_at = await _creative_test_ads(campaign)
     if first_collected_at is None:
@@ -1085,6 +1146,13 @@ async def apply_recommendation(
             ),
             access_token=connection.accessToken,
             ad_account_id=connection.adAccountId or "",
+        )
+    elif recommendation.actionType == "SWITCH_TO_PURCHASE":
+        # Documented but unbuilt: raises SwitchToPurchaseNotBuiltError, so the
+        # proposal stays pending and nothing is created on Meta.
+        raise switch_to_purchase.SwitchToPurchaseNotBuiltError(
+            "Adding a Purchase ad set is not built yet — your approval is "
+            "recorded as interest only; nothing was created on Meta."
         )
     elif recommendation.actionType == "TEST_CAROUSEL":
         # Only a draft: the user still generates, reviews and publishes it.

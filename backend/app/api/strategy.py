@@ -21,6 +21,7 @@ from app.schemas.strategy import (
     StrategyResponse,
 )
 from app.services.campaign_readiness import is_ready
+from app.services.creative import test_ads_required
 from app.services.meta import (
     AccountCampaignInsights,
     MetaConnectionError,
@@ -48,21 +49,29 @@ _ANSWER_REQUIRED = (
 )
 
 
-def _to_response(strategy: Strategy) -> StrategyResponse:
+async def _to_response(strategy: Strategy, campaign: Campaign) -> StrategyResponse:
     """Map a Prisma Strategy record to its public response shape.
 
     Args:
         strategy: The Prisma Strategy model instance.
+        campaign: The campaign it belongs to.
 
     Returns:
         The public-facing representation, with `content` parsed from its
-        stored JSON string into the right plan-type model.
+        stored JSON string into the right plan-type model. For a creative
+        test it also says how many ads the test needs selected.
     """
+    content = StrategyContentAdapter.validate_json(strategy.content)
     return StrategyResponse(
         id=strategy.id,
         campaign_id=strategy.campaignId,
-        content=StrategyContentAdapter.validate_json(strategy.content),
+        content=content,
         created_at=strategy.createdAt,
+        required_test_ads=(
+            await test_ads_required(campaign, content)
+            if content.plan_type == "CREATIVE_TEST_PLAN"
+            else None
+        ),
     )
 
 
@@ -223,7 +232,7 @@ async def create_strategy(
         where={"id": campaign.id}, data={"status": "STRATEGY_GENERATED"}
     )
 
-    return _to_response(strategy)
+    return await _to_response(strategy, campaign)
 
 
 @router.get("", response_model=StrategyResponse)
@@ -247,4 +256,4 @@ async def get_strategy(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail=_STRATEGY_NOT_FOUND
         )
-    return _to_response(strategy)
+    return await _to_response(strategy, campaign)

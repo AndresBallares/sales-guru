@@ -3949,3 +3949,266 @@ async def test_delete_meta_object_reports_a_network_failure(
 @pytest.mark.asyncio
 async def test_delete_meta_object_is_a_no_op_in_fake_mode(fake_meta_mode: None) -> None:
     assert await _delete_object() is True
+
+
+# ── Creative-test additions: no cap, exclusions, UTMs, enhancement opt-outs ──
+
+
+class _ResponseQueueClient(_FakeAsyncClient):
+    """Answers each POST with the next canned response (the last repeats)."""
+
+    def __init__(self, responses: list[_FakeResponse]) -> None:
+        super().__init__(response=responses[0])
+        self._queue = list(responses)
+
+    async def post(
+        self,
+        url: str,
+        data: dict[str, str],
+        files: dict[str, Any] | None = None,
+    ) -> _FakeResponse:
+        self.calls.append((url, data))
+        return self._queue.pop(0) if len(self._queue) > 1 else self._queue[0]
+
+
+def _refusal(key: str) -> _FakeResponse:
+    return _FakeResponse(
+        {
+            "error": {
+                "message": f"(#100) Param key '{key}' in degrees_of_freedom_spec"
+                "[creative_features_spec] must be one of {IMAGE_ANIMATION}",
+                "code": 100,
+            }
+        },
+        is_error=True,
+    )
+
+
+async def _link_creative(url_tags: str | None = None) -> None:
+    await meta.create_meta_ad_creative(
+        access_token="token",
+        ad_account_id="act_1",
+        page_id="page_1",
+        name="Ad",
+        headline="Headline",
+        body_text="Body.",
+        description=None,
+        cta="SHOP_NOW",
+        link="https://acme.example",
+        image_hash="hash",
+        url_tags=url_tags,
+    )
+
+
+@pytest.mark.asyncio
+async def test_create_meta_ad_set_sends_no_bid_cap_when_none_is_given(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = _mock_client_returning(monkeypatch, _FakeResponse({"id": "adset_1"}))
+
+    await meta.create_meta_ad_set(
+        access_token="token",
+        ad_account_id="act_1",
+        name="Test",
+        meta_campaign_id="campaign_1",
+        daily_budget_cents=5000,
+        optimization_goal="OFFSITE_CONVERSIONS",
+        age_min=18,
+        age_max=None,
+        target_cac_cents=None,
+    )
+
+    _url, data = client.calls[0]
+    assert data["bid_strategy"] == "LOWEST_COST_WITHOUT_CAP"
+    assert "bid_amount" not in data
+
+
+@pytest.mark.asyncio
+async def test_create_meta_ad_set_excludes_the_given_custom_audiences(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = _mock_client_returning(monkeypatch, _FakeResponse({"id": "adset_1"}))
+
+    await meta.create_meta_ad_set(
+        access_token="token",
+        ad_account_id="act_1",
+        name="Test",
+        meta_campaign_id="campaign_1",
+        daily_budget_cents=5000,
+        optimization_goal="OFFSITE_CONVERSIONS",
+        age_min=18,
+        age_max=None,
+        excluded_custom_audience_ids=["aud_1"],
+    )
+
+    targeting = json.loads(client.calls[0][1]["targeting"])
+    assert targeting["excluded_custom_audiences"] == [{"id": "aud_1"}]
+
+
+@pytest.mark.asyncio
+async def test_create_meta_ad_set_sends_no_exclusion_by_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = _mock_client_returning(monkeypatch, _FakeResponse({"id": "adset_1"}))
+
+    await meta.create_meta_ad_set(
+        access_token="token",
+        ad_account_id="act_1",
+        name="Test",
+        meta_campaign_id="campaign_1",
+        daily_budget_cents=5000,
+        optimization_goal="OFFSITE_CONVERSIONS",
+        age_min=18,
+        age_max=None,
+    )
+
+    assert "excluded_custom_audiences" not in json.loads(
+        client.calls[0][1]["targeting"]
+    )
+
+
+@pytest.mark.asyncio
+async def test_create_purchasers_audience_builds_a_180_day_purchase_rule(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = _mock_client_returning(monkeypatch, _FakeResponse({"id": "aud_1"}))
+
+    audience_id = await meta.create_purchasers_audience(
+        access_token="token",
+        ad_account_id="act_1",
+        pixel_id="pixel_1",
+        name="Purchasers",
+    )
+
+    url, data = client.calls[0]
+    assert audience_id == "aud_1"
+    assert url.endswith("/act_1/customaudiences")
+    assert data["prefill"] == "true"
+    assert "subtype" not in data  # Graph v21.0 refuses it for a website audience
+    rule = json.loads(data["rule"])["inclusions"]["rules"][0]
+    assert rule["event_sources"] == [{"id": "pixel_1", "type": "pixel"}]
+    assert rule["retention_seconds"] == 180 * 86400
+    assert rule["filter"]["filters"] == [
+        {"field": "event", "operator": "eq", "value": "Purchase"}
+    ]
+
+
+@pytest.mark.asyncio
+async def test_create_purchasers_audience_returns_a_fake_id_in_fake_mode(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("FAKE_META", "true")
+    get_settings.cache_clear()
+    try:
+        audience_id = await meta.create_purchasers_audience(
+            access_token="token",
+            ad_account_id="act_1",
+            pixel_id="pixel_1",
+            name="Purchasers",
+        )
+    finally:
+        monkeypatch.delenv("FAKE_META")
+        get_settings.cache_clear()
+
+    assert audience_id.startswith("fake_audience_")
+
+
+@pytest.mark.asyncio
+async def test_a_creative_opts_out_of_every_enhancement_and_carries_its_url_tags(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = _mock_client_returning(monkeypatch, _FakeResponse({"id": "creative_1"}))
+
+    await _link_creative(url_tags="utm_source=paid_social")
+
+    data = client.calls[0][1]
+    assert data["url_tags"] == "utm_source=paid_social"
+    features = json.loads(data["degrees_of_freedom_spec"])["creative_features_spec"]
+    assert set(features) == set(meta.CREATIVE_OPT_OUT_FEATURES)
+    assert all(value == {"enroll_status": "OPT_OUT"} for value in features.values())
+
+
+@pytest.mark.asyncio
+async def test_a_creative_without_url_tags_sends_none(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = _mock_client_returning(monkeypatch, _FakeResponse({"id": "creative_1"}))
+
+    await _link_creative()
+
+    assert "url_tags" not in client.calls[0][1]
+
+
+@pytest.mark.asyncio
+async def test_a_refused_enhancement_is_skipped_with_a_warning_not_a_failure(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    client = _ResponseQueueClient(
+        [_refusal("image_touchups"), _FakeResponse({"id": "c1"})]
+    )
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **_kwargs: client)
+
+    with caplog.at_level("WARNING"):
+        await _link_creative()
+
+    first = json.loads(client.calls[0][1]["degrees_of_freedom_spec"])
+    second = json.loads(client.calls[1][1]["degrees_of_freedom_spec"])
+    assert "image_touchups" in first["creative_features_spec"]
+    assert "image_touchups" not in second["creative_features_spec"]
+    assert (
+        len(second["creative_features_spec"]) == len(meta.CREATIVE_OPT_OUT_FEATURES) - 1
+    )
+    assert "image_touchups" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_a_refusal_that_names_no_feature_drops_every_opt_out(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    unnamed = _FakeResponse(
+        {
+            "error": {
+                "message": "(#100) degrees_of_freedom_spec: creative_features_spec bad",
+                "code": 100,
+            }
+        },
+        is_error=True,
+    )
+    client = _ResponseQueueClient([unnamed, _FakeResponse({"id": "c1"})])
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **_kwargs: client)
+
+    with caplog.at_level("WARNING"):
+        await _link_creative()
+
+    assert "degrees_of_freedom_spec" not in client.calls[1][1]
+    assert "sending none" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_a_refusal_of_an_unknown_feature_name_drops_every_opt_out(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = _ResponseQueueClient(
+        [_refusal("not_one_we_sent"), _FakeResponse({"id": "c1"})]
+    )
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **_kwargs: client)
+
+    await _link_creative()
+
+    assert "degrees_of_freedom_spec" not in client.calls[1][1]
+
+
+@pytest.mark.asyncio
+async def test_an_unrelated_creative_error_is_still_raised(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    other = _FakeResponse(
+        {"error": {"message": "Invalid image hash", "code": 100}}, is_error=True
+    )
+    client = _ResponseQueueClient([other])
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **_kwargs: client)
+
+    with pytest.raises(meta.MetaConnectionError, match="Invalid image hash"):
+        await _link_creative()
+
+    assert len(client.calls) == 1

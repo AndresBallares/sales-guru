@@ -18,12 +18,15 @@ from app.schemas.strategy import (
     NormalizedMetrics,
 )
 from app.services import locales as locales_module
+from app.services import meta as meta_service_module
 from app.services import strategist as strategist_module
 from app.services.benchmarks import JEWELRY_META_BENCHMARKS
+from app.services.meta import MetaConnectionError
 from fastapi.testclient import TestClient
 from prisma import Prisma
 
 from tests.test_publish import (
+    _FAKE_VARIANTS,
     _connect_meta,
     _create_audience,
     _create_business,
@@ -69,6 +72,13 @@ def mock_locales(monkeypatch: pytest.MonkeyPatch) -> AsyncMock:
     search = AsyncMock(return_value=[{"name": "English (All)", "key": 1001}])
     monkeypatch.setattr(locales_module, "search_ad_locales", search)
     return search
+
+
+@pytest.fixture(autouse=True)
+def mock_purchasers_audience(monkeypatch: pytest.MonkeyPatch) -> AsyncMock:
+    create = AsyncMock(return_value="aud_1")
+    monkeypatch.setattr(meta_service_module, "create_purchasers_audience", create)
+    return create
 
 
 def _creative_plan_campaign(
@@ -551,3 +561,368 @@ async def test_publish_refuses_primary_text_over_the_limit(
     assert response.status_code == 400
     assert "max 125" in response.json()["detail"]
     mock_services["create_campaign"].assert_not_awaited()
+
+
+# ── Four ads, three for a thin product ───────────────────────
+
+
+def test_a_product_with_four_photos_needs_all_four_ads_before_approval(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    business_id, campaign_id, _ = _creative_plan_campaign(
+        client, monkeypatch, select=3, approve=False, photo_count=4
+    )
+    assert _campaign_status(client, business_id, campaign_id) == "ADS_GENERATED"
+
+    fourth = _creatives(client, business_id, campaign_id)[3]["id"]
+    client.post(
+        f"/businesses/{business_id}/campaigns/{campaign_id}/creatives/{fourth}/select"
+    )
+
+    assert _campaign_status(client, business_id, campaign_id) == "PENDING_APPROVAL"
+
+
+def test_a_product_without_a_fourth_photo_is_ready_at_three_ads(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    business_id, campaign_id, _ = _creative_plan_campaign(
+        client, monkeypatch, select=3, approve=False, photo_count=3
+    )
+
+    assert _campaign_status(client, business_id, campaign_id) == "PENDING_APPROVAL"
+
+
+def test_the_strategy_says_how_many_ads_the_test_needs(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    thin, thin_campaign, _ = _creative_plan_campaign(
+        client, monkeypatch, select=0, approve=False, photo_count=3
+    )
+    thin_needed = client.get(
+        f"/businesses/{thin}/campaigns/{thin_campaign}/strategy"
+    ).json()["requiredTestAds"]
+
+    full, full_campaign, _ = _creative_plan_campaign(
+        client, monkeypatch, select=0, approve=False, photo_count=4
+    )
+    full_needed = client.get(
+        f"/businesses/{full}/campaigns/{full_campaign}/strategy"
+    ).json()["requiredTestAds"]
+
+    assert (thin_needed, full_needed) == (3, 4)
+
+
+@pytest.mark.asyncio
+async def test_publish_refuses_a_test_that_gained_a_photo_after_approval(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    mock_services: dict[str, AsyncMock],  # noqa: F811
+) -> None:
+    """Approved at three ads for a three-photo product, then a fourth photo is
+    added: the test now needs four, and publish says so."""
+    business_id, campaign_id, _ = _creative_plan_campaign(
+        client, monkeypatch, select=3, photo_count=3
+    )
+    seeder = Prisma()
+    await seeder.connect()
+    try:
+        campaign = await seeder.campaign.find_unique(where={"id": campaign_id})
+        assert campaign is not None and campaign.productId is not None
+        photo = await seeder.productimage.find_first(
+            where={"productId": campaign.productId}
+        )
+        assert photo is not None
+        await seeder.productimage.create(
+            data={
+                "productId": campaign.productId,
+                "data": photo.data,
+                "contentType": photo.contentType,
+                "position": 9,
+                "mediaType": "IMAGE",
+            }
+        )
+    finally:
+        await seeder.disconnect()
+
+    response = client.post(f"/businesses/{business_id}/campaigns/{campaign_id}/publish")
+
+    assert response.status_code == 400
+    assert "needs 4 selected ads" in response.json()["detail"]
+    mock_services["create_campaign"].assert_not_awaited()
+
+
+# ── No cost cap on a first test ──────────────────────────────
+
+
+def test_a_first_test_bids_for_the_lowest_cost_with_no_cap(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    mock_services: dict[str, AsyncMock],  # noqa: F811
+) -> None:
+    plan = _creative_plan(bid_strategy="LOWEST_COST")
+    business_id, campaign_id, _ = _creative_plan_campaign(
+        client, monkeypatch, plan=plan
+    )
+
+    client.post(f"/businesses/{business_id}/campaigns/{campaign_id}/publish")
+
+    assert _kwargs(mock_services["create_ad_set"])["target_cac_cents"] is None
+
+
+def test_a_first_add_to_cart_test_also_has_no_cap(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    mock_services: dict[str, AsyncMock],  # noqa: F811
+) -> None:
+    plan = _creative_plan(
+        bid_strategy="LOWEST_COST",
+        optimization_event="ADD_TO_CART",
+        target_cost_per_add_to_cart=12.34,
+    )
+    business_id, campaign_id, _ = _creative_plan_campaign(
+        client, monkeypatch, plan=plan
+    )
+
+    client.post(f"/businesses/{business_id}/campaigns/{campaign_id}/publish")
+
+    kwargs = _kwargs(mock_services["create_ad_set"])
+    assert kwargs["custom_event_type"] == "ADD_TO_CART"
+    assert kwargs["target_cac_cents"] is None
+
+
+def test_a_plan_stored_before_the_change_keeps_its_cap(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    mock_services: dict[str, AsyncMock],  # noqa: F811
+) -> None:
+    business_id, campaign_id, _ = _creative_plan_campaign(client, monkeypatch)
+
+    client.post(f"/businesses/{business_id}/campaigns/{campaign_id}/publish")
+
+    assert _kwargs(mock_services["create_ad_set"])["target_cac_cents"] is not None
+
+
+# ── 180-day purchasers excluded ──────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_publish_excludes_the_pixels_recent_purchasers_and_remembers_them(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    mock_services: dict[str, AsyncMock],  # noqa: F811
+    mock_purchasers_audience: AsyncMock,
+) -> None:
+    business_id, campaign_id, _ = _creative_plan_campaign(client, monkeypatch)
+
+    client.post(f"/businesses/{business_id}/campaigns/{campaign_id}/publish")
+
+    assert _kwargs(mock_services["create_ad_set"])["excluded_custom_audience_ids"] == [
+        "aud_1"
+    ]
+    audience_kwargs = _kwargs(mock_purchasers_audience)
+    assert audience_kwargs["pixel_id"] == "pixel_1"
+    assert audience_kwargs["ad_account_id"] == "act_1"
+    seeder = Prisma()
+    await seeder.connect()
+    try:
+        connection = await seeder.metaconnection.find_first()
+        assert connection is not None
+        assert connection.purchasersAudienceId == "aud_1"
+    finally:
+        await seeder.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_a_remembered_audience_is_reused_not_created_again(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    mock_services: dict[str, AsyncMock],  # noqa: F811
+    mock_purchasers_audience: AsyncMock,
+) -> None:
+    business_id, campaign_id, _ = _creative_plan_campaign(client, monkeypatch)
+    seeder = Prisma()
+    await seeder.connect()
+    try:
+        await seeder.metaconnection.update_many(
+            where={}, data={"purchasersAudienceId": "aud_existing"}
+        )
+    finally:
+        await seeder.disconnect()
+
+    client.post(f"/businesses/{business_id}/campaigns/{campaign_id}/publish")
+
+    mock_purchasers_audience.assert_not_awaited()
+    assert _kwargs(mock_services["create_ad_set"])["excluded_custom_audience_ids"] == [
+        "aud_existing"
+    ]
+
+
+def test_publish_goes_ahead_without_the_exclusion_when_meta_refuses_the_audience(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    mock_services: dict[str, AsyncMock],  # noqa: F811
+    mock_purchasers_audience: AsyncMock,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    mock_purchasers_audience.side_effect = MetaConnectionError(
+        "Custom audience terms not accepted", code=2655
+    )
+    business_id, campaign_id, _ = _creative_plan_campaign(client, monkeypatch)
+
+    with caplog.at_level("WARNING"):
+        response = client.post(
+            f"/businesses/{business_id}/campaigns/{campaign_id}/publish"
+        )
+
+    assert response.status_code == 200
+    assert (
+        _kwargs(mock_services["create_ad_set"])["excluded_custom_audience_ids"] is None
+    )
+    assert "without the purchasers exclusion" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_a_connection_with_no_pixel_has_no_purchasers_to_exclude() -> None:
+    from types import SimpleNamespace
+    from typing import cast
+
+    from app.services import publish as publish_module
+    from prisma.models import MetaConnection
+
+    connection = cast(MetaConnection, SimpleNamespace(pixelId=None))
+
+    assert await publish_module._purchasers_audience_id(connection) is None
+
+
+# ── Ad names and UTM parameters from avatar x concept ────────
+
+
+async def _set_angles(
+    campaign_id: str, angles: list[tuple[str | None, str | None]]
+) -> None:
+    seeder = Prisma()
+    await seeder.connect()
+    try:
+        creatives = await seeder.creative.find_many(
+            where={"campaignId": campaign_id, "status": "SELECTED"},
+            order={"createdAt": "asc"},
+        )
+        for creative, (avatar, concept) in zip(creatives, angles, strict=True):
+            await seeder.creative.update(
+                where={"id": creative.id}, data={"avatar": avatar, "concept": concept}
+            )
+    finally:
+        await seeder.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_each_ad_is_named_and_tagged_from_its_avatar_and_concept(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    mock_services: dict[str, AsyncMock],  # noqa: F811
+) -> None:
+    business_id, campaign_id, _ = _creative_plan_campaign(client, monkeypatch)
+    await _set_angles(
+        campaign_id,
+        [
+            ("self_purchaser", "everyday-wear"),
+            ("gift_buyer", "social-proof"),
+            (None, None),
+        ],
+    )
+
+    client.post(f"/businesses/{business_id}/campaigns/{campaign_id}/publish")
+
+    ad_names = [c.kwargs["name"] for c in mock_services["create_ad"].await_args_list]
+    assert ad_names[0] == "Self-purchaser – Everyday wear"
+    assert ad_names[1] == "Gift buyer – Social proof"
+    assert ad_names[2] not in {ad_names[0], ad_names[1]}  # an older ad: its headline
+    tags = [
+        c.kwargs["url_tags"]
+        for c in mock_services["create_ad_creative"].await_args_list
+    ]
+    assert "utm_source=paid_social" in tags[0]
+    assert "utm_medium=self-purchaser-everyday-wear" in tags[0]
+    assert "utm_medium=gift-buyer-social-proof" in tags[1]
+    assert "utm_medium=paid&" in tags[2]
+    assert "utm_content=Self-purchaser%20%E2%80%93%20Everyday%20wear" in tags[0]
+    assert "utm_campaign=" in tags[0]
+    # The same names are what the app records locally.
+    seeder = Prisma()
+    await seeder.connect()
+    try:
+        ads = await seeder.ad.find_many(order={"createdAt": "asc"})
+    finally:
+        await seeder.disconnect()
+    assert [a.name for a in ads][:2] == ad_names[:2]
+
+
+# ── Generating: each ad carries its avatar and concept ───────
+
+
+@pytest.mark.asyncio
+async def test_generating_stores_each_ads_avatar_and_concept(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    mock_services: dict[str, AsyncMock],  # noqa: F811
+) -> None:
+    from app.api import creative as creative_module
+    from app.schemas.strategy import CreativeAngle
+    from app.services.creative import apply_plan_angles
+
+    plan = _creative_plan(
+        creative_angles=[
+            CreativeAngle(
+                avatar="self_purchaser", concept="everyday-wear", description="a"
+            ),
+            CreativeAngle(
+                avatar="self_purchaser", concept="craftsmanship", description="b"
+            ),
+            CreativeAngle(
+                avatar="gift_buyer", concept="the-perfect-gift", description="c"
+            ),
+            CreativeAngle(avatar="gift_buyer", concept="social-proof", description="d"),
+        ]
+    )
+    variants = apply_plan_angles(list(_FAKE_VARIANTS), plan)
+    monkeypatch.setattr(
+        creative_module, "generate_creatives", AsyncMock(return_value=variants)
+    )
+    business_id, campaign_id, _ = _creative_plan_campaign(
+        client, monkeypatch, plan=plan, select=0, approve=False
+    )
+
+    seeder = Prisma()
+    await seeder.connect()
+    try:
+        rows = await seeder.creative.find_many(
+            where={"campaignId": campaign_id}, order={"createdAt": "asc"}
+        )
+    finally:
+        await seeder.disconnect()
+
+    assert [(r.avatar, r.concept) for r in rows] == [
+        ("self_purchaser", "everyday-wear"),
+        ("self_purchaser", "craftsmanship"),
+        ("gift_buyer", "the-perfect-gift"),
+        ("gift_buyer", "social-proof"),
+    ]
+    assert rows[0].creativeAngle == "Self-purchaser – Everyday wear"
+
+
+@pytest.mark.asyncio
+async def test_an_older_plan_leaves_avatar_and_concept_empty(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    business_id, campaign_id, _ = _creative_plan_campaign(
+        client, monkeypatch, select=0, approve=False
+    )
+
+    seeder = Prisma()
+    await seeder.connect()
+    try:
+        rows = await seeder.creative.find_many(where={"campaignId": campaign_id})
+    finally:
+        await seeder.disconnect()
+
+    assert rows and all(r.avatar is None and r.concept is None for r in rows)

@@ -17,6 +17,7 @@ from app.api import strategy as strategy_module
 from app.schemas.strategy import (
     AudienceConstraints,
     BudgetRecommendation,
+    CreativeAngle,
     CreativePersona,
     CreativeTestPlanContent,
     DataDrivenStrategyContent,
@@ -98,7 +99,11 @@ _FAKE_CREATIVE_TEST_PLAN = CreativeTestPlanContent(
     hypotheses=[strategist_service._build_creative_hypothesis("Angle A wins.")],
     offer="Custom emerald rings",
     positioning="Premium and personal",
-    creative_angles=["Product on skin", "Social proof", "Gifting"],
+    creative_angles=[
+        CreativeAngle(concept="product-on-skin", description="Product on skin"),
+        CreativeAngle(concept="social-proof", description="Social proof"),
+        CreativeAngle(concept="gifting", description="Gifting"),
+    ],
     copy_strategy="Lead with the story behind each piece",
     daily_budget=50,
     duration_days=10,

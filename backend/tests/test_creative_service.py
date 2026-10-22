@@ -1234,6 +1234,7 @@ def test_build_prompt_omits_the_carousel_message_rule_for_single_image() -> None
 def _creative_plan() -> Any:
     from app.schemas.strategy import (
         AudienceConstraints,
+        CreativeAngle,
         CreativePersona,
         CreativeTestPlanContent,
         NormalizedMetrics,
@@ -1253,7 +1254,11 @@ def _creative_plan() -> Any:
         hypotheses=[strategist._build_creative_hypothesis("On-skin wins.")],
         offer="Custom emerald rings",
         positioning="Premium and personal",
-        creative_angles=["Product on skin", "Social proof", "Gifting"],
+        creative_angles=[
+            CreativeAngle(concept="product-on-skin", description="Product on skin"),
+            CreativeAngle(concept="social-proof", description="Social proof"),
+            CreativeAngle(concept="gifting", description="Gifting"),
+        ],
         copy_strategy="Lead with the story behind each piece",
         daily_budget=50.0,
         duration_days=10,
@@ -1492,3 +1497,102 @@ def test_copy_problems_reports_every_problem_at_once() -> None:
     )
 
     assert len(problems) >= 3  # over length, no sentence end, long headline
+
+
+# ── Structured angles: relabelling and the prompt ────────────
+
+
+def _structured_plan() -> Any:
+    from app.schemas.strategy import CreativeAngle
+
+    plan = _creative_plan()
+    return plan.model_copy(
+        update={
+            "creative_angles": [
+                CreativeAngle(
+                    avatar="self_purchaser",
+                    concept="everyday-wear",
+                    description="A piece for every day",
+                ),
+                CreativeAngle(
+                    avatar="self_purchaser",
+                    concept="craftsmanship",
+                    description="The craftsmanship",
+                ),
+                CreativeAngle(
+                    avatar="gift_buyer",
+                    concept="the-perfect-gift",
+                    description="The gift she keeps",
+                ),
+                CreativeAngle(
+                    avatar="gift_buyer",
+                    concept="social-proof",
+                    description="Loved by other buyers",
+                ),
+            ]
+        }
+    )
+
+
+def test_the_prompt_lists_each_angle_for_its_variant() -> None:
+    prompt = creative._build_prompt(
+        _fake_business(), _fake_product(), _structured_plan()
+    )
+
+    assert "Variant A: Self-purchaser – Everyday wear — A piece for every day" in prompt
+    assert "Variant D: Gift buyer – Social proof — Loved by other buyers" in prompt
+    assert "in the order listed above" in prompt
+
+
+def test_the_prompt_shows_an_older_angle_by_its_concept() -> None:
+    prompt = creative._build_prompt(_fake_business(), _fake_product(), _creative_plan())
+
+    assert "Variant A: product-on-skin — Product on skin" in prompt
+
+
+def test_variants_take_the_plans_angle_at_their_position() -> None:
+    variants = creative.apply_plan_angles(
+        list(creative._FAKE_VARIANTS), _structured_plan()
+    )
+
+    assert [v.creative_angle for v in variants] == [
+        "Self-purchaser – Everyday wear",
+        "Self-purchaser – Craftsmanship",
+        "Gift buyer – The perfect gift",
+        "Gift buyer – Social proof",
+    ]
+    assert variants[0].headline == creative._FAKE_VARIANTS[0].headline
+
+
+def test_an_older_plan_or_another_plan_type_keeps_the_models_angles() -> None:
+    variants = list(creative._FAKE_VARIANTS)
+
+    assert creative.apply_plan_angles(variants, _creative_plan()) == variants
+    assert creative.apply_plan_angles(variants, _FAKE_STRATEGY) == variants
+
+
+def test_a_plan_with_a_different_number_of_angles_keeps_the_models_angles() -> None:
+    plan = _structured_plan()
+    plan = plan.model_copy(update={"creative_angles": plan.creative_angles[:3]})
+    variants = list(creative._FAKE_VARIANTS)
+
+    assert creative.apply_plan_angles(variants, plan) == variants
+
+
+@pytest.mark.asyncio
+async def test_fake_mode_gives_a_creative_test_its_structured_angles(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("FAKE_LLM", "true")
+    get_settings.cache_clear()
+    try:
+        variants = await creative.generate_creatives(
+            business=_fake_business(),
+            product=_fake_product(),
+            strategy=_structured_plan(),
+        )
+    finally:
+        monkeypatch.delenv("FAKE_LLM")
+        get_settings.cache_clear()
+
+    assert variants[0].creative_angle == "Self-purchaser – Everyday wear"
