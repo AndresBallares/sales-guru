@@ -8,7 +8,7 @@ from pydantic import Field, ValidationInfo, field_validator, model_validator
 
 from app.schemas.base import CamelCaseModel
 from app.schemas.campaign import Objective
-from app.services.ad_quality import copy_field_problems
+from app.services.ad_quality import copy_field_problems, praise_opener_problems
 
 CtaType = Literal[
     "SHOP_NOW",
@@ -220,6 +220,7 @@ class GeneratedCreativeVariant(CamelCaseModel):
         problems = [
             *copy_field_problems("headline", self.headline),
             *copy_field_problems("primary text", self.body_text),
+            *praise_opener_problems("primary text", self.body_text),
             *copy_field_problems("description", self.description),
         ]
         for position, card in enumerate(self.cards or [], start=1):

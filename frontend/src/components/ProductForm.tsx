@@ -60,6 +60,7 @@ export function ProductForm({
   const [margin, setMargin] = useState(product?.margin != null ? String(product.margin) : '')
   const [features, setFeatures] = useState(product?.features ?? '')
   const [benefits, setBenefits] = useState(product?.benefits ?? '')
+  const [mechanism, setMechanism] = useState(product?.mechanism ?? '')
   const [url, setUrl] = useState(product?.url ?? '')
   const [urlFieldError, setUrlFieldError] = useState<string | null>(null)
   const [formError, setFormError] = useState<string | null>(null)
@@ -244,6 +245,8 @@ export function ProductForm({
             margin: margin ? Number(margin) : undefined,
             features: features || undefined,
             benefits: benefits || undefined,
+            // null clears a mechanism that was emptied; the other text fields can't be.
+            mechanism: mechanism.trim() || null,
             url: url ? normalizeDestinationUrl(url) : null,
           })
         : await createProduct(businessId, {
@@ -252,6 +255,7 @@ export function ProductForm({
             margin: margin ? Number(margin) : undefined,
             features: features || undefined,
             benefits: benefits || undefined,
+            mechanism: mechanism.trim() || undefined,
             url: url ? normalizeDestinationUrl(url) : undefined,
             campaignId,
           })
@@ -480,6 +484,22 @@ export function ProductForm({
           value={benefits}
           onChange={(event) => setBenefits(event.target.value)}
         />
+      </div>
+      <div className="field">
+        <label htmlFor={`mechanism-${idSuffix}`}>
+          Mechanism <span className="field-hint">(optional)</span>
+        </label>
+        <textarea
+          id={`mechanism-${idSuffix}`}
+          maxLength={300}
+          aria-describedby={`mechanism-help-${idSuffix}`}
+          value={mechanism}
+          onChange={(event) => setMechanism(event.target.value)}
+        />
+        <span className="field-hint" id={`mechanism-help-${idSuffix}`}>
+          The specific design, material or method that makes it deliver its benefit — why the
+          promise is believable.
+        </span>
       </div>
       {formError && (
         <p className="form-error" role="alert">

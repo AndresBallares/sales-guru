@@ -16,4 +16,35 @@ describe('angleLabel', () => {
       'Product on skin',
     )
   })
+
+  it('puts the pillar last, so the avatar part is unchanged', () => {
+    expect(
+      angleLabel({
+        avatar: 'self_purchaser',
+        concept: 'craftsmanship',
+        pillar: 'mechanism',
+        description: 'x',
+      }),
+    ).toBe('Self-purchaser – Craftsmanship – Mechanism')
+    expect(
+      angleLabel({
+        avatar: 'gift_buyer',
+        concept: 'why-gold-lasts',
+        pillar: 'education',
+        description: 'x',
+      }),
+    ).toBe('Gift buyer – Why gold lasts – Education')
+  })
+
+  it('names an angle with no pillar exactly as before', () => {
+    expect(
+      angleLabel({ avatar: 'gift_buyer', concept: 'gifting', pillar: null, description: 'x' }),
+    ).toBe('Gift buyer – Gifting')
+  })
+
+  it('ignores a pillar on an older angle with no avatar', () => {
+    expect(
+      angleLabel({ avatar: null, concept: 'gifting', pillar: 'offer', description: 'x' }),
+    ).toBe('Gifting')
+  })
 })

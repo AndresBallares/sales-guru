@@ -1085,13 +1085,14 @@ async def _publish_creative_test_plan(
 
     for creative in creatives:
         ad_name = creative_naming.ad_name(
-            creative.avatar, creative.concept, creative.headline
+            creative.avatar, creative.concept, creative.headline, creative.pillar
         )
         url_tags = creative_naming.url_tags(
             campaign_name=object_name,
             avatar=creative.avatar,
             concept=creative.concept,
             name=ad_name,
+            pillar=creative.pillar,
         )
         if (
             creative.storyProductImageId or creative.squareProductImageId

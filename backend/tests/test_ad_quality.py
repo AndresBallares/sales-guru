@@ -202,3 +202,135 @@ def test_the_publish_guard_checks_headline_description_and_cards() -> None:
 
 def test_the_publish_guard_passes_clean_copy() -> None:
     assert creative.copy_problems(_copy()) == []
+
+
+# --- Ad structure rules ---------------------------------------------------------
+
+
+def test_the_structure_block_is_under_150_words() -> None:
+    assert len(" ".join(ad_quality.structure_lines()).split()) <= 150
+
+
+def test_the_structure_rules_cover_offer_mechanism_praise_education_and_pillar() -> (
+    None
+):
+    text = "\n".join(ad_quality.structure_lines())
+
+    assert "Ad structure (apply to every variant):" in text
+    for expected in (
+        "at least one offer element or risk-reducer",
+        "standing promotion",
+        "guarantee, free returns, free shipping",
+        "Never invent one",
+        "connect it to the benefit",
+        "why the promise is believable, not a spec to list",
+        "ceramic inlay means the color never fades",
+        "No generic praise",
+        "Education is a valid angle",
+        "why a material lasts, how to spot quality",
+        "pillar",
+        "avatar",
+    ):
+        assert expected in text
+
+
+def test_the_structure_rules_hold_no_bidding_or_budget_mechanics() -> None:
+    text = "\n".join(ad_quality.structure_lines()).lower()
+
+    for word in ("bid", "pacing", "cost cap", "budget", "cpa", "roas"):
+        assert word not in text
+
+
+# --- generic-praise openers -----------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("text", "word"),
+    [
+        ("Beautiful jewelry for every day.", "Beautiful"),
+        ("Stunning pieces for her.", "Stunning"),
+        ("AMAZING rings, made for you.", "AMAZING"),
+        ("Stunning.", "Stunning"),
+        ("Gorgeous! Shop the collection.", "Gorgeous"),
+        ("  beautiful jewelry", "beautiful"),
+        ('"Stunning pieces," she said.', "Stunning"),
+    ],
+)
+def test_a_praise_only_opener_is_blocked(text: str, word: str) -> None:
+    assert ad_quality.generic_praise_opener(text) == word
+    [problem] = ad_quality.praise_opener_problems("primary text", text)
+    assert f"'{word}'" in problem
+    assert "names no material or specific detail" in problem
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Stunning 18k gold, hand-set in New York.",
+        "Beautiful ceramic inlay that never fades.",
+        "Amazing 2-carat diamonds at a fair price.",
+        "Beautiful sterling silver, made to last.",
+        "Stunning handcrafted rings.",
+        # Praise after the opener is fine, however generic.
+        "Hand-set in 18k gold. Stunning from every angle.",
+        "Made to last, and beautiful with it.",
+        "The stunning 18k gold ring you will keep.",
+        # Not praise at all.
+        "Solid gold, hand-set.",
+        "Beautifully made in solid gold.",
+        "",
+    ],
+)
+def test_a_concrete_opener_or_mid_copy_praise_is_allowed(text: str) -> None:
+    assert ad_quality.generic_praise_opener(text) is None
+    assert ad_quality.praise_opener_problems("primary text", text) == []
+
+
+def test_only_the_first_sentence_has_to_be_concrete() -> None:
+    """The concrete word has to be in the opener's own sentence, not later."""
+    assert ad_quality.generic_praise_opener("Stunning pieces. Solid 18k gold.")
+
+
+def test_no_text_has_no_opener() -> None:
+    assert ad_quality.generic_praise_opener(None) is None
+
+
+def test_a_variant_that_opens_with_praise_alone_is_rejected() -> None:
+    with pytest.raises(ValidationError, match="opens with generic praise"):
+        GeneratedCreativeVariant.model_validate(
+            {**_VARIANT, "bodyText": "Beautiful jewelry for her. Shop the collection."}
+        )
+
+
+def test_a_variant_with_mid_copy_praise_is_accepted() -> None:
+    variant = GeneratedCreativeVariant.model_validate(
+        {**_VARIANT, "bodyText": "Hand-set in stunning 18k gold. Shop the collection."}
+    )
+
+    assert "stunning" in variant.body_text
+
+
+def test_the_headline_may_open_with_praise_only_the_primary_text_is_checked() -> None:
+    """The brief is about the primary text's opener."""
+    variant = GeneratedCreativeVariant.model_validate(
+        {**_VARIANT, "headline": "Beautiful gold"}
+    )
+
+    assert variant.headline == "Beautiful gold"
+
+
+def test_the_publish_guard_blocks_a_praise_only_opener() -> None:
+    problems = creative.copy_problems(
+        _copy(bodyText="Stunning pieces for her. Shop the collection.")
+    )
+
+    assert any("opens with generic praise ('Stunning')" in p for p in problems)
+
+
+def test_the_publish_guard_allows_mid_copy_praise() -> None:
+    assert (
+        creative.copy_problems(
+            _copy(bodyText="Hand-set in stunning 18k gold. Shop the collection.")
+        )
+        == []
+    )

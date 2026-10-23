@@ -332,6 +332,7 @@ describe('createProduct', () => {
       margin: null,
       features: null,
       benefits: null,
+      mechanism: null,
       url: null,
     }
     const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(jsonResponse(product, 201))

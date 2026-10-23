@@ -141,21 +141,25 @@ _FAKE_CREATIVE_TEST_PLAN_FIELDS = GeneratedCreativeTestPlanFields(
         GeneratedCreativeAngle(
             avatar="self_purchaser",
             concept="everyday-wear",
+            pillar="emotion",
             description="Fake angle: a piece for every day (FAKE_LLM mode).",
         ),
         GeneratedCreativeAngle(
             avatar="self_purchaser",
             concept="craftsmanship",
+            pillar="mechanism",
             description="Fake angle: the craftsmanship (FAKE_LLM mode).",
         ),
         GeneratedCreativeAngle(
             avatar="gift_buyer",
             concept="the-perfect-gift",
+            pillar="emotion",
             description="Fake angle: the gift she will keep (FAKE_LLM mode).",
         ),
         GeneratedCreativeAngle(
             avatar="gift_buyer",
             concept="social-proof",
+            pillar="offer",
             description="Fake angle: loved by other buyers (FAKE_LLM mode).",
         ),
     ],
@@ -265,6 +269,10 @@ def _business_product_audience_lines(
             lines.append(f"Features: {product.features}")
         if product.benefits:
             lines.append(f"Benefits: {product.benefits}")
+        if product.mechanism:
+            lines.append(
+                f"Mechanism (why the benefit is believable): {product.mechanism}"
+            )
     else:
         lines += ["", "No specific product was selected for this campaign."]
 
@@ -856,7 +864,16 @@ def _build_creative_test_plan_prompt(
         "craftsmanship, the-perfect-gift or social-proof) and a "
         "description of what the ad shows and promises. Use both avatars, "
         "typically two concepts each, and never repeat an avatar and "
-        "concept pair. Each must differ in what it says or shows, not "
+        "concept pair. Each also has a pillar, its main persuasion lever: "
+        "offer (the standing promotion or a risk-reducer such as a "
+        "guarantee or free returns), mechanism (the design, material or "
+        "method that makes the product deliver its benefit), education "
+        "(teach one thing the buyer doesn't know) or emotion (the feeling, "
+        "the moment, the gift). The four angles must span at least 3 "
+        "distinct pillars, never four versions of the same one; use offer "
+        "only if there is a real promotion or risk-reducer above, and "
+        "mechanism from the product's stated mechanism or materials. Each "
+        "must differ in what it says or shows, not "
         "just in wording, and each must be something this product's real "
         "details support. " + _creative_format_instruction(creative_format),
         "- hypothesis_statement: a falsifiable statement naming which "

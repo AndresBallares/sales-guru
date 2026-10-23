@@ -48,6 +48,7 @@ const existingProduct: api.Product = {
   margin: null,
   features: null,
   benefits: null,
+  mechanism: null,
   primaryImageUrl: null,
   url: null,
 }

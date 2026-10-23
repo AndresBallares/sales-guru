@@ -884,6 +884,7 @@ describe('CampaignsSection', () => {
       margin: null,
       features: null,
       benefits: null,
+      mechanism: null,
       primaryImageUrl: null,
       url: null,
     })
@@ -1026,6 +1027,7 @@ describe('CampaignsSection', () => {
         margin: null,
         features: null,
         benefits: null,
+        mechanism: null,
         primaryImageUrl: null,
         url: null,
       },
@@ -1046,6 +1048,7 @@ describe('CampaignsSection', () => {
       margin: null,
       features: null,
       benefits: null,
+      mechanism: null,
       primaryImageUrl: 'https://img.example/wallet.jpg',
       url: null,
     }
@@ -1236,6 +1239,7 @@ describe('CampaignsSection', () => {
         margin: null,
         features: null,
         benefits: null,
+        mechanism: null,
         primaryImageUrl: null,
         url: null,
       },
@@ -1264,6 +1268,7 @@ describe('CampaignsSection', () => {
         margin: null,
         features: null,
         benefits: null,
+        mechanism: null,
         primaryImageUrl: null,
         url: null,
       },
@@ -1274,6 +1279,7 @@ describe('CampaignsSection', () => {
         margin: null,
         features: null,
         benefits: null,
+        mechanism: null,
         primaryImageUrl: null,
         url: null,
       },
@@ -1309,6 +1315,7 @@ describe('CampaignsSection', () => {
         margin: null,
         features: null,
         benefits: null,
+        mechanism: null,
         primaryImageUrl: null,
         url: null,
       },
@@ -1320,6 +1327,7 @@ describe('CampaignsSection', () => {
       margin: null,
       features: null,
       benefits: null,
+      mechanism: null,
       primaryImageUrl: null,
       url: null,
     }
@@ -1366,6 +1374,7 @@ describe('CampaignsSection', () => {
       margin: null,
       features: null,
       benefits: null,
+      mechanism: null,
       primaryImageUrl: 'http://localhost:8000/product-images/img-1',
       url: null,
     }
@@ -1400,6 +1409,7 @@ describe('CampaignsSection', () => {
         margin: null,
         features: null,
         benefits: null,
+        mechanism: null,
         primaryImageUrl: null,
         url: null,
       },
@@ -1445,6 +1455,7 @@ describe('CampaignsSection', () => {
         margin: null,
         features: null,
         benefits: null,
+        mechanism: null,
         primaryImageUrl: null,
         url: null,
       },
@@ -1509,6 +1520,7 @@ describe('CampaignsSection', () => {
         margin: null,
         features: null,
         benefits: null,
+        mechanism: null,
         primaryImageUrl: null,
         url: null,
       },
@@ -1537,6 +1549,7 @@ describe('CampaignsSection', () => {
         margin: null,
         features: null,
         benefits: null,
+        mechanism: null,
         primaryImageUrl: null,
         url: null,
       },
@@ -1563,6 +1576,7 @@ describe('CampaignsSection', () => {
       margin: null,
       features: null,
       benefits: null,
+      mechanism: null,
       primaryImageUrl: null,
       url: null,
     }
@@ -1593,6 +1607,7 @@ describe('CampaignsSection', () => {
         margin: undefined,
         features: undefined,
         benefits: undefined,
+        mechanism: null,
         url: 'https://acme.example/wallets',
       }),
     )
@@ -1610,6 +1625,7 @@ describe('CampaignsSection', () => {
         margin: null,
         features: null,
         benefits: null,
+        mechanism: null,
         primaryImageUrl: null,
         url: null,
       },
@@ -1642,6 +1658,7 @@ describe('CampaignsSection', () => {
         margin: null,
         features: null,
         benefits: null,
+        mechanism: null,
         primaryImageUrl: null,
         url: null,
       },
@@ -1652,6 +1669,7 @@ describe('CampaignsSection', () => {
         margin: null,
         features: null,
         benefits: null,
+        mechanism: null,
         primaryImageUrl: null,
         url: null,
       },
@@ -1693,6 +1711,7 @@ describe('CampaignsSection', () => {
       margin: null,
       features: null,
       benefits: null,
+      mechanism: null,
       primaryImageUrl: 'https://img.example/ring.jpg',
       url: null,
     }
@@ -2020,7 +2039,12 @@ describe('CampaignsSection', () => {
         offer: 'Custom emerald rings',
         positioning: 'Premium and personal',
         creativeAngles: [
-      { avatar: 'self_purchaser', concept: 'product-on-skin', description: 'Product on skin' },
+      {
+        avatar: 'self_purchaser',
+        concept: 'product-on-skin',
+        pillar: 'mechanism',
+        description: 'Product on skin',
+      },
       { avatar: 'gift_buyer', concept: 'social-proof', description: 'Social proof' },
       { avatar: 'gift_buyer', concept: 'gifting', description: 'Gifting' },
     ],
@@ -2050,7 +2074,9 @@ describe('CampaignsSection', () => {
     expect(screen.getByText(/cheapest add-to-cart\./)).toBeInTheDocument()
     expect(screen.getByText(/broad \(Meta Advantage\+\)/)).toBeInTheDocument()
     expect(screen.getByText(/Milestone gift buyers/)).toBeInTheDocument()
-    expect(screen.getByText('Self-purchaser – Product on skin')).toBeInTheDocument()
+    // The pillar goes last when an angle has one; an older angle is named as before.
+    expect(screen.getByText('Self-purchaser – Product on skin – Mechanism')).toBeInTheDocument()
+    expect(screen.getByText('Gift buyer – Gifting')).toBeInTheDocument()
     expect(screen.getByText(/\$50\/day on one ad set for 10 days/)).toBeInTheDocument()
   })
 
@@ -3999,6 +4025,7 @@ describe('CampaignsSection', () => {
           margin: null,
           features: null,
           benefits: null,
+          mechanism: null,
           primaryImageUrl: null,
           url: null,
         },

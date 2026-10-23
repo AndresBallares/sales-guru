@@ -209,6 +209,11 @@ model Product {
   margin      Float?
   features    String?
   benefits    String?
+  // The specific design, material or method that makes the product deliver its
+  // benefit ("solid 18k gold with hand-applied ceramic inlay, so the color
+  // can't fade or chip like plating"). It is why the promise is believable,
+  // and the Creative Agent connects it to the benefit instead of listing it.
+  mechanism   String?
   url         String?
   images      ProductImage[]
   campaigns   Campaign[]
@@ -538,6 +543,9 @@ model Creative {
   // pair (app/services/creative_naming.py). Null on older creatives.
   avatar                    String?
   concept                   String?
+  // The ad's main persuasion lever, set with avatar and concept for a
+  // CREATIVE_TEST_PLAN's ads: offer | mechanism | education | emotion.
+  pillar                    String?
   imagePrompt               String?
   videoPrompt               String?
   imageUrl                  String?

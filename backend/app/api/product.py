@@ -76,6 +76,7 @@ async def _to_response(product: Product) -> ProductResponse:
         margin=product.margin,
         features=product.features,
         benefits=product.benefits,
+        mechanism=product.mechanism,
         url=product.url,
         primary_image_url=await get_primary_image_url(product.id),
     )
@@ -119,6 +120,7 @@ async def create_product(
             "margin": payload.margin,
             "features": payload.features,
             "benefits": payload.benefits,
+            "mechanism": payload.mechanism,
             "url": payload.url,
         }
     )
