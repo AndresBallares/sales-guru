@@ -2924,6 +2924,24 @@ describe('CampaignsSection', () => {
       expect(screen.queryByRole('button', { name: 'Select this ad' })).not.toBeInTheDocument()
     })
 
+    it('has no creative details section for a creative that carries no visual prompts', async () => {
+      // New creatives are generated without image/video prompts (token review,
+      // 2026-10); only older rows still carry them.
+      mockedApi.listCreatives.mockResolvedValue([
+        fakeCreative({
+          id: 'creative-1',
+          headline: 'Headline A',
+          imagePrompt: null,
+          videoPrompt: null,
+        }),
+      ])
+
+      renderCampaigns(<CampaignsSection businessId="biz-1" />)
+
+      expect(await screen.findByText('Headline A')).toBeVisible()
+      expect(screen.queryByRole('button', { name: 'Creative details' })).not.toBeInTheDocument()
+    })
+
     it('offers no Next until an ad is selected, then a Next that opens the preview', async () => {
       mockedApi.listCreatives.mockResolvedValue(twoCreatives())
 

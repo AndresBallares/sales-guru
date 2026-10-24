@@ -32,8 +32,6 @@ _ONE_VARIANT: dict[str, Any] = {
     "description": "Ethically sourced.",
     "cta": "SHOP_NOW",
     "creativeAngle": "Craftsmanship",
-    "imagePrompt": "A close-up of a hand-set emerald ring on dark velvet",
-    "videoPrompt": "A jeweler setting an emerald into a ring, slow motion",
 }
 
 _VALID_TOOL_INPUT: dict[str, Any] = {
@@ -330,7 +328,6 @@ async def test_generate_creatives_returns_four_variants(
     ]
     assert result[0].headline == "Emeralds With a Story"
     assert result[0].cta == "SHOP_NOW"
-    assert result[0].video_prompt
 
 
 @pytest.mark.asyncio
@@ -666,11 +663,34 @@ def _sequenced_client(
 async def test_generate_creatives_coerces_a_disallowed_cta_to_the_objective_default(
     anthropic_api_key: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A SALES campaign (_FAKE_STRATEGY.objective) that keeps coming back
-    with LEARN_MORE — not in SALES's allowed {SHOP_NOW, GET_OFFER} — is
-    coerced to SHOP_NOW (SALES's default) after a failed retry, rather
-    than failing generation outright."""
+    """A SALES campaign (_FAKE_STRATEGY.objective) that comes back with
+    LEARN_MORE — not in SALES's allowed {SHOP_NOW, GET_OFFER} — is set to
+    SHOP_NOW (SALES's default) locally, with no paid retry (see
+    tests/test_creative_repair.py); a retry that also fails still ends in
+    _coerce_batch, covered below."""
     bad_batch = _batch_with("LEARN_MORE")
+    create = _sequenced_client(monkeypatch, bad_batch)
+
+    result = await creative.generate_creatives(
+        business=_fake_business(), product=_fake_product(), strategy=_FAKE_STRATEGY
+    )
+
+    assert create.call_count == 1
+    assert {v.cta for v in result} == {"SHOP_NOW"}
+
+
+@pytest.mark.asyncio
+async def test_a_retry_that_also_fails_is_still_coerced_and_told_what_was_wrong(
+    anthropic_api_key: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The fallback behind the local repair: a response the repair cannot fix
+    (an over-length headline next to a bad CTA) takes the one retry, whose
+    prompt names the problem, and a second failure is coerced rather than
+    raised."""
+    bad_batch = _batch_with("LEARN_MORE")
+    bad_batch["variants"][0]["headline"] = (
+        "Handcrafted gold rings with a ceramic inlay that never fades"
+    )
     create = _sequenced_client(monkeypatch, bad_batch, bad_batch)
 
     result = await creative.generate_creatives(
@@ -679,9 +699,9 @@ async def test_generate_creatives_coerces_a_disallowed_cta_to_the_objective_defa
 
     assert create.call_count == 2
     assert {v.cta for v in result} == {"SHOP_NOW"}
-    # The retry prompt actually told the model what it got wrong.
     retry_text = create.call_args.kwargs["messages"][0]["content"]
-    assert "not allowed for objective" in retry_text
+    assert "headline is" in retry_text
+    assert "(max 40)" in retry_text
 
 
 # ---------- Part 5(b): GET_OFFER needs a non-empty standing offer ----------
@@ -692,10 +712,10 @@ async def test_generate_creatives_coerces_get_offer_with_no_standing_offer(
     anthropic_api_key: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """GET_OFFER is otherwise in SALES's allowed set, but is still
-    coerced away when the business has no standing promotion
+    repaired away when the business has no standing promotion
     (BrandProfile.offer) set at all."""
     offer_batch = _batch_with("GET_OFFER")
-    create = _sequenced_client(monkeypatch, offer_batch, offer_batch)
+    create = _sequenced_client(monkeypatch, offer_batch)
 
     result = await creative.generate_creatives(
         business=_fake_business(),
@@ -704,7 +724,7 @@ async def test_generate_creatives_coerces_get_offer_with_no_standing_offer(
         brand_profile=_fake_brand_profile(offer=None),
     )
 
-    assert create.call_count == 2
+    assert create.call_count == 1
     assert {v.cta for v in result} == {"SHOP_NOW"}
 
 
@@ -712,10 +732,10 @@ async def test_generate_creatives_coerces_get_offer_with_no_standing_offer(
 async def test_generate_creatives_coerces_get_offer_when_primary_text_omits_it(
     anthropic_api_key: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A standing offer exists, but GET_OFFER is still coerced away if the
+    """A standing offer exists, but GET_OFFER is still repaired away if the
     primary text never actually mentions it."""
     offer_batch = _batch_with("GET_OFFER")
-    create = _sequenced_client(monkeypatch, offer_batch, offer_batch)
+    create = _sequenced_client(monkeypatch, offer_batch)
 
     result = await creative.generate_creatives(
         business=_fake_business(),
@@ -724,7 +744,7 @@ async def test_generate_creatives_coerces_get_offer_when_primary_text_omits_it(
         brand_profile=_fake_brand_profile(offer="20% off first order with WELCOME20"),
     )
 
-    assert create.call_count == 2
+    assert create.call_count == 1
     assert {v.cta for v in result} == {"SHOP_NOW"}
 
 
@@ -1128,7 +1148,7 @@ def test_is_creative_stale_true_for_business_description_even_with_no_product() 
 def test_build_prompt_requires_a_scroll_stopping_hook_in_the_first_line() -> None:
     """Meta truncates primary text after ~125 characters with "See more", so
     the opening line has to work on its own."""
-    prompt = creative._build_prompt(_fake_business(), _fake_product(), _FAKE_STRATEGY)
+    prompt = creative._build_system_prompt()
 
     assert "Ad quality rules" in prompt
     assert "first line" in prompt
@@ -1143,7 +1163,7 @@ def test_build_prompt_requires_a_scroll_stopping_hook_in_the_first_line() -> Non
 def test_build_prompt_never_lets_the_model_invent_social_proof() -> None:
     """The hook may use social proof, but only proof that's actually on file —
     an invented review count is false advertising."""
-    prompt = creative._build_prompt(_fake_business(), _fake_product(), _FAKE_STRATEGY)
+    prompt = creative._build_system_prompt()
 
     assert "Never invent reviews, ratings, counts, guarantees" in prompt
 
@@ -1155,7 +1175,9 @@ def test_build_prompt_points_at_listed_proof_points_when_they_exist() -> None:
         _fake_business(), _fake_product(), _FAKE_STRATEGY, brand_profile=brand_profile
     )
 
-    assert "Use one of the proof points listed above" in prompt
+    assert "Proof points/trust lines on file" in prompt
+    assert "4,000+ reviews" in prompt
+    assert "Use one of the proof points on file" in creative._build_system_prompt()
 
 
 def test_build_prompt_falls_back_to_product_facts_with_no_proof_points() -> None:
@@ -1164,51 +1186,27 @@ def test_build_prompt_falls_back_to_product_facts_with_no_proof_points() -> None
     assert "No proof points are on file" in prompt
 
 
-def test_build_prompt_asks_for_the_product_in_use_not_a_flat_product_shot() -> None:
-    prompt = creative._build_prompt(_fake_business(), _fake_product(), _FAKE_STRATEGY)
-
-    assert "product in use" in prompt
-    assert "flat white-background" in prompt
-
-
-def test_build_prompt_gives_jewelry_specific_visual_guidance() -> None:
-    business = _fake_business(industry="FASHION_JEWELRY")
-
-    prompt = creative._build_prompt(business, _fake_product(), _FAKE_STRATEGY)
-
-    assert "on skin, in motion" in prompt
-    assert "sparkle" in prompt
-
-
-def test_build_prompt_omits_jewelry_visual_guidance_for_other_industries() -> None:
-    business = _fake_business(industry="SAAS")
-
-    prompt = creative._build_prompt(business, _fake_product(), _FAKE_STRATEGY)
-
-    assert "sparkle" not in prompt
-
-
 def test_build_prompt_requires_one_clear_message_per_variant() -> None:
-    prompt = creative._build_prompt(_fake_business(), _fake_product(), _FAKE_STRATEGY)
+    prompt = creative._build_system_prompt()
 
     assert "one product, one benefit, one reason to act" in prompt
 
 
 def test_build_prompt_matches_the_copy_to_the_cta_action() -> None:
-    prompt = creative._build_prompt(_fake_business(), _fake_product(), _FAKE_STRATEGY)
+    prompt = creative._build_system_prompt()
 
     assert "Shop the collection" in prompt
     assert "never a vague" in prompt
 
 
 def test_build_prompt_keeps_the_copy_consistent_with_the_brand() -> None:
-    prompt = creative._build_prompt(_fake_business(), _fake_product(), _FAKE_STRATEGY)
+    prompt = creative._build_system_prompt()
 
     assert "same tone, colors, and photo style" in prompt
 
 
 def test_build_prompt_asks_for_short_scannable_copy_without_hashtags() -> None:
-    prompt = creative._build_prompt(_fake_business(), _fake_product(), _FAKE_STRATEGY)
+    prompt = creative._build_system_prompt()
 
     assert "line breaks" in prompt
     assert "at most one emoji" in prompt
@@ -1418,7 +1416,7 @@ def test_coerce_batch_never_cuts_primary_text_mid_phrase() -> None:
 
 
 def test_the_retry_prompt_states_the_character_rule_explicitly() -> None:
-    retry = creative._retry_prompt("BASE", "primary text is 128 characters")
+    retry = creative._retry_prompt("BASE", "primary text is 128 characters", 4)
 
     assert "BASE" in retry
     assert "primary text is 128 characters" in retry
@@ -1607,17 +1605,19 @@ async def test_fake_mode_gives_a_creative_test_its_structured_angles(
 
 
 def test_build_prompt_carries_the_meta_ad_quality_rules() -> None:
-    prompt = creative._build_prompt(
+    system = creative._build_system_prompt()
+    user = creative._build_prompt(
         _fake_business(industry="FASHION_JEWELRY"), _fake_product(), _FAKE_STRATEGY
     )
 
-    assert "Meta ad quality rules (apply to every variant):" in prompt
-    assert "No engagement bait" in prompt
-    assert "Never withhold information" in prompt
-    assert "18k gold, hand-set" in prompt
-    # After the existing quality rules, before the closing instructions.
-    assert prompt.index("Ad quality rules (apply") < prompt.index("Meta ad quality")
-    assert prompt.index("Meta ad quality") < prompt.index("Business website")
+    assert "Meta ad quality rules (apply to every variant):" in system
+    assert "No engagement bait" in system
+    assert "Never withhold information" in system
+    # The jewelry sentence is per-request, so the cached block stays shared.
+    assert "18k gold, hand-set" in user
+    assert "18k gold" not in system
+    # The existing quality rules come first, then the Ad structure, then Meta's.
+    assert system.index("Ad quality rules (apply") < system.index("Meta ad quality")
 
 
 def test_build_prompt_has_no_jewelry_line_for_another_industry() -> None:
@@ -1625,7 +1625,7 @@ def test_build_prompt_has_no_jewelry_line_for_another_industry() -> None:
         _fake_business(industry="RESTAURANT"), _fake_product(), _FAKE_STRATEGY
     )
 
-    assert "Meta ad quality rules" in prompt
+    assert "Meta ad quality rules" in creative._build_system_prompt()
     assert "18k gold" not in prompt
 
 
@@ -1735,14 +1735,15 @@ def test_a_product_without_a_mechanism_adds_no_mechanism_line() -> None:
 
 
 def test_the_prompt_carries_the_ad_structure_block_before_the_meta_rules() -> None:
+    system = creative._build_system_prompt()
     prompt = creative._build_prompt(_fake_business(), _fake_product(), _pillar_plan())
 
-    assert "Ad structure (apply to every variant):" in prompt
-    assert "at least one offer element or risk-reducer" in prompt
-    assert "connect it to the benefit" in prompt
-    assert "No generic praise" in prompt
-    assert "Education is a valid angle" in prompt
-    assert prompt.index("Ad structure (apply") < prompt.index("Meta ad quality rules")
+    assert "Ad structure (apply to every variant):" in system
+    assert "at least one offer element or risk-reducer" in system
+    assert "connect it to the benefit" in system
+    assert "No generic praise" in system
+    assert "Education is a valid angle" in system
+    assert system.index("Ad structure (apply") < system.index("Meta ad quality rules")
     # The avatar guidance from the angle system is untouched.
     assert "speaking to its angle's avatar" in prompt
 

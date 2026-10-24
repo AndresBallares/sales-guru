@@ -40,7 +40,8 @@ from typing import Literal, cast
 
 import anthropic
 from anthropic import AsyncAnthropic
-from anthropic.types import Message
+from anthropic.types import Message, TextBlockParam
+from anthropic.types.cache_control_ephemeral_param import CacheControlEphemeralParam
 from prisma.models import Audience, BrandProfile, Business, Product
 
 from app.core.config import get_settings
@@ -90,6 +91,7 @@ from app.services.benchmarks import (
     BenchmarkRange,
 )
 from app.services.brand_voice import brand_voice_lines
+from app.services.llm_usage import create_logged
 from app.services.meta import AccountCampaignInsights
 from app.services.prompt_safety import quarantine
 from app.services.tool_use import ToolInputRecoveryError, parse_tool_input
@@ -204,6 +206,14 @@ def _range_line(label: str, benchmark: BenchmarkRange, unit_fmt: str) -> str:
         f"{unit_fmt.format(benchmark.low)}–{unit_fmt.format(benchmark.high)}, "
         f"source: {benchmark.source})"
     )
+
+
+# Boundary between a prompt's fixed instructions and the facts of one request.
+# Everything before it is identical for every request of the same plan type, so
+# _call_agent sends it as a cached ``system`` block; this line and everything
+# after it are the user message. A prompt without the marker is sent whole as
+# the user message.
+_REQUEST_MARKER = "Request details (specific to this campaign):"
 
 
 def _vertical_grounding() -> str:
@@ -358,6 +368,25 @@ def _build_test_plan_prompt(
         "",
         _vertical_grounding(),
         "",
+        "Design Variant B's audience from the real product/business/"
+        "audience data in the request details below — do not create an "
+        "unnecessarily complicated, interest-stacked audience. It should be "
+        "specific enough to test a meaningful, falsifiable hypothesis, but "
+        "simple enough that the result can be interpreted. Avoid overly "
+        "clever demographic assumptions that aren't actually supported by "
+        "the data given.",
+        "",
+        "Your hypothesis statement must name a specific, measurable "
+        "difference you expect between Variant B and the broad baseline "
+        "(e.g. a lower CAC, a higher CTR) — not a vague claim like "
+        '"this audience should perform well." Generate at least two '
+        "creative angles to test. Do not propose testing against another "
+        "ad platform (Google, TikTok, etc.) — this product only executes "
+        "on Meta.",
+        "",
+        "Submit your test plan using the provided tool.",
+        "",
+        _REQUEST_MARKER,
         *_business_product_audience_lines(business, product, audience, brand_profile),
         "",
         f"Campaign objective: {objective}",
@@ -368,25 +397,9 @@ def _build_test_plan_prompt(
         f"business decision, not something you need to determine, but "
         f"factor it into how ambitious your hypothesis and creative "
         f"angles can realistically be at that spend level.",
-        "",
-        "Design Variant B's audience from the real product/business/"
-        "audience data above — do not create an unnecessarily complicated, "
-        "interest-stacked audience. It should be specific enough to test a "
-        "meaningful, falsifiable hypothesis, but simple enough that the "
-        "result can be interpreted. Avoid overly clever demographic "
-        "assumptions that aren't actually supported by the data given.",
-        "",
-        "Your hypothesis statement must name a specific, measurable "
-        "difference you expect between Variant B and the broad baseline "
-        "(e.g. a lower CAC, a higher CTR) — not a vague claim like "
-        '"this audience should perform well." Generate at least two '
-        "creative angles to test. Do not propose testing against another "
-        "ad platform (Google, TikTok, etc.) — this product only executes "
-        "on Meta.",
     ]
     if unit_economics is not None:
         lines += ["", _unit_economics_line(unit_economics)]
-    lines += ["", "Submit your test plan using the provided tool."]
     return "\n".join(lines)
 
 
@@ -605,6 +618,21 @@ def _build_data_driven_strategy_prompt(
         "",
         _vertical_grounding(),
         "",
+        "keyLearnings should summarize what the historical data shows "
+        "worked or didn't. recommendedAdjustments should be concrete "
+        "changes vs. past performance. scalingTrigger should state, in "
+        "plain terms, what result should trigger increasing budget "
+        "further.",
+        "",
+        "Ad formats: this plan may use single-image or carousel ads. When "
+        "the business has several product photos, recommend a carousel as "
+        "a subsequent experiment in recommendedAdjustments, run as its own "
+        "campaign with every ad a carousel rather than mixed with "
+        "single-image ads, so the format is the only variable.",
+        "",
+        "Submit your strategy using the provided tool.",
+        "",
+        _REQUEST_MARKER,
         *_business_product_audience_lines(business, product, audience, brand_profile),
         "",
         f"Campaign objective: {objective}",
@@ -632,22 +660,6 @@ def _build_data_driven_strategy_prompt(
             f"{_unit_economics_line(unit_economics)} Factor this into your "
             f"budget recommendation and scaling trigger.",
         ]
-    lines += [
-        "",
-        "keyLearnings should summarize what the historical data shows "
-        "worked or didn't. recommendedAdjustments should be concrete "
-        "changes vs. past performance. scalingTrigger should state, in "
-        "plain terms, what result should trigger increasing budget "
-        "further.",
-        "",
-        "Ad formats: this plan may use single-image or carousel ads. When "
-        "the business has several product photos, recommend a carousel as "
-        "a subsequent experiment in recommendedAdjustments, run as its own "
-        "campaign with every ad a carousel rather than mixed with "
-        "single-image ads, so the format is the only variable.",
-        "",
-        "Submit your strategy using the provided tool.",
-    ]
     return "\n".join(lines)
 
 
@@ -841,21 +853,13 @@ def _build_creative_test_plan_prompt(
         "",
         _vertical_grounding(),
         "",
-        *_business_product_audience_lines(business, product, audience, brand_profile),
-        "",
-        f"Campaign objective: {objective}",
-        f"The single ad set runs at ${daily_budget:.2f}/day for "
-        f"{duration_days} days. {event_note} That is a fixed business "
-        "decision, not something you need to determine, but factor it into "
-        "how many distinct angles are realistic at that spend.",
-        "",
         "Your job:",
         "- creative_persona: the one person the creatives should speak to "
         "(name, a short description, their problem, their desire), drawn "
-        "from the real product/business data above. This is context for "
-        "the ad copywriter and designer, not used for targeting — don't "
-        "describe interests or demographics as if they would be selected "
-        "in the ad set.",
+        "from the real product/business data in the request details below. "
+        "This is context for the ad copywriter and designer, not used for "
+        "targeting — don't describe interests or demographics as if they "
+        "would be selected in the ad set.",
         "- creative_angles: exactly 4 distinct angles to test, organized as "
         "avatars x concepts. Each angle has an avatar (self_purchaser: "
         "someone buying for themselves; gift_buyer: someone buying for "
@@ -871,25 +875,41 @@ def _build_creative_test_plan_prompt(
         "(teach one thing the buyer doesn't know) or emotion (the feeling, "
         "the moment, the gift). The four angles must span at least 3 "
         "distinct pillars, never four versions of the same one; use offer "
-        "only if there is a real promotion or risk-reducer above, and "
-        "mechanism from the product's stated mechanism or materials. Each "
-        "must differ in what it says or shows, not "
+        "only if there is a real promotion or risk-reducer in the request "
+        "details, and mechanism from the product's stated mechanism or "
+        "materials. Each must differ in what it says or shows, not "
         "just in wording, and each must be something this product's real "
-        "details support. " + _creative_format_instruction(creative_format),
+        "details support. The ad format is stated in the request details.",
         "- hypothesis_statement: a falsifiable statement naming which "
         "angle you expect to win on cost per add-to-cart and why — not a "
         'vague claim like "this should perform well."',
         "Do not propose testing against another ad platform "
         "(Google, TikTok, etc.) — this product only executes on Meta.",
+        "",
+        "Submit your creative test plan using the provided tool.",
+        "",
+        _REQUEST_MARKER,
+        *_business_product_audience_lines(business, product, audience, brand_profile),
+        "",
+        f"Campaign objective: {objective}",
+        f"The single ad set runs at ${daily_budget:.2f}/day for "
+        f"{duration_days} days. {event_note} That is a fixed business "
+        "decision, not something you need to determine, but factor it into "
+        "how many distinct angles are realistic at that spend.",
+        "",
+        "Ad format: " + _creative_format_instruction(creative_format),
     ]
     if unit_economics is not None:
         lines += ["", _unit_economics_line(unit_economics)]
-    lines += ["", "Submit your creative test plan using the provided tool."]
     return "\n".join(lines)
 
 
 async def _call_agent(
-    *, tool_name: str, tool_schema: dict[str, object], prompt: str
+    *,
+    tool_name: str,
+    tool_schema: dict[str, object],
+    prompt: str,
+    campaign_id: str | None = None,
 ) -> dict[str, object]:
     """Shared Anthropic forced-tool-use call for both plan types.
 
@@ -897,6 +917,8 @@ async def _call_agent(
         tool_name: The name of the single tool the model is forced to call.
         tool_schema: The JSON schema of that tool's input.
         prompt: The full grounding prompt.
+        campaign_id: The campaign the plan is for, only used to tag the
+            token-usage log line (see app/services/llm_usage.py).
 
     Returns:
         The tool call's raw input, ready for parse_tool_input.
@@ -919,12 +941,31 @@ async def _call_agent(
         raise StrategistError("ANTHROPIC_API_KEY is not configured")
 
     client = AsyncAnthropic(api_key=settings.anthropic_api_key)
+    instructions, marker, request = prompt.partition(_REQUEST_MARKER)
+    system: list[TextBlockParam] = (
+        [
+            {
+                "type": "text",
+                "text": instructions.rstrip(),
+                "cache_control": CacheControlEphemeralParam(type="ephemeral"),
+            }
+        ]
+        if marker
+        else []
+    )
+    user_prompt = marker + request if marker else prompt
 
-    async def _create() -> Message:
+    async def _create(attempt: int) -> Message:
         try:
-            return await client.messages.create(
+            return await create_logged(
+                client,
+                agent="strategist",
+                call_type="strategy",
+                campaign_id=campaign_id,
+                attempt=attempt,
                 model=_MODEL,
                 max_tokens=_MAX_TOKENS,
+                system=system or anthropic.NOT_GIVEN,
                 tools=[
                     {
                         "name": tool_name,
@@ -933,12 +974,12 @@ async def _call_agent(
                     }
                 ],
                 tool_choice={"type": "tool", "name": tool_name},
-                messages=[{"role": "user", "content": prompt}],
+                messages=[{"role": "user", "content": user_prompt}],
             )
         except anthropic.AnthropicError as exc:
             raise StrategistError(f"Anthropic API call failed: {exc}") from exc
 
-    response = await _create()
+    response = await _create(1)
     # A response cut off mid-JSON by the token limit should never reach
     # parse_tool_input — it can only ever fail there in a way none of that
     # module's known-quirk recovery can repair (genuinely incomplete, not
@@ -953,7 +994,7 @@ async def _call_agent(
             _MAX_TOKENS,
             tool_name,
         )
-        response = await _create()
+        response = await _create(2)
 
     tool_use = next(
         (block for block in response.content if block.type == "tool_use"), None
@@ -974,6 +1015,7 @@ async def generate_strategy(
     account_history: list[AccountCampaignInsights] | None = None,
     brand_profile: BrandProfile | None = None,
     creative_format: Literal["SINGLE_IMAGE", "SINGLE_VIDEO"] = "SINGLE_IMAGE",
+    campaign_id: str | None = None,
 ) -> StrategyContent:
     """Call the Marketing Strategist Agent and return a structured plan.
 
@@ -996,6 +1038,8 @@ async def generate_strategy(
         brand_profile: The business's brand profile, if one exists (PRD.md
             §5 step 3.5) — grounds the plan in a "Brand voice" block. None
             (the default — no profile yet) falls back to current behavior.
+        campaign_id: The campaign the plan is for, only used to tag the
+            token-usage log line.
 
     Returns:
         The generated plan, with every backend-computed field (see
@@ -1057,6 +1101,7 @@ async def generate_strategy(
             tool_name=_CREATIVE_TEST_PLAN_TOOL_NAME,
             tool_schema=GeneratedCreativeTestPlanFields.model_json_schema(),
             prompt=prompt,
+            campaign_id=campaign_id,
         )
         try:
             generated_creative = parse_tool_input(raw, GeneratedCreativeTestPlanFields)
@@ -1116,6 +1161,7 @@ async def generate_strategy(
             tool_name=_TEST_PLAN_TOOL_NAME,
             tool_schema=GeneratedTestPlanFields.model_json_schema(),
             prompt=prompt,
+            campaign_id=campaign_id,
         )
         try:
             generated = parse_tool_input(raw, GeneratedTestPlanFields)
@@ -1177,6 +1223,7 @@ async def generate_strategy(
         tool_name=_DATA_DRIVEN_STRATEGY_TOOL_NAME,
         tool_schema=GeneratedDataDrivenStrategyFields.model_json_schema(),
         prompt=prompt,
+        campaign_id=campaign_id,
     )
     try:
         generated_opt = parse_tool_input(raw, GeneratedDataDrivenStrategyFields)

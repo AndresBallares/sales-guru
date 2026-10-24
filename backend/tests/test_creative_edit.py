@@ -31,8 +31,6 @@ def _variant(letter: str, **overrides: Any) -> GeneratedCreativeVariant:
         "description": f"Fresh description {letter}",
         "cta": "SHOP_NOW",
         "creative_angle": f"Angle {letter}",
-        "image_prompt": "img",
-        "video_prompt": "vid",
     }
     fields.update(overrides)
     return GeneratedCreativeVariant(**fields)
@@ -222,10 +220,11 @@ def test_several_fields_can_be_regenerated_at_once(
     assert after["description"].startswith("Fresh description")
 
 
-def test_regeneration_keeps_the_ads_creative_angle(
+def test_regeneration_asks_for_one_variant_on_the_ads_own_angle(
     client: TestClient, monkeypatch: pytest.MonkeyPatch, regenerated: AsyncMock
 ) -> None:
-    """The ad is one of the test's angles: new words, same angle."""
+    """The ad is one of the test's angles: new words, same angle — and the
+    agent is asked for that one variant, not a batch of four."""
     business_id, campaign_id, selected = _creative_plan_campaign(
         client, monkeypatch, select=3, approve=False
     )
@@ -235,8 +234,7 @@ def test_regeneration_keeps_the_ads_creative_angle(
         if c["id"] == selected[0]
     )
     regenerated.return_value = [
-        _variant("X", creative_angle="Something else entirely"),
-        _variant("Y", creative_angle=before["creativeAngle"], headline="On angle"),
+        _variant("Y", creative_angle=before["creativeAngle"], headline="On angle")
     ]
 
     after = client.post(
@@ -244,6 +242,9 @@ def test_regeneration_keeps_the_ads_creative_angle(
         json={"fields": ["headline"]},
     ).json()
 
+    kwargs = regenerated.call_args.kwargs
+    assert kwargs["single_variant"].creative_angle == before["creativeAngle"]
+    assert kwargs["campaign_id"] == campaign_id
     assert after["headline"] == "On angle"
     assert after["creativeAngle"] == before["creativeAngle"]
 

@@ -72,6 +72,22 @@ _MATERIALS_RULE_BY_INDUSTRY: dict[str, str] = {
 }
 
 
+def materials_note(industry: str | None) -> str:
+    """The industry-specific extension of rule 4, without its leading space.
+
+    Kept apart from rule_lines so the rules themselves are identical for
+    every industry (and so cacheable as one block); the Creative Agent puts
+    this note in the per-request half of the prompt instead.
+
+    Args:
+        industry: Business.industry.
+
+    Returns:
+        The note, or an empty string for an industry with none.
+    """
+    return _MATERIALS_RULE_BY_INDUSTRY.get(industry or "", "").strip()
+
+
 def rule_lines(industry: str | None) -> list[str]:
     """The "Meta ad quality rules" block of the Creative Agent's prompt.
 

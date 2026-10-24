@@ -1,7 +1,17 @@
 """Creative Agent (PRD.md build step 6).
 
 Strategy -> Creative Agent -> Creative A/B/C/D, each with {Primary Text,
-Headline, Description, CTA, Image Prompt, Video Prompt}.
+Headline, Description, CTA, Creative Angle}.
+
+**Cost shape (token review, 2026-10):** the static instructions — role, ad
+quality rules, ad structure, Meta's rules, slot limits — live in a cached
+``system`` block (``_build_system_prompt``); everything about one request
+(business, product, strategy, objective's CTA set) is the user message
+(``_build_prompt``). The tool schema is identical for a full batch and a
+single-slot regenerate, so one cached prefix serves both. Image/video
+prompts are no longer generated: nothing consumed them but a details panel
+(AI image generation is deferred), and they were a large share of output.
+Every call goes through ``create_logged`` (app/services/llm_usage.py).
 
 Same forced-tool-use approach as the Marketing Strategist Agent
 (app/services/strategist.py) for guaranteed-structured output — the model
@@ -64,6 +74,7 @@ from anthropic.types import (
     MessageParam,
     TextBlockParam,
 )
+from anthropic.types.cache_control_ephemeral_param import CacheControlEphemeralParam
 from prisma.models import BrandProfile, Business, Campaign, Creative, Product
 from prisma.models import ProductImage as PrismaProductImage
 from pydantic import ValidationError
@@ -82,6 +93,7 @@ from app.schemas.creative import (
     GeneratedCreativeBatch,
     GeneratedCreativeCard,
     GeneratedCreativeVariant,
+    offer_mentioned,
 )
 from app.schemas.product_image import MAX_VIDEO_BYTES, MAX_VIDEO_SECONDS
 from app.schemas.strategy import (
@@ -93,15 +105,20 @@ from app.schemas.strategy import (
 from app.services import ad_quality
 from app.services.brand_voice import brand_voice_lines
 from app.services.creative_naming import angle_label
+from app.services.llm_usage import CallType, create_logged
 from app.services.media_info import is_square
 from app.services.prompt_safety import quarantine
-from app.services.tool_use import ToolInputRecoveryError, parse_tool_input
+from app.services.tool_use import (
+    ToolInputRecoveryError,
+    candidate_payloads,
+    parse_tool_input,
+)
 
 logger = logging.getLogger(__name__)
 
 _MODEL = "claude-sonnet-5"
-# Four variants x {headline, body_text, description, cta, creative_angle,
-# image_prompt, video_prompt} is a lot of real content — 4096 was
+# Four variants x {headline, body_text, description, cta, creative_angle}
+# (plus per-card copy for a carousel) is a lot of real content — 4096 was
 # occasionally too tight and truncated mid-JSON (confirmed 2026-09-09,
 # surfaced by real e2e generation rather than any mocked test: the
 # truncated tail came back as a string tool_use.py's known-quirk
@@ -140,67 +157,27 @@ _ANGLE_TEMPLATES_BY_INDUSTRY: dict[str, tuple[str, ...]] = {
     ),
 }
 
-# Visual guidance for image_prompt/video_prompt (confirmed 2026-10-06): a
-# post that shows the product in use outperforms a flat product shot. The
-# generic line applies to every industry; an industry listed in
-# _VISUAL_GUIDANCE_BY_INDUSTRY gets a more specific line added on top, the
-# same extension pattern as _ANGLE_TEMPLATES_BY_INDUSTRY above.
-_VISUAL_GUIDANCE_BY_INDUSTRY: dict[str, str] = {
-    "FASHION_JEWELRY": (
-        "For jewelry, show it on skin, in motion, and close enough that the "
-        "sparkle is visible."
-    ),
-}
 
+def _quality_rule_lines() -> list[str]:
+    """Build the "Ad quality rules" block of the Creative Agent's system prompt.
 
-def _quality_rule_lines(
-    industry: str | None,
-    *,
-    has_proof_points: bool,
-    format: CreativeFormat,
-) -> list[str]:
-    """Build the "Ad quality rules" block of the Creative Agent's prompt.
+    Six rules for what makes a Facebook post work (confirmed with the user
+    2026-10-06; PRD.md §5 step 6): a hook in the first line, one clear
+    message, proof, a CTA-matched action, brand consistency, and short
+    scannable copy. Prompt-level guidance only — the hard limits (CTA set,
+    slot lengths) stay enforced by the batch validators.
 
-    Seven rules for what makes a Facebook post work (confirmed with the user
-    2026-10-06; PRD.md §5 step 6): a hook in the first line, a product-in-use
-    visual, one clear message, proof, a CTA-matched action, brand
-    consistency, and short scannable copy. Prompt-level guidance only — the
-    hard limits (CTA set, slot lengths) stay enforced by the batch validators.
-
-    Args:
-        industry: Business.industry, for the industry-specific visual line.
-        has_proof_points: Whether the brand profile lists proof points —
-            switches rule 4 between "use a listed one" and "lean on the
-            product facts given", never "make one up".
-        format: SINGLE_IMAGE or CAROUSEL — CAROUSEL adds a line tying every
-            card back to the variant's single message.
+    A seventh rule, "Visual: image_prompt and video_prompt must show the
+    product in use", is gone with those fields (token review, 2026-10): the
+    ads use the business's uploaded photos and videos, so there is no visual
+    prompt to steer. The rules are identical for every request — what used to
+    vary (proof points on file, carousel) now rides in the per-request
+    prompt — so this whole block can be cached.
 
     Returns:
         The prompt lines, starting with a blank separator line.
     """
-    visual = (
-        "Visual: image_prompt and video_prompt must show the product in use, "
-        "not a flat white-background product shot. Video and carousels "
-        "usually outperform a static product photo."
-    )
-    industry_visual = _VISUAL_GUIDANCE_BY_INDUSTRY.get(industry or "")
-    if industry_visual:
-        visual += " " + industry_visual
-
-    if has_proof_points:
-        proof = (
-            "Proof: build trust into each variant. Use one of the proof "
-            "points listed above, or a material or fact from the product "
-            "details."
-        )
-    else:
-        proof = (
-            "Proof: build trust into each variant using the product's own "
-            "materials and facts from the details above. No proof points are "
-            "on file for this business."
-        )
-
-    lines = [
+    return [
         "",
         "Ad quality rules (apply to every variant):",
         "1. Hook: Facebook cuts primary text off after about "
@@ -208,27 +185,23 @@ def _quality_rule_lines(
         "first line of body_text has to stop the scroll on its own: open "
         "with a question, a specific, concrete claim, a specific benefit, "
         "or social proof. Don't open with the brand name or a greeting.",
-        f"2. {visual}",
-        "3. One message: one product, one benefit, one reason to act per "
+        "2. One message: one product, one benefit, one reason to act per "
         "variant. Don't try to say everything.",
-        f"4. {proof} Never invent reviews, ratings, counts, guarantees, "
-        "shipping or return terms, or materials that aren't given above.",
-        "5. Call to action: write the copy so it leads into the CTA with a "
+        "3. Proof: build trust into each variant. Use one of the proof "
+        "points on file if the request lists any, otherwise a material or "
+        "fact from the product details it gives. Never invent reviews, "
+        "ratings, counts, guarantees, shipping or return terms, or "
+        "materials that aren't given.",
+        "4. Call to action: write the copy so it leads into the CTA with a "
         'specific action, such as "Shop the collection" for a purchase '
         'goal, never a vague "Learn more" when the goal is a sale.',
-        "6. Brand consistency: keep the same tone, colors, and photo style "
-        "as the brand voice and logo above; people click through to the "
-        "business's page before buying.",
-        "7. Short, scannable copy: use line breaks, at most one emoji and "
+        "5. Brand consistency: keep the same tone, colors, and photo style "
+        "as the brand voice and logo in the request; people click through "
+        "to the business's page before buying.",
+        "6. Short, scannable copy: use line breaks, at most one emoji and "
         "only if it fits the brand, and no hashtags (they don't help on "
         "Facebook ads and look spammy).",
     ]
-    if format == "CAROUSEL":
-        lines.append(
-            "For a carousel, every card reinforces that same single message "
-            "from a different angle of the product in use."
-        )
-    return lines
 
 
 # Fake mode canned batch — built from the real GeneratedCreativeVariant
@@ -250,8 +223,6 @@ _FAKE_VARIANTS: list[GeneratedCreativeVariant] = [
         description=f"Fake description {letter}.",
         cta=cta,
         creative_angle=f"Fake creative angle {letter}",
-        image_prompt=f"Fake image prompt {letter}.",
-        video_prompt=f"Fake video prompt {letter}.",
     )
     for letter, cta in zip("ABCD", _FAKE_CTAS, strict=True)
 ]
@@ -272,8 +243,6 @@ def _fake_carousel_variants(card_count: int) -> list[GeneratedCreativeVariant]:
             description=f"Fake description {letter}.",
             cta=cta,
             creative_angle=f"Fake creative angle {letter}",
-            image_prompt=f"Fake image prompt {letter}.",
-            video_prompt=f"Fake video prompt {letter}.",
             cards=[
                 GeneratedCreativeCard(
                     headline=f"Fake card {position + 1} headline {letter}",
@@ -296,6 +265,45 @@ class VideoInput(NamedTuple):
     thumbnail_data: str
     thumbnail_content_type: str
     duration_seconds: float
+
+
+class SingleVariantTarget(NamedTuple):
+    """Which one variant a single-slot regenerate should produce.
+
+    Attributes:
+        creative_angle: The existing creative's angle (free text, or the
+            "Gift buyer – Social proof" label of a creative test).
+        plan_angle_index: For a creative test, the position of that angle in
+            the plan's creative_angles (see find_plan_angle_index), so the
+            variant keeps its avatar, concept and pillar. None otherwise.
+    """
+
+    creative_angle: str
+    plan_angle_index: int | None = None
+
+
+def find_plan_angle_index(strategy: StrategyContent, creative_angle: str) -> int | None:
+    """The position of the creative-test angle a creative was built on.
+
+    Args:
+        strategy: The campaign's strategy.
+        creative_angle: The creative's stored angle label.
+
+    Returns:
+        The index into strategy.creative_angles, or None when the strategy is
+        not a creative test, the angle carries no avatar (an older plan), or
+        nothing matches — the caller then regenerates on the free-text angle.
+    """
+    if strategy.plan_type != "CREATIVE_TEST_PLAN":
+        return None
+    wanted = creative_angle.strip().lower()
+    for position, angle in enumerate(strategy.creative_angles):
+        if angle.avatar is None:
+            continue
+        label = angle_label(str(angle.avatar), angle.concept, angle.pillar)
+        if label.strip().lower() == wanted:
+            return position
+    return None
 
 
 class CreativeAgentError(RuntimeError):
@@ -552,7 +560,12 @@ def _trim_body_text(text: str, max_length: int) -> str:
     return _truncate_at_word_boundary(flat, max_length)
 
 
-def _retry_prompt(prompt: str, first_failure: object) -> str:
+def _variant_phrase(count: int) -> str:
+    """Count with its noun: ``1 variant``, ``4 variants``."""
+    return f"{count} variant{'' if count == 1 else 's'}"
+
+
+def _retry_prompt(prompt: str, first_failure: object, variant_count: int) -> str:
     """The prompt for the one retry, stating the character rules explicitly.
 
     The first failure is usually a slot over its limit, and the model tends to
@@ -571,8 +584,40 @@ def _retry_prompt(prompt: str, first_failure: object) -> str:
         f"{MAX_HEADLINE_LENGTH} characters and descriptions at most "
         f"{MAX_DESCRIPTION_LENGTH}.\n"
         "Resubmit a complete, corrected batch of "
-        f"{_VARIANT_COUNT} variants."
+        f"{_variant_phrase(variant_count)}."
     )
+
+
+def _build_system_prompt() -> str:
+    """The Creative Agent's static instructions, identical for every request.
+
+    Role, ad quality rules, ad structure and Meta's ad quality rules. Sent as a
+    cached ``system`` block (see generate_creatives), so the text must not vary
+    by business, product, industry or format — anything that does belongs in
+    _build_prompt. Tools render before system in the cache prefix, so the tool
+    schema is cached with it.
+
+    The slot limits and the shared-CTA rule are deliberately NOT here even
+    though they are static: they close the per-request prompt instead, where
+    they always were. Measured against the real API (2026-10-24), moving them
+    into this block made the first attempt fail validation on 6 of 6 calls
+    (primary text over 125 characters, mixed CTAs), against 1 of 3 before — each
+    failure costing a full retry and a coerced result. Recency matters for
+    hard limits; the ~100 tokens it costs uncached are not worth saving.
+
+    Returns:
+        The system prompt text.
+    """
+    lines = [
+        "You are an ad copywriter. Generate the number of distinct ad creative "
+        "variants the request asks for, for the business it describes, "
+        "grounded in the marketing strategy it gives — do not invent facts "
+        "about the business that weren't provided.",
+    ]
+    lines += _quality_rule_lines()
+    lines += ad_quality.structure_lines()
+    lines += ad_quality.rule_lines(None)
+    return "\n".join(lines)
 
 
 def _build_prompt(
@@ -586,8 +631,13 @@ def _build_prompt(
     format: CreativeFormat = "SINGLE_IMAGE",
     card_count: int = 0,
     video_seconds: float | None = None,
+    single_variant: SingleVariantTarget | None = None,
 ) -> str:
-    """Build the grounding prompt from the business/product and its strategy.
+    """Build the per-request prompt from the business/product and its strategy.
+
+    The static instructions (role, quality rules, structure, Meta's rules, slot
+    limits) are not here — they are the cached system prompt, see
+    _build_system_prompt. This is only what changes per request.
 
     Order (confirmed with the user 2026-09-12, Part 3): objective + the
     exact allowed CTA set, brand profile (voice/positioning plus the
@@ -627,11 +677,16 @@ def _build_prompt(
             — ignored for SINGLE_IMAGE.
         video_seconds: For SINGLE_VIDEO, the video's length; the prompt then
             says the ad is a video and the attached image is a frame from it.
+        single_variant: When set, the prompt asks for one variant built on
+            this angle (a single-slot regenerate) instead of a batch of
+            four. On a creative test it lists only that angle, keeping its
+            avatar/concept/pillar and the persona.
 
     Returns:
         The prompt text.
     """
     objective = strategy.objective
+    variant_count = 1 if single_variant is not None else _VARIANT_COUNT
     allowed_ctas = sorted(ALLOWED_CTAS_BY_OBJECTIVE.get(objective, set()))
     standing_offer = brand_profile.offer if brand_profile is not None else None
     proof_points = (
@@ -640,16 +695,16 @@ def _build_prompt(
         else []
     )
 
+    same_cta = (
+        " All four variants in this batch must use that same CTA — do not "
+        "vary it across variants."
+        if variant_count > 1
+        else ""
+    )
     lines = [
-        "You are an ad copywriter. Generate "
-        f"{_VARIANT_COUNT} distinct ad creative variants for the business "
-        "described below, grounded in the marketing strategy given — do "
-        "not invent facts about the business that weren't provided.",
-        "",
         f"Campaign objective: {objective}",
         "You must choose the CTA from exactly this set: "
-        f"{', '.join(allowed_ctas)}. All four variants in this batch must "
-        "use that same CTA — do not vary it across variants.",
+        f"{', '.join(allowed_ctas)}.{same_cta}",
     ]
     if "GET_OFFER" in allowed_ctas:
         if standing_offer:
@@ -692,6 +747,8 @@ def _build_prompt(
             "never invent a proof point that isn't listed here: "
             + "; ".join(proof_points)
         )
+    else:
+        lines.append("No proof points are on file for this business.")
     lines += [
         f"Standing promotion (from brand profile): {standing_offer or 'none'}",
         f"Campaign strategic offer: {strategy.offer}",
@@ -739,8 +796,15 @@ def _build_prompt(
         f"Copy strategy: {strategy.copy_strategy}",
     ]
     if strategy.plan_type == "CREATIVE_TEST_PLAN":
-        lines += ["Creative angles, one per variant:"]
-        for position, angle in enumerate(strategy.creative_angles):
+        listed = list(enumerate(strategy.creative_angles))
+        if single_variant is None:
+            lines += ["Creative angles, one per variant:"]
+        elif single_variant.plan_angle_index is not None:
+            listed = [listed[single_variant.plan_angle_index]]
+            lines += ["Creative angle for this variant:"]
+        else:
+            lines += ["Creative angles in this test, for context:"]
+        for position, angle in listed:
             name = (
                 angle_label(angle.avatar, angle.concept)
                 if angle.avatar
@@ -757,20 +821,30 @@ def _build_prompt(
         )
     if strategy.plan_type == "CREATIVE_TEST_PLAN":
         persona = strategy.creative_persona
-        lines += [
+        lines.append(
             quarantine(
                 "Creative persona (who these ads speak to; this is not used "
                 "for targeting — delivery is broad and the creative does the "
                 "audience selection)",
                 f"{persona.name} — {persona.description}",
-            ),
-            "These ads compete against each other in one ad set, so return "
-            "the variants in the order listed above: variant A is built on "
-            "the first angle, variant B on the second, and so on, each "
-            "speaking to its angle's avatar (a self-purchaser buys for "
-            "themselves, a gift buyer buys for someone else). The test is "
-            "which angle wins.",
-        ]
+            )
+        )
+        if single_variant is not None:
+            lines.append(
+                "This ad competes against others in one ad set: build it on "
+                "its own angle, speaking to that angle's avatar (a "
+                "self-purchaser buys for themselves, a gift buyer buys for "
+                "someone else). The test is which angle wins."
+            )
+        else:
+            lines.append(
+                "These ads compete against each other in one ad set, so "
+                "return the variants in the order listed above: variant A is "
+                "built on the first angle, variant B on the second, and so "
+                "on, each speaking to its angle's avatar (a self-purchaser "
+                "buys for themselves, a gift buyer buys for someone else). "
+                "The test is which angle wins."
+            )
         if format == "SINGLE_IMAGE":
             lines.append(
                 "Every variant is a single image: if a creative angle above "
@@ -800,13 +874,11 @@ def _build_prompt(
         if template == "offer + urgency" and not standing_offer:
             continue
         lines.append(f"- {template}")
-
-    lines += _quality_rule_lines(
-        business.industry, has_proof_points=bool(proof_points), format=format
-    )
-
-    lines += ad_quality.structure_lines()
-    lines += ad_quality.rule_lines(business.industry)
+    materials_note = ad_quality.materials_note(business.industry)
+    if materials_note:
+        lines.append(
+            f"Industry note, extending Meta ad quality rule 4: {materials_note}"
+        )
 
     lines += [
         "",
@@ -814,19 +886,37 @@ def _build_prompt(
         f"link — never write the domain into the copy itself): "
         f"{business.website or 'none'}",
         "",
-        f"Generate exactly {_VARIANT_COUNT} variants, each built around a "
-        "different creative angle (draw from the creative angles and "
-        "reference structures above where possible) — every variant's "
-        "angle must be distinct from the others. Each variant needs: "
-        f"body_text as the primary text (at most {MAX_BODY_TEXT_LENGTH} "
-        f"characters — it must read complete before Meta's own truncation "
-        f"cuts it off), a headline (at most {MAX_HEADLINE_LENGTH} "
-        f"characters), an optional description (at most "
+    ]
+    if single_variant is None:
+        opening = (
+            f"Generate exactly {_VARIANT_COUNT} variants, each built around a "
+            "different creative angle (draw from the creative angles and "
+            "reference structures above where possible) — every variant's "
+            "angle must be distinct from the others."
+        )
+    elif single_variant.plan_angle_index is not None:
+        opening = (
+            "Generate exactly 1 variant, built on the creative angle listed above."
+        )
+    else:
+        opening = (
+            "Generate exactly 1 variant, built on this creative angle: "
+            f"{single_variant.creative_angle}."
+        )
+    lines.append(
+        f"{opening} Each variant needs: body_text as the primary text (at "
+        f"most {MAX_BODY_TEXT_LENGTH} characters — it must read complete "
+        "before Meta's own truncation cuts it off), a headline (at most "
+        f"{MAX_HEADLINE_LENGTH} characters), an optional description (at most "
         f"{MAX_DESCRIPTION_LENGTH} characters — omit it if no proof point "
         "fits, don't pad it), the one shared CTA chosen above, and the "
-        "creative angle.",
-    ]
+        "creative angle."
+    )
     if format == "CAROUSEL":
+        lines.append(
+            "For a carousel, every card reinforces that same single message "
+            "from a different angle of the product in use."
+        )
         lines.append(
             f"Each variant must also include a cards list of exactly "
             f"{card_count} cards, one per attached product photo in the "
@@ -843,8 +933,126 @@ def _build_prompt(
     return "\n".join(lines)
 
 
+class Repair(NamedTuple):
+    """One deterministic fix applied to a response before validating it again.
+
+    Attributes:
+        field: ``cta`` or ``body_text``.
+        variant: 1-based variant number for a per-variant field, None for the
+            batch-wide CTA.
+        before: The value (a CTA list, or a text) before the fix.
+        after: The value after it.
+    """
+
+    field: str
+    variant: int | None
+    before: str
+    after: str
+
+
+def _repair_target_cta(
+    objective: Objective, standing_offer: str | None, bodies: list[str]
+) -> CtaType:
+    """The one CTA a mixed or invalid batch is set to.
+
+    GET_OFFER only when this objective allows it, the business has a standing
+    promotion and every variant's primary text mentions it (the same bar the
+    validator holds GET_OFFER to); otherwise the objective's default.
+    """
+    if (
+        "GET_OFFER" in ALLOWED_CTAS_BY_OBJECTIVE.get(objective, set())
+        and standing_offer
+        and all(offer_mentioned(standing_offer, body) for body in bodies)
+    ):
+        return "GET_OFFER"
+    return DEFAULT_CTA_BY_OBJECTIVE.get(objective, "LEARN_MORE")
+
+
+def _repair_batch(
+    raw: dict[str, object], objective: Objective, standing_offer: str | None
+) -> tuple[dict[str, object], list[Repair]] | None:
+    """Fix the two things a first attempt most often gets wrong, with no model call.
+
+    Measured against the real API (2026-10): about 4 in 6 first attempts failed
+    validation on mixed CTAs (GET_OFFER on the offer-angle variant, SHOP_NOW on
+    the rest) or on primary text a few characters past the limit, and a paid
+    retry then often failed the same way.
+
+    * Primary text over the limit is trimmed to its last complete sentence, but
+      only if at least ~60 characters survive; otherwise nothing is repaired and
+      the caller takes its retry, as before.
+    * Mixed CTAs, a CTA the objective forbids, or GET_OFFER without a
+      qualifying promotion are all set to the one CTA _repair_target_cta picks.
+      The text is repaired first, so the GET_OFFER check sees the final text.
+
+    Nothing else is touched (a long headline, engagement bait, a wrong variant
+    count all still go to the retry), and the result is validated again by the
+    caller, so a repair can never let an invalid batch through.
+
+    Args:
+        raw: The model's tool input.
+        objective: The campaign's objective, for the allowed and default CTAs.
+        standing_offer: BrandProfile.offer, if any.
+
+    Returns:
+        The repaired copy and what changed, or None when there is nothing to
+        repair or a long text cannot be trimmed safely.
+    """
+    # The model sometimes wraps its answer under a stray key; parse_tool_input
+    # unwraps it, so repair what is inside rather than the wrapper.
+    payload = next(
+        (
+            candidate
+            for candidate in candidate_payloads(raw, GeneratedCreativeBatch)
+            if isinstance(candidate.get("variants"), list)
+            and candidate["variants"]
+            and all(
+                isinstance(v, dict) for v in cast(list[object], candidate["variants"])
+            )
+        ),
+        None,
+    )
+    if payload is None:
+        return None
+    fixed = copy.deepcopy(payload)
+    rows = cast(list[dict[str, object]], fixed["variants"])
+    repairs: list[Repair] = []
+
+    for number, row in enumerate(rows, start=1):
+        body = row.get("bodyText")
+        if not isinstance(body, str) or len(body) <= MAX_BODY_TEXT_LENGTH:
+            continue
+        trimmed = _trim_to_last_sentence(body.strip(), MAX_BODY_TEXT_LENGTH)
+        if trimmed is None or len(trimmed) < _MIN_TRIMMED_BODY_LENGTH:
+            return None
+        row["bodyText"] = trimmed
+        repairs.append(Repair("body_text", number, body, trimmed))
+
+    ctas = [row.get("cta") for row in rows]
+    bodies = [str(row.get("bodyText", "")) for row in rows]
+    allowed: set[CtaType] | frozenset[CtaType] = ALLOWED_CTAS_BY_OBJECTIVE.get(
+        objective, set()
+    )
+    target = _repair_target_cta(objective, standing_offer, bodies)
+    unqualified_get_offer = set(ctas) == {"GET_OFFER"} and target != "GET_OFFER"
+    if (
+        len(set(ctas)) > 1
+        or any(c not in allowed for c in ctas)
+        or unqualified_get_offer
+    ):
+        for row in rows:
+            row["cta"] = target
+        repairs.append(
+            Repair("cta", None, "|".join(dict.fromkeys(str(c) for c in ctas)), target)
+        )
+    return (fixed, repairs) if repairs else None
+
+
 def _coerce_batch(
-    raw: dict[str, object], objective: Objective, failure: Exception
+    raw: dict[str, object],
+    objective: Objective,
+    failure: Exception,
+    variant_count: int = _VARIANT_COUNT,
 ) -> list[GeneratedCreativeVariant]:
     """Best-effort recovery after two failed attempts at a valid batch.
 
@@ -869,6 +1077,8 @@ def _coerce_batch(
         objective: The campaign's objective, for its default CTA.
         failure: The validation failure being recovered from, logged for
             visibility into what the model kept getting wrong.
+        variant_count: How many variants were asked for — the one rule the
+            re-check still enforces, as the only context it passes.
 
     Returns:
         The coerced batch's variants.
@@ -923,7 +1133,9 @@ def _coerce_batch(
         # re-raise on data we already know is now compliant, or (for
         # GET_OFFER specifically) reject a CTA we deliberately moved away
         # from anyway.
-        batch = parse_tool_input(coerced, GeneratedCreativeBatch)
+        batch = parse_tool_input(
+            coerced, GeneratedCreativeBatch, context={"variant_count": variant_count}
+        )
     except (ValidationError, ToolInputRecoveryError) as exc:
         raise CreativeAgentError(
             "Creative Agent output was invalid even after a retry and "
@@ -1028,6 +1240,8 @@ async def generate_creatives(
     format: CreativeFormat = "SINGLE_IMAGE",
     card_images: list[PrismaProductImage] | None = None,
     video: VideoInput | None = None,
+    single_variant: SingleVariantTarget | None = None,
+    campaign_id: str | None = None,
 ) -> list[GeneratedCreativeVariant]:
     """Call the Creative Agent and return a batch of ad creative variants.
 
@@ -1066,10 +1280,17 @@ async def generate_creatives(
         video: For SINGLE_VIDEO, the video's thumbnail (passed as the vision
             input in place of primary_image) and duration, so the prompt can
             tell the agent the ad is a video. Ignored for other formats.
+        single_variant: When set, generate one variant on this angle instead
+            of a batch of four — the single-slot regenerate. Same guards,
+            retry and coercion; on a creative test the variant keeps its
+            avatar/concept/pillar context.
+        campaign_id: The campaign the call is for, only used to tag the
+            token-usage log line.
 
     Returns:
-        Exactly four generated creative variants (Creative A-D), their
-        shared CTA guaranteed to be one this campaign's objective allows.
+        Exactly four generated creative variants (Creative A-D) — or exactly
+        one when single_variant is set — their shared CTA guaranteed to be
+        one this campaign's objective allows.
         For CAROUSEL, each variant also carries a cards list matching
         card_images 1:1 in order.
 
@@ -1081,11 +1302,16 @@ async def generate_creatives(
     """
     settings = get_settings()
     is_carousel = format == "CAROUSEL"
+    variant_count = 1 if single_variant is not None else _VARIANT_COUNT
     if settings.fake_llm_enabled:
         if is_carousel:
             assert card_images is not None  # caller contract, see docstring
-            return _fake_carousel_variants(len(card_images))
-        return apply_plan_angles(list(_FAKE_VARIANTS), strategy)
+            fakes = _fake_carousel_variants(len(card_images))
+        else:
+            fakes = list(_FAKE_VARIANTS)
+        if single_variant is not None:
+            return fakes[:1]
+        return fakes if is_carousel else apply_plan_angles(fakes, strategy)
     if not settings.anthropic_api_key:
         raise CreativeAgentError("ANTHROPIC_API_KEY is not configured")
 
@@ -1103,6 +1329,7 @@ async def generate_creatives(
         format=format,
         card_count=len(card_images) if is_carousel and card_images else 0,
         video_seconds=video.duration_seconds if is_video and video else None,
+        single_variant=single_variant,
     )
 
     image_blocks: list[ImageBlockParam] = []
@@ -1158,7 +1385,16 @@ async def generate_creatives(
             }
         )
 
-    async def _call(prompt_text: str) -> dict[str, object]:
+    call_type: CallType = (
+        "slot_regenerate" if single_variant is not None else "creative_batch"
+    )
+    system_block: TextBlockParam = {
+        "type": "text",
+        "text": _build_system_prompt(),
+        "cache_control": CacheControlEphemeralParam(type="ephemeral"),
+    }
+
+    async def _call(prompt_text: str, attempt: int) -> dict[str, object]:
         content: str | list[ImageBlockParam | TextBlockParam]
         if image_blocks:
             content = [*image_blocks, {"type": "text", "text": prompt_text}]
@@ -1166,9 +1402,15 @@ async def generate_creatives(
             content = prompt_text
         message: MessageParam = {"role": "user", "content": content}
         try:
-            response = await client.messages.create(
+            response = await create_logged(
+                client,
+                agent="creative",
+                call_type=call_type,
+                campaign_id=campaign_id,
+                attempt=attempt,
                 model=_MODEL,
                 max_tokens=_MAX_TOKENS,
+                system=[system_block],
                 tools=[
                     {
                         "name": _TOOL_NAME,
@@ -1193,24 +1435,91 @@ async def generate_creatives(
         "objective": strategy.objective,
         "standing_offer": brand_profile.offer if brand_profile is not None else None,
         "format": format,
+        "variant_count": variant_count,
     }
     expected_card_count = len(card_images) if is_carousel and card_images else None
 
-    raw = await _call(prompt)
+    standing_offer = brand_profile.offer if brand_profile is not None else None
+    raw = await _call(prompt, 1)
     try:
         batch = parse_tool_input(raw, GeneratedCreativeBatch, context=context)
         variants = batch.variants
     except (ValidationError, ToolInputRecoveryError) as first_failure:
-        raw = await _call(_retry_prompt(prompt, first_failure))
-        try:
-            batch = parse_tool_input(raw, GeneratedCreativeBatch, context=context)
-            variants = batch.variants
-        except (ValidationError, ToolInputRecoveryError) as second_failure:
-            variants = _coerce_batch(raw, strategy.objective, second_failure)
+        repaired = _repair_batch(raw, strategy.objective, standing_offer)
+        variants_or_none = None
+        if repaired is not None:
+            try:
+                batch = parse_tool_input(
+                    repaired[0], GeneratedCreativeBatch, context=context
+                )
+            except (ValidationError, ToolInputRecoveryError):
+                logger.info(
+                    "llm_repair_rejected agent=creative call_type=%s "
+                    "campaign_id=%s repairs=%d — still invalid, retrying",
+                    call_type,
+                    campaign_id or "none",
+                    len(repaired[1]),
+                )
+            else:
+                variants_or_none = batch.variants
+                for repair in repaired[1]:
+                    _log_repair(repair, call_type, campaign_id)
+        if variants_or_none is not None:
+            variants = variants_or_none
+        else:
+            raw = await _call(_retry_prompt(prompt, first_failure, variant_count), 2)
+            try:
+                batch = parse_tool_input(raw, GeneratedCreativeBatch, context=context)
+                variants = batch.variants
+            except (ValidationError, ToolInputRecoveryError) as second_failure:
+                variants = _coerce_batch(
+                    raw, strategy.objective, second_failure, variant_count
+                )
 
     if expected_card_count is not None:
         _check_card_counts_match_images(variants, expected_card_count)
+    if single_variant is not None:
+        return _keep_requested_angle(variants, strategy, single_variant)
     return apply_plan_angles(variants, strategy)
+
+
+def _log_repair(repair: Repair, call_type: str, campaign_id: str | None) -> None:
+    """Log one applied repair so how often each fires can be counted."""
+    if repair.variant is None:
+        detail = f"before={repair.before!r} after={repair.after!r}"
+    else:
+        detail = (
+            f"variant={repair.variant} before_len={len(repair.before)} "
+            f"after_len={len(repair.after)}"
+        )
+    logger.info(
+        "llm_repair agent=creative call_type=%s campaign_id=%s field=%s %s",
+        call_type,
+        campaign_id or "none",
+        repair.field,
+        detail,
+    )
+
+
+def _keep_requested_angle(
+    variants: list[GeneratedCreativeVariant],
+    strategy: StrategyContent,
+    target: SingleVariantTarget,
+) -> list[GeneratedCreativeVariant]:
+    """Stamp the requested angle on a single regenerated variant.
+
+    The prompt asks for it, but like apply_plan_angles for a batch this makes
+    it the rule: a creative test's variant gets its plan angle's label (which
+    api/creative.py maps back to avatar and concept), any other plan keeps the
+    angle the creative already had.
+    """
+    index = target.plan_angle_index
+    if strategy.plan_type == "CREATIVE_TEST_PLAN" and index is not None:
+        angle = strategy.creative_angles[index]
+        if angle.avatar is not None:
+            label = angle_label(str(angle.avatar), angle.concept, angle.pillar)
+            return [variants[0].model_copy(update={"creative_angle": label})]
+    return [variants[0].model_copy(update={"creative_angle": target.creative_angle})]
 
 
 def is_creative_stale(

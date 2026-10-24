@@ -34,7 +34,9 @@ from app.schemas.strategy import (
 from app.services.campaign_readiness import is_ready
 from app.services.creative import (
     CreativeAgentError,
+    SingleVariantTarget,
     VideoInput,
+    find_plan_angle_index,
     generate_creatives,
     is_creative_stale,
     test_ads_required,
@@ -434,6 +436,7 @@ async def create_creatives(
             format=creative_format,
             card_images=card_images,
             video=video_input,
+            campaign_id=campaign.id,
         )
     except CreativeAgentError as exc:
         raise HTTPException(
@@ -477,8 +480,6 @@ async def create_creatives(
             else None,
             "concept": plan_angle.concept if plan_angle else None,
             "pillar": plan_angle.pillar if plan_angle else None,
-            "imagePrompt": variant.image_prompt,
-            "videoPrompt": variant.video_prompt,
             "format": creative_format,
             # Snapshot the business/product this batch was actually
             # grounded in (app/services/creative.py's is_creative_stale
@@ -1073,10 +1074,11 @@ async def regenerate_creative_copy(
 ) -> CreativeResponse:
     """Rewrite some of one ad's copy (headline, primary text, description).
 
-    Runs the Creative Agent again against the same strategy and takes the
-    variant on this ad's creative angle (the first variant when the model
-    wandered off it), then copies over only the requested slots — the angle,
-    image, CTA and every other slot are untouched.
+    Runs the Creative Agent again against the same strategy, asking for one
+    variant on this ad's creative angle — not a batch of four with three thrown
+    away — then copies over only the requested slots: the angle, image, CTA and
+    every other slot are untouched. On a creative test the variant keeps its
+    avatar, concept and pillar.
 
     Args:
         creative_id: The creative to rewrite.
@@ -1117,30 +1119,28 @@ async def regenerate_creative_copy(
     elif product is not None:
         primary_image = await get_primary_image(product.id)
 
+    plan = StrategyContentAdapter.validate_json(strategy.content)
+    current_angle = creative.creativeAngle or ""
     try:
         variants = await generate_creatives(
             business=business,
             product=product,
-            strategy=StrategyContentAdapter.validate_json(strategy.content),
+            strategy=plan,
             primary_image=primary_image,
             brand_profile=brand_profile,
             format=cast(CreativeFormat, creative.format),
             video=video_input,
+            single_variant=SingleVariantTarget(
+                current_angle, find_plan_angle_index(plan, current_angle)
+            ),
+            campaign_id=campaign.id,
         )
     except CreativeAgentError as exc:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)
         ) from exc
 
-    on_angle = next(
-        (
-            v
-            for v in variants
-            if creative.creativeAngle is not None
-            and v.creative_angle.strip().lower() == creative.creativeAngle.lower()
-        ),
-        variants[0],
-    )
+    on_angle = variants[0]
     data: CreativeUpdateInput = {}
     for field in dict.fromkeys(payload.fields):
         if field == "headline":

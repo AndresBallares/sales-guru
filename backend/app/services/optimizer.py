@@ -36,14 +36,16 @@ from typing import NamedTuple
 import anthropic
 from anthropic import AsyncAnthropic
 from prisma.models import AdSet, Business, Campaign, Metric
+from pydantic import ValidationError
 
 from app.core.config import get_settings
 from app.schemas.optimization import GeneratedRecommendation
 from app.schemas.strategy import SuccessCriterion, TestPlanContent, UnitEconomicsFields
 from app.schemas.test_evaluation import Confidence, GeneratedTestEvaluation
 from app.services.benchmarks import JEWELRY_META_BENCHMARKS, classify_performance_zone
+from app.services.llm_usage import create_logged
 
-_MODEL = "claude-sonnet-5"
+_MODEL: str = "claude-sonnet-5"
 _MAX_TOKENS = 1024
 _TOOL_NAME = "submit_recommendation"
 _TEST_EVALUATION_TOOL_NAME = "submit_test_evaluation"
@@ -506,7 +508,11 @@ async def generate_recommendation(
     prompt = _build_prompt(business, campaign, ad_set, windows, ads)
 
     try:
-        response = await client.messages.create(
+        response = await create_logged(
+            client,
+            agent="optimizer",
+            call_type="optimizer_eval",
+            campaign_id=campaign.id,
             model=_MODEL,
             max_tokens=_MAX_TOKENS,
             tools=[
@@ -1075,27 +1081,53 @@ async def evaluate_test_plan(
         business, campaign, test_plan, latest_metric, hypothesis_metric
     )
 
-    try:
-        response = await client.messages.create(
-            model=_MODEL,
-            max_tokens=_MAX_TOKENS,
-            tools=[
-                {
-                    "name": _TEST_EVALUATION_TOOL_NAME,
-                    "description": "Submit the test-plan evaluation.",
-                    "input_schema": GeneratedTestEvaluation.model_json_schema(),
-                }
-            ],
-            tool_choice={"type": "tool", "name": _TEST_EVALUATION_TOOL_NAME},
-            messages=[{"role": "user", "content": prompt}],
+    async def _attempt(prompt_text: str, attempt: int) -> dict[str, object]:
+        try:
+            response = await create_logged(
+                client,
+                agent="optimizer",
+                call_type="test_eval",
+                campaign_id=campaign.id,
+                attempt=attempt,
+                model=_MODEL,
+                max_tokens=_MAX_TOKENS,
+                tools=[
+                    {
+                        "name": _TEST_EVALUATION_TOOL_NAME,
+                        "description": "Submit the test-plan evaluation.",
+                        "input_schema": GeneratedTestEvaluation.model_json_schema(),
+                    }
+                ],
+                tool_choice={"type": "tool", "name": _TEST_EVALUATION_TOOL_NAME},
+                messages=[{"role": "user", "content": prompt_text}],
+            )
+        except anthropic.AnthropicError as exc:
+            raise OptimizerError(f"Anthropic API call failed: {exc}") from exc
+
+        tool_use = next(
+            (block for block in response.content if block.type == "tool_use"), None
         )
-    except anthropic.AnthropicError as exc:
-        raise OptimizerError(f"Anthropic API call failed: {exc}") from exc
+        if tool_use is None:
+            raise OptimizerError("Model did not return a tool call")
+        return tool_use.input
 
-    tool_use = next(
-        (block for block in response.content if block.type == "tool_use"), None
-    )
-    if tool_use is None:
-        raise OptimizerError("Model did not return a tool call")
-
-    return GeneratedTestEvaluation.model_validate(tool_use.input)
+    try:
+        return GeneratedTestEvaluation.model_validate(await _attempt(prompt, 1))
+    except ValidationError as first_failure:
+        # A real call came back without the required ``reasoning`` field and the
+        # whole evaluation crashed. One corrected retry, the same policy the
+        # Creative Agent uses; a second invalid response is a real failure.
+        retry_prompt = (
+            f"{prompt}\n\n"
+            "Your previous submission was invalid and must be corrected:\n"
+            f"{first_failure}\n"
+            "Resubmit the complete evaluation with every required field."
+        )
+        try:
+            return GeneratedTestEvaluation.model_validate(
+                await _attempt(retry_prompt, 2)
+            )
+        except ValidationError as second_failure:
+            raise OptimizerError(
+                f"The model returned an invalid test evaluation twice: {second_failure}"
+            ) from second_failure

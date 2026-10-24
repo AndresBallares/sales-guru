@@ -40,8 +40,6 @@ _FAKE_VARIANTS = [
         description=f"Description {letter}",
         cta="SHOP_NOW",
         creative_angle=f"Angle {letter}",
-        image_prompt=f"Image prompt {letter}",
-        video_prompt=f"Video prompt {letter}",
     )
     for letter in "ABCD"
 ]
