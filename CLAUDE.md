@@ -138,6 +138,7 @@ path the rule above requires explicit confirmation for).
   client before running e2e; stale builds cause false failures.
 - **Schema changes**: always `uv run prisma migrate dev --name <desc>`, never
   `prisma db push` — see README.md's Database schema changes section for why.
+- **Real Meta or Anthropic API calls that cost money require an explicit approved cap in the message authorizing them. Stop and report before exceeding it; never assume a higher amount is fine.**
 - **Destructive commands** (`prisma db push --force-reset`, `prisma migrate
   reset`, `DROP`, `rm -rf`, `git push --force`, `git reset --hard`, deleting
   branches): before running any of these, print the exact target (database
