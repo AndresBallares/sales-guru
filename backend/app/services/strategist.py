@@ -99,7 +99,6 @@ from app.services.unit_economics import compute_unit_economics
 
 logger = logging.getLogger(__name__)
 
-_MODEL = "claude-sonnet-5"
 # Raised 2048 -> 8192 (confirmed 2026-09-12), matching the Creative Agent's
 # own identical fix (app/services/creative.py) — a real TEST_PLAN response
 # (full nested hypothesis audience, budget/copy-strategy/angles) hit the
@@ -963,7 +962,7 @@ async def _call_agent(
                 call_type="strategy",
                 campaign_id=campaign_id,
                 attempt=attempt,
-                model=_MODEL,
+                model=settings.strategist_model,
                 max_tokens=_MAX_TOKENS,
                 system=system or anthropic.NOT_GIVEN,
                 tools=[

@@ -5,6 +5,7 @@ call: the client is replaced everywhere it could be reached.
 """
 
 import importlib.util
+import os
 import sys
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
@@ -297,35 +298,37 @@ async def test_evaluate_runs_the_apps_agent_on_the_requested_model_then_restores
     seen: list[str] = []
 
     async def _fake_generate(**kwargs: Any) -> RecommendationResult:
-        seen.append(optimizer._MODEL)
+        seen.append(get_settings().optimizer_eval_model)
         assert kwargs["ad_set"].budget == cmp.SCENARIOS[0].budget
         return _result()
 
     monkeypatch.setattr(optimizer, "generate_recommendation", _fake_generate)
-    before = optimizer._MODEL
+    monkeypatch.delenv("OPTIMIZER_EVAL_MODEL", raising=False)
+    get_settings.cache_clear()
 
     outcome = await cmp.evaluate("candidate-model", cmp.SCENARIOS[0])
 
     assert seen == ["candidate-model"]
-    restored = optimizer._MODEL
-    assert restored == before
+    assert "OPTIMIZER_EVAL_MODEL" not in os.environ
+    assert get_settings().optimizer_eval_model == "claude-haiku-5-5"
     assert outcome.action_type == "INCREASE_BUDGET"
 
 
 @pytest.mark.asyncio
-async def test_evaluate_restores_the_model_even_when_the_call_fails(
+async def test_evaluate_restores_a_preexisting_model_setting_even_when_the_call_fails(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
         optimizer, "generate_recommendation", AsyncMock(side_effect=RuntimeError("x"))
     )
-    before = optimizer._MODEL
+    monkeypatch.setenv("OPTIMIZER_EVAL_MODEL", "pre-existing")
+    get_settings.cache_clear()
 
     with pytest.raises(RuntimeError):
         await cmp.evaluate("candidate-model", cmp.SCENARIOS[0])
 
-    restored = optimizer._MODEL
-    assert restored == before
+    assert os.environ["OPTIMIZER_EVAL_MODEL"] == "pre-existing"
+    get_settings.cache_clear()
 
 
 @pytest.mark.asyncio
