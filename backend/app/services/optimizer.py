@@ -44,6 +44,7 @@ from app.schemas.strategy import SuccessCriterion, TestPlanContent, UnitEconomic
 from app.schemas.test_evaluation import Confidence, GeneratedTestEvaluation
 from app.services.benchmarks import JEWELRY_META_BENCHMARKS, classify_performance_zone
 from app.services.llm_usage import create_logged
+from app.services.tool_use import tool_input_schema
 
 _MODEL: str = "claude-sonnet-5"
 _MAX_TOKENS = 1024
@@ -519,7 +520,7 @@ async def generate_recommendation(
                 {
                     "name": _TOOL_NAME,
                     "description": "Submit the recommended optimization action.",
-                    "input_schema": GeneratedRecommendation.model_json_schema(),
+                    "input_schema": tool_input_schema(GeneratedRecommendation),
                 }
             ],
             tool_choice={"type": "tool", "name": _TOOL_NAME},
@@ -1095,7 +1096,7 @@ async def evaluate_test_plan(
                     {
                         "name": _TEST_EVALUATION_TOOL_NAME,
                         "description": "Submit the test-plan evaluation.",
-                        "input_schema": GeneratedTestEvaluation.model_json_schema(),
+                        "input_schema": tool_input_schema(GeneratedTestEvaluation),
                     }
                 ],
                 tool_choice={"type": "tool", "name": _TEST_EVALUATION_TOOL_NAME},
