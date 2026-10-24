@@ -9,7 +9,8 @@ the duration of a run.
 
 It is inert by default. Without ``--run`` it prints the plan and an estimated
 cost and makes NO API calls. ``--run`` spends real money (20 calls plus the
-compatibility probe, a few cents) and needs a real ANTHROPIC_API_KEY.
+compatibility probe) and needs a real ANTHROPIC_API_KEY and an explicit
+``--cap`` in dollars, enforced before every call.
 
 What it checks, per scenario, baseline model vs candidate model:
 
@@ -33,13 +34,16 @@ decision to switch is a human one.
 Usage:
     uv run python scripts/compare_optimizer_models.py                  # plan only
     uv run python scripts/compare_optimizer_models.py --run            # real calls
-    uv run python scripts/compare_optimizer_models.py --run --candidate MODEL_ID
+    uv run python scripts/compare_optimizer_models.py --run --cap 0.50
 """
 
 import argparse
 import asyncio
 import sys
-from dataclasses import dataclass, field
+import time
+from collections.abc import Iterator
+from contextlib import contextmanager
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
@@ -48,9 +52,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import anthropic  # noqa: E402
 from anthropic import AsyncAnthropic  # noqa: E402
+from anthropic.resources.messages.messages import AsyncMessages  # noqa: E402
 from app.core.config import get_settings  # noqa: E402
 from app.services import optimizer  # noqa: E402
 from app.services.optimizer import (  # noqa: E402
+    AUTO_APPLY_CONFIDENCE_THRESHOLD,
     AdPerformance,
     RecommendationResult,
     TrendWindow,
@@ -65,11 +71,18 @@ BUDGET_TOLERANCE = 0.05
 MIN_ACTION_AGREEMENT = 9
 MIN_AUTO_APPLY_AGREEMENT = 9
 
-# Per-million-token prices, only for the cost estimate in the plan.
+# Per-million-token (input, output) prices. Cache writes cost 1.25x input and
+# cache reads 0.1x. A model missing here is costed at the baseline's rate, never
+# as free, so the spend cap errs on the side of stopping early.
 _PRICES = {
     "claude-sonnet-5": (2.0, 10.0),
     "claude-haiku-5-5": (0.10, 0.50),
 }
+_CACHE_WRITE_FACTOR = 1.25
+_CACHE_READ_FACTOR = 0.10
+# Worst case for one optimizer evaluation on the baseline model (measured about
+# $0.0076); used to refuse a call that could cross the cap.
+_PER_CALL_MAX = 0.03
 _EST_INPUT_TOKENS = 1500  # measured 1,519 on a real optimizer_eval (2026-10-24)
 _EST_OUTPUT_TOKENS = 460  # same call
 
@@ -201,6 +214,7 @@ class Outcome:
     suggested_budget: float | None
     target_ad_id: str | None
     requires_approval: bool
+    usage: "CallUsage | None" = None
 
 
 def outcome_of(result: RecommendationResult) -> Outcome:
@@ -219,6 +233,121 @@ def outcome_of(result: RecommendationResult) -> Outcome:
             capped_by_guardrail=result.capped_by_guardrail,
         ),
     )
+
+
+def confidence_band(confidence: float) -> str:
+    """A coarse band for a self-reported confidence, ending at the auto-apply bar.
+
+    Agreement on the exact number is meaningless (two runs of one model differ),
+    so the comparison asks whether both land in the same band, and the top band
+    starts at the app's auto-apply threshold because crossing it changes what
+    happens to the recommendation.
+    """
+    if confidence >= AUTO_APPLY_CONFIDENCE_THRESHOLD:
+        return "AUTO_APPLY"
+    if confidence >= 0.75:
+        return "HIGH"
+    if confidence >= 0.5:
+        return "MEDIUM"
+    return "LOW"
+
+
+@dataclass(frozen=True)
+class CallUsage:
+    """What one real call used and cost."""
+
+    model: str
+    input_tokens: int
+    output_tokens: int
+    thinking_tokens: int
+    cost: float
+    latency_s: float
+
+
+def _tokens(value: object) -> int:
+    return value if isinstance(value, int) else 0
+
+
+def call_cost(model: str, usage: object) -> float:
+    """Dollar cost of one response's usage on ``model``."""
+    price_in, price_out = _PRICES.get(model, _PRICES[DEFAULT_BASELINE])
+    plain = _tokens(getattr(usage, "input_tokens", 0))
+    written = _tokens(getattr(usage, "cache_creation_input_tokens", 0))
+    read = _tokens(getattr(usage, "cache_read_input_tokens", 0))
+    out = _tokens(getattr(usage, "output_tokens", 0))
+    return (
+        plain * price_in
+        + written * price_in * _CACHE_WRITE_FACTOR
+        + read * price_in * _CACHE_READ_FACTOR
+        + out * price_out
+    ) / 1e6
+
+
+class CapReachedError(RuntimeError):
+    """Raised before a call that could take total spend past the approved cap."""
+
+
+class SpendLedger:
+    """Counts what real calls cost and refuses the one that could cross the cap.
+
+    Per CLAUDE.md, real API calls that cost money need an explicit approved cap;
+    this enforces it in code rather than trusting the estimate.
+    """
+
+    def __init__(self, cap: float, per_call_max: float = _PER_CALL_MAX) -> None:
+        """Start empty with an approved ``cap`` and a worst-case cost per call."""
+        self.cap = cap
+        self.per_call_max = per_call_max
+        self.spent = 0.0
+        self.calls: list[CallUsage] = []
+
+    def check(self) -> None:
+        """Raise CapReachedError if one more call could take spend past the cap."""
+        if self.spent + self.per_call_max > self.cap + 1e-9:
+            raise CapReachedError(
+                f"cap ${self.cap:.2f} reached (spent ${self.spent:.4f}; the next "
+                f"call could cost up to ${self.per_call_max:.2f})"
+            )
+
+    def record(self, model: str, usage: object, latency_s: float) -> CallUsage:
+        """Add one finished call's cost and return its usage record."""
+        details = getattr(usage, "output_tokens_details", None)
+        entry = CallUsage(
+            model=model,
+            input_tokens=_tokens(getattr(usage, "input_tokens", 0))
+            + _tokens(getattr(usage, "cache_creation_input_tokens", 0))
+            + _tokens(getattr(usage, "cache_read_input_tokens", 0)),
+            output_tokens=_tokens(getattr(usage, "output_tokens", 0)),
+            thinking_tokens=_tokens(getattr(details, "thinking_tokens", 0)),
+            cost=call_cost(model, usage),
+            latency_s=latency_s,
+        )
+        self.spent += entry.cost
+        self.calls.append(entry)
+        return entry
+
+    @contextmanager
+    def patched(self) -> Iterator[None]:
+        """Wrap ``messages.create`` so every call is checked and recorded."""
+        original = AsyncMessages.create
+        ledger = self
+
+        async def _measured(self_: object, **kwargs: object) -> object:
+            ledger.check()
+            started = time.monotonic()
+            response = await cast(Any, original)(self_, **kwargs)
+            ledger.record(
+                str(kwargs.get("model", "unknown")),
+                response.usage,
+                time.monotonic() - started,
+            )
+            return response
+
+        cast(Any, AsyncMessages).create = _measured
+        try:
+            yield
+        finally:
+            cast(Any, AsyncMessages).create = original
 
 
 @dataclass(frozen=True)
@@ -258,6 +387,13 @@ class Comparison:
         return abs(a - b) <= BUDGET_TOLERANCE * a
 
     @property
+    def same_confidence_band(self) -> bool:
+        """Whether both confidences fall in the same band (see confidence_band)."""
+        return confidence_band(self.baseline.confidence) == confidence_band(
+            self.candidate.confidence
+        )
+
+    @property
     def confidence_delta(self) -> float:
         """Candidate confidence minus baseline confidence."""
         return self.candidate.confidence - self.baseline.confidence
@@ -286,6 +422,7 @@ def summarize(comparisons: list[Comparison]) -> dict[str, Any]:
         "total": total,
         "same_action": action,
         "same_risk": sum(c.same_risk for c in comparisons),
+        "same_confidence_band": sum(c.same_confidence_band for c in comparisons),
         "same_auto_apply": auto,
         "same_target_ad": sum(c.same_target_ad for c in comparisons),
         "budget_close": sum(c.budget_close for c in comparisons),
@@ -379,12 +516,21 @@ async def probe_forced_tool_use(model: str) -> str | None:
     return None
 
 
-async def evaluate(model: str, scenario: Scenario) -> Outcome:
-    """Run the app's own ``generate_recommendation`` on ``model`` for a scenario."""
+async def evaluate(
+    model: str, scenario: Scenario, ledger: SpendLedger | None = None
+) -> Outcome:
+    """Run the app's own ``generate_recommendation`` on ``model`` for a scenario.
+
+    With a ledger, the call is checked against the spend cap first (CapReachedError
+    before any money is spent) and its cost, tokens and latency come back on the
+    outcome.
+    """
     original = optimizer._MODEL
     optimizer._MODEL = model
-    try:
-        result = await optimizer.generate_recommendation(
+    seen = len(ledger.calls) if ledger is not None else 0
+
+    async def _call() -> RecommendationResult:
+        return await optimizer.generate_recommendation(
             business=cast(Any, SimpleNamespace(name="Acme Jewelry")),
             campaign=cast(
                 Any,
@@ -396,9 +542,19 @@ async def evaluate(model: str, scenario: Scenario) -> Outcome:
             windows=build_windows(scenario),
             ads=build_ads(scenario),
         )
+
+    try:
+        if ledger is None:
+            result = await _call()
+        else:
+            with ledger.patched():
+                result = await _call()
     finally:
         optimizer._MODEL = original
-    return outcome_of(result)
+    outcome = outcome_of(result)
+    if ledger is not None and len(ledger.calls) > seen:
+        outcome = replace(outcome, usage=ledger.calls[-1])
+    return outcome
 
 
 def print_plan(baseline: str, candidate: str) -> None:
@@ -415,30 +571,71 @@ def print_plan(baseline: str, candidate: str) -> None:
         print(f"  - {scenario.name}")
 
 
+def _model_totals(label: str, usages: list[CallUsage]) -> str:
+    if not usages:
+        return f"  {label}  no usage recorded"
+    cost = sum(u.cost for u in usages)
+    latency = sum(u.latency_s for u in usages) / len(usages)
+    return (
+        f"  {label}  total ${cost:.4f} over {len(usages)} calls "
+        f"(${cost / len(usages):.4f}/call), mean latency {latency:.1f}s, "
+        f"input tokens {sum(u.input_tokens for u in usages)}, "
+        f"output tokens {sum(u.output_tokens for u in usages)}, "
+        f"thinking tokens {sum(u.thinking_tokens for u in usages)}"
+    )
+
+
 def print_report(comparisons: list[Comparison], baseline: str, candidate: str) -> None:
-    """Print the per-scenario table and the suggested verdict."""
-    print(f"\n{'scenario':44s} {'action':>20s}  {'risk':>13s}  approval  conf")
+    """Print the per-input table, agreement counts, cost and latency, and the bar."""
+    print(
+        f"\n{'input':44s} {'action':>20s}  {'risk':>11s}  {'conf band':>20s}  "
+        f"{'target ad':>9s}  {'cost b/c':>15s}  {'latency b/c':>11s}"
+    )
     for c in comparisons:
         action = (
             c.baseline.action_type
             if c.same_action
             else f"{c.baseline.action_type[:9]}!={c.candidate.action_type[:9]}"
         )
+        bands = (
+            confidence_band(c.baseline.confidence)
+            if c.same_confidence_band
+            else (
+                f"{confidence_band(c.baseline.confidence)}!="
+                f"{confidence_band(c.candidate.confidence)}"
+            )
+        )
+        bu, cu = c.baseline.usage, c.candidate.usage
+        cost = f"{bu.cost:.4f}/{cu.cost:.4f}" if bu and cu else "n/a"
+        lat = f"{bu.latency_s:.1f}/{cu.latency_s:.1f}s" if bu and cu else "n/a"
         print(
             f"{c.scenario[:44]:44s} {action:>20s}  "
-            f"{c.baseline.risk:>5s}/{c.candidate.risk:<5s}  "
-            f"{'same' if c.same_auto_apply else 'DIFFERS':>8s}  "
-            f"{c.confidence_delta:+.2f}"
+            f"{c.baseline.risk:>5s}/{c.candidate.risk:<5s}  {bands:>20s}  "
+            f"{'same' if c.same_target_ad else 'DIFFERS':>9s}  {cost:>15s}  {lat:>11s}"
         )
     s = summarize(comparisons)
     print(
         f"\nsame action     : {s['same_action']}/{s['total']}"
         f"\nsame risk       : {s['same_risk']}/{s['total']}"
+        f"\nsame conf. band : {s['same_confidence_band']}/{s['total']}"
         f"\nsame auto-apply : {s['same_auto_apply']}/{s['total']}"
         f"\nsame target ad  : {s['same_target_ad']}/{s['total']}"
         f"\nbudget within 5%: {s['budget_close']}/{s['total']}"
         f"\nmean confidence : {s['mean_confidence_delta']:+.3f} "
         f"({candidate} minus {baseline})"
+    )
+    print("\nCost and latency:")
+    print(
+        _model_totals(
+            f"{baseline:18s}",
+            [c.baseline.usage for c in comparisons if c.baseline.usage],
+        )
+    )
+    print(
+        _model_totals(
+            f"{candidate:18s}",
+            [c.candidate.usage for c in comparisons if c.candidate.usage],
+        )
     )
     if s["riskier"]:
         print(f"\nCANDIDATE AUTO-APPLIES WHAT THE BASELINE WOULD NOT: {s['riskier']}")
@@ -450,8 +647,18 @@ def print_report(comparisons: list[Comparison], baseline: str, candidate: str) -
     )
 
 
-async def run(baseline: str, candidate: str) -> int:
-    """Probe the candidate, then evaluate every scenario on both models."""
+async def run(baseline: str, candidate: str, cap: float) -> int:
+    """Probe the candidate, then evaluate every scenario on both models.
+
+    Args:
+        baseline: The model to compare against.
+        candidate: The model being considered.
+        cap: The approved dollar cap for the whole run (CLAUDE.md requires one).
+
+    Returns:
+        0 on a full run, 1 if the candidate rejects forced tool use, 2 without an
+        API key, 3 if the cap stopped the run (a partial report is printed).
+    """
     settings = get_settings()
     if not settings.anthropic_api_key:
         print("ANTHROPIC_API_KEY is not configured.", file=sys.stderr)
@@ -468,13 +675,27 @@ async def run(baseline: str, candidate: str) -> int:
         return 1
     print("  accepted.\n")
 
+    ledger = SpendLedger(cap)
     comparisons: list[Comparison] = []
+    stopped: CapReachedError | None = None
     for scenario in SCENARIOS:
-        base = await evaluate(baseline, scenario)
-        cand = await evaluate(candidate, scenario)
+        try:
+            base = await evaluate(baseline, scenario, ledger)
+            cand = await evaluate(candidate, scenario, ledger)
+        except CapReachedError as exc:
+            stopped = exc
+            break
         comparisons.append(Comparison(scenario.name, base, cand))
         print(f"  done: {scenario.name}")
-    print_report(comparisons, baseline, candidate)
+    if comparisons:
+        print_report(comparisons, baseline, candidate)
+    if stopped is not None:
+        print(
+            f"\nSTOPPED: {stopped}. Compared {len(comparisons)} of "
+            f"{len(SCENARIOS)} inputs; spend so far ${ledger.spent:.4f}."
+        )
+        return 3
+    print(f"\nSpend: ${ledger.spent:.4f} of the ${cap:.2f} cap.")
     return 0
 
 
@@ -486,11 +707,22 @@ def main() -> int:
     parser.add_argument(
         "--run", action="store_true", help="Make the real API calls (costs money)."
     )
+    parser.add_argument(
+        "--cap",
+        type=float,
+        help="Approved spend cap in dollars; required with --run, enforced in code.",
+    )
     args = parser.parse_args()
     if not args.run:
         print_plan(args.baseline, args.candidate)
         return 0
-    return asyncio.run(run(args.baseline, args.candidate))
+    if args.cap is None:
+        print(
+            "--run spends real money and needs an approved cap: pass --cap DOLLARS.",
+            file=sys.stderr,
+        )
+        return 2
+    return asyncio.run(run(args.baseline, args.candidate, args.cap))
 
 
 if __name__ == "__main__":
