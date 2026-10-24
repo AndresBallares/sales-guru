@@ -333,7 +333,7 @@ async def test_run_needs_an_api_key(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("ANTHROPIC_API_KEY", "")
     get_settings.cache_clear()
     try:
-        assert await cmp.run("a", "b") == 2
+        assert await cmp.run("a", "b", cap=0.5) == 2
     finally:
         get_settings.cache_clear()
 
@@ -348,7 +348,7 @@ async def test_run_stops_before_any_evaluation_if_forced_tool_use_is_rejected(
     monkeypatch.setattr(cmp, "probe_forced_tool_use", AsyncMock(return_value="400: no"))
     monkeypatch.setattr(cmp, "evaluate", evaluate)
     try:
-        assert await cmp.run("a", "b") == 1
+        assert await cmp.run("a", "b", cap=0.5) == 1
     finally:
         get_settings.cache_clear()
 
@@ -364,7 +364,7 @@ async def test_run_evaluates_every_scenario_on_both_models_and_reports(
     get_settings.cache_clear()
     calls: list[str] = []
 
-    async def _evaluate(model: str, scenario: Any) -> Any:
+    async def _evaluate(model: str, scenario: Any, ledger: Any = None) -> Any:
         calls.append(model)
         # The candidate disagrees on one scenario, to exercise the report's
         # mismatch and "riskier" branches.
@@ -375,7 +375,7 @@ async def test_run_evaluates_every_scenario_on_both_models_and_reports(
     monkeypatch.setattr(cmp, "probe_forced_tool_use", AsyncMock(return_value=None))
     monkeypatch.setattr(cmp, "evaluate", _evaluate)
     try:
-        assert await cmp.run("base", "cand") == 0
+        assert await cmp.run("base", "cand", cap=0.5) == 0
     finally:
         get_settings.cache_clear()
 
@@ -395,10 +395,224 @@ async def test_run_reports_meeting_the_bar_when_everything_agrees(
     monkeypatch.setattr(cmp, "probe_forced_tool_use", AsyncMock(return_value=None))
     monkeypatch.setattr(cmp, "evaluate", AsyncMock(return_value=_outcome()))
     try:
-        await cmp.run("base", "cand")
+        await cmp.run("base", "cand", cap=0.5)
     finally:
         get_settings.cache_clear()
 
     out = capsys.readouterr().out
     assert "candidate meets it" in out
     assert "CANDIDATE AUTO-APPLIES" not in out
+
+
+# ---------- confidence bands ----------
+
+
+@pytest.mark.parametrize(
+    ("confidence", "band"),
+    [
+        (0.0, "LOW"),
+        (0.49, "LOW"),
+        (0.5, "MEDIUM"),
+        (0.74, "MEDIUM"),
+        (0.75, "HIGH"),
+        (0.89, "HIGH"),
+        (0.9, "AUTO_APPLY"),
+        (1.0, "AUTO_APPLY"),
+    ],
+)
+def test_confidence_bands_end_at_the_apps_auto_apply_threshold(
+    confidence: float, band: str
+) -> None:
+    assert cmp.confidence_band(confidence) == band
+
+
+def test_confidence_agreement_is_about_the_band_not_the_exact_number() -> None:
+    near = cmp.Comparison("s", _outcome(confidence=0.80), _outcome(confidence=0.88))
+    crossing = cmp.Comparison("s", _outcome(confidence=0.88), _outcome(confidence=0.91))
+
+    assert near.same_confidence_band is True
+    assert crossing.same_confidence_band is False
+
+
+def test_the_summary_counts_confidence_band_agreement() -> None:
+    summary = cmp.summarize(_run_of(10))
+
+    assert summary["same_confidence_band"] == 10
+
+
+# ---------- cost and latency ----------
+
+
+def _usage(**overrides: Any) -> Any:
+    fields: dict[str, Any] = {
+        "input_tokens": 1_000_000,
+        "output_tokens": 1_000_000,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+    }
+    fields.update(overrides)
+    return SimpleNamespace(**fields)
+
+
+def test_call_cost_uses_each_models_own_per_million_prices() -> None:
+    assert cmp.call_cost("claude-sonnet-5", _usage()) == pytest.approx(12.0)
+    assert cmp.call_cost("claude-haiku-5-5", _usage()) == pytest.approx(0.60)
+
+
+def test_call_cost_prices_cache_writes_and_reads_differently_from_plain_input() -> None:
+    usage = _usage(
+        input_tokens=0,
+        output_tokens=0,
+        cache_creation_input_tokens=1_000_000,
+        cache_read_input_tokens=1_000_000,
+    )
+
+    assert cmp.call_cost("claude-sonnet-5", usage) == pytest.approx(
+        2.0 * 1.25 + 2.0 * 0.1
+    )
+
+
+def test_call_cost_treats_missing_counters_as_zero() -> None:
+    usage = SimpleNamespace(input_tokens=None, output_tokens=2_000_000)
+
+    assert cmp.call_cost("claude-sonnet-5", usage) == pytest.approx(20.0)
+
+
+def test_an_unpriced_model_is_costed_at_the_baseline_rate_never_as_free() -> None:
+    assert cmp.call_cost("mystery-model", _usage()) == cmp.call_cost(
+        "claude-sonnet-5", _usage()
+    )
+
+
+# ---------- the spend cap ----------
+
+
+def test_the_ledger_adds_up_what_each_call_cost() -> None:
+    ledger = cmp.SpendLedger(cap=1.0)
+
+    ledger.record("claude-sonnet-5", _usage(input_tokens=500_000, output_tokens=0), 1.5)
+    ledger.record("claude-sonnet-5", _usage(input_tokens=500_000, output_tokens=0), 2.5)
+
+    assert ledger.spent == pytest.approx(2.0)
+    assert [c.latency_s for c in ledger.calls] == [1.5, 2.5]
+
+
+def test_the_ledger_refuses_a_call_that_could_cross_the_cap() -> None:
+    ledger = cmp.SpendLedger(cap=0.10, per_call_max=0.03)
+    ledger.record(
+        "claude-sonnet-5", _usage(input_tokens=0, output_tokens=7_000), 1.0
+    )  # $0.07
+
+    ledger.check()  # 0.07 + 0.03 == 0.10, still allowed
+    ledger.record(
+        "claude-sonnet-5", _usage(input_tokens=0, output_tokens=100), 1.0
+    )  # $0.001
+
+    with pytest.raises(cmp.CapReachedError, match="cap"):
+        ledger.check()
+
+
+@pytest.mark.asyncio
+async def test_a_patched_client_records_every_call_and_enforces_the_cap(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from anthropic.resources.messages.messages import AsyncMessages
+
+    response = SimpleNamespace(
+        usage=_usage(input_tokens=1000, output_tokens=100), content=[]
+    )
+    fake = AsyncMock(return_value=response)
+    monkeypatch.setattr(AsyncMessages, "create", fake)
+    ledger = cmp.SpendLedger(cap=0.05, per_call_max=0.03)
+
+    with ledger.patched():
+        await cast(Any, AsyncMessages).create(object(), model="claude-sonnet-5")
+        await cast(Any, AsyncMessages).create(object(), model="claude-sonnet-5")
+
+    assert len(ledger.calls) == 2
+    assert ledger.calls[0].input_tokens == 1000
+    assert ledger.calls[0].output_tokens == 100
+    assert ledger.spent == pytest.approx(2 * (1000 * 2 + 100 * 10) / 1e6)
+    assert AsyncMessages.create is fake  # restored on exit
+
+
+@pytest.mark.asyncio
+async def test_the_patched_client_stops_before_the_call_that_would_cross_the_cap(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from anthropic.resources.messages.messages import AsyncMessages
+
+    fake = AsyncMock()
+    monkeypatch.setattr(AsyncMessages, "create", fake)
+    ledger = cmp.SpendLedger(cap=0.02, per_call_max=0.03)
+
+    with ledger.patched(), pytest.raises(cmp.CapReachedError):
+        await cast(Any, AsyncMessages).create(object(), model="claude-sonnet-5")
+
+    fake.assert_not_awaited()
+
+
+def test_run_requires_an_explicit_cap(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr(sys, "argv", ["x", "--run"])
+
+    assert cmp.main() == 2
+
+    assert "--cap" in capsys.readouterr().err
+
+
+@pytest.mark.asyncio
+async def test_run_stops_and_reports_what_it_has_when_the_cap_is_reached(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    get_settings.cache_clear()
+    monkeypatch.setattr(cmp, "probe_forced_tool_use", AsyncMock(return_value=None))
+    calls = {"n": 0}
+
+    async def _evaluate(model: str, scenario: Any, ledger: Any = None) -> Any:
+        calls["n"] += 1
+        if calls["n"] > 4:  # two scenarios done, the third refused
+            raise cmp.CapReachedError("cap $0.50 reached")
+        return _outcome()
+
+    monkeypatch.setattr(cmp, "evaluate", _evaluate)
+    try:
+        assert await cmp.run("base", "cand", cap=0.5) == 3
+    finally:
+        get_settings.cache_clear()
+
+    out = capsys.readouterr().out
+    assert "STOPPED" in out
+    assert "2 of 10" in out
+    assert "same action     : 2/2" in out
+
+
+def test_the_report_shows_cost_and_latency_per_model(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    def _o(cost: float, latency: float) -> Any:
+        return _outcome(
+            usage=cmp.CallUsage(
+                model="m",
+                input_tokens=1000,
+                output_tokens=200,
+                thinking_tokens=50,
+                cost=cost,
+                latency_s=latency,
+            )
+        )
+
+    comparisons = [
+        cmp.Comparison("s1", _o(0.010, 5.0), _o(0.001, 2.0)),
+        cmp.Comparison("s2", _o(0.012, 6.0), _o(0.002, 3.0)),
+    ]
+
+    cmp.print_report(comparisons, "base", "cand")
+
+    out = capsys.readouterr().out
+    assert "total $0.0220 over 2 calls" in out
+    assert "total $0.0030 over 2 calls" in out
+    assert "mean latency 5.5s" in out and "mean latency 2.5s" in out
+    assert "thinking tokens 100" in out
