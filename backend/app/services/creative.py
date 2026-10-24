@@ -112,6 +112,7 @@ from app.services.tool_use import (
     ToolInputRecoveryError,
     candidate_payloads,
     parse_tool_input,
+    tool_input_schema,
 )
 
 logger = logging.getLogger(__name__)
@@ -1414,7 +1415,7 @@ async def generate_creatives(
                     {
                         "name": _TOOL_NAME,
                         "description": "Submit the generated ad creative variants.",
-                        "input_schema": GeneratedCreativeBatch.model_json_schema(),
+                        "input_schema": tool_input_schema(GeneratedCreativeBatch),
                     }
                 ],
                 tool_choice={"type": "tool", "name": _TOOL_NAME},

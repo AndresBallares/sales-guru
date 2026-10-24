@@ -11,8 +11,12 @@ from typing import Literal
 
 import pytest
 from app.schemas.strategy import GeneratedTestPlanFields
-from app.services.tool_use import ToolInputRecoveryError, parse_tool_input
-from pydantic import BaseModel
+from app.services.tool_use import (
+    ToolInputRecoveryError,
+    parse_tool_input,
+    tool_input_schema,
+)
+from pydantic import BaseModel, Field
 
 
 class _Flat(BaseModel):
@@ -323,3 +327,112 @@ def test_parse_tool_input_leaves_a_clean_strategist_payload_unaffected() -> None
 
     assert result.hypothesis_audience_targeting.interests == ["jewelry", "diamonds"]
     assert result.hypothesis_audience_name == "Gift Seekers"
+
+
+# ---------- tool_input_schema: docstrings are for developers, not the model ----------
+
+
+class _Inner(BaseModel):
+    """Developer note on the inner model: how it is stored, who validates it."""
+
+    label: str = Field(description="What the model should write here.")
+
+
+class _Outer(BaseModel):
+    """Developer note on the outer model: a long history of why it exists."""
+
+    inner: _Inner
+    count: int = Field(description="How many.")
+    plain: str
+
+
+def _descriptions_outside_properties(
+    node: object, in_properties: bool = False
+) -> list[str]:
+    found: list[str] = []
+    if isinstance(node, dict):
+        for key, value in node.items():
+            if key == "description" and not in_properties:
+                found.append(str(value))
+            found += _descriptions_outside_properties(value, key == "properties")
+    elif isinstance(node, list):
+        for item in node:
+            found += _descriptions_outside_properties(item)
+    return found
+
+
+def test_the_full_schema_carries_the_class_docstrings() -> None:
+    """The premise: Pydantic puts every class docstring into the schema."""
+    descriptions = _descriptions_outside_properties(_Outer.model_json_schema())
+
+    assert any("long history" in d for d in descriptions)
+    assert any("how it is stored" in d for d in descriptions)
+
+
+def test_tool_input_schema_drops_class_docstrings_at_every_level() -> None:
+    schema = tool_input_schema(_Outer)
+
+    assert "description" not in schema
+    assert all("description" not in d for d in schema["$defs"].values())
+
+
+def test_tool_input_schema_keeps_the_descriptions_the_model_should_read() -> None:
+    schema = tool_input_schema(_Outer)
+
+    assert schema["properties"]["count"]["description"] == "How many."
+    assert schema["$defs"]["_Inner"]["properties"]["label"]["description"] == (
+        "What the model should write here."
+    )
+
+
+def test_tool_input_schema_changes_nothing_but_those_descriptions() -> None:
+    full = _Outer.model_json_schema()
+    trimmed = tool_input_schema(_Outer)
+
+    full.pop("description")
+    for definition in full["$defs"].values():
+        definition.pop("description")
+
+    assert trimmed == full
+
+
+def test_tool_input_schema_returns_a_fresh_dict_each_time() -> None:
+    first = tool_input_schema(_Outer)
+    first["properties"].clear()
+
+    assert tool_input_schema(_Outer)["properties"]
+
+
+def test_a_model_with_no_docstring_or_definitions_is_handled() -> None:
+    class Bare(BaseModel):
+        x: int
+
+    assert "description" not in tool_input_schema(Bare)
+    assert tool_input_schema(Bare)["properties"]["x"]["type"] == "integer"
+
+
+def test_every_agent_tool_schema_is_trimmed() -> None:
+    """The six schemas the agents send, as the agents build them."""
+    from app.schemas.creative import GeneratedCreativeBatch
+    from app.schemas.optimization import GeneratedRecommendation
+    from app.schemas.strategy import (
+        GeneratedCreativeTestPlanFields,
+        GeneratedDataDrivenStrategyFields,
+        GeneratedTestPlanFields,
+    )
+    from app.schemas.test_evaluation import GeneratedTestEvaluation
+
+    for model in (
+        GeneratedCreativeBatch,
+        GeneratedRecommendation,
+        GeneratedTestEvaluation,
+        GeneratedCreativeTestPlanFields,
+        GeneratedTestPlanFields,
+        GeneratedDataDrivenStrategyFields,
+    ):
+        schema = tool_input_schema(model)
+
+        assert "description" not in schema, model.__name__
+        assert all("description" not in d for d in schema.get("$defs", {}).values()), (
+            model.__name__
+        )

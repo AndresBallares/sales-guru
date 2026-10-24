@@ -52,6 +52,7 @@ error rather than quietly generating an audience with no interests.
 import copy
 import json
 import logging
+from typing import Any
 
 from pydantic import BaseModel, ValidationError
 
@@ -259,6 +260,31 @@ def _recovery_candidates(
     if decoded is not None:
         _add(_unwrap_stray_key(decoded, model))
     return candidates
+
+
+def tool_input_schema(model: type[BaseModel]) -> dict[str, Any]:
+    """The JSON schema to send as a tool's ``input_schema``, without class docstrings.
+
+    Pydantic copies every class docstring into the schema's ``description``, so
+    developer notes (why a field exists, which module validates it, when a
+    behavior was confirmed) went to the model on every call. Measured 2026-10:
+    about 40% of the Creative tool's characters. Only the class-level
+    descriptions are dropped — the top-level one and each ``$defs`` entry's.
+    ``Field(description=...)`` text is deliberate guidance for the model and is
+    kept, and nothing else about the schema changes (types, required fields,
+    constraints), so validation is unaffected.
+
+    Args:
+        model: The Pydantic model the tool call must match.
+
+    Returns:
+        A fresh schema dict.
+    """
+    schema = model.model_json_schema()
+    schema.pop("description", None)
+    for definition in schema.get("$defs", {}).values():
+        definition.pop("description", None)
+    return schema
 
 
 def candidate_payloads(

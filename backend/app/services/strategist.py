@@ -94,7 +94,11 @@ from app.services.brand_voice import brand_voice_lines
 from app.services.llm_usage import create_logged
 from app.services.meta import AccountCampaignInsights
 from app.services.prompt_safety import quarantine
-from app.services.tool_use import ToolInputRecoveryError, parse_tool_input
+from app.services.tool_use import (
+    ToolInputRecoveryError,
+    parse_tool_input,
+    tool_input_schema,
+)
 from app.services.unit_economics import compute_unit_economics
 
 logger = logging.getLogger(__name__)
@@ -1098,7 +1102,7 @@ async def generate_strategy(
         )
         raw = await _call_agent(
             tool_name=_CREATIVE_TEST_PLAN_TOOL_NAME,
-            tool_schema=GeneratedCreativeTestPlanFields.model_json_schema(),
+            tool_schema=tool_input_schema(GeneratedCreativeTestPlanFields),
             prompt=prompt,
             campaign_id=campaign_id,
         )
@@ -1158,7 +1162,7 @@ async def generate_strategy(
         )
         raw = await _call_agent(
             tool_name=_TEST_PLAN_TOOL_NAME,
-            tool_schema=GeneratedTestPlanFields.model_json_schema(),
+            tool_schema=tool_input_schema(GeneratedTestPlanFields),
             prompt=prompt,
             campaign_id=campaign_id,
         )
@@ -1220,7 +1224,7 @@ async def generate_strategy(
     )
     raw = await _call_agent(
         tool_name=_DATA_DRIVEN_STRATEGY_TOOL_NAME,
-        tool_schema=GeneratedDataDrivenStrategyFields.model_json_schema(),
+        tool_schema=tool_input_schema(GeneratedDataDrivenStrategyFields),
         prompt=prompt,
         campaign_id=campaign_id,
     )
