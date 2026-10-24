@@ -4,8 +4,8 @@ Token cost review (2026-10). The routine ``optimizer_eval`` call is small and
 its output is a bounded decision (PAUSE_AD / INCREASE_BUDGET / DECREASE_BUDGET),
 so a smaller model may do it for a fraction of the cost. This script answers
 "does it make the same decisions?" on 10 fixed scenarios before anything is
-switched. It changes nothing in the app: it only reads ``optimizer._MODEL`` for
-the duration of a run.
+switched. It changes nothing in the app: it only overrides the
+``OPTIMIZER_EVAL_MODEL`` setting for the duration of each call.
 
 It is inert by default. Without ``--run`` it prints the plan and an estimated
 cost and makes NO API calls. ``--run`` spends real money (20 calls plus the
@@ -39,6 +39,7 @@ Usage:
 
 import argparse
 import asyncio
+import os
 import sys
 import time
 from collections.abc import Iterator
@@ -516,6 +517,22 @@ async def probe_forced_tool_use(model: str) -> str | None:
     return None
 
 
+@contextmanager
+def _eval_model(model: str) -> Iterator[None]:
+    """Point the routine-evaluation model setting at ``model``, then restore it."""
+    previous = os.environ.get("OPTIMIZER_EVAL_MODEL")
+    os.environ["OPTIMIZER_EVAL_MODEL"] = model
+    get_settings.cache_clear()
+    try:
+        yield
+    finally:
+        if previous is None:
+            os.environ.pop("OPTIMIZER_EVAL_MODEL", None)
+        else:
+            os.environ["OPTIMIZER_EVAL_MODEL"] = previous
+        get_settings.cache_clear()
+
+
 async def evaluate(
     model: str, scenario: Scenario, ledger: SpendLedger | None = None
 ) -> Outcome:
@@ -525,8 +542,6 @@ async def evaluate(
     before any money is spent) and its cost, tokens and latency come back on the
     outcome.
     """
-    original = optimizer._MODEL
-    optimizer._MODEL = model
     seen = len(ledger.calls) if ledger is not None else 0
 
     async def _call() -> RecommendationResult:
@@ -543,14 +558,12 @@ async def evaluate(
             ads=build_ads(scenario),
         )
 
-    try:
+    with _eval_model(model):
         if ledger is None:
             result = await _call()
         else:
             with ledger.patched():
                 result = await _call()
-    finally:
-        optimizer._MODEL = original
     outcome = outcome_of(result)
     if ledger is not None and len(ledger.calls) > seen:
         outcome = replace(outcome, usage=ledger.calls[-1])

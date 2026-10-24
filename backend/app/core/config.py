@@ -23,6 +23,19 @@ class Settings(BaseSettings):
         anthropic_api_key: Key for the Marketing Strategist Agent's LLM
             calls (PRD.md §6). None until set — endpoints that need it
             raise a clear error rather than the app failing to start.
+        strategist_model: Model for the Marketing Strategist Agent's plans
+            (env `STRATEGIST_MODEL`).
+        creative_model: Model for the Creative Agent, batches and single-slot
+            regenerates (env `CREATIVE_MODEL`).
+        optimizer_eval_model: Model for the Optimizer's routine evaluation,
+            the recommendation call that runs about daily per live campaign
+            (env `OPTIMIZER_EVAL_MODEL`). Haiku 5.5: on a 10-input comparison
+            with Sonnet 5 it agreed on the action 9 of 10 times and on the
+            auto-apply outcome 10 of 10, was more cautious on risk, and cost
+            about a twentieth as much (PRD.md step 10).
+        optimizer_test_eval_model: Model for the Optimizer's TEST_PLAN
+            evaluation, a longer judgment that stays on Sonnet 5
+            (env `OPTIMIZER_TEST_EVAL_MODEL`).
         frontend_url: Base URL of the SPA. Only used to build the browser
             redirect target at the end of the Meta OAuth callback (the
             callback is hit directly by Meta, not via the frontend's own
@@ -104,6 +117,10 @@ class Settings(BaseSettings):
     database_url: str = "file:./dev.db"
     cors_origins: str = "http://localhost:5173"
     anthropic_api_key: str | None = None
+    strategist_model: str = "claude-sonnet-5"
+    creative_model: str = "claude-sonnet-5"
+    optimizer_eval_model: str = "claude-haiku-5-5"
+    optimizer_test_eval_model: str = "claude-sonnet-5"
     frontend_url: str = "http://localhost:5173"
     backend_url: str = "http://localhost:8000"
     meta_app_id: str | None = None

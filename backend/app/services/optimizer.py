@@ -46,7 +46,6 @@ from app.services.benchmarks import JEWELRY_META_BENCHMARKS, classify_performanc
 from app.services.llm_usage import create_logged
 from app.services.tool_use import tool_input_schema
 
-_MODEL: str = "claude-sonnet-5"
 _MAX_TOKENS = 1024
 _TOOL_NAME = "submit_recommendation"
 _TEST_EVALUATION_TOOL_NAME = "submit_test_evaluation"
@@ -514,7 +513,7 @@ async def generate_recommendation(
             agent="optimizer",
             call_type="optimizer_eval",
             campaign_id=campaign.id,
-            model=_MODEL,
+            model=settings.optimizer_eval_model,
             max_tokens=_MAX_TOKENS,
             tools=[
                 {
@@ -1090,7 +1089,7 @@ async def evaluate_test_plan(
                 call_type="test_eval",
                 campaign_id=campaign.id,
                 attempt=attempt,
-                model=_MODEL,
+                model=settings.optimizer_test_eval_model,
                 max_tokens=_MAX_TOKENS,
                 tools=[
                     {

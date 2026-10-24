@@ -163,3 +163,44 @@ def test_dashboard_sample_data_in_production_refuses_to_construct(
 
     with pytest.raises(ValueError, match="DASHBOARD_SAMPLE_DATA must never be enabled"):
         Settings(_env_file=None)
+
+
+# ── Per-agent-call models ──
+
+
+def test_each_agent_call_has_its_own_model_setting_with_the_chosen_defaults(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Optimizer routine evaluations run on Haiku 5.5 (9/10 action and 10/10
+    auto-apply agreement with Sonnet, at about a twentieth of the cost);
+    everything else stays on Sonnet 5."""
+    for name in (
+        "STRATEGIST_MODEL",
+        "CREATIVE_MODEL",
+        "OPTIMIZER_EVAL_MODEL",
+        "OPTIMIZER_TEST_EVAL_MODEL",
+    ):
+        monkeypatch.delenv(name, raising=False)
+
+    settings = Settings(_env_file=None)
+
+    assert settings.optimizer_eval_model == "claude-haiku-5-5"
+    assert settings.optimizer_test_eval_model == "claude-sonnet-5"
+    assert settings.strategist_model == "claude-sonnet-5"
+    assert settings.creative_model == "claude-sonnet-5"
+
+
+def test_each_model_can_be_overridden_from_the_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("OPTIMIZER_EVAL_MODEL", "claude-sonnet-5")
+    monkeypatch.setenv("OPTIMIZER_TEST_EVAL_MODEL", "claude-haiku-5-5")
+    monkeypatch.setenv("STRATEGIST_MODEL", "model-a")
+    monkeypatch.setenv("CREATIVE_MODEL", "model-b")
+
+    settings = Settings(_env_file=None)
+
+    assert settings.optimizer_eval_model == "claude-sonnet-5"
+    assert settings.optimizer_test_eval_model == "claude-haiku-5-5"
+    assert settings.strategist_model == "model-a"
+    assert settings.creative_model == "model-b"

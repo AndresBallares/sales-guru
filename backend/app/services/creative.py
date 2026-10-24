@@ -117,7 +117,6 @@ from app.services.tool_use import (
 
 logger = logging.getLogger(__name__)
 
-_MODEL = "claude-sonnet-5"
 # Four variants x {headline, body_text, description, cta, creative_angle}
 # (plus per-card copy for a carousel) is a lot of real content — 4096 was
 # occasionally too tight and truncated mid-JSON (confirmed 2026-09-09,
@@ -1409,7 +1408,7 @@ async def generate_creatives(
                 call_type=call_type,
                 campaign_id=campaign_id,
                 attempt=attempt,
-                model=_MODEL,
+                model=settings.creative_model,
                 max_tokens=_MAX_TOKENS,
                 system=[system_block],
                 tools=[

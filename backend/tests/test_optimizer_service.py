@@ -1009,6 +1009,79 @@ async def test_evaluate_test_plan_raises_without_an_api_key(
 
 
 @pytest.mark.asyncio
+async def test_the_routine_evaluation_runs_on_haiku_and_the_test_evaluation_on_sonnet(
+    anthropic_api_key: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Chosen from the 10-input comparison (PRD.md step 10): the routine call is
+    a small bounded decision; the test evaluation is a longer judgment."""
+    monkeypatch.delenv("OPTIMIZER_EVAL_MODEL", raising=False)
+    monkeypatch.delenv("OPTIMIZER_TEST_EVAL_MODEL", raising=False)
+    get_settings.cache_clear()
+    create = _sequenced(monkeypatch, _VALID_TOOL_INPUT, _VALID_TEST_EVALUATION_INPUT)
+
+    await optimizer.generate_recommendation(
+        business=_fake_business(),
+        campaign=_fake_campaign(),
+        ad_set=_fake_ad_set(budget=50.0),
+        windows=[],
+    )
+    await _evaluate()
+
+    models = [call.kwargs["model"] for call in create.call_args_list]
+    assert models == ["claude-haiku-5-5", "claude-sonnet-5"]
+
+
+@pytest.mark.asyncio
+async def test_the_optimizer_models_follow_the_settings(
+    anthropic_api_key: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("OPTIMIZER_EVAL_MODEL", "eval-model")
+    monkeypatch.setenv("OPTIMIZER_TEST_EVAL_MODEL", "test-eval-model")
+    get_settings.cache_clear()
+    create = _sequenced(monkeypatch, _VALID_TOOL_INPUT, _VALID_TEST_EVALUATION_INPUT)
+
+    await optimizer.generate_recommendation(
+        business=_fake_business(),
+        campaign=_fake_campaign(),
+        ad_set=_fake_ad_set(budget=50.0),
+        windows=[],
+    )
+    await _evaluate()
+
+    models = [call.kwargs["model"] for call in create.call_args_list]
+    assert models == ["eval-model", "test-eval-model"]
+
+
+@pytest.mark.asyncio
+async def test_the_usage_log_records_which_model_each_optimizer_call_used(
+    anthropic_api_key: None,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    import logging
+
+    monkeypatch.delenv("OPTIMIZER_EVAL_MODEL", raising=False)
+    monkeypatch.delenv("OPTIMIZER_TEST_EVAL_MODEL", raising=False)
+    get_settings.cache_clear()
+    _sequenced(monkeypatch, _VALID_TOOL_INPUT, _VALID_TEST_EVALUATION_INPUT)
+
+    with caplog.at_level(logging.INFO, logger="app.services.llm_usage"):
+        await optimizer.generate_recommendation(
+            business=_fake_business(),
+            campaign=_fake_campaign(),
+            ad_set=_fake_ad_set(budget=50.0),
+            windows=[],
+        )
+        await _evaluate()
+
+    lines = [r.getMessage() for r in caplog.records if "llm_usage" in r.getMessage()]
+    assert "call_type=optimizer_eval" in lines[0]
+    assert "model=claude-haiku-5-5" in lines[0]
+    assert "call_type=test_eval" in lines[1]
+    assert "model=claude-sonnet-5" in lines[1]
+
+
+@pytest.mark.asyncio
 async def test_both_optimizer_calls_log_their_usage_per_campaign(
     anthropic_api_key: None,
     monkeypatch: pytest.MonkeyPatch,
