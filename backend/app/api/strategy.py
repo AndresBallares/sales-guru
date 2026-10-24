@@ -215,6 +215,7 @@ async def create_strategy(
                 if body is not None and body.test_format == "VIDEO"
                 else "SINGLE_IMAGE"
             ),
+            campaign_id=campaign.id,
         )
     except StrategistError as exc:
         raise HTTPException(

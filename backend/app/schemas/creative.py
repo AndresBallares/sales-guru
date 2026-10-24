@@ -164,8 +164,6 @@ class GeneratedCreativeVariant(CamelCaseModel):
     description: str | None = None
     cta: CtaType
     creative_angle: str
-    image_prompt: str
-    video_prompt: str
     # None for a SINGLE_IMAGE variant. For a CAROUSEL variant, one card
     # per attached product photo (see generate_creatives) — body_text/cta
     # above stay shared across all of this variant's cards; each card
@@ -253,7 +251,14 @@ class GeneratedCreativeVariant(CamelCaseModel):
 
 
 class GeneratedCreativeBatch(CamelCaseModel):
-    """The full tool-call payload: exactly _VARIANT_COUNT variants (A-D).
+    """The full tool-call payload: the requested number of variants (A-D).
+
+    The schema allows 1 to _VARIANT_COUNT variants, and the validation
+    context's ``variant_count`` (default _VARIANT_COUNT) says how many this
+    call asked for. One schema serves both a full batch and a single-slot
+    regenerate, so the tool definition — the first thing in the cached
+    prompt prefix — is identical between them. The count is still enforced
+    exactly, by ``_check_variant_count``, not left to the model.
 
     Two independent groups of cross-variant rules, both confirmed with the
     user 2026-09-12:
@@ -287,8 +292,24 @@ class GeneratedCreativeBatch(CamelCaseModel):
     """
 
     variants: list[GeneratedCreativeVariant] = Field(
-        min_length=_VARIANT_COUNT, max_length=_VARIANT_COUNT
+        min_length=1, max_length=_VARIANT_COUNT
     )
+
+    @model_validator(mode="after")
+    def _check_variant_count(self, info: ValidationInfo) -> Self:
+        """Exactly the requested number of variants, _VARIANT_COUNT by default.
+
+        Unconditional like the length limits: it holds during _coerce_batch's
+        structural re-check too, which passes only the count as context.
+        """
+        context = info.context or {}
+        expected = context.get("variant_count", _VARIANT_COUNT)
+        if len(self.variants) != expected:
+            raise ValueError(
+                f"Expected exactly {expected} variant{'s' if expected != 1 else ''}; "
+                f"got {len(self.variants)}"
+            )
+        return self
 
     @model_validator(mode="after")
     def _check_shared_cta_and_distinct_angles(self) -> Self:

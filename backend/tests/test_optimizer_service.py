@@ -1009,6 +1009,61 @@ async def test_evaluate_test_plan_raises_without_an_api_key(
 
 
 @pytest.mark.asyncio
+async def test_both_optimizer_calls_log_their_usage_per_campaign(
+    anthropic_api_key: None,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A routine evaluation and a test evaluation are logged as different
+    call types, each tagged with the campaign — the basis for averages."""
+    import logging
+
+    usage = SimpleNamespace(
+        input_tokens=640,
+        output_tokens=210,
+        cache_creation_input_tokens=0,
+        cache_read_input_tokens=0,
+        output_tokens_details=SimpleNamespace(thinking_tokens=120),
+    )
+    responses = [
+        SimpleNamespace(
+            content=[SimpleNamespace(type="tool_use", input=_VALID_TOOL_INPUT)],
+            usage=usage,
+            stop_reason="tool_use",
+        ),
+        SimpleNamespace(
+            content=[
+                SimpleNamespace(type="tool_use", input=_VALID_TEST_EVALUATION_INPUT)
+            ],
+            usage=usage,
+            stop_reason="tool_use",
+        ),
+    ]
+    create = AsyncMock(side_effect=responses)
+    client = SimpleNamespace(messages=SimpleNamespace(create=create))
+    monkeypatch.setattr(optimizer, "AsyncAnthropic", lambda **_kwargs: client)
+
+    with caplog.at_level(logging.INFO, logger="app.services.llm_usage"):
+        await optimizer.generate_recommendation(
+            business=_fake_business(),
+            campaign=_fake_campaign(),
+            ad_set=_fake_ad_set(budget=50.0),
+            windows=[],
+        )
+        await optimizer.evaluate_test_plan(
+            business=_fake_business(),
+            campaign=_fake_campaign(),
+            test_plan=_fake_test_plan(),
+            latest_metric=_fake_metric(),
+        )
+
+    lines = [r.getMessage() for r in caplog.records if "llm_usage" in r.getMessage()]
+    assert "agent=optimizer call_type=optimizer_eval campaign_id=camp-1" in lines[0]
+    assert "agent=optimizer call_type=test_eval campaign_id=camp-1" in lines[1]
+    assert all("thinking_tokens=120" in line for line in lines)
+
+
+@pytest.mark.asyncio
 async def test_evaluate_test_plan_returns_the_parsed_evaluation(
     anthropic_api_key: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -42,8 +42,9 @@ from app.schemas.optimization import GeneratedRecommendation
 from app.schemas.strategy import SuccessCriterion, TestPlanContent, UnitEconomicsFields
 from app.schemas.test_evaluation import Confidence, GeneratedTestEvaluation
 from app.services.benchmarks import JEWELRY_META_BENCHMARKS, classify_performance_zone
+from app.services.llm_usage import create_logged
 
-_MODEL = "claude-sonnet-5"
+_MODEL: str = "claude-sonnet-5"
 _MAX_TOKENS = 1024
 _TOOL_NAME = "submit_recommendation"
 _TEST_EVALUATION_TOOL_NAME = "submit_test_evaluation"
@@ -506,7 +507,11 @@ async def generate_recommendation(
     prompt = _build_prompt(business, campaign, ad_set, windows, ads)
 
     try:
-        response = await client.messages.create(
+        response = await create_logged(
+            client,
+            agent="optimizer",
+            call_type="optimizer_eval",
+            campaign_id=campaign.id,
             model=_MODEL,
             max_tokens=_MAX_TOKENS,
             tools=[
@@ -1076,7 +1081,11 @@ async def evaluate_test_plan(
     )
 
     try:
-        response = await client.messages.create(
+        response = await create_logged(
+            client,
+            agent="optimizer",
+            call_type="test_eval",
+            campaign_id=campaign.id,
             model=_MODEL,
             max_tokens=_MAX_TOKENS,
             tools=[

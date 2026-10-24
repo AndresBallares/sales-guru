@@ -695,9 +695,152 @@ async def test_data_driven_prompt_recommends_a_carousel_as_a_separate_experiment
     )
 
     assert create.await_args is not None
-    prompt = str(create.await_args.kwargs["messages"][0]["content"])
+    kwargs = create.await_args.kwargs
+    prompt = kwargs["system"][0]["text"] + str(kwargs["messages"][0]["content"])
     assert "recommend a carousel as a subsequent experiment" in prompt
     assert "every ad a carousel" in prompt
+
+
+# ── Static-first prompts: the fixed half is a cached system block ──
+
+
+def _plan_builders() -> list[tuple[str, Any]]:
+    business, product = _fake_business(), _fake_product()
+    return [
+        (
+            "test_plan",
+            lambda b=business: strategist._build_test_plan_prompt(
+                b, product, None, "SALES", None, 50.0, 10
+            ),
+        ),
+        (
+            "creative_test_plan",
+            lambda b=business: strategist._build_creative_test_plan_prompt(
+                b,
+                product,
+                None,
+                "SALES",
+                None,
+                50.0,
+                10,
+                "PURCHASE",
+                None,
+                "SINGLE_IMAGE",
+            ),
+        ),
+        (
+            "data_driven",
+            lambda b=business: strategist._build_data_driven_strategy_prompt(
+                b, product, None, "SALES", None, [], None
+            ),
+        ),
+    ]
+
+
+@pytest.mark.parametrize("name", ["test_plan", "creative_test_plan", "data_driven"])
+def test_every_plan_prompt_puts_its_fixed_instructions_before_the_request(
+    name: str,
+) -> None:
+    prompt = dict(_plan_builders())[name]()
+    instructions, marker, request = prompt.partition(strategist._REQUEST_MARKER)
+
+    assert marker
+    assert "Acme Jewelry" not in instructions
+    assert "Campaign objective: SALES" in request
+    assert "Acme Jewelry" in request
+    assert "Submit your" in instructions
+
+
+@pytest.mark.parametrize("name", ["test_plan", "creative_test_plan", "data_driven"])
+def test_the_fixed_instructions_do_not_change_with_the_request(name: str) -> None:
+    """Same plan type, different business: identical cached prefix."""
+    build = dict(_plan_builders())[name]
+    other = _fake_business(name="Completely Different Co")
+
+    first = build().partition(strategist._REQUEST_MARKER)[0]
+    second = build(other).partition(strategist._REQUEST_MARKER)[0]
+
+    assert first == second
+
+
+@pytest.mark.asyncio
+async def test_call_agent_sends_the_fixed_half_as_a_cached_system_block(
+    anthropic_api_key: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    create = _mock_client_returning(
+        monkeypatch,
+        [SimpleNamespace(type="tool_use", input=_VALID_DATA_DRIVEN_STRATEGY_INPUT)],
+    )
+
+    await strategist.generate_strategy(
+        business=_fake_business(),
+        product=_fake_product(),
+        audience=_fake_audience(),
+        objective="SALES",
+        plan_type="DATA_DRIVEN_STRATEGY",
+        campaign_id="camp_7",
+    )
+
+    assert create.await_args is not None
+    kwargs = create.await_args.kwargs
+    assert kwargs["system"][0]["cache_control"] == {"type": "ephemeral"}
+    assert "Acme Jewelry" not in kwargs["system"][0]["text"]
+    user = kwargs["messages"][0]["content"]
+    assert user.startswith(strategist._REQUEST_MARKER)
+    assert "Acme Jewelry" in user
+
+
+@pytest.mark.asyncio
+async def test_call_agent_sends_a_marker_less_prompt_whole_with_no_system_block(
+    anthropic_api_key: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    create = _mock_client_returning(
+        monkeypatch, [SimpleNamespace(type="tool_use", input={"a": 1})]
+    )
+
+    await strategist._call_agent(
+        tool_name="submit_strategy", tool_schema={"type": "object"}, prompt="plain"
+    )
+
+    assert create.await_args is not None
+    kwargs = create.await_args.kwargs
+    assert "system" not in kwargs or not kwargs["system"]
+    assert kwargs["messages"][0]["content"] == "plain"
+
+
+@pytest.mark.asyncio
+async def test_a_truncated_response_is_logged_as_a_retry(
+    anthropic_api_key: None,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    import logging
+
+    usage = SimpleNamespace(input_tokens=10, output_tokens=8192)
+    truncated = SimpleNamespace(content=[], stop_reason="max_tokens", usage=usage)
+    complete = SimpleNamespace(
+        content=[SimpleNamespace(type="tool_use", input={"a": 1})],
+        stop_reason="tool_use",
+        usage=usage,
+    )
+    create = AsyncMock(side_effect=[truncated, complete])
+    client = SimpleNamespace(messages=SimpleNamespace(create=create))
+    monkeypatch.setattr(strategist, "AsyncAnthropic", lambda **_kwargs: client)
+
+    with caplog.at_level(logging.INFO, logger="app.services.llm_usage"):
+        await strategist._call_agent(
+            tool_name="submit_strategy",
+            tool_schema={"type": "object"},
+            prompt="plain",
+            campaign_id="camp_3",
+        )
+
+    lines = [r.getMessage() for r in caplog.records if "llm_usage" in r.getMessage()]
+    assert len(lines) == 2
+    assert all("agent=strategist call_type=strategy" in x for x in lines)
+    assert all("campaign_id=camp_3" in x for x in lines)
+    assert "attempt=1 retry=false" in lines[0]
+    assert "attempt=2 retry=true" in lines[1]
 
 
 @pytest.fixture

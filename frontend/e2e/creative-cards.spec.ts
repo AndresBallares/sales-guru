@@ -14,29 +14,27 @@ async function reachCreativeChoices(page: Page) {
   await expect(page.getByRole('heading', { name: 'Choose your ad creative' })).toBeVisible()
 }
 
-test('shows the creatives as cards with details tucked away, and passes the axe checks', async ({
+test('shows the creatives as cards with editing tucked away, and passes the axe checks', async ({
   page,
 }) => {
   await reachCreativeChoices(page)
   const cards = page.getByRole('article')
   expect(await cards.count()).toBeGreaterThan(1)
 
-  const toggle = cards.first().getByRole('button', { name: 'Creative details' })
-  await expect(toggle).toHaveAttribute('aria-expanded', 'false')
-  await toggle.click()
-  await expect(toggle).toHaveAttribute('aria-expanded', 'true')
-  await expect(cards.nth(1).getByRole('button', { name: 'Creative details' })).toHaveAttribute(
+  // New creatives carry no image/video prompts (they are no longer generated), so there is no
+  // "Creative details" section to open; it only appears for older creatives that have them.
+  await expect(page.getByRole('button', { name: 'Creative details' })).toHaveCount(0)
+
+  // The editing controls are in their own collapsed section, one per card.
+  const edit = cards.first().getByRole('button', { name: 'Edit creative' })
+  await expect(edit).toHaveAttribute('aria-expanded', 'false')
+  await expect(cards.nth(1).getByRole('button', { name: 'Edit creative' })).toHaveAttribute(
     'aria-expanded',
     'false',
   )
-
-  // The editing controls are in their own collapsed section, independent of the details.
-  const edit = cards.first().getByRole('button', { name: 'Edit creative' })
-  await expect(edit).toHaveAttribute('aria-expanded', 'false')
   await expect(cards.first().getByRole('button', { name: 'Regenerate headline' })).toHaveCount(0)
   await edit.click()
   await expect(edit).toHaveAttribute('aria-expanded', 'true')
-  await expect(toggle).toHaveAttribute('aria-expanded', 'true')
   await expect(cards.first().getByRole('button', { name: 'Regenerate headline' })).toBeVisible()
 
   // Automated WCAG 2.x A/AA rules (not a full audit).
@@ -63,7 +61,6 @@ for (const width of [320, 375, 430]) {
   test(`has no horizontal scroll and 48px actions at ${width}px`, async ({ page }) => {
     await page.setViewportSize({ width, height: 900 })
     await reachCreativeChoices(page)
-    await page.getByRole('button', { name: 'Creative details' }).first().click()
     await page.getByRole('button', { name: 'Edit creative' }).first().click()
 
     const overflow = await page.evaluate(
@@ -72,7 +69,7 @@ for (const width of [320, 375, 430]) {
     expect(overflow).toBeLessThanOrEqual(0)
     const button = page.getByRole('button', { name: 'Continue with this creative' }).first()
     expect((await button.boundingBox())?.height).toBeGreaterThanOrEqual(48)
-    const toggle = page.getByRole('button', { name: 'Creative details' }).first()
+    const toggle = page.getByRole('button', { name: 'Edit creative' }).first()
     expect((await toggle.boundingBox())?.height).toBeGreaterThanOrEqual(44)
   })
 }
