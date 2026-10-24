@@ -261,6 +261,26 @@ def _recovery_candidates(
     return candidates
 
 
+def candidate_payloads(
+    raw: dict[str, object], model: type[BaseModel]
+) -> list[dict[str, object]]:
+    """The raw input followed by each reshaping parse_tool_input would try.
+
+    For callers that need to look inside a response the same way the parser
+    does — notably to repair a batch that is wrapped under a stray key AND
+    invalid, where parse_tool_input raises the original, misleading error about
+    the wrapper rather than the real problem inside it.
+
+    Args:
+        raw: The tool call's raw input.
+        model: The Pydantic model it was supposed to match.
+
+    Returns:
+        ``raw`` first, then every recovery candidate that differs from it.
+    """
+    return [raw, *(c for c in _recovery_candidates(raw, model) if c != raw)]
+
+
 def parse_tool_input[ModelT: BaseModel](
     raw: dict[str, object],
     model: type[ModelT],

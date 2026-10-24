@@ -663,11 +663,34 @@ def _sequenced_client(
 async def test_generate_creatives_coerces_a_disallowed_cta_to_the_objective_default(
     anthropic_api_key: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A SALES campaign (_FAKE_STRATEGY.objective) that keeps coming back
-    with LEARN_MORE — not in SALES's allowed {SHOP_NOW, GET_OFFER} — is
-    coerced to SHOP_NOW (SALES's default) after a failed retry, rather
-    than failing generation outright."""
+    """A SALES campaign (_FAKE_STRATEGY.objective) that comes back with
+    LEARN_MORE — not in SALES's allowed {SHOP_NOW, GET_OFFER} — is set to
+    SHOP_NOW (SALES's default) locally, with no paid retry (see
+    tests/test_creative_repair.py); a retry that also fails still ends in
+    _coerce_batch, covered below."""
     bad_batch = _batch_with("LEARN_MORE")
+    create = _sequenced_client(monkeypatch, bad_batch)
+
+    result = await creative.generate_creatives(
+        business=_fake_business(), product=_fake_product(), strategy=_FAKE_STRATEGY
+    )
+
+    assert create.call_count == 1
+    assert {v.cta for v in result} == {"SHOP_NOW"}
+
+
+@pytest.mark.asyncio
+async def test_a_retry_that_also_fails_is_still_coerced_and_told_what_was_wrong(
+    anthropic_api_key: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The fallback behind the local repair: a response the repair cannot fix
+    (an over-length headline next to a bad CTA) takes the one retry, whose
+    prompt names the problem, and a second failure is coerced rather than
+    raised."""
+    bad_batch = _batch_with("LEARN_MORE")
+    bad_batch["variants"][0]["headline"] = (
+        "Handcrafted gold rings with a ceramic inlay that never fades"
+    )
     create = _sequenced_client(monkeypatch, bad_batch, bad_batch)
 
     result = await creative.generate_creatives(
@@ -676,9 +699,9 @@ async def test_generate_creatives_coerces_a_disallowed_cta_to_the_objective_defa
 
     assert create.call_count == 2
     assert {v.cta for v in result} == {"SHOP_NOW"}
-    # The retry prompt actually told the model what it got wrong.
     retry_text = create.call_args.kwargs["messages"][0]["content"]
-    assert "not allowed for objective" in retry_text
+    assert "headline is" in retry_text
+    assert "(max 40)" in retry_text
 
 
 # ---------- Part 5(b): GET_OFFER needs a non-empty standing offer ----------
@@ -689,10 +712,10 @@ async def test_generate_creatives_coerces_get_offer_with_no_standing_offer(
     anthropic_api_key: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """GET_OFFER is otherwise in SALES's allowed set, but is still
-    coerced away when the business has no standing promotion
+    repaired away when the business has no standing promotion
     (BrandProfile.offer) set at all."""
     offer_batch = _batch_with("GET_OFFER")
-    create = _sequenced_client(monkeypatch, offer_batch, offer_batch)
+    create = _sequenced_client(monkeypatch, offer_batch)
 
     result = await creative.generate_creatives(
         business=_fake_business(),
@@ -701,7 +724,7 @@ async def test_generate_creatives_coerces_get_offer_with_no_standing_offer(
         brand_profile=_fake_brand_profile(offer=None),
     )
 
-    assert create.call_count == 2
+    assert create.call_count == 1
     assert {v.cta for v in result} == {"SHOP_NOW"}
 
 
@@ -709,10 +732,10 @@ async def test_generate_creatives_coerces_get_offer_with_no_standing_offer(
 async def test_generate_creatives_coerces_get_offer_when_primary_text_omits_it(
     anthropic_api_key: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A standing offer exists, but GET_OFFER is still coerced away if the
+    """A standing offer exists, but GET_OFFER is still repaired away if the
     primary text never actually mentions it."""
     offer_batch = _batch_with("GET_OFFER")
-    create = _sequenced_client(monkeypatch, offer_batch, offer_batch)
+    create = _sequenced_client(monkeypatch, offer_batch)
 
     result = await creative.generate_creatives(
         business=_fake_business(),
@@ -721,7 +744,7 @@ async def test_generate_creatives_coerces_get_offer_when_primary_text_omits_it(
         brand_profile=_fake_brand_profile(offer="20% off first order with WELCOME20"),
     )
 
-    assert create.call_count == 2
+    assert create.call_count == 1
     assert {v.cta for v in result} == {"SHOP_NOW"}
 
 

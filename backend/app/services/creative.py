@@ -93,6 +93,7 @@ from app.schemas.creative import (
     GeneratedCreativeBatch,
     GeneratedCreativeCard,
     GeneratedCreativeVariant,
+    offer_mentioned,
 )
 from app.schemas.product_image import MAX_VIDEO_BYTES, MAX_VIDEO_SECONDS
 from app.schemas.strategy import (
@@ -107,7 +108,11 @@ from app.services.creative_naming import angle_label
 from app.services.llm_usage import CallType, create_logged
 from app.services.media_info import is_square
 from app.services.prompt_safety import quarantine
-from app.services.tool_use import ToolInputRecoveryError, parse_tool_input
+from app.services.tool_use import (
+    ToolInputRecoveryError,
+    candidate_payloads,
+    parse_tool_input,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -928,6 +933,121 @@ def _build_prompt(
     return "\n".join(lines)
 
 
+class Repair(NamedTuple):
+    """One deterministic fix applied to a response before validating it again.
+
+    Attributes:
+        field: ``cta`` or ``body_text``.
+        variant: 1-based variant number for a per-variant field, None for the
+            batch-wide CTA.
+        before: The value (a CTA list, or a text) before the fix.
+        after: The value after it.
+    """
+
+    field: str
+    variant: int | None
+    before: str
+    after: str
+
+
+def _repair_target_cta(
+    objective: Objective, standing_offer: str | None, bodies: list[str]
+) -> CtaType:
+    """The one CTA a mixed or invalid batch is set to.
+
+    GET_OFFER only when this objective allows it, the business has a standing
+    promotion and every variant's primary text mentions it (the same bar the
+    validator holds GET_OFFER to); otherwise the objective's default.
+    """
+    if (
+        "GET_OFFER" in ALLOWED_CTAS_BY_OBJECTIVE.get(objective, set())
+        and standing_offer
+        and all(offer_mentioned(standing_offer, body) for body in bodies)
+    ):
+        return "GET_OFFER"
+    return DEFAULT_CTA_BY_OBJECTIVE.get(objective, "LEARN_MORE")
+
+
+def _repair_batch(
+    raw: dict[str, object], objective: Objective, standing_offer: str | None
+) -> tuple[dict[str, object], list[Repair]] | None:
+    """Fix the two things a first attempt most often gets wrong, with no model call.
+
+    Measured against the real API (2026-10): about 4 in 6 first attempts failed
+    validation on mixed CTAs (GET_OFFER on the offer-angle variant, SHOP_NOW on
+    the rest) or on primary text a few characters past the limit, and a paid
+    retry then often failed the same way.
+
+    * Primary text over the limit is trimmed to its last complete sentence, but
+      only if at least ~60 characters survive; otherwise nothing is repaired and
+      the caller takes its retry, as before.
+    * Mixed CTAs, a CTA the objective forbids, or GET_OFFER without a
+      qualifying promotion are all set to the one CTA _repair_target_cta picks.
+      The text is repaired first, so the GET_OFFER check sees the final text.
+
+    Nothing else is touched (a long headline, engagement bait, a wrong variant
+    count all still go to the retry), and the result is validated again by the
+    caller, so a repair can never let an invalid batch through.
+
+    Args:
+        raw: The model's tool input.
+        objective: The campaign's objective, for the allowed and default CTAs.
+        standing_offer: BrandProfile.offer, if any.
+
+    Returns:
+        The repaired copy and what changed, or None when there is nothing to
+        repair or a long text cannot be trimmed safely.
+    """
+    # The model sometimes wraps its answer under a stray key; parse_tool_input
+    # unwraps it, so repair what is inside rather than the wrapper.
+    payload = next(
+        (
+            candidate
+            for candidate in candidate_payloads(raw, GeneratedCreativeBatch)
+            if isinstance(candidate.get("variants"), list)
+            and candidate["variants"]
+            and all(
+                isinstance(v, dict) for v in cast(list[object], candidate["variants"])
+            )
+        ),
+        None,
+    )
+    if payload is None:
+        return None
+    fixed = copy.deepcopy(payload)
+    rows = cast(list[dict[str, object]], fixed["variants"])
+    repairs: list[Repair] = []
+
+    for number, row in enumerate(rows, start=1):
+        body = row.get("bodyText")
+        if not isinstance(body, str) or len(body) <= MAX_BODY_TEXT_LENGTH:
+            continue
+        trimmed = _trim_to_last_sentence(body.strip(), MAX_BODY_TEXT_LENGTH)
+        if trimmed is None or len(trimmed) < _MIN_TRIMMED_BODY_LENGTH:
+            return None
+        row["bodyText"] = trimmed
+        repairs.append(Repair("body_text", number, body, trimmed))
+
+    ctas = [row.get("cta") for row in rows]
+    bodies = [str(row.get("bodyText", "")) for row in rows]
+    allowed: set[CtaType] | frozenset[CtaType] = ALLOWED_CTAS_BY_OBJECTIVE.get(
+        objective, set()
+    )
+    target = _repair_target_cta(objective, standing_offer, bodies)
+    unqualified_get_offer = set(ctas) == {"GET_OFFER"} and target != "GET_OFFER"
+    if (
+        len(set(ctas)) > 1
+        or any(c not in allowed for c in ctas)
+        or unqualified_get_offer
+    ):
+        for row in rows:
+            row["cta"] = target
+        repairs.append(
+            Repair("cta", None, "|".join(dict.fromkeys(str(c) for c in ctas)), target)
+        )
+    return (fixed, repairs) if repairs else None
+
+
 def _coerce_batch(
     raw: dict[str, object],
     objective: Objective,
@@ -1319,25 +1439,66 @@ async def generate_creatives(
     }
     expected_card_count = len(card_images) if is_carousel and card_images else None
 
+    standing_offer = brand_profile.offer if brand_profile is not None else None
     raw = await _call(prompt, 1)
     try:
         batch = parse_tool_input(raw, GeneratedCreativeBatch, context=context)
         variants = batch.variants
     except (ValidationError, ToolInputRecoveryError) as first_failure:
-        raw = await _call(_retry_prompt(prompt, first_failure, variant_count), 2)
-        try:
-            batch = parse_tool_input(raw, GeneratedCreativeBatch, context=context)
-            variants = batch.variants
-        except (ValidationError, ToolInputRecoveryError) as second_failure:
-            variants = _coerce_batch(
-                raw, strategy.objective, second_failure, variant_count
-            )
+        repaired = _repair_batch(raw, strategy.objective, standing_offer)
+        variants_or_none = None
+        if repaired is not None:
+            try:
+                batch = parse_tool_input(
+                    repaired[0], GeneratedCreativeBatch, context=context
+                )
+            except (ValidationError, ToolInputRecoveryError):
+                logger.info(
+                    "llm_repair_rejected agent=creative call_type=%s "
+                    "campaign_id=%s repairs=%d — still invalid, retrying",
+                    call_type,
+                    campaign_id or "none",
+                    len(repaired[1]),
+                )
+            else:
+                variants_or_none = batch.variants
+                for repair in repaired[1]:
+                    _log_repair(repair, call_type, campaign_id)
+        if variants_or_none is not None:
+            variants = variants_or_none
+        else:
+            raw = await _call(_retry_prompt(prompt, first_failure, variant_count), 2)
+            try:
+                batch = parse_tool_input(raw, GeneratedCreativeBatch, context=context)
+                variants = batch.variants
+            except (ValidationError, ToolInputRecoveryError) as second_failure:
+                variants = _coerce_batch(
+                    raw, strategy.objective, second_failure, variant_count
+                )
 
     if expected_card_count is not None:
         _check_card_counts_match_images(variants, expected_card_count)
     if single_variant is not None:
         return _keep_requested_angle(variants, strategy, single_variant)
     return apply_plan_angles(variants, strategy)
+
+
+def _log_repair(repair: Repair, call_type: str, campaign_id: str | None) -> None:
+    """Log one applied repair so how often each fires can be counted."""
+    if repair.variant is None:
+        detail = f"before={repair.before!r} after={repair.after!r}"
+    else:
+        detail = (
+            f"variant={repair.variant} before_len={len(repair.before)} "
+            f"after_len={len(repair.after)}"
+        )
+    logger.info(
+        "llm_repair agent=creative call_type=%s campaign_id=%s field=%s %s",
+        call_type,
+        campaign_id or "none",
+        repair.field,
+        detail,
+    )
 
 
 def _keep_requested_angle(

@@ -1063,6 +1063,103 @@ async def test_both_optimizer_calls_log_their_usage_per_campaign(
     assert all("thinking_tokens=120" in line for line in lines)
 
 
+def _sequenced(monkeypatch: pytest.MonkeyPatch, *inputs: dict[str, Any]) -> AsyncMock:
+    """Patch AsyncAnthropic to return one canned tool-use response per call."""
+    create = AsyncMock(
+        side_effect=[
+            SimpleNamespace(content=[SimpleNamespace(type="tool_use", input=i)])
+            for i in inputs
+        ]
+    )
+    client = SimpleNamespace(messages=SimpleNamespace(create=create))
+    monkeypatch.setattr(optimizer, "AsyncAnthropic", lambda **_kwargs: client)
+    return create
+
+
+_MISSING_REASONING = {
+    k: v for k, v in _VALID_TEST_EVALUATION_INPUT.items() if k != "reasoning"
+}
+
+
+async def _evaluate() -> Any:
+    return await optimizer.evaluate_test_plan(
+        business=_fake_business(),
+        campaign=_fake_campaign(),
+        test_plan=_fake_test_plan(),
+        latest_metric=_fake_metric(),
+    )
+
+
+@pytest.mark.asyncio
+async def test_evaluate_test_plan_retries_once_when_the_tool_input_is_invalid(
+    anthropic_api_key: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A real call came back without the required ``reasoning`` field and the
+    evaluation simply crashed; it now gets one corrected retry."""
+    create = _sequenced(monkeypatch, _MISSING_REASONING, _VALID_TEST_EVALUATION_INPUT)
+
+    result = await _evaluate()
+
+    assert create.call_count == 2
+    assert result.reasoning == _VALID_TEST_EVALUATION_INPUT["reasoning"]
+
+
+@pytest.mark.asyncio
+async def test_the_evaluation_retry_names_what_was_wrong(
+    anthropic_api_key: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    create = _sequenced(monkeypatch, _MISSING_REASONING, _VALID_TEST_EVALUATION_INPUT)
+
+    await _evaluate()
+
+    first = create.call_args_list[0].kwargs["messages"][0]["content"]
+    retry = create.call_args_list[1].kwargs["messages"][0]["content"]
+    assert retry.startswith(first)
+    assert "previous submission was invalid" in retry
+    assert "reasoning" in retry
+
+
+@pytest.mark.asyncio
+async def test_evaluate_test_plan_raises_after_a_second_invalid_response(
+    anthropic_api_key: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    create = _sequenced(monkeypatch, _MISSING_REASONING, _MISSING_REASONING)
+
+    with pytest.raises(optimizer.OptimizerError, match="invalid"):
+        await _evaluate()
+
+    assert create.call_count == 2
+
+
+@pytest.mark.asyncio
+async def test_a_valid_evaluation_makes_a_single_call(
+    anthropic_api_key: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    create = _sequenced(monkeypatch, _VALID_TEST_EVALUATION_INPUT)
+
+    await _evaluate()
+
+    assert create.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_the_evaluation_retry_is_logged_as_attempt_two(
+    anthropic_api_key: None,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    import logging
+
+    _sequenced(monkeypatch, _MISSING_REASONING, _VALID_TEST_EVALUATION_INPUT)
+
+    with caplog.at_level(logging.INFO, logger="app.services.llm_usage"):
+        await _evaluate()
+
+    lines = [r.getMessage() for r in caplog.records if "llm_usage" in r.getMessage()]
+    assert "call_type=test_eval" in lines[0] and "attempt=1 retry=false" in lines[0]
+    assert "attempt=2 retry=true" in lines[1]
+
+
 @pytest.mark.asyncio
 async def test_evaluate_test_plan_returns_the_parsed_evaluation(
     anthropic_api_key: None, monkeypatch: pytest.MonkeyPatch

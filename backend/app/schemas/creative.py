@@ -250,6 +250,31 @@ class GeneratedCreativeVariant(CamelCaseModel):
         return self
 
 
+def offer_mentioned(standing_offer: str, body_text: str) -> bool:
+    """Whether primary text refers to the standing promotion, loosely.
+
+    A deliberately fuzzy check — the model paraphrases rather than quoting the
+    offer string verbatim (offer "20% off first order with WELCOME20" becomes
+    "Get 20% off with code WELCOME20 today"), so any one significant (3+
+    character) word of the offer appearing in the text counts. An offer with no
+    such word (e.g. "$5") has nothing to look for and always counts.
+
+    Args:
+        standing_offer: BrandProfile.offer.
+        body_text: A variant's primary text.
+
+    Returns:
+        True if the text mentions the offer.
+    """
+    offer_tokens = [
+        token.lower()
+        for token in re.findall(r"[A-Za-z0-9]+", standing_offer)
+        if len(token) >= 3
+    ]
+    body_lower = body_text.lower()
+    return not offer_tokens or any(token in body_lower for token in offer_tokens)
+
+
 class GeneratedCreativeBatch(CamelCaseModel):
     """The full tool-call payload: the requested number of variants (A-D).
 
@@ -390,14 +415,8 @@ class GeneratedCreativeBatch(CamelCaseModel):
         # text like "Get 20% off with code WELCOME20 today"), so this
         # looks for any one significant (3+ char) word from the offer
         # appearing in the primary text, not an exact substring match.
-        offer_tokens = [
-            token.lower()
-            for token in re.findall(r"[A-Za-z0-9]+", standing_offer)
-            if len(token) >= 3
-        ]
         for variant in self.variants:
-            body_lower = variant.body_text.lower()
-            if offer_tokens and not any(token in body_lower for token in offer_tokens):
+            if not offer_mentioned(standing_offer, variant.body_text):
                 raise ValueError(
                     "GET_OFFER requires the primary text to mention the "
                     f"standing promotion ({standing_offer!r}); "
