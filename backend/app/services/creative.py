@@ -1394,6 +1394,16 @@ async def generate_creatives(
         "cache_control": CacheControlEphemeralParam(type="ephemeral"),
     }
 
+    # Cache the images too. The user turn is images first, then the per-request
+    # text, so one breakpoint on the LAST image block makes tools + system +
+    # every image a single cached prefix and leaves only the text billed in full.
+    # Measured in production (2026-10-25): about 4,700 of a regenerate's ~6,860
+    # uncached input tokens were the photo and logo, re-billed on every call.
+    # Changing a photo changes this prefix's bytes, so only this entry misses;
+    # the earlier system breakpoint still hits.
+    if image_blocks:
+        image_blocks[-1]["cache_control"] = CacheControlEphemeralParam(type="ephemeral")
+
     async def _call(prompt_text: str, attempt: int) -> dict[str, object]:
         content: str | list[ImageBlockParam | TextBlockParam]
         if image_blocks:
