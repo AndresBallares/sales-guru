@@ -129,6 +129,14 @@ def _fake_creative(**overrides: object) -> Creative:
     return cast(Creative, SimpleNamespace(**defaults))
 
 
+def sent_text(create: Any, call: int = -1) -> str:
+    """All the text of the user turn that was sent, joined (it is several blocks)."""
+    content = create.call_args_list[call].kwargs["messages"][0]["content"]
+    if isinstance(content, str):
+        return content
+    return "\n".join(b["text"] for b in content if b["type"] == "text")
+
+
 def _mock_client_returning(
     monkeypatch: pytest.MonkeyPatch, content: list[SimpleNamespace]
 ) -> AsyncMock:
@@ -356,8 +364,8 @@ async def test_generate_creatives_sends_the_primary_image_as_a_vision_block(
     assert len(sent_messages) == 1
     content = sent_messages[0]["content"]
     assert isinstance(content, list)
-    assert len(content) == 2
-    image_block, text_block = content
+    assert len(content) == 3
+    image_block, context_block, tail_block = content
     assert image_block == {
         "type": "image",
         "source": {
@@ -369,8 +377,10 @@ async def test_generate_creatives_sends_the_primary_image_as_a_vision_block(
         # tests/test_creative_image_cache.py
         "cache_control": {"type": "ephemeral"},
     }
-    assert text_block["type"] == "text"
-    assert "photo of the product is attached" in text_block["text"]
+    assert context_block["type"] == "text"
+    assert context_block["cache_control"] == {"type": "ephemeral"}
+    assert tail_block["type"] == "text"
+    assert "photo of the product is attached" in context_block["text"]
 
 
 @pytest.mark.asyncio
@@ -393,8 +403,8 @@ async def test_generate_creatives_sends_the_business_logo_as_a_vision_block(
 
     content = create.call_args.kwargs["messages"][0]["content"]
     assert isinstance(content, list)
-    assert len(content) == 2
-    image_block, text_block = content
+    assert len(content) == 3
+    image_block, context_block, tail_block = content
     assert image_block == {
         "type": "image",
         "source": {
@@ -406,7 +416,7 @@ async def test_generate_creatives_sends_the_business_logo_as_a_vision_block(
         # tests/test_creative_image_cache.py
         "cache_control": {"type": "ephemeral"},
     }
-    assert "logo is attached" in text_block["text"]
+    assert "logo is attached" in context_block["text"]
 
 
 @pytest.mark.asyncio
@@ -431,11 +441,12 @@ async def test_generate_creatives_sends_logo_and_product_image_together(
     )
 
     content = create.call_args.kwargs["messages"][0]["content"]
-    assert len(content) == 3
-    logo_block, product_block, text_block = content
+    assert len(content) == 4
+    logo_block, product_block, context_block, tail_block = content
     assert logo_block["source"]["data"] == str(Base64.encode(b"logo bytes"))
     assert product_block["source"]["data"] == str(image.data)
-    assert text_block["type"] == "text"
+    assert context_block["type"] == "text"
+    assert tail_block["type"] == "text"
 
 
 @pytest.mark.asyncio
@@ -456,8 +467,7 @@ async def test_generate_creatives_forwards_the_brand_profile_into_the_real_promp
         brand_profile=brand_profile,
     )
 
-    sent_content = create.call_args.kwargs["messages"][0]["content"]
-    assert isinstance(sent_content, str)
+    sent_content = sent_text(create)
     assert "Brand voice" in sent_content
     assert "Voice traits: Warm, Artisanal" in sent_content
 
@@ -466,9 +476,9 @@ async def test_generate_creatives_forwards_the_brand_profile_into_the_real_promp
 async def test_generate_creatives_sends_plain_text_with_no_primary_image(
     anthropic_api_key: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """No primary_image (the default) keeps sending a bare text prompt,
-    same shape as before this feature existed — no empty/None image block,
-    no behavior change for a product with no photos."""
+    """No primary_image (the default) sends no image block at all — no
+    empty/None image, no behavior change for a product with no photos; the
+    user turn is just the cached context and the tail, both text."""
     create = _mock_client_returning(
         monkeypatch, [SimpleNamespace(type="tool_use", input=_VALID_TOOL_INPUT)]
     )
@@ -477,9 +487,9 @@ async def test_generate_creatives_sends_plain_text_with_no_primary_image(
         business=_fake_business(), product=_fake_product(), strategy=_FAKE_STRATEGY
     )
 
-    sent_content = create.call_args.kwargs["messages"][0]["content"]
-    assert isinstance(sent_content, str)
-    assert "photo of the product is attached" not in sent_content
+    blocks = create.call_args.kwargs["messages"][0]["content"]
+    assert [b["type"] for b in blocks] == ["text", "text"]
+    assert "photo of the product is attached" not in sent_text(create)
 
 
 @pytest.mark.asyncio
@@ -705,7 +715,7 @@ async def test_a_retry_that_also_fails_is_still_coerced_and_told_what_was_wrong(
 
     assert create.call_count == 2
     assert {v.cta for v in result} == {"SHOP_NOW"}
-    retry_text = create.call_args.kwargs["messages"][0]["content"]
+    retry_text = sent_text(create)
     assert "headline is" in retry_text
     assert "(max 40)" in retry_text
 
@@ -1653,7 +1663,7 @@ async def test_generate_creatives_regenerates_copy_with_engagement_bait(
     )
 
     assert create.call_count == 2
-    retry_text = create.call_args.kwargs["messages"][0]["content"]
+    retry_text = sent_text(create)
     assert "primary text contains 'tag a'" in retry_text
     assert all("tag a" not in v.body_text.lower() for v in result)
 
@@ -1767,5 +1777,5 @@ async def test_generate_creatives_regenerates_a_praise_only_opener(
     )
 
     assert create.call_count == 2
-    retry_text = create.call_args.kwargs["messages"][0]["content"]
+    retry_text = sent_text(create)
     assert "opens with generic praise ('Stunning')" in retry_text

@@ -29,6 +29,7 @@ from tests.test_creative_service import (
     _fake_product,
     _structured_plan,
     anthropic_api_key,  # noqa: F401 — pytest fixture re-exported for this module
+    sent_text,
 )
 
 _NO_VISUAL_PROMPTS = dict(_ONE_VARIANT)
@@ -212,7 +213,7 @@ async def test_generate_creatives_sends_the_static_block_as_a_cached_system_prom
             "cache_control": {"type": "ephemeral"},
         }
     ]
-    assert "Acme Jewelry" in kwargs["messages"][0]["content"]
+    assert "Acme Jewelry" in sent_text(create)
 
 
 @pytest.mark.asyncio
@@ -257,7 +258,7 @@ async def test_a_single_variant_call_returns_exactly_one_variant(
 
     assert len(result) == 1
     assert result[0].creative_angle == "Craftsmanship"
-    user = create.call_args.kwargs["messages"][0]["content"]
+    user = sent_text(create)
     assert "Generate exactly 1 variant" in user
     assert "Craftsmanship" in user
 
@@ -280,7 +281,7 @@ async def test_a_single_variant_call_keeps_the_guards_and_retries(
 
     assert create.call_count == 2
     assert len(result) == 1
-    retry_text = create.call_args.kwargs["messages"][0]["content"]
+    retry_text = sent_text(create)
     assert "corrected batch of 1 variant" in retry_text
 
 
@@ -319,7 +320,7 @@ async def test_a_single_variant_on_a_test_plan_carries_that_angles_context(
         single_variant=creative.SingleVariantTarget("Social proof", plan_angle_index=1),
     )
 
-    user = create.call_args.kwargs["messages"][0]["content"]
+    user = sent_text(create)
     assert "Social proof" in user
     assert "Milestone gift buyers" in user
     assert "Product on skin" not in user
@@ -376,7 +377,7 @@ async def test_a_single_variant_without_a_plan_angle_keeps_the_creatives_own_ang
         single_variant=creative.SingleVariantTarget("My own angle"),
     )
 
-    user = create.call_args.kwargs["messages"][0]["content"]
+    user = sent_text(create)
     assert result[0].creative_angle == "My own angle"
     assert "Creative angles in this test, for context:" in user
     assert "return the variants in the order listed" not in user

@@ -65,7 +65,7 @@ creative_angle stay shared across a variant's own cards, same as before.
 import copy
 import json
 import logging
-from typing import Literal, NamedTuple, cast
+from typing import Any, Literal, NamedTuple, cast
 
 import anthropic
 from anthropic import AsyncAnthropic
@@ -620,7 +620,7 @@ def _build_system_prompt() -> str:
     return "\n".join(lines)
 
 
-def _build_prompt(
+def _build_prompt_parts(
     business: Business,
     product: Product | None,
     strategy: StrategyContent,
@@ -632,12 +632,20 @@ def _build_prompt(
     card_count: int = 0,
     video_seconds: float | None = None,
     single_variant: SingleVariantTarget | None = None,
-) -> str:
-    """Build the per-request prompt from the business/product and its strategy.
+) -> tuple[str, str]:
+    """Build the per-request prompt as (campaign context, per-call tail).
 
-    The static instructions (role, quality rules, structure, Meta's rules, slot
-    limits) are not here — they are the cached system prompt, see
-    _build_system_prompt. This is only what changes per request.
+    The static instructions (role, quality rules, structure, Meta's rules) are
+    not here — they are the cached system prompt, see _build_system_prompt.
+
+    The two halves are cached differently (see generate_creatives). The
+    **context** is everything that is true of the campaign however many times
+    it is asked about — objective and CTA set, business, brand, offers, product,
+    positioning, copy strategy, persona, audience, reference structures, website
+    — and is byte-identical for a batch and for a regenerate of any ad, so the
+    API can read it from cache. The **tail** is what differs per call: the
+    angle(s), the batch-or-single wording, and the closing limits paragraph,
+    which stays last on purpose (see _build_system_prompt).
 
     Order (confirmed with the user 2026-09-12, Part 3): objective + the
     exact allowed CTA set, brand profile (voice/positioning plus the
@@ -683,7 +691,7 @@ def _build_prompt(
             avatar/concept/pillar and the persona.
 
     Returns:
-        The prompt text.
+        ``(context, tail)``.
     """
     objective = strategy.objective
     variant_count = 1 if single_variant is not None else _VARIANT_COUNT
@@ -695,16 +703,9 @@ def _build_prompt(
         else []
     )
 
-    same_cta = (
-        " All four variants in this batch must use that same CTA — do not "
-        "vary it across variants."
-        if variant_count > 1
-        else ""
-    )
     lines = [
         f"Campaign objective: {objective}",
-        "You must choose the CTA from exactly this set: "
-        f"{', '.join(allowed_ctas)}.{same_cta}",
+        f"You must choose the CTA from exactly this set: {', '.join(allowed_ctas)}.",
     ]
     if "GET_OFFER" in allowed_ctas:
         if standing_offer:
@@ -796,30 +797,6 @@ def _build_prompt(
         f"Copy strategy: {strategy.copy_strategy}",
     ]
     if strategy.plan_type == "CREATIVE_TEST_PLAN":
-        listed = list(enumerate(strategy.creative_angles))
-        if single_variant is None:
-            lines += ["Creative angles, one per variant:"]
-        elif single_variant.plan_angle_index is not None:
-            listed = [listed[single_variant.plan_angle_index]]
-            lines += ["Creative angle for this variant:"]
-        else:
-            lines += ["Creative angles in this test, for context:"]
-        for position, angle in listed:
-            name = (
-                angle_label(angle.avatar, angle.concept)
-                if angle.avatar
-                else angle.concept
-            )
-            pillar = f" (pillar: {angle.pillar})" if angle.pillar else ""
-            lines.append(
-                f"- Variant {chr(ord('A') + position)}: {name}{pillar} — "
-                f"{angle.description}"
-            )
-    else:
-        lines.append(
-            f"Creative angles to draw from: {', '.join(strategy.creative_angles)}"
-        )
-    if strategy.plan_type == "CREATIVE_TEST_PLAN":
         persona = strategy.creative_persona
         lines.append(
             quarantine(
@@ -829,36 +806,6 @@ def _build_prompt(
                 f"{persona.name} — {persona.description}",
             )
         )
-        if single_variant is not None:
-            lines.append(
-                "This ad competes against others in one ad set: build it on "
-                "its own angle, speaking to that angle's avatar (a "
-                "self-purchaser buys for themselves, a gift buyer buys for "
-                "someone else). The test is which angle wins."
-            )
-        else:
-            lines.append(
-                "These ads compete against each other in one ad set, so "
-                "return the variants in the order listed above: variant A is "
-                "built on the first angle, variant B on the second, and so "
-                "on, each speaking to its angle's avatar (a self-purchaser "
-                "buys for themselves, a gift buyer buys for someone else). "
-                "The test is which angle wins."
-            )
-        if format == "SINGLE_IMAGE":
-            lines.append(
-                "Every variant is a single image: if a creative angle above "
-                "mentions a carousel, video or several images, adapt it to "
-                "work as one image — never return a cards list."
-            )
-        if format == "SINGLE_VIDEO":
-            lines.append(
-                "Every variant is the same video with different copy: the "
-                "angles must differ in what the copy says and promises, not "
-                "in footage. If a creative angle above mentions a carousel "
-                "or several images, adapt it to a message over one video — "
-                "never return a cards list."
-            )
     audience = primary_audience(strategy)
     if audience.problem:
         lines.append(f"Target audience problem: {audience.problem}")
@@ -885,8 +832,69 @@ def _build_prompt(
         "Business website (this appears automatically as the ad's display "
         f"link — never write the domain into the copy itself): "
         f"{business.website or 'none'}",
-        "",
     ]
+
+    tail: list[str] = []
+    if strategy.plan_type == "CREATIVE_TEST_PLAN":
+        listed = list(enumerate(strategy.creative_angles))
+        if single_variant is None:
+            tail += ["Creative angles, one per variant:"]
+        elif single_variant.plan_angle_index is not None:
+            listed = [listed[single_variant.plan_angle_index]]
+            tail += ["Creative angle for this variant:"]
+        else:
+            tail += ["Creative angles in this test, for context:"]
+        for position, angle in listed:
+            name = (
+                angle_label(angle.avatar, angle.concept)
+                if angle.avatar
+                else angle.concept
+            )
+            pillar = f" (pillar: {angle.pillar})" if angle.pillar else ""
+            tail.append(
+                f"- Variant {chr(ord('A') + position)}: {name}{pillar} — "
+                f"{angle.description}"
+            )
+        if single_variant is not None:
+            tail.append(
+                "This ad competes against others in one ad set: build it on "
+                "its own angle, speaking to that angle's avatar (a "
+                "self-purchaser buys for themselves, a gift buyer buys for "
+                "someone else). The test is which angle wins."
+            )
+        else:
+            tail.append(
+                "These ads compete against each other in one ad set, so "
+                "return the variants in the order listed above: variant A is "
+                "built on the first angle, variant B on the second, and so "
+                "on, each speaking to its angle's avatar (a self-purchaser "
+                "buys for themselves, a gift buyer buys for someone else). "
+                "The test is which angle wins."
+            )
+        if format == "SINGLE_IMAGE":
+            tail.append(
+                "Every variant is a single image: if a creative angle above "
+                "mentions a carousel, video or several images, adapt it to "
+                "work as one image — never return a cards list."
+            )
+        if format == "SINGLE_VIDEO":
+            tail.append(
+                "Every variant is the same video with different copy: the "
+                "angles must differ in what the copy says and promises, not "
+                "in footage. If a creative angle above mentions a carousel "
+                "or several images, adapt it to a message over one video — "
+                "never return a cards list."
+            )
+    else:
+        tail.append(
+            f"Creative angles to draw from: {', '.join(strategy.creative_angles)}"
+        )
+    if variant_count > 1:
+        tail.append(
+            "All four variants in this batch must use that same CTA — do not "
+            "vary it across variants."
+        )
+    tail.append("")
     if single_variant is None:
         opening = (
             f"Generate exactly {_VARIANT_COUNT} variants, each built around a "
@@ -903,7 +911,7 @@ def _build_prompt(
             "Generate exactly 1 variant, built on this creative angle: "
             f"{single_variant.creative_angle}."
         )
-    lines.append(
+    tail.append(
         f"{opening} Each variant needs: body_text as the primary text (at "
         f"most {MAX_BODY_TEXT_LENGTH} characters — it must read complete "
         "before Meta's own truncation cuts it off), a headline (at most "
@@ -913,11 +921,11 @@ def _build_prompt(
         "creative angle."
     )
     if format == "CAROUSEL":
-        lines.append(
+        tail.append(
             "For a carousel, every card reinforces that same single message "
             "from a different angle of the product in use."
         )
-        lines.append(
+        tail.append(
             f"Each variant must also include a cards list of exactly "
             f"{card_count} cards, one per attached product photo in the "
             "same order they were attached (card 1 = the first attached "
@@ -929,8 +937,23 @@ def _build_prompt(
             "stay shared across all of its cards — don't repeat them per "
             "card, and don't give cards their own CTA."
         )
-    lines.append("Submit them using the provided tool.")
-    return "\n".join(lines)
+    tail.append("Submit them using the provided tool.")
+    return "\n".join(lines), "\n".join(tail)
+
+
+def _build_prompt(
+    business: Business,
+    product: Product | None,
+    strategy: StrategyContent,
+    **kwargs: Any,  # noqa: ANN401 — forwarded verbatim to _build_prompt_parts
+) -> str:
+    """The whole per-request prompt as one string: context, then tail.
+
+    What generate_creatives sends is the two halves as separate content blocks
+    (the first cached); this joined form is the same text, for reading and tests.
+    """
+    context, tail = _build_prompt_parts(business, product, strategy, **kwargs)
+    return f"{context}\n{tail}"
 
 
 class Repair(NamedTuple):
@@ -1319,7 +1342,7 @@ async def generate_creatives(
     is_video = format == "SINGLE_VIDEO" and video is not None
     has_image = not is_carousel and (primary_image is not None or is_video)
     has_logo = business.logoData is not None
-    prompt = _build_prompt(
+    campaign_context, tail = _build_prompt_parts(
         business,
         product,
         strategy,
@@ -1404,12 +1427,26 @@ async def generate_creatives(
     if image_blocks:
         image_blocks[-1]["cache_control"] = CacheControlEphemeralParam(type="ephemeral")
 
-    async def _call(prompt_text: str, attempt: int) -> dict[str, object]:
-        content: str | list[ImageBlockParam | TextBlockParam]
-        if image_blocks:
-            content = [*image_blocks, {"type": "text", "text": prompt_text}]
-        else:
-            content = prompt_text
+    # The campaign context is the third cached tier: system, then the images,
+    # then this text. It is byte-identical for every call on the campaign (a
+    # batch, or a regenerate of any ad), so repeats read it from cache and only
+    # the per-call tail is billed in full. Editing the brand profile, product,
+    # business or strategy changes these bytes, so exactly this tier (and the
+    # tail after it) is rewritten, while the system and image entries still hit.
+    # Production measurement (2026-10-25): about 4,000 of a regenerate's input
+    # tokens were this text. Three breakpoints in all, under the limit of four.
+    context_block: TextBlockParam = {
+        "type": "text",
+        "text": campaign_context,
+        "cache_control": CacheControlEphemeralParam(type="ephemeral"),
+    }
+
+    async def _call(tail_text: str, attempt: int) -> dict[str, object]:
+        content: list[ImageBlockParam | TextBlockParam] = [
+            *image_blocks,
+            context_block,
+            {"type": "text", "text": tail_text},
+        ]
         message: MessageParam = {"role": "user", "content": content}
         try:
             response = await create_logged(
@@ -1450,7 +1487,7 @@ async def generate_creatives(
     expected_card_count = len(card_images) if is_carousel and card_images else None
 
     standing_offer = brand_profile.offer if brand_profile is not None else None
-    raw = await _call(prompt, 1)
+    raw = await _call(tail, 1)
     try:
         batch = parse_tool_input(raw, GeneratedCreativeBatch, context=context)
         variants = batch.variants
@@ -1477,7 +1514,7 @@ async def generate_creatives(
         if variants_or_none is not None:
             variants = variants_or_none
         else:
-            raw = await _call(_retry_prompt(prompt, first_failure, variant_count), 2)
+            raw = await _call(_retry_prompt(tail, first_failure, variant_count), 2)
             try:
                 batch = parse_tool_input(raw, GeneratedCreativeBatch, context=context)
                 variants = batch.variants
