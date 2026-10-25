@@ -36,6 +36,9 @@ class Settings(BaseSettings):
         optimizer_test_eval_model: Model for the Optimizer's TEST_PLAN
             evaluation, a longer judgment that stays on Sonnet 5
             (env `OPTIMIZER_TEST_EVAL_MODEL`).
+        log_level: Level for the app's own loggers (env `LOG_LEVEL`, a name such
+            as INFO or DEBUG). Libraries stay at WARNING regardless; see
+            app/core/log_config.py.
         frontend_url: Base URL of the SPA. Only used to build the browser
             redirect target at the end of the Meta OAuth callback (the
             callback is hit directly by Meta, not via the frontend's own
@@ -117,6 +120,7 @@ class Settings(BaseSettings):
     database_url: str = "file:./dev.db"
     cors_origins: str = "http://localhost:5173"
     anthropic_api_key: str | None = None
+    log_level: str = "INFO"
     strategist_model: str = "claude-sonnet-5"
     creative_model: str = "claude-sonnet-5"
     optimizer_eval_model: str = "claude-haiku-5-5"

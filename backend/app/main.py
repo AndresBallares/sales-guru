@@ -26,9 +26,11 @@ from app.api.strategy import router as strategy_router
 from app.api.test_evaluation import router as test_evaluation_router
 from app.core.config import get_settings
 from app.core.db import db
+from app.core.log_config import configure_logging
 from app.core.scheduler import start_scheduler, stop_scheduler
 
 settings = get_settings()
+configure_logging(settings.log_level)
 
 
 @asynccontextmanager
