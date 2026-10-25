@@ -365,6 +365,9 @@ async def test_generate_creatives_sends_the_primary_image_as_a_vision_block(
             "media_type": "image/png",
             "data": str(Base64.encode(b"png bytes")),
         },
+        # the last (here only) image ends the cached prefix; see
+        # tests/test_creative_image_cache.py
+        "cache_control": {"type": "ephemeral"},
     }
     assert text_block["type"] == "text"
     assert "photo of the product is attached" in text_block["text"]
@@ -399,6 +402,9 @@ async def test_generate_creatives_sends_the_business_logo_as_a_vision_block(
             "media_type": "image/png",
             "data": str(Base64.encode(b"logo png bytes")),
         },
+        # the last (here only) image ends the cached prefix; see
+        # tests/test_creative_image_cache.py
+        "cache_control": {"type": "ephemeral"},
     }
     assert "logo is attached" in text_block["text"]
 
