@@ -81,11 +81,13 @@ async def test_a_single_product_photo_is_marked_as_the_end_of_the_cached_prefix(
 
     await _generate(primary_image=_png(b"photo"))
 
-    image, text = _content(create)
+    image, context, tail = _content(create)
     assert image["type"] == "image"
     assert image["cache_control"] == _EPHEMERAL
-    assert text["type"] == "text"
-    assert "cache_control" not in text
+    assert context["type"] == "text"
+    assert context["cache_control"] == _EPHEMERAL  # the campaign context
+    assert tail["type"] == "text"
+    assert "cache_control" not in tail
 
 
 @pytest.mark.asyncio
@@ -103,8 +105,8 @@ async def test_with_a_logo_and_a_photo_only_the_last_image_is_marked(
     await _generate(business=business, primary_image=_png(b"photo"))
 
     blocks = _content(create)
-    assert [b["type"] for b in blocks] == ["image", "image", "text"]
-    assert _marked(blocks) == [1]
+    assert [b["type"] for b in blocks] == ["image", "image", "text", "text"]
+    assert _marked(blocks) == [1, 2]  # last image, then the context
 
 
 @pytest.mark.asyncio
@@ -124,8 +126,8 @@ async def test_a_carousel_marks_only_its_last_card_image(
     )
 
     blocks = _content(create)
-    assert [b["type"] for b in blocks] == ["image", "image", "image", "text"]
-    assert _marked(blocks) == [2]
+    assert [b["type"] for b in blocks] == ["image", "image", "image", "text", "text"]
+    assert _marked(blocks) == [2, 3]
 
 
 @pytest.mark.asyncio
@@ -143,8 +145,8 @@ async def test_a_video_thumbnail_is_cached_like_a_photo(
     await _generate(format="SINGLE_VIDEO", video=video)
 
     blocks = _content(create)
-    assert [b["type"] for b in blocks] == ["image", "text"]
-    assert _marked(blocks) == [0]
+    assert [b["type"] for b in blocks] == ["image", "text", "text"]
+    assert _marked(blocks) == [0, 1]
 
 
 @pytest.mark.asyncio
@@ -156,8 +158,10 @@ async def test_without_images_there_is_nothing_extra_to_cache(
 
     await _generate()
 
-    assert isinstance(create.call_args.kwargs["messages"][0]["content"], str)
-    assert _breakpoints(create) == 1  # the system block only
+    blocks = _content(create)
+    assert [b["type"] for b in blocks] == ["text", "text"]
+    assert _marked(blocks) == [0]  # the context; there is no image to mark
+    assert _breakpoints(create) == 2  # system + context
 
 
 @pytest.mark.asyncio
@@ -171,7 +175,7 @@ async def test_the_system_breakpoint_stays_so_a_changed_photo_still_hits_it(
 
     kwargs = create.call_args.kwargs
     assert kwargs["system"][0]["cache_control"] == _EPHEMERAL
-    assert _breakpoints(create) == 2  # system + last image, well under the limit of 4
+    assert _breakpoints(create) == 3  # system + last image + context, under 4
 
 
 @pytest.mark.asyncio
@@ -231,5 +235,5 @@ async def test_a_retry_carries_the_same_marked_image(
 
     assert create.call_count == 2
     for call in (0, 1):
-        assert _marked(_content(create, call)) == [0]
-        assert _breakpoints(create, call) == 2
+        assert _marked(_content(create, call)) == [0, 1]
+        assert _breakpoints(create, call) == 3
