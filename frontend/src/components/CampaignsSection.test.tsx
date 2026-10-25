@@ -1983,15 +1983,18 @@ describe('CampaignsSection', () => {
 
     await user.click(screen.getByRole('button', { name: 'Generate strategy' }))
 
-    expect(await screen.findByText(/Test plan/)).toBeInTheDocument()
-    expect(screen.getByText(/Broad \/ Automated Baseline \(baseline\):/)).toBeInTheDocument()
-    expect(screen.getByText(/Luxury Jewelry Interest Audience:/)).toBeInTheDocument()
     expect(
-      screen.getByText(/The hypothesis-driven audience will produce a lower CAC\./),
+      await screen.findByRole('heading', { name: 'Strategy at a glance' }),
     ).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'View full strategy' }))
+    expect(screen.getByText('Broad / Automated Baseline (baseline)')).toBeInTheDocument()
+    expect(screen.getByText('Luxury Jewelry Interest Audience')).toBeInTheDocument()
+    expect(
+      screen.getAllByText(/The hypothesis-driven audience will produce a lower CAC\./).length,
+    ).toBeGreaterThan(0)
     expect(screen.getByText(/\$50\/day per variant for 10 days/)).toBeInTheDocument()
     expect(screen.getByText(/test new creative/)).toBeInTheDocument()
-    expect(screen.getByText(/gross profit \$200.00/)).toBeInTheDocument()
+    expect(screen.getByText(/Gross profit \$200.00/)).toBeInTheDocument()
     expect(screen.getByText(/breakeven ROAS 2.50x/)).toBeInTheDocument()
   })
 
@@ -2069,14 +2072,18 @@ describe('CampaignsSection', () => {
 
     await user.click(screen.getByRole('button', { name: 'Generate strategy' }))
 
-    expect(await screen.findByText(/Creative test/)).toBeInTheDocument()
+    expect(
+      await screen.findByRole('heading', { name: 'Creative angles to test' }),
+    ).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'View full strategy' }))
     expect(screen.getByText(/runs 3 creative angles/)).toBeInTheDocument()
     expect(screen.getByText(/cheapest add-to-cart\./)).toBeInTheDocument()
-    expect(screen.getByText(/broad \(Meta Advantage\+\)/)).toBeInTheDocument()
-    expect(screen.getByText(/Milestone gift buyers/)).toBeInTheDocument()
-    // The pillar goes last when an angle has one; an older angle is named as before.
-    expect(screen.getByText('Self-purchaser – Product on skin – Mechanism')).toBeInTheDocument()
-    expect(screen.getByText('Gift buyer – Gifting')).toBeInTheDocument()
+    expect(screen.getByText(/Broad \(Meta Advantage\+\)/)).toBeInTheDocument()
+    expect(screen.getAllByText(/Milestone gift buyers/).length).toBeGreaterThan(0)
+    // Each angle is a card titled by its concept, tagged with its avatar and pillar when it has them.
+    expect(screen.getByRole('heading', { name: 'Product on skin' })).toBeInTheDocument()
+    expect(screen.getByText('Self-purchaser · Mechanism')).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Gifting' })).toBeInTheDocument()
     expect(screen.getByText(/\$50\/day on one ad set for 10 days/)).toBeInTheDocument()
   })
 
@@ -2134,7 +2141,7 @@ describe('CampaignsSection', () => {
     renderCampaigns(<CampaignsSection businessId="biz-1" />)
     await screen.findByText(/Custom emerald rings/)
 
-    await user.click(screen.getByRole('button', { name: 'Generate ads' }))
+    await user.click(screen.getByRole('button', { name: 'Generate Ads' }))
 
     expect(await screen.findByText('Headline A')).toBeInTheDocument()
     expect(screen.getByText('Headline B')).toBeInTheDocument()
@@ -2171,7 +2178,7 @@ describe('CampaignsSection', () => {
     await screen.findByText(/Custom emerald rings/)
 
     await user.click(screen.getByRole('radio', { name: 'Carousel' }))
-    await user.click(screen.getByRole('button', { name: 'Generate ads' }))
+    await user.click(screen.getByRole('button', { name: 'Generate Ads' }))
 
     await waitFor(() =>
       expect(mockedApi.createCreatives).toHaveBeenCalledWith('biz-1', 'camp-1', 'CAROUSEL'),
@@ -2291,13 +2298,51 @@ describe('CampaignsSection', () => {
 
     renderCampaigns(<CampaignsSection businessId="biz-1" />)
     await screen.findByText(/Custom emerald rings/)
-    await user.click(screen.getByRole('button', { name: 'Generate ads' }))
+    await user.click(screen.getByRole('button', { name: 'Generate Ads' }))
     await screen.findByText('Headline A')
 
     expect(
       await screen.findByRole('button', { name: 'Regenerate with brand voice' }),
     ).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Regenerate ads' })).not.toBeInTheDocument()
+  })
+
+  it('keeps the strategy when ad generation fails and lets the user retry from it', async () => {
+    mockedApi.listCampaigns.mockResolvedValue([
+      {
+        id: 'camp-1',
+        name: null,
+        objective: 'SALES',
+        status: 'STRATEGY_GENERATED',
+        productId: null,
+        audienceId: null,
+        metaCampaignId: null,
+        eventVenueKey: null,
+        startDate: null,
+        endDate: null,
+        pausedReason: null,
+        dailySpendFlag: null,
+        needsDestinationUrl: false,
+      },
+    ])
+    mockedApi.getStrategy.mockResolvedValue(FAKE_STRATEGY)
+    mockedApi.createCreatives
+      .mockRejectedValueOnce(new api.ApiError(502, 'Ad generation is unavailable'))
+      .mockResolvedValueOnce([fakeCreative({ headline: 'Headline A' })])
+    const user = userEvent.setup()
+
+    renderCampaigns(<CampaignsSection businessId="biz-1" />)
+    await screen.findByRole('heading', { name: 'Strategy at a glance' })
+
+    await user.click(screen.getByRole('button', { name: 'Generate Ads' }))
+    expect(await screen.findByText('Ad generation is unavailable')).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Strategy at a glance' })).toBeInTheDocument()
+    expect(mockedApi.createStrategy).not.toHaveBeenCalled()
+
+    await user.click(screen.getByRole('button', { name: 'Try again' }))
+    expect(await screen.findByText('Headline A')).toBeInTheDocument()
+    expect(mockedApi.createCreatives).toHaveBeenCalledTimes(2)
+    expect(screen.queryByRole('heading', { name: 'Strategy at a glance' })).not.toBeInTheDocument()
   })
 
   it('shows an error if ad generation fails', async () => {
@@ -2327,7 +2372,7 @@ describe('CampaignsSection', () => {
     renderCampaigns(<CampaignsSection businessId="biz-1" />)
     await screen.findByText(/Custom emerald rings/)
 
-    await user.click(screen.getByRole('button', { name: 'Generate ads' }))
+    await user.click(screen.getByRole('button', { name: 'Generate Ads' }))
 
     expect(await screen.findByRole('alert')).toHaveTextContent(
       'Generate a strategy for this campaign first',
@@ -5559,7 +5604,7 @@ describe('CampaignsSection video ads and the creative test format', () => {
       const user = userEvent.setup()
 
       renderCampaigns(<CampaignsSection businessId="biz-1" />)
-      await user.click(await screen.findByRole('button', { name: 'Generate ads' }))
+      await user.click(await screen.findByRole('button', { name: 'Generate Ads' }))
 
       expect(mockedApi.createCreatives).toHaveBeenCalledWith('biz-1', 'camp-1', 'SINGLE_VIDEO')
       expect(await screen.findByText('Headline A')).toBeInTheDocument()
@@ -5592,7 +5637,7 @@ describe('CampaignsSection video ads and the creative test format', () => {
 
     renderCampaigns(<CampaignsSection businessId="biz-1" />)
     await user.click(await screen.findByRole('radio', { name: 'Single video' }))
-    await user.click(screen.getByRole('button', { name: 'Generate ads' }))
+    await user.click(screen.getByRole('button', { name: 'Generate Ads' }))
 
     expect(mockedApi.createCreatives).toHaveBeenCalledWith('biz-1', 'camp-1', 'SINGLE_VIDEO')
   })

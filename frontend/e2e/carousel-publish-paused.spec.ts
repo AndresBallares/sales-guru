@@ -28,7 +28,7 @@ test('publishes a carousel ad paused, with all three cards intact', async ({ pag
     page.getByText('Has this business run advertising campaigns before?'),
   ).toBeVisible()
   await page.getByRole('button', { name: 'No' }).click()
-  await expect(page.getByText('Creative angles:')).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Creative angles to test' })).toBeVisible()
 
   await page.getByRole('radio', { name: 'Carousel' }).check()
   await page.getByRole('button', { name: 'Generate ads' }).click()

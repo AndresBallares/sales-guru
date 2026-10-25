@@ -8,7 +8,6 @@ import { ActionRow } from './ActionRow'
 import { ExtraAssetSlot } from './ExtraAssetSlot'
 import { CardToolbar, type ToolbarAction } from './CardToolbar'
 import { CarouselEditor } from './CarouselEditor'
-import { angleLabel } from '../lib/creativeAngle'
 import {
   ArrowRightIcon,
   ArchiveIcon,
@@ -83,7 +82,6 @@ import {
   type ProductImage,
   type Recommendation,
   type StrategyContent,
-  type TargetLocation,
   type TestEvaluation,
 } from '../lib/api'
 import { InstagramNote } from './InstagramNote'
@@ -93,14 +91,9 @@ import { AudienceForm } from './AudienceForm'
 import { OptionsLoadError } from './OptionsLoadError'
 import { useOptions } from '../lib/useOptions'
 import { NewCampaignFlow } from './NewCampaignFlow'
+import { StrategyOverview } from './StrategyOverview'
 import { ProductForm } from './ProductForm'
 import { SocialPostPreview } from './SocialPostPreview'
-
-function formatLocations(locations: TargetLocation[]): string {
-  return locations
-    .map((loc) => [loc.city, loc.region].filter(Boolean).join(', '))
-    .join('; ')
-}
 
 // A creative test (CREATIVE_TEST_PLAN) publishes 3-4 ads in one ad set — kept
 // in step with the backend's MIN/MAX_CREATIVE_ANGLES (app/schemas/strategy.py).
@@ -1296,20 +1289,23 @@ export function CampaignsSection({
               // One ad-regeneration action: with a brand profile the backend applies
               // the brand voice to every generation, so the same button just says so.
               const hasAds = campaignCreatives.length > 0
-              editingActions.push({
-                key: 'ads',
-                label: adsBusy
-                  ? 'Generating ads…'
-                  : hasAds
-                    ? hasBrandProfile
-                      ? 'Regenerate with brand voice'
-                      : 'Regenerate ads'
-                    : 'Generate ads',
-                icon: hasAds && hasBrandProfile ? <VoiceIcon /> : <RefreshIcon />,
-                busy: adsBusy,
-                disabled: adsBusy,
-                onClick: () => void handleGenerateCreatives(campaign.id),
-              })
+              // Before any ads exist, the strategy page's Generate Ads button is the one action.
+              if (hasAds) {
+                editingActions.push({
+                  key: 'ads',
+                  label: adsBusy
+                    ? 'Generating ads…'
+                    : hasAds
+                      ? hasBrandProfile
+                        ? 'Regenerate with brand voice'
+                        : 'Regenerate ads'
+                      : 'Generate ads',
+                  icon: hasAds && hasBrandProfile ? <VoiceIcon /> : <RefreshIcon />,
+                  busy: adsBusy,
+                  disabled: adsBusy,
+                  onClick: () => void handleGenerateCreatives(campaign.id),
+                })
+              }
               if (campaign.status !== 'DRAFT') {
                 editingActions.push({
                   key: 'strategy',
@@ -1755,241 +1751,15 @@ export function CampaignsSection({
                     the strategy write-up that produced them is no longer
                     the useful thing to scroll past to reach them. */}
                 {strategy && campaignCreatives.length === 0 && (
-                  <div aria-label={`Strategy for ${campaign.name ?? campaign.id}`}>
-                    <p>
-                      <strong>Offer:</strong> {strategy.offer}
-                    </p>
-                    <p>
-                      <strong>Positioning:</strong> {strategy.positioning}
-                    </p>
-                    {strategy.planType === 'TEST_PLAN' ? (
-                      <>
-                        <p>
-                          <strong>Test plan</strong> — this business has no
-                          meaningful advertising history yet. The purpose is
-                          to collect real data, not assume a winner.
-                        </p>
-                        {strategy.audienceVariants.map((variant) => (
-                          <div key={variant.id}>
-                            <p>
-                              <strong>
-                                {variant.name}
-                                {variant.isBaseline ? ' (baseline)' : ''}:
-                              </strong>{' '}
-                              {[
-                                variant.targeting.ageMin != null &&
-                                variant.targeting.ageMax != null
-                                  ? `${variant.targeting.ageMin}-${variant.targeting.ageMax}`
-                                  : null,
-                                variant.targeting.genders?.join(', '),
-                                formatLocations(variant.targeting.location),
-                                variant.targeting.interests.join(', '),
-                              ]
-                                .filter(Boolean)
-                                .join(' — ') || 'Broad — no targeting constraints'}
-                            </p>
-                            <p>{variant.hypothesis}</p>
-                          </div>
-                        ))}
-                        <p>
-                          <strong>Creative angles:</strong>
-                        </p>
-                        <ul>
-                          {strategy.creativeAngles.map((angle) => (
-                            <li key={angle}>{angle}</li>
-                          ))}
-                        </ul>
-                        <p>
-                          <strong>Copy strategy:</strong> {strategy.copyStrategy}
-                        </p>
-                        <p>
-                          <strong>Primary hypothesis:</strong>
-                        </p>
-                        <ul>
-                          {strategy.hypotheses.map((hypothesis) => (
-                            <li key={hypothesis.id}>
-                              {hypothesis.statement} (measured by{' '}
-                              {hypothesis.primaryMetric}, also tracking{' '}
-                              {hypothesis.secondaryMetrics.join(', ')})
-                            </li>
-                          ))}
-                        </ul>
-                        <p>
-                          <strong>Test budget:</strong> ${strategy.dailyBudget}/day per
-                          variant for {strategy.durationDays} days (${strategy.totalBudget}{' '}
-                          total across both variants)
-                        </p>
-                        <p>
-                          <strong>Leading indicators (early signal):</strong>
-                        </p>
-                        <ul>
-                          {strategy.successCriteria.leadingIndicators.map((criterion) => (
-                            <li key={criterion.metric}>
-                              <strong>{criterion.metric}:</strong>{' '}
-                              {criterion.benchmark
-                                ? `industry range ${criterion.benchmark.low}–${criterion.benchmark.high} (median ${criterion.benchmark.median})`
-                                : 'no industry benchmark configured'}
-                              {criterion.businessTarget != null &&
-                                ` — business target: ${criterion.businessTarget}`}
-                              {' — '}
-                              {criterion.guidance}
-                            </li>
-                          ))}
-                        </ul>
-                        <p>
-                          <strong>Economic indicators (need more volume):</strong>
-                        </p>
-                        <ul>
-                          {strategy.successCriteria.economicIndicators.map((criterion) => (
-                            <li key={criterion.metric}>
-                              <strong>{criterion.metric}:</strong>{' '}
-                              {criterion.benchmark
-                                ? `industry range ${criterion.benchmark.low}–${criterion.benchmark.high} (median ${criterion.benchmark.median})`
-                                : 'no industry benchmark configured'}
-                              {criterion.businessTarget != null &&
-                                ` — business target: ${criterion.businessTarget}`}
-                              {' — '}
-                              {criterion.guidance}
-                            </li>
-                          ))}
-                        </ul>
-                        <p>{strategy.successCriteria.profitabilityNote}</p>
-                        <p>
-                          <strong>Decision rules:</strong>
-                        </p>
-                        <ul>
-                          {strategy.decisionRules.map((rule) => (
-                            <li key={rule.action}>
-                              If {rule.condition} → {rule.action.replaceAll('_', ' ')}
-                            </li>
-                          ))}
-                        </ul>
-                      </>
-                    ) : strategy.planType === 'CREATIVE_TEST_PLAN' ? (
-                      <>
-                        <p>
-                          <strong>Creative test</strong> — this business has no
-                          meaningful advertising history yet. One broad ad set
-                          runs {strategy.creativeAngles.length} creative angles
-                          against each other to find which earns the cheapest{' '}
-                          {strategy.optimizationEvent === 'ADD_TO_CART'
-                            ? 'add-to-cart'
-                            : 'purchase'}
-                          .
-                        </p>
-                        <p>
-                          <strong>Audience:</strong> broad (Meta Advantage+),{' '}
-                          {strategy.audienceConstraints.country}, age{' '}
-                          {strategy.audienceConstraints.ageMin}+,{' '}
-                          {strategy.audienceConstraints.languages.join(', ')}
-                        </p>
-                        <p>
-                          <strong>Creative persona:</strong>{' '}
-                          {strategy.creativePersona.name} —{' '}
-                          {strategy.creativePersona.description}
-                        </p>
-                        <p>
-                          <strong>Creative angles:</strong>
-                        </p>
-                        <ul>
-                          {strategy.creativeAngles.map((angle) => (
-                            <li key={angleLabel(angle)}>
-                              <strong>{angleLabel(angle)}</strong> — {angle.description}
-                            </li>
-                          ))}
-                        </ul>
-                        <p>
-                          <strong>Copy strategy:</strong> {strategy.copyStrategy}
-                        </p>
-                        <p>
-                          <strong>Primary hypothesis:</strong>
-                        </p>
-                        <ul>
-                          {strategy.hypotheses.map((hypothesis) => (
-                            <li key={hypothesis.id}>
-                              {hypothesis.statement} (measured by{' '}
-                              {hypothesis.primaryMetric}, also tracking{' '}
-                              {hypothesis.secondaryMetrics.join(', ')})
-                            </li>
-                          ))}
-                        </ul>
-                        <p>
-                          <strong>Test budget:</strong> ${strategy.dailyBudget}/day on one
-                          ad set for {strategy.durationDays} days (${strategy.totalBudget}{' '}
-                          total)
-                        </p>
-                      </>
-                    ) : (
-                      <>
-                        <p>
-                          <strong>Target audience:</strong>{' '}
-                          {[
-                            strategy.targetAudience.ageMin != null &&
-                            strategy.targetAudience.ageMax != null
-                              ? `${strategy.targetAudience.ageMin}-${strategy.targetAudience.ageMax}`
-                              : null,
-                            formatLocations(strategy.targetAudience.location),
-                            strategy.targetAudience.interests.join(', '),
-                          ]
-                            .filter(Boolean)
-                            .join(' — ')}
-                        </p>
-                        {strategy.targetAudience.problem && (
-                          <p>
-                            <strong>Problem:</strong> {strategy.targetAudience.problem}
-                          </p>
-                        )}
-                        {strategy.targetAudience.desire && (
-                          <p>
-                            <strong>Desire:</strong> {strategy.targetAudience.desire}
-                          </p>
-                        )}
-                        <p>
-                          <strong>Creative angles:</strong>
-                        </p>
-                        <ul>
-                          {strategy.creativeAngles.map((angle) => (
-                            <li key={angle}>{angle}</li>
-                          ))}
-                        </ul>
-                        <p>
-                          <strong>Copy strategy:</strong> {strategy.copyStrategy}
-                        </p>
-                        <p>
-                          <strong>Budget:</strong> ${strategy.budgetRecommendation.daily}/day —{' '}
-                          {strategy.budgetRecommendation.rationale}
-                        </p>
-                        <p>
-                          <strong>Key learnings:</strong>
-                        </p>
-                        <ul>
-                          {strategy.keyLearnings.map((learning) => (
-                            <li key={learning}>{learning}</li>
-                          ))}
-                        </ul>
-                        <p>
-                          <strong>Recommended adjustments:</strong>
-                        </p>
-                        <ul>
-                          {strategy.recommendedAdjustments.map((adjustment) => (
-                            <li key={adjustment}>{adjustment}</li>
-                          ))}
-                        </ul>
-                        <p>
-                          <strong>Scaling trigger:</strong> {strategy.scalingTrigger}
-                        </p>
-                      </>
-                    )}
-                    {strategy.unitEconomics && (
-                      <p>
-                        <strong>Unit economics:</strong> gross profit $
-                        {strategy.unitEconomics.grossProfit.toFixed(2)}, breakeven CAC $
-                        {strategy.unitEconomics.breakevenCac.toFixed(2)}, target CAC $
-                        {strategy.unitEconomics.targetCac.toFixed(2)}, breakeven ROAS{' '}
-                        {strategy.unitEconomics.breakevenRoas.toFixed(2)}x
-                      </p>
-                    )}
-                  </div>
+                  <StrategyOverview
+                    strategy={strategy}
+                    campaignName={campaign.name ?? campaign.id}
+                    onGenerateAds={
+                      isPublished ? undefined : () => void handleGenerateCreatives(campaign.id)
+                    }
+                    generating={adsBusy}
+                    error={creativeError}
+                  />
                 )}
                 {strategy && (
                   <div
@@ -1997,7 +1767,7 @@ export function CampaignsSection({
                     aria-label={`Ads for ${campaign.name ?? campaign.id}`}
                   >
                     {isPublished && <p className="field-hint">{ADS_LOCKED_NOTE}</p>}
-                    {creativeError && (
+                    {creativeError && campaignCreatives.length > 0 && (
                       <p className="form-error" role="alert">
                         {creativeError}
                       </p>
