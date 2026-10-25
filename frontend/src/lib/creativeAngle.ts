@@ -13,7 +13,7 @@ const PILLAR_LABELS: Record<string, string> = {
 }
 
 // "everyday-wear" -> "Everyday wear"
-function conceptLabel(concept: string): string {
+export function conceptLabel(concept: string): string {
   const spaced = concept.replace(/-/g, ' ')
   return spaced.charAt(0).toUpperCase() + spaced.slice(1)
 }
@@ -26,4 +26,14 @@ export function angleLabel(angle: CreativeAngle): string {
   if (!angle.avatar) return concept
   const label = `${AVATAR_LABELS[angle.avatar]} – ${concept}`
   return angle.pillar ? `${label} – ${PILLAR_LABELS[angle.pillar]}` : label
+}
+
+// The short strategic label on an angle card: who it speaks to and its persuasion lever.
+export function angleTag(angle: CreativeAngle): string {
+  return [
+    angle.avatar ? AVATAR_LABELS[angle.avatar] : null,
+    angle.pillar ? PILLAR_LABELS[angle.pillar] : null,
+  ]
+    .filter(Boolean)
+    .join(' · ')
 }

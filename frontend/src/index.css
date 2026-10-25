@@ -5174,3 +5174,192 @@ output.preview-missing {
     padding: 0.4rem 0.7rem;
   }
 }
+
+/* Campaign strategy overview: summary, collapsible full strategy, angle cards, Generate Ads CTA. */
+.strategy-overview {
+  display: flex;
+  flex-direction: column;
+  gap: 2rem;
+  max-width: 64rem;
+}
+
+.strategy-panel,
+.strategy-angles,
+.strategy-cta {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.75rem;
+}
+
+.strategy-overview h4 {
+  margin: 0;
+  font-size: 1.15rem;
+  font-weight: 600;
+}
+
+.strategy-overview p {
+  margin: 0;
+}
+
+.strategy-subtitle,
+.strategy-cta > p {
+  color: var(--text-secondary);
+  font-size: 0.95rem;
+}
+
+.strategy-summary {
+  max-width: 46rem;
+  font-size: 1.05rem;
+  line-height: 1.6;
+}
+
+.strategy-glance {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(13rem, 1fr));
+  gap: 0.75rem;
+  width: 100%;
+  margin: 0.25rem 0;
+}
+
+.strategy-glance-item {
+  padding: 0.85rem 1rem;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface);
+}
+
+.strategy-glance dt,
+.strategy-field dt {
+  color: var(--text-secondary);
+  font-size: 0.8rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+.strategy-glance dd {
+  margin: 0.25rem 0 0;
+  overflow-wrap: anywhere;
+  line-height: 1.45;
+}
+
+.strategy-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  min-height: 44px;
+  padding: 0;
+  border: none;
+  background: none;
+  box-shadow: none;
+  color: var(--text);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.strategy-toggle-chevron {
+  display: inline-flex;
+  color: var(--text-secondary);
+}
+
+.strategy-toggle[aria-expanded='true'] .strategy-toggle-chevron {
+  transform: rotate(180deg);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .strategy-toggle-chevron {
+    transition: transform 0.15s;
+  }
+}
+
+.strategy-full {
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+  width: 100%;
+  padding-top: 1rem;
+  border-top: 1px solid var(--border);
+}
+
+.strategy-full[hidden] {
+  display: none;
+}
+
+.strategy-section h5 {
+  margin: 0 0 0.5rem;
+  font-size: 1rem;
+  font-weight: 600;
+}
+
+.strategy-section dl {
+  display: flex;
+  flex-direction: column;
+  gap: 0.85rem;
+  margin: 0;
+}
+
+.strategy-field dd {
+  margin: 0.2rem 0 0;
+  max-width: 46rem;
+  line-height: 1.55;
+}
+
+.strategy-field ul {
+  margin: 0;
+  padding-left: 1.25rem;
+}
+
+.strategy-angle-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr));
+  gap: 0.75rem;
+  width: 100%;
+  margin: 0.25rem 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.strategy-angle-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  padding: 1rem;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface);
+}
+
+.strategy-angle-card h5 {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 600;
+}
+
+.strategy-angle-card p {
+  color: var(--text-secondary);
+  font-size: 0.92rem;
+  line-height: 1.5;
+}
+
+.strategy-angle-tag {
+  align-self: flex-start;
+  padding: 0.15rem 0.55rem;
+  border-radius: 999px;
+  background: var(--pill-bg);
+  color: var(--pill-text);
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+
+.strategy-cta {
+  padding: 1.5rem;
+  border-radius: 14px;
+  background: var(--row-bg);
+}
+
+@media (max-width: 600px) {
+  .strategy-cta .btn-generate {
+    width: 100%;
+  }
+}

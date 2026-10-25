@@ -33,7 +33,7 @@ test('a fake Meta connection carries a campaign through real strategy and ad gen
     page.getByText('Has this business run advertising campaigns before?'),
   ).toBeVisible({ timeout: 15_000 })
   await page.getByRole('button', { name: 'No' }).click()
-  await expect(page.getByText('Creative angles:')).toBeVisible({ timeout: 30_000 })
+  await expect(page.getByRole('heading', { name: 'Creative angles to test' })).toBeVisible({ timeout: 30_000 })
 
   await page.getByRole('button', { name: 'Generate ads' }).click()
   // The Creative Agent's LLM occasionally returns a cta value outside its
