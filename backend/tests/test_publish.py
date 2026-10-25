@@ -451,6 +451,13 @@ def mock_services(monkeypatch: pytest.MonkeyPatch) -> dict[str, AsyncMock]:
         meta_service_module, "create_meta_video_ad_creative", create_video_creative
     )
 
+    require_funding_source = AsyncMock(return_value=None)
+    monkeypatch.setattr(
+        meta_service_module, "require_funding_source", require_funding_source
+    )
+    delete_object = AsyncMock(return_value=True)
+    monkeypatch.setattr(meta_service_module, "delete_meta_object", delete_object)
+
     resume_campaign = AsyncMock(return_value=None)
     monkeypatch.setattr(meta_service_module, "resume_meta_campaign", resume_campaign)
     resume_ad = AsyncMock(return_value=None)
@@ -471,6 +478,8 @@ def mock_services(monkeypatch: pytest.MonkeyPatch) -> dict[str, AsyncMock]:
     )
 
     return {
+        "require_funding_source": require_funding_source,
+        "delete_object": delete_object,
         "create_placement_creative": create_placement_creative,
         "resume_campaign": resume_campaign,
         "resume_ad": resume_ad,

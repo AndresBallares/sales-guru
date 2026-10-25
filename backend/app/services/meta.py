@@ -2405,6 +2405,70 @@ async def delete_meta_object(
     return True
 
 
+# Meta's error_subcode for "the ad account has no valid payment method".
+NO_PAYMENT_METHOD_SUBCODE = 1359188
+_BILLING_SETTINGS_URL = "https://business.facebook.com/billing_hub/payment_settings"
+
+
+def no_payment_method_message(ad_account_id: str) -> str:
+    """The plain-language "add a payment method" message, with the billing link.
+
+    Args:
+        ad_account_id: The connected ad account ("act_123..."); Meta's billing
+            page takes the bare number.
+
+    Returns:
+        The message to show the user.
+    """
+    asset_id = ad_account_id.removeprefix("act_")
+    return (
+        "Your Meta ad account has no valid payment method. Add one in Meta's "
+        "Billing & payments, then publish again. "
+        f"{_BILLING_SETTINGS_URL}?asset_id={asset_id}"
+    )
+
+
+async def require_funding_source(*, access_token: str, ad_account_id: str) -> None:
+    """Stop a publish early when the ad account has no payment method.
+
+    Checked before anything is created on Meta, so a missing payment method
+    can't leave a half-created campaign behind. If billing can't be read at all
+    (a token without that permission) the publish is allowed to try: Meta's own
+    rejection is still translated by the publish path.
+
+    Args:
+        access_token: The business's Meta access token.
+        ad_account_id: The connected ad account.
+
+    Raises:
+        MetaConnectionError: The account has no funding source (carries
+            NO_PAYMENT_METHOD_SUBCODE and the user-facing message).
+    """
+    if get_settings().fake_meta_enabled:
+        return
+    try:
+        body = await _get_json(
+            f"{_GRAPH_BASE_URL}/{ad_account_id}",
+            {
+                "fields": "funding_source_details,account_status",
+                "access_token": access_token,
+            },
+        )
+    except MetaConnectionError:
+        logger.warning("Could not read funding status of %s", ad_account_id)
+        return
+    if not body.get("funding_source_details"):
+        logger.warning(
+            "Ad account %s has no funding source (account_status=%s)",
+            ad_account_id,
+            body.get("account_status"),
+        )
+        raise MetaConnectionError(
+            no_payment_method_message(ad_account_id),
+            error_subcode=NO_PAYMENT_METHOD_SUBCODE,
+        )
+
+
 async def update_meta_ad_set_budget(
     *, access_token: str, meta_ad_set_id: str, daily_budget_cents: int
 ) -> None:
