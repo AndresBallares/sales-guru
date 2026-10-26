@@ -717,6 +717,152 @@ async def publish_campaign_to_meta(
     creatives: list[Creative] | None = None,
     report: StatusReporter | None = None,
 ) -> Campaign:
+    """Publish the campaign to Meta, leaving nothing behind if that fails.
+
+    An ad account with no payment method is refused before anything is created.
+    If a later step fails, the Meta campaign this attempt created (which takes
+    its ad sets and ads with it) and the local ad set/ad rows are removed, so a
+    retry starts from scratch instead of adding a second campaign. Meta's "no
+    valid payment method" error is replaced by a plain message.
+
+    Args:
+        campaign: The campaign being published.
+        connection: The business's Meta connection (account and Page set).
+        creative: The campaign's SELECTED creative.
+        strategy: The campaign's parsed strategy.
+        destination_url: Where the ad's CTA links to.
+        paused: Create everything PAUSED instead of ACTIVE.
+        creatives: Every SELECTED creative, for a CREATIVE_TEST_PLAN.
+        report: Progress reporter for a video upload.
+
+    Returns:
+        The campaign, now LIVE or PAUSED. See _publish_to_meta.
+
+    Raises:
+        MetaConnectionError: The ad account has no payment method, or any
+            Graph API call fails.
+    """
+    assert connection.adAccountId is not None
+    ad_account_id = connection.adAccountId
+    await meta.require_funding_source(
+        access_token=connection.accessToken, ad_account_id=ad_account_id
+    )
+    creative_ids_before = [
+        c.id for c in await db.creative.find_many(where={"campaignId": campaign.id})
+    ]
+    created_campaign_ids: list[str] = []
+    try:
+        return await _publish_to_meta(
+            campaign=campaign,
+            connection=connection,
+            creative=creative,
+            strategy=strategy,
+            destination_url=destination_url,
+            paused=paused,
+            creatives=creatives,
+            report=report,
+            created_campaign_ids=created_campaign_ids,
+        )
+    except Exception as exc:
+        await _roll_back_failed_publish(
+            campaign=campaign,
+            connection=connection,
+            meta_campaign_ids=created_campaign_ids,
+            creative_ids_before=creative_ids_before,
+        )
+        if (
+            isinstance(exc, MetaConnectionError)
+            and exc.error_subcode == meta.NO_PAYMENT_METHOD_SUBCODE
+        ):
+            raise MetaConnectionError(
+                meta.no_payment_method_message(ad_account_id),
+                code=exc.code,
+                error_subcode=exc.error_subcode,
+            ) from exc
+        raise
+
+
+async def _roll_back_failed_publish(
+    *,
+    campaign: Campaign,
+    connection: MetaConnection,
+    meta_campaign_ids: list[str],
+    creative_ids_before: list[str],
+) -> None:
+    """Undo what a failed publish attempt created, best effort.
+
+    Deleting a Meta campaign removes its ad sets and ads. Locally, the ad sets
+    and ads are removed, the creatives are detached from them, and any creative
+    row the attempt added (a TEST_PLAN's per-variant duplicate) is dropped. A
+    cleanup failure is logged, never raised, so the publish's own error is the
+    one the user sees.
+
+    Args:
+        campaign: The campaign that failed to publish.
+        connection: The business's Meta connection.
+        meta_campaign_ids: Meta campaigns this attempt created.
+        creative_ids_before: The campaign's creative rows before the attempt.
+    """
+    assert connection.adAccountId is not None
+    for meta_campaign_id in meta_campaign_ids:
+        try:
+            await meta.delete_meta_object(
+                access_token=connection.accessToken,
+                ad_account_id=connection.adAccountId,
+                meta_object_id=meta_campaign_id,
+            )
+        except MetaConnectionError:
+            logger.exception(
+                "Could not delete Meta campaign %s left by a failed publish of "
+                "campaign %s; delete it in Ads Manager",
+                meta_campaign_id,
+                campaign.id,
+            )
+    try:
+        async with db.tx() as tx:
+            await tx.creativecard.delete_many(
+                where={
+                    "creative": {
+                        "is": {
+                            "campaignId": campaign.id,
+                            "id": {"not_in": creative_ids_before},
+                        }
+                    }
+                }
+            )
+            await tx.creative.delete_many(
+                where={"campaignId": campaign.id, "id": {"not_in": creative_ids_before}}
+            )
+            for kept in await tx.creative.find_many(where={"campaignId": campaign.id}):
+                await tx.creative.update(
+                    where={"id": kept.id},
+                    data={"ad": {"disconnect": True}, "metaCreativeId": None},
+                )
+            ad_set_ids = [
+                a.id
+                for a in await tx.adset.find_many(where={"campaignId": campaign.id})
+            ]
+            if ad_set_ids:
+                await tx.ad.delete_many(where={"adSetId": {"in": ad_set_ids}})
+            await tx.adset.delete_many(where={"campaignId": campaign.id})
+    except Exception:
+        logger.exception(
+            "Could not clear local rows of failed publish of campaign %s", campaign.id
+        )
+
+
+async def _publish_to_meta(
+    *,
+    campaign: Campaign,
+    connection: MetaConnection,
+    creative: Creative,
+    strategy: StrategyContent,
+    destination_url: str,
+    paused: bool,
+    creatives: list[Creative] | None,
+    report: StatusReporter | None,
+    created_campaign_ids: list[str],
+) -> Campaign:
     """Create the campaign on Meta, then mirror it locally.
 
     A CREATIVE_TEST_PLAN campaign publishes ONE ad set (broad Advantage+
@@ -751,6 +897,8 @@ async def publish_campaign_to_meta(
             and SINGLE_VIDEO, and to every TEST_PLAN variant.
         report: Called with a short step name and an optional percentage as a
             video uploads and processes, so a background job can show progress.
+        created_campaign_ids: Appended with the Meta campaign id as soon as it
+            exists, so the caller can delete it if a later step fails.
 
     Returns:
         The campaign, now LIVE (or PAUSED if paused=True, with
@@ -794,6 +942,7 @@ async def publish_campaign_to_meta(
             destination_url=destination_url,
             paused=paused,
             video_assets=video_assets,
+            created_campaign_ids=created_campaign_ids,
         )
 
     optimization_goal = _OPTIMIZATION_GOAL_BY_OBJECTIVE[campaign.objective]
@@ -821,6 +970,7 @@ async def publish_campaign_to_meta(
         objective=campaign.objective,
         status=meta_status,
     )
+    created_campaign_ids.append(meta_campaign_id)
     if (
         creative.storyProductImageId or creative.squareProductImageId
     ) and creative.format != "CAROUSEL":
@@ -978,6 +1128,7 @@ async def _publish_creative_test_plan(
     destination_url: str,
     paused: bool,
     video_assets: dict[str, VideoAsset],
+    created_campaign_ids: list[str],
 ) -> Campaign:
     """Publish a CREATIVE_TEST_PLAN: one ad set, one ad per selected creative.
 
@@ -1000,6 +1151,8 @@ async def _publish_creative_test_plan(
         paused: Create everything PAUSED instead of ACTIVE.
         video_assets: The already-processed videos of a video test's ads
             (see _resolve_video_assets); empty for an image test.
+        created_campaign_ids: Appended with the Meta campaign id as soon as it
+            exists, so the caller can delete it if a later step fails.
 
     Returns:
         The campaign, LIVE (or PAUSED), with metaCampaignId and endDate set.
@@ -1044,6 +1197,7 @@ async def _publish_creative_test_plan(
         objective=campaign.objective,
         status=meta_status,
     )
+    created_campaign_ids.append(meta_campaign_id)
     meta_ad_set_id = await meta.create_meta_ad_set(
         access_token=access_token,
         ad_account_id=ad_account_id,
