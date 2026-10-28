@@ -604,6 +604,7 @@ async def create_meta_campaign(
     name: str,
     objective: str,
     status: Literal["ACTIVE", "PAUSED"] = "ACTIVE",
+    daily_budget_cents: int | None = None,
 ) -> str:
     """Create a Campaign object on Meta (PRD.md build step 8).
 
@@ -622,6 +623,12 @@ async def create_meta_campaign(
             sends "PAUSED" here and to create_meta_ad_set/create_meta_ad
             so nothing spends until a human clicks Activate, in this app
             or directly in Ads Manager.
+        daily_budget_cents: A campaign budget (CBO), in the ad account's minor
+            currency unit (cents for USD). When given, the campaign owns the
+            daily budget and the bid strategy (LOWEST_COST_WITHOUT_CAP, "Highest
+            volume", so no cost cap), and its ad sets must carry neither. None
+            keeps the budget on each ad set (create_meta_ad_set's
+            daily_budget_cents).
 
     Returns:
         The new Meta campaign id.
@@ -631,24 +638,29 @@ async def create_meta_campaign(
     """
     if get_settings().fake_meta_enabled:
         return f"fake_campaign_{uuid4().hex[:12]}"
-    body = await _post_json(
-        f"{_GRAPH_BASE_URL}/{ad_account_id}/campaigns",
-        {
-            "access_token": access_token,
-            "name": name,
-            "objective": CAMPAIGN_OBJECTIVE_MAP[objective],
-            "status": status,
-            "special_ad_categories": "[]",
-            # Meta requires this explicitly once a campaign doesn't use a
-            # campaign-level budget (real API behavior confirmed
-            # 2026-08-29, not caught by any mocked test before — error
-            # was "Must specify True or False in is_adset_budget_sharing_
-            # enabled field"). False because budget lives on the AdSet
-            # (create_meta_ad_set's daily_budget), not shared/optimized
-            # across ad sets at the campaign level.
-            "is_adset_budget_sharing_enabled": "false",
-        },
-    )
+    payload: dict[str, str] = {
+        "access_token": access_token,
+        "name": name,
+        "objective": CAMPAIGN_OBJECTIVE_MAP[objective],
+        "status": status,
+        "special_ad_categories": "[]",
+        # AUCTION is Meta's default; sent so the campaign's buying type never
+        # depends on a default.
+        "buying_type": "AUCTION",
+    }
+    if daily_budget_cents is not None:
+        payload["daily_budget"] = str(daily_budget_cents)
+        payload["bid_strategy"] = "LOWEST_COST_WITHOUT_CAP"
+    else:
+        # Meta requires this explicitly once a campaign doesn't use a
+        # campaign-level budget (real API behavior confirmed
+        # 2026-08-29, not caught by any mocked test before — error
+        # was "Must specify True or False in is_adset_budget_sharing_
+        # enabled field"). False because budget lives on the AdSet
+        # (create_meta_ad_set's daily_budget), not shared/optimized
+        # across ad sets at the campaign level.
+        payload["is_adset_budget_sharing_enabled"] = "false"
+    body = await _post_json(f"{_GRAPH_BASE_URL}/{ad_account_id}/campaigns", payload)
     campaign_id: str = body["id"]
     return campaign_id
 
@@ -733,7 +745,7 @@ async def create_meta_ad_set(
     ad_account_id: str,
     name: str,
     meta_campaign_id: str,
-    daily_budget_cents: int,
+    daily_budget_cents: int | None,
     optimization_goal: str,
     age_min: int,
     age_max: int | None,
@@ -785,7 +797,9 @@ async def create_meta_ad_set(
         name: The ad set's display name on Meta.
         meta_campaign_id: The parent Meta campaign id.
         daily_budget_cents: Daily budget in the ad account's minor
-            currency unit (cents for USD).
+            currency unit (cents for USD). None when the campaign owns the
+            budget (CBO, create_meta_campaign's daily_budget_cents): the ad
+            set then sends no daily_budget, bid_strategy or bid_amount.
         optimization_goal: A Meta optimization_goal value.
         age_min: Minimum target age.
         age_max: Maximum target age, or None to omit it. Meta rejects an
@@ -864,7 +878,11 @@ async def create_meta_ad_set(
 
     Raises:
         MetaConnectionError: If the call fails.
+        ValueError: If target_cac_cents is given without a daily_budget_cents:
+            a cost cap belongs to the ad-set-budget path only.
     """
+    if daily_budget_cents is None and target_cac_cents is not None:
+        raise ValueError("A cost cap needs the ad set's own budget, not a CBO campaign")
     if get_settings().fake_meta_enabled:
         return f"fake_adset_{uuid4().hex[:12]}"
     if custom_location is not None:
@@ -908,15 +926,16 @@ async def create_meta_ad_set(
         "access_token": access_token,
         "name": name,
         "campaign_id": meta_campaign_id,
-        "daily_budget": str(daily_budget_cents),
         "billing_event": "IMPRESSIONS",
         "optimization_goal": optimization_goal,
-        "bid_strategy": "COST_CAP"
-        if target_cac_cents is not None
-        else "LOWEST_COST_WITHOUT_CAP",
         "targeting": targeting,
         "status": status,
     }
+    if daily_budget_cents is not None:
+        data["daily_budget"] = str(daily_budget_cents)
+        data["bid_strategy"] = (
+            "COST_CAP" if target_cac_cents is not None else "LOWEST_COST_WITHOUT_CAP"
+        )
     if target_cac_cents is not None:
         data["bid_amount"] = str(target_cac_cents)
     if pixel_id is not None:
@@ -2487,6 +2506,31 @@ async def update_meta_ad_set_budget(
         return
     await _post_json(
         f"{_GRAPH_BASE_URL}/{meta_ad_set_id}",
+        {"access_token": access_token, "daily_budget": str(daily_budget_cents)},
+    )
+
+
+async def update_meta_campaign_budget(
+    *, access_token: str, meta_campaign_id: str, daily_budget_cents: int
+) -> None:
+    """Update a CBO campaign's daily budget on Meta.
+
+    The campaign-budget counterpart of update_meta_ad_set_budget: under a
+    campaign budget Meta rejects a budget on the ad set.
+
+    Args:
+        access_token: The business's Meta access token.
+        meta_campaign_id: The Meta campaign id (Campaign.metaCampaignId).
+        daily_budget_cents: The new daily budget, in the ad account's minor
+            currency unit (cents for USD).
+
+    Raises:
+        MetaConnectionError: If the call fails.
+    """
+    if get_settings().fake_meta_enabled:
+        return
+    await _post_json(
+        f"{_GRAPH_BASE_URL}/{meta_campaign_id}",
         {"access_token": access_token, "daily_budget": str(daily_budget_cents)},
     )
 

@@ -13,6 +13,7 @@ from unittest.mock import AsyncMock
 import pytest
 from app.core.config import get_settings
 from app.schemas.strategy import (
+    CREATIVE_TEST_DEFAULT_DAILY_BUDGET,
     AudienceConstraints,
     CreativeAngle,
     CreativeTestPlanContent,
@@ -198,28 +199,6 @@ def test_daily_budget_of_a_creative_plan_is_its_single_ad_set_budget() -> None:
 # ── Optimization event: decided at creation, never switched ──
 
 
-def test_choose_optimization_event_uses_add_to_cart_at_or_above_the_threshold() -> None:
-    assert strategist._choose_optimization_event(
-        _product(price=500.0), 500.0, 50.0
-    ) == ("ADD_TO_CART")
-    assert strategist._choose_optimization_event(
-        _product(price=2000.0), 500.0, 50.0
-    ) == ("ADD_TO_CART")
-
-
-def test_choose_optimization_event_uses_purchase_below_the_threshold() -> None:
-    assert strategist._choose_optimization_event(
-        _product(price=499.99), 500.0, 50.0
-    ) == ("PURCHASE")
-
-
-def test_choose_optimization_event_uses_purchase_without_a_price() -> None:
-    assert strategist._choose_optimization_event(None, 500.0, 50.0) == "PURCHASE"
-    assert strategist._choose_optimization_event(_product(price=None), 500.0, 50.0) == (
-        "PURCHASE"
-    )
-
-
 def test_high_ticket_threshold_is_configurable_with_a_500_default(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -299,15 +278,17 @@ async def test_creative_test_plan_budget_is_one_ad_set_at_the_full_daily_rate(
     )
 
     assert isinstance(result, CreativeTestPlanContent)
-    assert result.daily_budget == 50.0
+    assert result.daily_budget == 100.0
     assert result.duration_days == 10
-    assert result.total_budget == 500.0
+    assert result.total_budget == 1000.0
 
 
 @pytest.mark.asyncio
-async def test_creative_test_plan_budget_follows_target_cac_within_20_to_75(
+async def test_creative_test_plan_budget_is_the_default_whatever_the_product(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """The budget is a per-campaign setting; it starts at $100, not at a number
+    derived from the product's target CAC."""
     _mock_agent(monkeypatch, _VALID_INPUT)
 
     result = await strategist.generate_strategy(
@@ -319,39 +300,20 @@ async def test_creative_test_plan_budget_follows_target_cac_within_20_to_75(
     )
 
     assert isinstance(result, CreativeTestPlanContent)
-    assert 20.0 <= result.daily_budget <= 75.0
+    assert result.daily_budget == CREATIVE_TEST_DEFAULT_DAILY_BUDGET == 100.0
 
 
 @pytest.mark.asyncio
-async def test_high_ticket_product_optimizes_for_add_to_cart_with_its_own_cap(
-    monkeypatch: pytest.MonkeyPatch,
+@pytest.mark.parametrize("price", [80.0, 499.99, 500.0, 2000.0, None])
+async def test_creative_test_plan_starts_on_purchase_whatever_the_price(
+    monkeypatch: pytest.MonkeyPatch, price: float | None
 ) -> None:
+    """Never silently Add to Cart: a high price only earns a warning in the UI."""
     _mock_agent(monkeypatch, _VALID_INPUT)
 
     result = await strategist.generate_strategy(
         business=_business(),
-        product=_product(price=2000.0, margin=0.5),
-        audience=None,
-        objective="SALES",
-        plan_type="CREATIVE_TEST_PLAN",
-    )
-
-    assert isinstance(result, CreativeTestPlanContent)
-    assert result.optimization_event == "ADD_TO_CART"
-    assert result.target_cost_per_add_to_cart is not None
-    assert result.unit_economics is not None
-    assert result.target_cost_per_add_to_cart < result.unit_economics.target_cac
-
-
-@pytest.mark.asyncio
-async def test_low_ticket_product_optimizes_for_purchase_with_no_cart_cap(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    _mock_agent(monkeypatch, _VALID_INPUT)
-
-    result = await strategist.generate_strategy(
-        business=_business(),
-        product=_product(price=80.0, margin=0.5),
+        product=_product(price=price, margin=0.5),
         audience=None,
         objective="SALES",
         plan_type="CREATIVE_TEST_PLAN",
@@ -360,6 +322,73 @@ async def test_low_ticket_product_optimizes_for_purchase_with_no_cart_cap(
     assert isinstance(result, CreativeTestPlanContent)
     assert result.optimization_event == "PURCHASE"
     assert result.target_cost_per_add_to_cart is None
+
+
+_UNIT_ECONOMICS = UnitEconomicsFields(
+    gross_profit=500.0, breakeven_cac=500.0, target_cac=250.0, breakeven_roas=2.0
+)
+
+
+def _stored_plan() -> CreativeTestPlanContent:
+    return CreativeTestPlanContent.model_validate(
+        _plan_dict(unit_economics=_UNIT_ECONOMICS)
+    )
+
+
+def test_apply_test_settings_sets_the_budget_and_the_total() -> None:
+    result = strategist.apply_test_settings(
+        _stored_plan(),
+        daily_budget=60.0,
+        optimization_event="PURCHASE",
+        add_to_cart_to_purchase_rate=0.1,
+    )
+
+    assert result.daily_budget == 60.0
+    assert result.total_budget == 600.0
+    assert result.optimization_event == "PURCHASE"
+    assert result.target_cost_per_add_to_cart is None
+
+
+def test_apply_test_settings_add_to_cart_sets_the_benchmark_cost_per_add_to_cart() -> (
+    None
+):
+    plan = _stored_plan()
+
+    result = strategist.apply_test_settings(
+        plan,
+        daily_budget=100.0,
+        optimization_event="ADD_TO_CART",
+        add_to_cart_to_purchase_rate=0.1,
+    )
+
+    assert plan.optimization_event == "PURCHASE"  # the given plan is untouched
+    assert result.optimization_event == "ADD_TO_CART"
+    assert result.unit_economics is not None
+    assert result.target_cost_per_add_to_cart == pytest.approx(
+        result.unit_economics.target_cac * 0.1
+    )
+    leading = result.success_criteria.leading_indicators[0]
+    assert leading.business_target == result.target_cost_per_add_to_cart
+    assert result.bid_strategy == plan.bid_strategy
+
+
+def test_apply_test_settings_back_to_purchase_clears_the_add_to_cart_target() -> None:
+    cart = strategist.apply_test_settings(
+        _stored_plan(),
+        daily_budget=100.0,
+        optimization_event="ADD_TO_CART",
+        add_to_cart_to_purchase_rate=0.1,
+    )
+
+    back = strategist.apply_test_settings(
+        cart,
+        daily_budget=100.0,
+        optimization_event="PURCHASE",
+        add_to_cart_to_purchase_rate=0.1,
+    )
+
+    assert back.target_cost_per_add_to_cart is None
+    assert back.success_criteria.leading_indicators[0].business_target is None
 
 
 @pytest.mark.asyncio
@@ -874,18 +903,6 @@ def test_a_test_needs_four_ads_unless_the_product_lacks_a_fourth_asset(
     media_count: int, needed: int
 ) -> None:
     assert required_test_ads(media_count) == needed
-
-
-# ── Add to Cart only on a small budget ───────────────────────
-
-
-def test_a_big_budget_goes_back_to_purchase_even_for_an_expensive_product() -> None:
-    assert strategist._choose_optimization_event(
-        _product(price=900.0), 500.0, 149.0
-    ) == ("ADD_TO_CART")
-    assert strategist._choose_optimization_event(
-        _product(price=900.0), 500.0, 150.0
-    ) == ("PURCHASE")
 
 
 def test_the_plan_says_when_to_propose_the_switch_to_purchase() -> None:

@@ -719,6 +719,151 @@ def test_a_plan_stored_before_the_change_keeps_its_cap(
     assert _kwargs(mock_services["create_ad_set"])["target_cac_cents"] is not None
 
 
+# ── One CBO campaign: the campaign owns the budget and the bid strategy ──
+
+
+def _cbo_plan(**overrides: Any) -> CreativeTestPlanContent:
+    """A first test as the Strategist now writes it: lowest cost, $100 x 10 days."""
+    fields: dict[str, Any] = {
+        "bid_strategy": "LOWEST_COST",
+        "daily_budget": 100.0,
+        "total_budget": 1000.0,
+    }
+    fields.update(overrides)
+    return _creative_plan(**fields)
+
+
+def test_a_first_test_gives_the_campaign_the_budget_and_the_ad_set_none(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    mock_services: dict[str, AsyncMock],  # noqa: F811
+) -> None:
+    business_id, campaign_id, _ = _creative_plan_campaign(
+        client, monkeypatch, plan=_cbo_plan()
+    )
+
+    response = client.post(f"/businesses/{business_id}/campaigns/{campaign_id}/publish")
+
+    assert response.status_code == 200
+    assert _kwargs(mock_services["create_campaign"])["daily_budget_cents"] == 10000
+    ad_set = _kwargs(mock_services["create_ad_set"])
+    assert ad_set["daily_budget_cents"] is None
+    assert ad_set["target_cac_cents"] is None
+
+
+def test_a_first_test_optimizes_for_purchase_conversions_by_default(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    mock_services: dict[str, AsyncMock],  # noqa: F811
+) -> None:
+    business_id, campaign_id, _ = _creative_plan_campaign(
+        client, monkeypatch, plan=_cbo_plan()
+    )
+
+    client.post(f"/businesses/{business_id}/campaigns/{campaign_id}/publish")
+
+    ad_set = _kwargs(mock_services["create_ad_set"])
+    assert ad_set["optimization_goal"] == "OFFSITE_CONVERSIONS"
+    assert ad_set["custom_event_type"] == "PURCHASE"
+    assert ad_set["attribution_spec"] == meta_service_module.ATTRIBUTION_SPEC
+
+
+def test_a_first_test_suggests_the_jewelry_interest_on_advantage_plus(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    mock_services: dict[str, AsyncMock],  # noqa: F811
+) -> None:
+    """The interest is a backend default (a suggestion under Advantage+), not
+    something the LLM picks."""
+    business_id, campaign_id, _ = _creative_plan_campaign(
+        client, monkeypatch, plan=_cbo_plan()
+    )
+
+    client.post(f"/businesses/{business_id}/campaigns/{campaign_id}/publish")
+
+    ad_set = _kwargs(mock_services["create_ad_set"])
+    assert ad_set["interests"] == [{"id": "6003266225248", "name": "Jewelry"}]
+    assert ad_set["advantage_audience"] == 1
+
+
+def test_a_first_test_that_chose_add_to_cart_keeps_the_campaign_budget_and_no_cap(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    mock_services: dict[str, AsyncMock],  # noqa: F811
+) -> None:
+    plan = _cbo_plan(
+        optimization_event="ADD_TO_CART", target_cost_per_add_to_cart=12.34
+    )
+    business_id, campaign_id, _ = _creative_plan_campaign(
+        client, monkeypatch, plan=plan
+    )
+
+    client.post(f"/businesses/{business_id}/campaigns/{campaign_id}/publish")
+
+    assert _kwargs(mock_services["create_campaign"])["daily_budget_cents"] == 10000
+    ad_set = _kwargs(mock_services["create_ad_set"])
+    assert ad_set["custom_event_type"] == "ADD_TO_CART"
+    assert ad_set["target_cac_cents"] is None
+
+
+@pytest.mark.asyncio
+async def test_a_first_test_records_its_one_ad_set_with_the_campaign_budget(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    mock_services: dict[str, AsyncMock],  # noqa: F811
+) -> None:
+    """Our ad-set row of a one-ad-set CBO test holds the campaign's budget, so the
+    Optimizer reads one current budget; the breakers never add it on top."""
+    business_id, campaign_id, _ = _creative_plan_campaign(
+        client, monkeypatch, plan=_cbo_plan()
+    )
+    client.post(f"/businesses/{business_id}/campaigns/{campaign_id}/publish")
+
+    seeder = Prisma()
+    await seeder.connect()
+    try:
+        ad_sets = await seeder.adset.find_many(where={"campaignId": campaign_id})
+        campaign = await seeder.campaign.find_unique(where={"id": campaign_id})
+    finally:
+        await seeder.disconnect()
+
+    assert [a.budget for a in ad_sets] == [100.0]
+    assert campaign is not None and campaign.budgetLevel == "CAMPAIGN"
+
+
+def test_an_older_plan_keeps_its_budget_and_cost_cap_on_the_ad_set(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    mock_services: dict[str, AsyncMock],  # noqa: F811
+) -> None:
+    business_id, campaign_id, _ = _creative_plan_campaign(client, monkeypatch)
+
+    client.post(f"/businesses/{business_id}/campaigns/{campaign_id}/publish")
+
+    assert _kwargs(mock_services["create_campaign"])["daily_budget_cents"] is None
+    ad_set = _kwargs(mock_services["create_ad_set"])
+    assert ad_set["daily_budget_cents"] == 5000
+    assert ad_set["target_cac_cents"] is not None
+    assert ad_set["interests"] is None
+
+
+def test_publish_refuses_a_campaign_budget_under_ten_dollars_per_ad(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    mock_services: dict[str, AsyncMock],  # noqa: F811
+) -> None:
+    plan = _cbo_plan(daily_budget=39.0, total_budget=390.0)
+    business_id, campaign_id, _ = _creative_plan_campaign(
+        client, monkeypatch, plan=plan, select=4, photo_count=4
+    )
+
+    response = client.post(f"/businesses/{business_id}/campaigns/{campaign_id}/publish")
+
+    assert response.status_code == 400
+    assert "at least $40" in response.json()["detail"]
+    mock_services["create_campaign"].assert_not_awaited()
+
+
 # ── 180-day purchasers excluded ──────────────────────────────
 
 

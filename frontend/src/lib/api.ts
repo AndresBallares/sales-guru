@@ -1137,6 +1137,51 @@ export function removeCreativeCard(
   )
 }
 
+export type OptimizationEvent = 'PURCHASE' | 'ADD_TO_CART'
+
+// Whether Add to Cart is worth considering instead of Purchase, and why. Advice
+// only: the backend never switches the event itself.
+export interface EventAdvice {
+  recommended: OptimizationEvent | null
+  reasons: string[]
+  // False when the Pixel's 30-day events couldn't be read.
+  pixelChecked: boolean
+}
+
+// A creative test's per-campaign settings (app/schemas/strategy.py's
+// TestSettingsResponse).
+export interface TestSettings {
+  dailyBudget: number
+  minDailyBudget: number
+  durationDays: number
+  totalBudget: number
+  optimizationEvent: OptimizationEvent
+  adCount: number
+  advice: EventAdvice
+}
+
+export interface TestSettingsInput {
+  dailyBudget?: number
+  optimizationEvent?: OptimizationEvent
+}
+
+export function getTestSettings(businessId: string, campaignId: string): Promise<TestSettings> {
+  return request<TestSettings>(
+    `/businesses/${businessId}/campaigns/${campaignId}/strategy/test-settings`,
+  )
+}
+
+export function updateTestSettings(
+  businessId: string,
+  campaignId: string,
+  input: TestSettingsInput,
+): Promise<TestSettings> {
+  return request<TestSettings>(
+    `/businesses/${businessId}/campaigns/${campaignId}/strategy/test-settings`,
+    { method: 'PATCH', body: JSON.stringify(input) },
+  )
+}
+
 export interface MetaConnectResponse {
   authorizationUrl: string
 }

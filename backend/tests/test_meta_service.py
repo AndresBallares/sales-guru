@@ -457,6 +457,124 @@ async def test_create_meta_campaign_returns_the_new_id(
 
 
 @pytest.mark.asyncio
+async def test_create_meta_campaign_sends_the_auction_buying_type(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """buying_type is sent explicitly even though AUCTION is Meta's default."""
+    client = _mock_client_returning(monkeypatch, _FakeResponse({"id": "campaign_123"}))
+
+    await meta.create_meta_campaign(
+        access_token="token",
+        ad_account_id="act_1",
+        name="Ring",
+        objective="SALES",
+    )
+
+    _url, data = client.calls[0]
+    assert data["buying_type"] == "AUCTION"
+
+
+@pytest.mark.asyncio
+async def test_create_meta_campaign_with_a_budget_owns_budget_and_bid_strategy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A campaign budget (CBO) sends daily_budget and the highest-volume strategy,
+    and not the ad-set-budget flag (the two are mutually exclusive on Meta)."""
+    client = _mock_client_returning(monkeypatch, _FakeResponse({"id": "campaign_123"}))
+
+    await meta.create_meta_campaign(
+        access_token="token",
+        ad_account_id="act_1",
+        name="Ring",
+        objective="SALES",
+        daily_budget_cents=10000,
+    )
+
+    _url, data = client.calls[0]
+    assert data["daily_budget"] == "10000"
+    assert data["bid_strategy"] == "LOWEST_COST_WITHOUT_CAP"
+    assert data["buying_type"] == "AUCTION"
+    assert "is_adset_budget_sharing_enabled" not in data
+
+
+@pytest.mark.asyncio
+async def test_create_meta_campaign_without_a_budget_sends_no_budget_or_strategy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An ad-set-budget campaign keeps its exact shape: no budget, no strategy."""
+    client = _mock_client_returning(monkeypatch, _FakeResponse({"id": "campaign_123"}))
+
+    await meta.create_meta_campaign(
+        access_token="token", ad_account_id="act_1", name="Ring", objective="SALES"
+    )
+
+    _url, data = client.calls[0]
+    assert "daily_budget" not in data
+    assert "bid_strategy" not in data
+
+
+@pytest.mark.asyncio
+async def test_create_meta_ad_set_without_a_budget_leaves_budget_to_the_campaign(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Under a campaign budget the ad set carries no daily_budget, bid_strategy
+    or bid_amount; billing event, goal and targeting are unchanged."""
+    client = _mock_client_returning(monkeypatch, _FakeResponse({"id": "adset_123"}))
+
+    await meta.create_meta_ad_set(
+        access_token="token",
+        ad_account_id="act_1",
+        name="Ring",
+        meta_campaign_id="campaign_123",
+        daily_budget_cents=None,
+        optimization_goal="OFFSITE_CONVERSIONS",
+        age_min=25,
+        age_max=None,
+    )
+
+    _url, data = client.calls[0]
+    assert "daily_budget" not in data
+    assert "bid_strategy" not in data
+    assert "bid_amount" not in data
+    assert data["billing_event"] == "IMPRESSIONS"
+    assert data["optimization_goal"] == "OFFSITE_CONVERSIONS"
+
+
+@pytest.mark.asyncio
+async def test_create_meta_ad_set_rejects_a_cost_cap_without_its_own_budget() -> None:
+    """A cost cap belongs to the ad-set-budget path; it is refused, not dropped."""
+    with pytest.raises(ValueError, match="cost cap"):
+        await meta.create_meta_ad_set(
+            access_token="token",
+            ad_account_id="act_1",
+            name="Ring",
+            meta_campaign_id="campaign_123",
+            daily_budget_cents=None,
+            optimization_goal="OFFSITE_CONVERSIONS",
+            age_min=25,
+            age_max=None,
+            target_cac_cents=5000,
+        )
+
+
+@pytest.mark.asyncio
+async def test_update_meta_campaign_budget_sends_the_new_budget(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A CBO budget change POSTs daily_budget to the campaign's own node."""
+    client = _mock_client_returning(monkeypatch, _FakeResponse({"success": True}))
+
+    await meta.update_meta_campaign_budget(
+        access_token="token", meta_campaign_id="campaign_123", daily_budget_cents=12000
+    )
+
+    url, data = client.calls[0]
+    assert url == "https://graph.facebook.com/v21.0/campaign_123"
+    assert data["daily_budget"] == "12000"
+    assert data["access_token"] == "token"
+
+
+@pytest.mark.asyncio
 async def test_create_meta_campaign_sends_paused_status_when_given(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

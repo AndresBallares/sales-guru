@@ -506,10 +506,28 @@ Avatar = Literal["self_purchaser", "gift_buyer"]
 Pillar = Literal["offer", "mechanism", "education", "emotion"]
 MIN_DISTINCT_PILLARS = 3
 
-# Ad set budget under which an expensive product optimizes for AddToCart, and
-# the purchase count at which the Optimizer proposes moving to Purchase.
-ADD_TO_CART_MAX_DAILY_BUDGET = 150.0
+# The purchase count at which the Optimizer proposes moving an AddToCart test
+# to Purchase.
 SWITCH_TO_PURCHASE_MIN_PURCHASES = 25
+
+# A creative test is one CBO campaign: its daily budget is a per-campaign
+# setting. It starts at the default and may not go below MIN_DAILY_BUDGET_PER_AD
+# for each ad in the test ($40 for four), so every ad can buy enough
+# add-to-carts inside the 10-day test.
+CREATIVE_TEST_DEFAULT_DAILY_BUDGET = 100.0
+MIN_DAILY_BUDGET_PER_AD = 10.0
+
+
+def min_creative_test_daily_budget(ad_count: int) -> float:
+    """The lowest daily budget a creative test may run with.
+
+    Args:
+        ad_count: How many ads the test runs.
+
+    Returns:
+        MIN_DAILY_BUDGET_PER_AD for each ad, in dollars.
+    """
+    return MIN_DAILY_BUDGET_PER_AD * ad_count
 
 
 def required_test_ads(media_count: int) -> int:
@@ -728,11 +746,12 @@ class GeneratedCreativeTestPlanFields(CamelCaseModel):
 class CreativeTestPlanContent(CamelCaseModel):
     """The full structured CREATIVE_TEST_PLAN — what gets stored and returned.
 
-    One ad set, so total_budget is daily_budget x duration_days (not x 2 like
-    TEST_PLAN). optimization_event is decided once at creation (ADD_TO_CART
-    for a high-ticket product, else PURCHASE) and never switched mid-flight;
-    target_cost_per_add_to_cart is the cost-cap target for ADD_TO_CART ad
-    sets and None otherwise.
+    One ad set under one campaign budget, so total_budget is daily_budget x
+    duration_days (not x 2 like TEST_PLAN). optimization_event starts as
+    PURCHASE; the user may choose ADD_TO_CART for the campaign before it is
+    published (never switched silently, and never mid-flight);
+    target_cost_per_add_to_cart is the benchmark cost per add-to-cart for an
+    ADD_TO_CART test and None otherwise.
     """
 
     __test__ = False
@@ -905,3 +924,37 @@ class CreateStrategyRequest(CamelCaseModel):
     # A creative test's format: IMAGE (default) or VIDEO. Ignored outside a
     # creative test.
     test_format: Literal["IMAGE", "VIDEO"] | None = None
+
+
+class EventAdvice(CamelCaseModel):
+    """Whether Add to Cart is worth considering instead of Purchase, and why."""
+
+    # ADD_TO_CART when a reason applies, else None (Purchase needs no advice).
+    recommended: OptimizationEvent | None
+    reasons: list[str]
+    # False when the Pixel's 30-day events could not be read (no Pixel, or
+    # Meta failed): "no purchases" is then not known, so it is not reported.
+    pixel_checked: bool
+
+
+class TestSettingsResponse(CamelCaseModel):
+    """A creative test's per-campaign settings, with the advice on the event."""
+
+    __test__ = False
+
+    daily_budget: float
+    min_daily_budget: float
+    duration_days: int
+    total_budget: float
+    optimization_event: OptimizationEvent
+    # The ads the test runs (four, or three for a thin product); the minimum
+    # budget is MIN_DAILY_BUDGET_PER_AD for each.
+    ad_count: int
+    advice: EventAdvice
+
+
+class UpdateTestSettingsRequest(CamelCaseModel):
+    """Change a creative test's budget and/or conversion event before publishing."""
+
+    daily_budget: float | None = Field(default=None, gt=0)
+    optimization_event: OptimizationEvent | None = None

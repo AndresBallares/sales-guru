@@ -4154,6 +4154,39 @@ a.btn-outline {
   opacity: 0.7;
 }
 
+.test-budget-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin: 12px 0;
+}
+
+.test-event-group {
+  border: 0;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.test-event-option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+}
+
+.test-event-advice ul {
+  margin: 4px 0 0;
+  padding-left: 18px;
+}
+
+.test-settings-save {
+  align-self: flex-start;
+  min-height: 44px;
+}
+
 .test-remove-button {
   align-self: flex-start;
   min-height: 44px;
@@ -4161,6 +4194,7 @@ a.btn-outline {
 
 @media (max-width: 720px) {
   .edit-copy-button,
+  .test-settings-save,
   .test-remove-button {
     width: 100%;
   }

@@ -47,10 +47,10 @@ from prisma.models import Audience, BrandProfile, Business, Product
 from app.core.config import get_settings
 from app.schemas.brand_profile import DEFAULT_AD_LANGUAGES
 from app.schemas.strategy import (
-    ADD_TO_CART_MAX_DAILY_BUDGET,
     BROAD_BASELINE_HYPOTHESIS,
     BROAD_BASELINE_ID,
     BROAD_BASELINE_NAME,
+    CREATIVE_TEST_DEFAULT_DAILY_BUDGET,
     CREATIVE_TEST_HYPOTHESIS_ID,
     CREATIVE_TEST_PRIMARY_METRIC,
     CREATIVE_TEST_SECONDARY_METRICS,
@@ -669,38 +669,6 @@ def _build_data_driven_strategy_prompt(
 # --- CREATIVE_TEST_PLAN helpers ---------------------------------------------
 
 
-def _choose_optimization_event(
-    product: Product | None, high_ticket_threshold: float, daily_budget: float
-) -> OptimizationEvent:
-    """AddToCart for a high-ticket product on a small budget, else Purchase.
-
-    A product priced at or above the threshold rarely produces enough
-    purchases on a test budget for Meta (or us) to learn from, so the ad set
-    optimizes for AddToCart instead, as long as the daily budget is under
-    ADD_TO_CART_MAX_DAILY_BUDGET (a bigger budget buys enough purchases to
-    learn from). A product with no price on file stays on Purchase. The
-    choice is made at plan creation and never switched mid-flight (changing
-    an ad set's optimization event after creation isn't something Meta
-    documents as supported; the Optimizer proposes a new ad set instead).
-
-    Args:
-        product: The campaign's product, if any.
-        high_ticket_threshold: Price at or above which AddToCart is used.
-        daily_budget: The test's daily budget, in dollars.
-
-    Returns:
-        "ADD_TO_CART" or "PURCHASE".
-    """
-    if (
-        product is not None
-        and product.price is not None
-        and product.price >= high_ticket_threshold
-        and daily_budget < ADD_TO_CART_MAX_DAILY_BUDGET
-    ):
-        return "ADD_TO_CART"
-    return "PURCHASE"
-
-
 def _compute_target_cost_per_add_to_cart(
     unit_economics: UnitEconomicsFields | None,
     *,
@@ -729,6 +697,52 @@ def _compute_target_cost_per_add_to_cart(
         else JEWELRY_META_BENCHMARKS.cac.median
     )
     return target_cac * add_to_cart_to_purchase_rate
+
+
+def apply_test_settings(
+    plan: CreativeTestPlanContent,
+    *,
+    daily_budget: float,
+    optimization_event: OptimizationEvent,
+    add_to_cart_to_purchase_rate: float,
+) -> CreativeTestPlanContent:
+    """A creative test plan with the user's budget and conversion event applied.
+
+    The per-campaign settings the user edits before publishing. The total
+    follows the budget (one campaign budget x the test's days), and the
+    benchmark cost per add-to-cart and the success criteria that quote it
+    follow the event: set for ADD_TO_CART, absent for PURCHASE. The bid
+    strategy is untouched (a CBO test never has a cost cap).
+
+    Args:
+        plan: The plan to change.
+        daily_budget: The campaign's daily budget, in dollars.
+        optimization_event: PURCHASE or ADD_TO_CART.
+        add_to_cart_to_purchase_rate: Assumed share of add-to-carts that
+            become purchases (Settings.add_to_cart_to_purchase_rate).
+
+    Returns:
+        A new plan; the given one is not modified.
+    """
+    target = (
+        _compute_target_cost_per_add_to_cart(
+            plan.unit_economics,
+            add_to_cart_to_purchase_rate=add_to_cart_to_purchase_rate,
+        )
+        if optimization_event == "ADD_TO_CART"
+        else None
+    )
+    return plan.model_copy(
+        update={
+            "daily_budget": daily_budget,
+            "total_budget": daily_budget * plan.duration_days,
+            "optimization_event": optimization_event,
+            "target_cost_per_add_to_cart": target,
+            "success_criteria": _build_creative_success_criteria(
+                plan.benchmark_context, plan.unit_economics, target
+            ),
+        }
+    )
 
 
 def _ad_languages(brand_profile: BrandProfile | None) -> list[str]:
@@ -1074,20 +1088,13 @@ async def generate_strategy(
             raise StrategistError(
                 "A creative test plan is only available for the SALES objective"
             )
-        settings = get_settings()
-        daily_budget = _compute_test_daily_budget(unit_economics)
+        # One CBO campaign: the budget is a per-campaign setting that starts at
+        # the default, and the event starts as Purchase. The user may choose Add
+        # to Cart for the campaign (apply_test_settings), never switched here.
+        daily_budget = CREATIVE_TEST_DEFAULT_DAILY_BUDGET
         duration_days = DEFAULT_TEST_DURATION
-        optimization_event = _choose_optimization_event(
-            product, settings.high_ticket_price_threshold, daily_budget
-        )
-        target_cost_per_add_to_cart = (
-            _compute_target_cost_per_add_to_cart(
-                unit_economics,
-                add_to_cart_to_purchase_rate=settings.add_to_cart_to_purchase_rate,
-            )
-            if optimization_event == "ADD_TO_CART"
-            else None
-        )
+        optimization_event: OptimizationEvent = "PURCHASE"
+        target_cost_per_add_to_cart: float | None = None
         prompt = _build_creative_test_plan_prompt(
             business,
             product,
