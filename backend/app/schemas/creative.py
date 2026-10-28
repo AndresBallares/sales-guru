@@ -442,30 +442,44 @@ class GeneratedCreativeBatch(CamelCaseModel):
         and so must the headlines, each taking a different angle and wording.
         Near-duplicates are rejected by shared words (and, for headlines, by
         character similarity), which makes the model retry.
+
+        A single-ad regenerate has nobody to compare with in its own batch, so
+        the caller also passes context["other_texts"], the (headline, primary
+        text) of the test's other ads, and context["check_fields"], which of
+        the two the regenerate will actually replace (both by default).
         """
         context = info.context or {}
-        if not context.get("distinct_text") or len(self.variants) < 2:
+        if not context.get("distinct_text"):
             return self
-        for first, second in combinations(self.variants, 2):
-            if too_similar(
-                first.headline,
-                second.headline,
+        fields = context.get("check_fields", ("headline", "bodyText"))
+        others: list[tuple[str, str]] = list(context.get("other_texts", []))
+        entries = [(v.headline, v.body_text) for v in self.variants] + others
+        # Only pairs with at least one new variant: the existing ads were
+        # already accepted.
+        new_count = len(self.variants)
+        for i, j in combinations(range(len(entries)), 2):
+            if j >= new_count and i >= new_count:
+                continue
+            first, second = entries[i], entries[j]
+            if "headline" in fields and too_similar(
+                first[0],
+                second[0],
                 overlap_limit=_HEADLINE_OVERLAP_LIMIT,
                 ratio_limit=_HEADLINE_RATIO_LIMIT,
             ):
                 raise ValueError(
                     "Every ad needs a clearly different headline; these are too "
-                    f"alike: {first.headline!r} and {second.headline!r}. Give "
-                    "each ad its own angle and wording."
+                    f"alike: {first[0]!r} and {second[0]!r}. Give each ad its "
+                    "own angle and wording."
                 )
-            if too_similar(
-                first.body_text, second.body_text, overlap_limit=_BODY_OVERLAP_LIMIT
+            if "bodyText" in fields and too_similar(
+                first[1], second[1], overlap_limit=_BODY_OVERLAP_LIMIT
             ):
                 raise ValueError(
                     "Every ad needs a clearly different primary text; two of "
-                    f"them are too alike (headlines {first.headline!r} and "
-                    f"{second.headline!r}). Give each ad its own angle, "
-                    "opening and wording."
+                    f"them are too alike (headlines {first[0]!r} and "
+                    f"{second[0]!r}). Give each ad its own angle, opening and "
+                    "wording."
                 )
         return self
 

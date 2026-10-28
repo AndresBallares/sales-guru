@@ -374,6 +374,7 @@ async def _publish_test_plan_variant(
                 "sourceProductId": creative.sourceProductId,
                 "sourceDescription": creative.sourceDescription,
                 "sourceUrl": creative.sourceUrl,
+                "sourcePersonalization": creative.sourcePersonalization,
                 "sourceBusinessDescription": creative.sourceBusinessDescription,
                 # Deliberately different from the source row, not copied:
                 # this is a new local row for a new Ad, tied to this

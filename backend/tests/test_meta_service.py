@@ -4334,18 +4334,19 @@ async def test_a_creative_test_ad_opts_in_to_the_chosen_enhancements_only(
     data = client.calls[0][1]
     features = json.loads(data["degrees_of_freedom_spec"])["creative_features_spec"]
     on = {k for k, v in features.items() if v == {"enroll_status": "OPT_IN"}}
-    # Generate CTA, Enhance media text, Text improvements, Add overlays, Add music.
+    # Generate CTA, Text improvements, Add overlays, Add music.
     assert on == {
         "generate_cta",
-        "replace_media_text",
         "text_optimizations",
         "add_text_overlay",
         "music_generation",
     }
-    # Add business AI, Visual touch-ups, Add animation, Flex media, Translation
-    # and Enhance CTA (not the same setting as Generate CTA) stay off.
+    # Add business AI, Enhance media text (it can alter text inside the image),
+    # Visual touch-ups, Add animation, Flex media, Translation and Enhance CTA
+    # (not the same setting as Generate CTA) stay off.
     for off in (
         "biz_ai",
+        "replace_media_text",
         "image_touchups",
         "image_animation",
         "media_type_automation",
@@ -4374,16 +4375,16 @@ async def test_refused_keys_are_reported_to_the_caller(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     client = _ResponseQueueClient(
-        [_refusal("replace_media_text"), _FakeResponse({"id": "c1"})]
+        [_refusal("music_generation"), _FakeResponse({"id": "c1"})]
     )
     monkeypatch.setattr(httpx, "AsyncClient", lambda **_kwargs: client)
     refused: list[str] = []
 
     await _link_creative(creative_test=True, refused_features=refused)
 
-    assert refused == ["replace_media_text"]
+    assert refused == ["music_generation"]
     second = json.loads(client.calls[1][1]["degrees_of_freedom_spec"])
-    assert "replace_media_text" not in second["creative_features_spec"]
+    assert "music_generation" not in second["creative_features_spec"]
 
 
 def test_the_settings_meta_has_no_key_for_are_written_down() -> None:

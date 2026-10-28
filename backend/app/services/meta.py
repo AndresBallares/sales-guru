@@ -1529,16 +1529,15 @@ CREATIVE_OPT_OUT_FEATURES: tuple[str, ...] = (
 # stays opted out. Each key is accepted by Meta's validate-only mode on Graph
 # v21.0 (2026-10-28), and appears in a created creative's stored spec (read back
 # the same day). Mapping to Ads Manager's labels:
-#   generate_cta = Generate CTA, replace_media_text = Enhance media text,
-#   text_optimizations = Text improvements, add_text_overlay = Add overlays,
-#   music_generation = Add music.
-# Off: biz_ai (Add business AI), image_touchups (Visual touch-ups),
+#   generate_cta = Generate CTA, text_optimizations = Text improvements,
+#   add_text_overlay = Add overlays, music_generation = Add music.
+# Off: biz_ai (Add business AI), replace_media_text (Enhance media text: it can
+# alter text inside the image), image_touchups (Visual touch-ups),
 # image_animation (Add animation), media_type_automation (Flex media) and
 # text_translation (Translation). enhance_cta ("Enhance CTA") is a different
 # setting from Generate CTA and stays off.
 CREATIVE_TEST_OPT_IN_FEATURES: tuple[str, ...] = (
     "generate_cta",
-    "replace_media_text",
     "text_optimizations",
     "add_text_overlay",
     "music_generation",

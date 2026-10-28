@@ -39,6 +39,7 @@ from app.services.creative import (
     find_plan_angle_index,
     generate_creatives,
     is_creative_stale,
+    personalization_snapshot,
     test_ads_required,
 )
 from app.services.creative_naming import angle_label
@@ -487,6 +488,7 @@ async def create_creatives(
             "sourceProductId": product.id if product is not None else None,
             "sourceDescription": source_description,
             "sourceUrl": source_url,
+            "sourcePersonalization": personalization_snapshot(product),
             "sourceBusinessDescription": business.description,
         }
         if photo_pair is not None:
@@ -1131,6 +1133,10 @@ async def regenerate_creative_copy(
                 current_angle, find_plan_angle_index(plan, current_angle)
             ),
             campaign_id=campaign.id,
+            other_texts=await _other_ads_text(campaign, creative),
+            check_fields=tuple(
+                f for f in ("headline", "bodyText") if f in payload.fields
+            ),
         )
     except CreativeAgentError as exc:
         raise HTTPException(
@@ -1155,6 +1161,26 @@ async def regenerate_creative_copy(
     await _reopen_approval_if_selected(campaign, updated)
 
     return _to_response(updated, campaign, product, business)
+
+
+async def _other_ads_text(
+    campaign: Campaign, creative: Creative
+) -> list[tuple[str, str]]:
+    """The (headline, primary text) of the test's other ads, to stay clear of.
+
+    Args:
+        campaign: The campaign.
+        creative: The ad being regenerated, left out.
+
+    Returns:
+        One pair per other ad; empty outside a creative test.
+    """
+    if not await _is_creative_test_plan(campaign):
+        return []
+    others = await db.creative.find_many(
+        where={"campaignId": campaign.id, "id": {"not": creative.id}}
+    )
+    return [(c.headline, c.bodyText) for c in others]
 
 
 async def _find_carousel_creative(creative_id: str, campaign: Campaign) -> Creative:

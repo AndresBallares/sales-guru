@@ -585,6 +585,11 @@ model Creative {
   sourceProductId           String?
   sourceDescription         String?
   sourceUrl                 String?
+  // The product's personalization (flag and options) when this was generated,
+  // as personalization_snapshot() writes it: empty when the product is not
+  // personalizable. A later edit to either makes an unpublished ad stale. Null
+  // on an older row means "not personalizable".
+  sourcePersonalization     String?
   // Same snapshot idea, for the campaign's Business.description — a
   // third staleness source alongside the product fields above (confirmed
   // 2026-09-08): editing a business's own description after generating

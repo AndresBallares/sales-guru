@@ -124,6 +124,7 @@ def _fake_creative(**overrides: object) -> Creative:
         "sourceDescription": "Custom emerald rings",
         "sourceUrl": "https://acme.example/rings",
         "sourceBusinessDescription": None,
+        "sourcePersonalization": None,
     }
     defaults.update(overrides)
     return cast(Creative, SimpleNamespace(**defaults))

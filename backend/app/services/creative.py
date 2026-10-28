@@ -1120,6 +1120,8 @@ def _coerce_batch(
     failure: Exception,
     variant_count: int = _VARIANT_COUNT,
     distinct_text: bool = False,
+    other_texts: list[tuple[str, str]] | None = None,
+    check_fields: tuple[str, ...] = ("headline", "bodyText"),
 ) -> list[GeneratedCreativeVariant]:
     """Best-effort recovery after two failed attempts at a valid batch.
 
@@ -1148,6 +1150,10 @@ def _coerce_batch(
             re-check always enforces.
         distinct_text: Also enforce that the ads' texts are clearly different
             (a creative test). Coercion can't fix that, so it still raises.
+        other_texts: The test's other ads' (headline, primary text), for a
+            single-ad regenerate.
+        check_fields: Which of "headline" and "bodyText" the distinctness check
+            looks at.
 
     Returns:
         The coerced batch's variants.
@@ -1205,7 +1211,12 @@ def _coerce_batch(
         batch = parse_tool_input(
             coerced,
             GeneratedCreativeBatch,
-            context={"variant_count": variant_count, "distinct_text": distinct_text},
+            context={
+                "variant_count": variant_count,
+                "distinct_text": distinct_text,
+                "other_texts": other_texts or [],
+                "check_fields": check_fields,
+            },
         )
     except (ValidationError, ToolInputRecoveryError) as exc:
         raise CreativeAgentError(
@@ -1317,6 +1328,8 @@ async def generate_creatives(
     video: VideoInput | None = None,
     single_variant: SingleVariantTarget | None = None,
     campaign_id: str | None = None,
+    other_texts: list[tuple[str, str]] | None = None,
+    check_fields: tuple[str, ...] = ("headline", "bodyText"),
 ) -> list[GeneratedCreativeVariant]:
     """Call the Creative Agent and return a batch of ad creative variants.
 
@@ -1361,6 +1374,12 @@ async def generate_creatives(
             avatar/concept/pillar context.
         campaign_id: The campaign the call is for, only used to tag the
             token-usage log line.
+
+        other_texts: For a creative test's single-ad regenerate, the (headline,
+            primary text) of the test's other ads; the new text must be clearly
+            different from them, or the model retries.
+        check_fields: Which of "headline" and "bodyText" the regenerate will
+            replace, so only those are compared.
 
     Returns:
         Exactly four generated creative variants (Creative A-D) — or exactly
@@ -1537,6 +1556,9 @@ async def generate_creatives(
         "variant_count": variant_count,
         # A creative test's ads must read as different ads, not rewordings.
         "distinct_text": strategy.plan_type == "CREATIVE_TEST_PLAN",
+        # A single-ad regenerate is compared with the test's other ads.
+        "other_texts": other_texts or [],
+        "check_fields": check_fields,
     }
     expected_card_count = len(card_images) if is_carousel and card_images else None
 
@@ -1579,6 +1601,8 @@ async def generate_creatives(
                     second_failure,
                     variant_count,
                     bool(context["distinct_text"]),
+                    other_texts,
+                    check_fields,
                 )
 
     if expected_card_count is not None:
@@ -1627,6 +1651,21 @@ def _keep_requested_angle(
     return [variants[0].model_copy(update={"creative_angle": target.creative_angle})]
 
 
+def personalization_snapshot(product: Product | None) -> str:
+    """A product's personalization as stored on a creative: empty if it has none.
+
+    Args:
+        product: The campaign's product, if any.
+
+    Returns:
+        "" when the product is not personalizable, else the flag and options
+        joined, so editing either changes it.
+    """
+    if not getattr(product, "personalizable", False):
+        return ""
+    return f"1|{(getattr(product, 'personalizationOptions', None) or '').strip()}"
+
+
 def is_creative_stale(
     creative: Creative, campaign: Campaign, product: Product | None, business: Business
 ) -> bool:
@@ -1669,4 +1708,9 @@ def is_creative_stale(
     assert product is not None  # campaign.productId set implies its row exists (FK)
     if creative.sourceDescription != product.description:
         return True
-    return creative.sourceUrl != product.url
+    if creative.sourceUrl != product.url:
+        return True
+    # Personalization edits matter only until the ad is on Meta.
+    if getattr(campaign, "metaCampaignId", None) is not None:
+        return False
+    return (creative.sourcePersonalization or "") != personalization_snapshot(product)
