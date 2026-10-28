@@ -1799,7 +1799,8 @@ async def create_meta_carousel_ad_creative(
             account linked).
         url_tags: The ad's UTM parameters as a query string, sent as the
             creative's `url_tags`. Omitted when None.
-        creative_test: Apply a creative test's enhancement settings.
+        creative_test: Apply a creative test's enhancement settings and keep
+            the card order (no Meta reordering, no end card).
         refused_features: Appended with every enhancement key Meta refuses.
 
     Returns:
@@ -1824,6 +1825,12 @@ async def create_meta_carousel_ad_creative(
             for card in cards
         ],
     }
+    if creative_test:
+        # Meta defaults both to true: it may reorder the cards for performance
+        # and appends an end card. A test keeps the user's card order and adds
+        # nothing (validate-only on v21.0 accepts both, 2026-10-28).
+        link_data["multi_share_optimized"] = False
+        link_data["multi_share_end_card"] = False
     object_story_spec = json.dumps({"page_id": page_id, "link_data": link_data})
     payload = {
         "access_token": access_token,

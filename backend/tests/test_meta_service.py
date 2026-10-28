@@ -2005,6 +2005,50 @@ async def test_create_meta_ad_creative_returns_a_fake_id_in_fake_mode(
     assert creative_id.startswith("fake_creative_")
 
 
+async def _carousel(creative_test: bool) -> dict[str, Any]:
+    await meta.create_meta_carousel_ad_creative(
+        access_token="token",
+        ad_account_id="act_1",
+        page_id="page_1",
+        name="Carousel A",
+        body_text="Shop the whole collection",
+        cta="SHOP_NOW",
+        link="https://acme.example/rings",
+        cards=[
+            meta.CarouselCard("hash_1", "One", None, "https://acme.example/rings"),
+            meta.CarouselCard("hash_2", "Two", None, "https://acme.example/rings"),
+        ],
+        creative_test=creative_test,
+    )
+    return {}
+
+
+@pytest.mark.asyncio
+async def test_a_creative_test_carousel_keeps_card_order_and_adds_no_end_card(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = _mock_client_returning(monkeypatch, _FakeResponse({"id": "c1"}))
+
+    await _carousel(creative_test=True)
+
+    link_data = json.loads(client.calls[0][1]["object_story_spec"])["link_data"]
+    assert link_data["multi_share_optimized"] is False
+    assert link_data["multi_share_end_card"] is False
+
+
+@pytest.mark.asyncio
+async def test_a_regular_carousel_leaves_meta_defaults_alone(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = _mock_client_returning(monkeypatch, _FakeResponse({"id": "c1"}))
+
+    await _carousel(creative_test=False)
+
+    link_data = json.loads(client.calls[0][1]["object_story_spec"])["link_data"]
+    assert "multi_share_optimized" not in link_data
+    assert "multi_share_end_card" not in link_data
+
+
 @pytest.mark.asyncio
 async def test_create_meta_carousel_ad_creative_returns_a_fake_id_in_fake_mode(
     fake_meta_mode: None,
