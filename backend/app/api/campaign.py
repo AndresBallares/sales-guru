@@ -89,6 +89,10 @@ _VIDEO_TEST_VIDEOS_ONLY = (
     "This is a video test: every ad in it must be a video, so other formats "
     "can't be mixed in"
 )
+_CAROUSEL_TEST_CAROUSELS_ONLY = (
+    "This is a carousel test: every ad in it must be a carousel, so other "
+    "formats can't be mixed in"
+)
 _HAS_DELIVERED = (
     "This campaign has delivered, so it can't be deleted — archive it to keep its "
     "results"
@@ -700,11 +704,10 @@ async def publish_campaign(
         if any(c.format != strategy_content.creative_format for c in creatives):
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail=(
-                    _VIDEO_TEST_VIDEOS_ONLY
-                    if strategy_content.creative_format == "SINGLE_VIDEO"
-                    else _CREATIVE_TEST_SINGLE_IMAGE
-                ),
+                detail={
+                    "SINGLE_VIDEO": _VIDEO_TEST_VIDEOS_ONLY,
+                    "CAROUSEL": _CAROUSEL_TEST_CAROUSELS_ONLY,
+                }.get(strategy_content.creative_format, _CREATIVE_TEST_SINGLE_IMAGE),
             )
     if any(is_creative_stale(c, campaign, product, business) for c in creatives):
         raise HTTPException(

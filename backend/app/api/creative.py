@@ -93,9 +93,15 @@ _SQUARE_NOT_FEED = "The Square asset must be different from the feed asset"
 _FEED_NOT_SQUARE = (
     "This ad's Square asset is that one — the feed asset must be a different asset"
 )
-_CREATIVE_PLAN_SINGLE_IMAGE_ONLY = (
-    "A creative test plan uses single-image ads only for now"
+_CAROUSEL_TEST_CAROUSELS_ONLY = (
+    "This is a carousel test: every ad in it must be a carousel, so other "
+    "formats can't be mixed in"
 )
+_TEST_FORMAT_ONLY = {
+    "SINGLE_IMAGE": _IMAGE_TEST_IMAGES_ONLY,
+    "SINGLE_VIDEO": _VIDEO_TEST_VIDEOS_ONLY,
+    "CAROUSEL": _CAROUSEL_TEST_CAROUSELS_ONLY,
+}
 _NOT_A_CREATIVE_TEST_PLAN = (
     "Only a creative test plan lets you add or remove ads from the test"
 )
@@ -347,19 +353,10 @@ async def create_creatives(
     plan = StrategyContentAdapter.validate_json(strategy.content)
     if plan.plan_type == "CREATIVE_TEST_PLAN":
         creative_format = requested_format or plan.creative_format
-        if creative_format == "CAROUSEL":
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=_CREATIVE_PLAN_SINGLE_IMAGE_ONLY,
-            )
         if creative_format != plan.creative_format:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail=(
-                    _VIDEO_TEST_VIDEOS_ONLY
-                    if plan.creative_format == "SINGLE_VIDEO"
-                    else _IMAGE_TEST_IMAGES_ONLY
-                ),
+                detail=_TEST_FORMAT_ONLY[plan.creative_format],
             )
     else:
         creative_format = requested_format or "SINGLE_IMAGE"

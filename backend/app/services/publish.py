@@ -636,6 +636,8 @@ async def _create_video_meta_creative(
     destination_url: str,
     instagram_user_id: str | None,
     url_tags: str | None = None,
+    creative_test: bool = False,
+    refused_features: list[str] | None = None,
 ) -> str:
     """Create the Meta creative (video_data) for a SINGLE_VIDEO creative."""
     assert creative.productImageId is not None
@@ -654,6 +656,8 @@ async def _create_video_meta_creative(
         image_hash=asset.image_hash,
         instagram_user_id=instagram_user_id,
         url_tags=url_tags,
+        creative_test=creative_test,
+        refused_features=refused_features,
     )
 
 
@@ -667,6 +671,8 @@ async def _create_pair_meta_creative(
     destination_url: str,
     instagram_user_id: str | None,
     url_tags: str | None = None,
+    creative_test: bool = False,
+    refused_features: list[str] | None = None,
 ) -> str:
     """Create the one Meta creative for an ad with a story and/or square asset.
 
@@ -720,6 +726,8 @@ async def _create_pair_meta_creative(
         square=square,
         instagram_user_id=instagram_user_id,
         url_tags=url_tags,
+        creative_test=creative_test,
+        refused_features=refused_features,
     )
 
 
@@ -1265,6 +1273,7 @@ async def _publish_creative_test_plan(
         }
     )
 
+    refused_features: list[str] = []
     for creative in creatives:
         ad_name = creative_naming.ad_name(
             creative.avatar, creative.concept, creative.headline, creative.pillar
@@ -1276,7 +1285,24 @@ async def _publish_creative_test_plan(
             name=ad_name,
             pillar=creative.pillar,
         )
-        if (
+        if creative.format == "CAROUSEL":
+            meta_creative_id = await meta.create_meta_carousel_ad_creative(
+                access_token=access_token,
+                ad_account_id=ad_account_id,
+                page_id=connection.pageId,
+                instagram_user_id=effective_instagram_user_id(connection),
+                name=creative.headline,
+                body_text=creative.bodyText,
+                cta=creative.cta,
+                link=destination_url,
+                cards=await _resolve_carousel_cards(
+                    creative, access_token=access_token, ad_account_id=ad_account_id
+                ),
+                url_tags=url_tags,
+                creative_test=True,
+                refused_features=refused_features,
+            )
+        elif (
             creative.storyProductImageId or creative.squareProductImageId
         ) and creative.format != "CAROUSEL":
             meta_creative_id = await _create_pair_meta_creative(
@@ -1288,6 +1314,8 @@ async def _publish_creative_test_plan(
                 destination_url=destination_url,
                 instagram_user_id=effective_instagram_user_id(connection),
                 url_tags=url_tags,
+                creative_test=True,
+                refused_features=refused_features,
             )
         elif creative.format == "SINGLE_VIDEO":
             meta_creative_id = await _create_video_meta_creative(
@@ -1299,6 +1327,8 @@ async def _publish_creative_test_plan(
                 instagram_user_id=effective_instagram_user_id(connection),
                 destination_url=destination_url,
                 url_tags=url_tags,
+                creative_test=True,
+                refused_features=refused_features,
             )
         else:
             image_hash = await _resolve_image_hash(
@@ -1317,6 +1347,8 @@ async def _publish_creative_test_plan(
                 link=destination_url,
                 image_hash=image_hash,
                 url_tags=url_tags,
+                creative_test=True,
+                refused_features=refused_features,
             )
         meta_ad_id = await meta.create_meta_ad(
             access_token=access_token,
@@ -1338,6 +1370,21 @@ async def _publish_creative_test_plan(
             where={"id": creative.id},
             data={"ad": {"connect": {"id": ad.id}}, "metaCreativeId": meta_creative_id},
         )
+
+    # Anything Meta would not take is logged, never silent: a refused
+    # enhancement key stays at Meta's default, and the settings the API has no
+    # key for are listed so the gap is visible on every test publish.
+    if refused_features:
+        logger.warning(
+            "Creative test %s: Meta refused enhancement keys %s",
+            campaign.id,
+            sorted(set(refused_features)),
+        )
+    logger.warning(
+        "Creative test %s: settings with no Meta API key, left at Meta's default: %s",
+        campaign.id,
+        ", ".join(meta.CREATIVE_TEST_UNSUPPORTED_SETTINGS),
+    )
 
     update_data: CampaignUpdateInput = {
         "status": local_status,

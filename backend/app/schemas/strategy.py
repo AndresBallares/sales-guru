@@ -15,7 +15,7 @@ import re
 from datetime import datetime
 from typing import TYPE_CHECKING, Annotated, Literal, Self
 
-from pydantic import Field, TypeAdapter, model_validator
+from pydantic import Field, TypeAdapter, ValidationInfo, model_validator
 
 from app.schemas.base import CamelCaseModel
 from app.schemas.campaign import Objective
@@ -505,6 +505,9 @@ Avatar = Literal["self_purchaser", "gift_buyer"]
 # four versions of the same lever.
 Pillar = Literal["offer", "mechanism", "education", "emotion"]
 MIN_DISTINCT_PILLARS = 3
+# The angle where the buyer picks colors or materials on an existing design.
+# Only a personalizable product with a URL gets one (exactly one).
+PERSONALIZATION_CONCEPT = "personalization"
 
 # The purchase count at which the Optimizer proposes moving an AddToCart test
 # to Purchase.
@@ -516,6 +519,9 @@ SWITCH_TO_PURCHASE_MIN_PURCHASES = 25
 # add-to-carts inside the 10-day test.
 CREATIVE_TEST_DEFAULT_DAILY_BUDGET = 100.0
 MIN_DAILY_BUDGET_PER_AD = 10.0
+
+
+CreativeTestFormat = Literal["SINGLE_IMAGE", "SINGLE_VIDEO", "CAROUSEL"]
 
 
 def min_creative_test_daily_budget(ad_count: int) -> float:
@@ -726,6 +732,43 @@ class GeneratedCreativeTestPlanFields(CamelCaseModel):
     copy_strategy: str
 
     @model_validator(mode="after")
+    def _check_personalization(self, info: ValidationInfo) -> Self:
+        """The Personalized angle is there exactly when the product allows it.
+
+        Only when the caller sets context["personalization"]: "required" (a
+        personalizable product with a URL) means exactly one angle has the
+        personalization concept, and "forbidden" means none does. A gift-buyer
+        personalized angle is allowed only if another angle covers
+        self-purchase.
+        """
+        mode = (info.context or {}).get("personalization")
+        if mode is None:
+            return self
+        personalized = [
+            a for a in self.creative_angles if a.concept == PERSONALIZATION_CONCEPT
+        ]
+        if mode == "forbidden" and personalized:
+            raise ValueError(
+                "This product is not personalizable (or has no product URL), so "
+                f"no angle may use the {PERSONALIZATION_CONCEPT!r} concept"
+            )
+        if mode == "required":
+            if len(personalized) != 1:
+                raise ValueError(
+                    "Exactly one angle must use the "
+                    f"{PERSONALIZATION_CONCEPT!r} concept; got {len(personalized)}"
+                )
+            others = [a for a in self.creative_angles if a is not personalized[0]]
+            if personalized[0].avatar == "gift_buyer" and not any(
+                a.avatar == "self_purchaser" for a in others
+            ):
+                raise ValueError(
+                    "A gift_buyer personalization angle needs another angle for "
+                    "self_purchaser"
+                )
+        return self
+
+    @model_validator(mode="after")
     def _check_angles(self) -> Self:
         pairs = [(a.avatar, a.concept) for a in self.creative_angles]
         if len(set(pairs)) != len(pairs):
@@ -760,8 +803,9 @@ class CreativeTestPlanContent(CamelCaseModel):
     # The test's format, chosen up front: every ad in one test shares it
     # (mixed formats would blur what the test is comparing). A video test may
     # reuse one video across all its ads with different copy, which still
-    # isolates the message angle. Carousel is never a test format.
-    creative_format: Literal["SINGLE_IMAGE", "SINGLE_VIDEO"] = "SINGLE_IMAGE"
+    # isolates the message angle. A carousel test is four carousels of the
+    # product's photos, each with its own copy.
+    creative_format: CreativeTestFormat = "SINGLE_IMAGE"
     objective: Literal["SALES"]
     audience_constraints: AudienceConstraints
     creative_persona: CreativePersona
@@ -921,9 +965,9 @@ class CreateStrategyRequest(CamelCaseModel):
     # allows carousel. Ignored when real history exists and for other
     # objectives.
     strategy_mode: Literal["CREATIVE_TEST", "STANDARD"] | None = None
-    # A creative test's format: IMAGE (default) or VIDEO. Ignored outside a
-    # creative test.
-    test_format: Literal["IMAGE", "VIDEO"] | None = None
+    # A creative test's format: IMAGE (default), VIDEO or CAROUSEL. Ignored
+    # outside a creative test.
+    test_format: Literal["IMAGE", "VIDEO", "CAROUSEL"] | None = None
 
 
 class EventAdvice(CamelCaseModel):

@@ -207,6 +207,13 @@ model Product {
   // can't fade or chip like plating"). It is why the promise is believable,
   // and the Creative Agent connects it to the benefit instead of listing it.
   mechanism   String?
+  // The buyer picks colors or materials on an existing design and buys on the
+  // website. Only then may a creative test run a "Personalized" angle, and only
+  // with a product URL (the page where the options are chosen).
+  personalizable        Boolean @default(false)
+  // The options on offer ("6 ceramic colors, yellow/white/rose gold"). The
+  // Creative Agent names only these, never an option the product doesn't have.
+  personalizationOptions String?
   url         String?
   images      ProductImage[]
   campaigns   Campaign[]

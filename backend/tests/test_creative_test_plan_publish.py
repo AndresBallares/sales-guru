@@ -10,6 +10,7 @@ from typing import Any
 from unittest.mock import AsyncMock
 
 import pytest
+from app.api import creative as creative_module
 from app.api import strategy as strategy_module
 from app.schemas.strategy import (
     AudienceConstraints,
@@ -26,6 +27,7 @@ from fastapi.testclient import TestClient
 from prisma import Prisma
 
 from tests.test_publish import (
+    _FAKE_CAROUSEL_VARIANTS,
     _FAKE_VARIANTS,
     _connect_meta,
     _create_audience,
@@ -289,10 +291,10 @@ def test_a_legacy_campaign_still_selects_exclusively(client: TestClient) -> None
     assert by_id[first] == "REJECTED"
 
 
-def test_a_creative_test_plan_only_generates_single_image_ads(
+def test_an_image_test_refuses_a_carousel_request(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """V1 is SINGLE_IMAGE only: a carousel request is refused up front."""
+    """Every ad in a test shares the test's format, so a carousel is refused."""
     business_id, campaign_id, _ = _creative_plan_campaign(
         client, monkeypatch, select=0, approve=False, photo_count=3
     )
@@ -303,7 +305,110 @@ def test_a_creative_test_plan_only_generates_single_image_ads(
     )
 
     assert response.status_code == 400
-    assert "single-image" in response.json()["detail"].lower()
+    assert "image test" in response.json()["detail"].lower()
+
+
+def _carousel_test(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> tuple[str, str]:
+    """A carousel creative test with all four carousels selected and approved."""
+    monkeypatch.setattr(
+        creative_module,
+        "generate_creatives",
+        AsyncMock(return_value=_FAKE_CAROUSEL_VARIANTS),
+    )
+    business_id, campaign_id, _ = _creative_plan_campaign(
+        client,
+        monkeypatch,
+        plan=_creative_plan(creative_format="CAROUSEL"),
+        select=0,
+        approve=False,
+        photo_count=3,
+    )
+    creatives = client.post(
+        f"/businesses/{business_id}/campaigns/{campaign_id}/creatives",
+        json={"format": "CAROUSEL"},
+    ).json()
+    assert [c["format"] for c in creatives] == ["CAROUSEL"] * 4
+    for creative in creatives:
+        client.post(
+            f"/businesses/{business_id}/campaigns/{campaign_id}"
+            f"/creatives/{creative['id']}/select"
+        )
+    approved = client.post(f"/businesses/{business_id}/campaigns/{campaign_id}/approve")
+    assert approved.status_code == 200
+    return business_id, campaign_id
+
+
+def test_a_carousel_test_publishes_four_carousels_with_the_test_enhancements(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    mock_services: dict[str, AsyncMock],  # noqa: F811
+) -> None:
+    business_id, campaign_id = _carousel_test(client, monkeypatch)
+
+    response = client.post(f"/businesses/{business_id}/campaigns/{campaign_id}/publish")
+
+    assert response.status_code == 200
+    carousel = mock_services["create_carousel_ad_creative"]
+    assert carousel.await_count == 4
+    assert mock_services["create_ad_creative"].await_count == 0
+    for call in carousel.await_args_list:
+        assert call.kwargs["creative_test"] is True
+        assert call.kwargs["link"] == "https://acme.example/product"
+        assert len(call.kwargs["cards"]) == 3
+
+
+def test_the_carousel_choice_reaches_the_strategist(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    business_id, campaign_id, _ = _creative_plan_campaign(
+        client, monkeypatch, select=0, approve=False
+    )
+    generate = AsyncMock(return_value=_creative_plan(creative_format="CAROUSEL"))
+    monkeypatch.setattr(strategy_module, "generate_strategy", generate)
+
+    response = client.post(
+        f"/businesses/{business_id}/campaigns/{campaign_id}/strategy",
+        json={"hasPriorAdvertisingExperience": False, "testFormat": "CAROUSEL"},
+    )
+
+    assert response.status_code == 201
+    assert _kwargs(generate)["creative_format"] == "CAROUSEL"
+
+
+def test_a_carousel_test_refuses_a_single_image_ad(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    business_id, campaign_id, _ = _creative_plan_campaign(
+        client,
+        monkeypatch,
+        plan=_creative_plan(creative_format="CAROUSEL"),
+        select=0,
+        approve=False,
+        photo_count=3,
+    )
+
+    response = client.post(
+        f"/businesses/{business_id}/campaigns/{campaign_id}/creatives",
+        json={"format": "SINGLE_IMAGE"},
+    )
+
+    assert response.status_code == 400
+    assert "carousel test" in response.json()["detail"].lower()
+
+
+def test_every_single_image_ad_of_a_test_asks_for_the_test_enhancements(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    mock_services: dict[str, AsyncMock],  # noqa: F811
+) -> None:
+    business_id, campaign_id, _ = _creative_plan_campaign(client, monkeypatch, select=3)
+
+    client.post(f"/businesses/{business_id}/campaigns/{campaign_id}/publish")
+
+    for call in mock_services["create_ad_creative"].await_args_list:
+        assert call.kwargs["creative_test"] is True
 
 
 # ── Publishing: one ad set, 3-4 ads ──────────────────────────

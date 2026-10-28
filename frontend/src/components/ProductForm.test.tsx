@@ -856,3 +856,64 @@ describe('ProductForm — mechanism', () => {
     )
   })
 })
+
+describe('ProductForm — personalization', () => {
+  it('hides the options field until Personalizable is checked', async () => {
+    const user = userEvent.setup()
+    render(<ProductForm businessId="biz-1" onSaved={vi.fn<(product: api.Product) => void>()} />)
+
+    expect(screen.queryByLabelText(/Personalization options/)).not.toBeInTheDocument()
+    await user.click(screen.getByLabelText('Personalizable'))
+    expect(screen.getByLabelText(/Personalization options/)).toBeInTheDocument()
+  })
+
+  it('saves the flag and the options on edit', async () => {
+    mockedApi.updateProduct.mockResolvedValue(product)
+    const user = userEvent.setup()
+    render(
+      <ProductForm
+        businessId="biz-1"
+        product={product}
+        onSaved={vi.fn<(product: api.Product) => void>()}
+      />,
+    )
+
+    await user.click(screen.getByLabelText('Personalizable'))
+    await user.type(screen.getByLabelText(/Personalization options/), '6 ceramic colors')
+    await user.click(screen.getByRole('button', { name: 'Save' }))
+
+    await waitFor(() =>
+      expect(mockedApi.updateProduct).toHaveBeenCalledWith(
+        'biz-1',
+        'prod-1',
+        expect.objectContaining({
+          personalizable: true,
+          personalizationOptions: '6 ceramic colors',
+        }),
+      ),
+    )
+  })
+
+  it('clears the options when Personalizable is switched off', async () => {
+    mockedApi.updateProduct.mockResolvedValue(product)
+    const user = userEvent.setup()
+    render(
+      <ProductForm
+        businessId="biz-1"
+        product={{ ...product, personalizable: true, personalizationOptions: 'gold tones' }}
+        onSaved={vi.fn<(product: api.Product) => void>()}
+      />,
+    )
+
+    await user.click(screen.getByLabelText('Personalizable'))
+    await user.click(screen.getByRole('button', { name: 'Save' }))
+
+    await waitFor(() =>
+      expect(mockedApi.updateProduct).toHaveBeenCalledWith(
+        'biz-1',
+        'prod-1',
+        expect.objectContaining({ personalizable: false, personalizationOptions: null }),
+      ),
+    )
+  })
+})

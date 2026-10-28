@@ -4102,7 +4102,12 @@ def _refusal(key: str) -> _FakeResponse:
     )
 
 
-async def _link_creative(url_tags: str | None = None) -> None:
+async def _link_creative(
+    url_tags: str | None = None,
+    *,
+    creative_test: bool = False,
+    refused_features: list[str] | None = None,
+) -> None:
     await meta.create_meta_ad_creative(
         access_token="token",
         ad_account_id="act_1",
@@ -4115,6 +4120,8 @@ async def _link_creative(url_tags: str | None = None) -> None:
         link="https://acme.example",
         image_hash="hash",
         url_tags=url_tags,
+        creative_test=creative_test,
+        refused_features=refused_features,
     )
 
 
@@ -4314,6 +4321,75 @@ async def test_a_refusal_of_an_unknown_feature_name_drops_every_opt_out(
     await _link_creative()
 
     assert "degrees_of_freedom_spec" not in client.calls[1][1]
+
+
+@pytest.mark.asyncio
+async def test_a_creative_test_ad_opts_in_to_the_chosen_enhancements_only(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = _mock_client_returning(monkeypatch, _FakeResponse({"id": "creative_1"}))
+
+    await _link_creative(creative_test=True)
+
+    data = client.calls[0][1]
+    features = json.loads(data["degrees_of_freedom_spec"])["creative_features_spec"]
+    on = {k for k, v in features.items() if v == {"enroll_status": "OPT_IN"}}
+    # Generate CTA, Enhance media text, Text improvements, Add overlays, Add music.
+    assert on == {
+        "generate_cta",
+        "replace_media_text",
+        "text_optimizations",
+        "add_text_overlay",
+        "music_generation",
+    }
+    # Add business AI, Visual touch-ups, Add animation, Flex media, Translation
+    # and Enhance CTA (not the same setting as Generate CTA) stay off.
+    for off in (
+        "biz_ai",
+        "image_touchups",
+        "image_animation",
+        "media_type_automation",
+        "text_translation",
+        "enhance_cta",
+    ):
+        assert features[off] == {"enroll_status": "OPT_OUT"}
+    assert set(features) == set(meta.CREATIVE_OPT_OUT_FEATURES)
+    # Multi-advertiser ads are off.
+    assert json.loads(data["contextual_multi_ads"]) == {"enroll_status": "OPT_OUT"}
+
+
+@pytest.mark.asyncio
+async def test_a_regular_ad_keeps_every_enhancement_off_and_sets_no_multi_advertiser(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = _mock_client_returning(monkeypatch, _FakeResponse({"id": "creative_1"}))
+
+    await _link_creative()
+
+    assert "contextual_multi_ads" not in client.calls[0][1]
+
+
+@pytest.mark.asyncio
+async def test_refused_keys_are_reported_to_the_caller(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = _ResponseQueueClient(
+        [_refusal("replace_media_text"), _FakeResponse({"id": "c1"})]
+    )
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **_kwargs: client)
+    refused: list[str] = []
+
+    await _link_creative(creative_test=True, refused_features=refused)
+
+    assert refused == ["replace_media_text"]
+    second = json.loads(client.calls[1][1]["degrees_of_freedom_spec"])
+    assert "replace_media_text" not in second["creative_features_spec"]
+
+
+def test_the_settings_meta_has_no_key_for_are_written_down() -> None:
+    assert set(meta.CREATIVE_TEST_UNSUPPORTED_SETTINGS) == {
+        "Optimize website destination"
+    }
 
 
 @pytest.mark.asyncio

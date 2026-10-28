@@ -1,28 +1,28 @@
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent } from 'react'
 import {
   ApiError,
   getTestSettings,
   updateTestSettings,
   type OptimizationEvent,
   type TestSettings,
-} from "../lib/api";
+} from '../lib/api'
 
 interface TestSettingsPanelProps {
-  businessId: string;
-  campaignId: string;
+  businessId: string
+  campaignId: string
   // Locks the controls once the campaign is on Meta.
-  published: boolean;
+  published: boolean
   // Called after a save, so the page can pick up the campaign's new status.
-  onSaved: () => void;
+  onSaved: () => void
 }
 
 const EVENT_LABELS: Record<OptimizationEvent, string> = {
-  PURCHASE: "Purchase",
-  ADD_TO_CART: "Add to Cart",
-};
+  PURCHASE: 'Purchase',
+  ADD_TO_CART: 'Add to Cart',
+}
 
 function formatMoney(amount: number): string {
-  return `$${amount.toLocaleString("en-US", { maximumFractionDigits: 2 })}`;
+  return `$${amount.toLocaleString('en-US', { maximumFractionDigits: 2 })}`
 }
 
 // A creative test's daily budget and conversion event. Renders nothing for a
@@ -33,71 +33,58 @@ export function TestSettingsPanel({
   published,
   onSaved,
 }: TestSettingsPanelProps) {
-  const [settings, setSettings] = useState<TestSettings | null>(null);
-  const [budget, setBudget] = useState("");
-  const [event, setEvent] = useState<OptimizationEvent>("PURCHASE");
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [settings, setSettings] = useState<TestSettings | null>(null)
+  const [budget, setBudget] = useState('')
+  const [event, setEvent] = useState<OptimizationEvent>('PURCHASE')
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState<string | null>(null)
 
   function adopt(next: TestSettings) {
-    setSettings(next);
-    setBudget(String(next.dailyBudget));
-    setEvent(next.optimizationEvent);
+    setSettings(next)
+    setBudget(String(next.dailyBudget))
+    setEvent(next.optimizationEvent)
   }
 
   useEffect(() => {
-    let cancelled = false;
+    let cancelled = false
     getTestSettings(businessId, campaignId)
       .then((loaded) => {
-        if (!cancelled) adopt(loaded);
+        if (!cancelled) adopt(loaded)
       })
       .catch(() => {
-        if (!cancelled) setSettings(null);
-      });
+        if (!cancelled) setSettings(null)
+      })
     return () => {
-      cancelled = true;
-    };
-  }, [businessId, campaignId]);
+      cancelled = true
+    }
+  }, [businessId, campaignId])
 
-  if (settings === null) return null;
+  if (settings === null) return null
 
-  const parsedBudget = Number(budget);
-  const budgetValid =
-    budget.trim() !== "" && Number.isFinite(parsedBudget) && parsedBudget > 0;
-  const belowMinimum = budgetValid && parsedBudget < settings.minDailyBudget;
-  const dirty =
-    parsedBudget !== settings.dailyBudget ||
-    event !== settings.optimizationEvent;
-  const total = budgetValid
-    ? parsedBudget * settings.durationDays
-    : settings.totalBudget;
-  const { advice } = settings;
+  const parsedBudget = Number(budget)
+  const budgetValid = budget.trim() !== '' && Number.isFinite(parsedBudget) && parsedBudget > 0
+  const belowMinimum = budgetValid && parsedBudget < settings.minDailyBudget
+  const dirty = parsedBudget !== settings.dailyBudget || event !== settings.optimizationEvent
+  const total = budgetValid ? parsedBudget * settings.durationDays : settings.totalBudget
+  const { advice } = settings
 
   async function handleSubmit(submitEvent: FormEvent) {
-    submitEvent.preventDefault();
-    if (!budgetValid || belowMinimum || !dirty) return;
-    setSaving(true);
-    setError(null);
+    submitEvent.preventDefault()
+    if (!budgetValid || belowMinimum || !dirty) return
+    setSaving(true)
+    setError(null)
     try {
       adopt(
         await updateTestSettings(businessId, campaignId, {
-          ...(parsedBudget !== settings?.dailyBudget
-            ? { dailyBudget: parsedBudget }
-            : {}),
-          ...(event !== settings?.optimizationEvent
-            ? { optimizationEvent: event }
-            : {}),
+          ...(parsedBudget !== settings?.dailyBudget ? { dailyBudget: parsedBudget } : {}),
+          ...(event !== settings?.optimizationEvent ? { optimizationEvent: event } : {}),
         }),
-      );
-      onSaved();
+      )
+      onSaved()
     } catch (err) {
-      setError(
-        err instanceof ApiError
-          ? err.message
-          : "Could not save the test settings.",
-      );
+      setError(err instanceof ApiError ? err.message : 'Could not save the test settings.')
     } finally {
-      setSaving(false);
+      setSaving(false)
     }
   }
 
@@ -116,14 +103,12 @@ export function TestSettingsPanel({
           onChange={(e) => setBudget(e.target.value)}
         />
         <p className="field-hint">
-          At least {formatMoney(settings.minDailyBudget)} for {settings.adCount}{" "}
-          ads ($10 each). Over {settings.durationDays} days that is{" "}
-          {formatMoney(total)} in total.
+          At least {formatMoney(settings.minDailyBudget)} for {settings.adCount} ads ($10 each).
+          Over {settings.durationDays} days that is {formatMoney(total)} in total.
         </p>
         {belowMinimum && (
           <p className="form-error" role="alert">
-            The daily budget must be at least{" "}
-            {formatMoney(settings.minDailyBudget)}.
+            The daily budget must be at least {formatMoney(settings.minDailyBudget)}.
           </p>
         )}
       </div>
@@ -140,7 +125,7 @@ export function TestSettingsPanel({
               onChange={() => setEvent(value)}
             />
             {EVENT_LABELS[value]}
-            {advice.recommended === value && " (suggested)"}
+            {advice.recommended === value && ' (suggested)'}
           </label>
         ))}
       </fieldset>
@@ -157,8 +142,8 @@ export function TestSettingsPanel({
       )}
       {!advice.pixelChecked && (
         <p className="field-hint">
-          Couldn&apos;t check your Pixel&apos;s recent Purchase events, so there
-          is no advice based on them.
+          Couldn&apos;t check your Pixel&apos;s recent Purchase events, so there is no advice based
+          on them.
         </p>
       )}
 
@@ -168,7 +153,7 @@ export function TestSettingsPanel({
           className="btn-outline test-settings-save"
           disabled={saving || !dirty || !budgetValid || belowMinimum}
         >
-          {saving ? "Saving…" : "Save test settings"}
+          {saving ? 'Saving…' : 'Save test settings'}
         </button>
       )}
       {error && (
@@ -177,5 +162,5 @@ export function TestSettingsPanel({
         </p>
       )}
     </form>
-  );
+  )
 }

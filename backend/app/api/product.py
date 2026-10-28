@@ -77,6 +77,8 @@ async def _to_response(product: Product) -> ProductResponse:
         features=product.features,
         benefits=product.benefits,
         mechanism=product.mechanism,
+        personalizable=product.personalizable,
+        personalization_options=product.personalizationOptions,
         url=product.url,
         primary_image_url=await get_primary_image_url(product.id),
     )
@@ -121,6 +123,8 @@ async def create_product(
             "features": payload.features,
             "benefits": payload.benefits,
             "mechanism": payload.mechanism,
+            "personalizable": payload.personalizable,
+            "personalizationOptions": payload.personalization_options,
             "url": payload.url,
         }
     )
@@ -171,7 +175,14 @@ async def update_product(
             (via get_owned_product). 422 if url is given but fails
             validate_destination_url.
     """
-    update_data = cast(ProductUpdateInput, payload.model_dump(exclude_unset=True))
+    changes = payload.model_dump(exclude_unset=True)
+    # The column is camelCase; and personalizable is a non-null flag, so an
+    # explicit null means "leave it".
+    if "personalization_options" in changes:
+        changes["personalizationOptions"] = changes.pop("personalization_options")
+    if changes.get("personalizable", True) is None:
+        del changes["personalizable"]
+    update_data = cast(ProductUpdateInput, changes)
     if not update_data:
         return await _to_response(product)
     updated = await db.product.update(where={"id": product.id}, data=update_data)
