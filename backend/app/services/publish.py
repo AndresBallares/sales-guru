@@ -114,9 +114,10 @@ def _resolve_custom_location(campaign: Campaign) -> CustomLocation | None:
 # The detailed-targeting suggestion every campaign-budget creative test sends,
 # a backend default (never LLM-chosen). Meta has no interest called "Fine
 # jewelry" (its search for it returns only "Jewelry brands" and one tiny brand
-# page), so the closest real one is the curated "Jewelry" interest. Under
-# Advantage+ audience Meta treats it as a suggestion, not a limit.
-SUGGESTED_INTEREST_KEYS = ("jewelry",)
+# page), so the suggestion is the curated "Jewelry design" interest (shown in
+# Ads Manager as "Jewelry design (jewelry)"). Under Advantage+ audience Meta
+# treats it as a suggestion, not a limit.
+SUGGESTED_INTEREST_KEYS = ("jewelry_design",)
 
 
 def _suggested_interests() -> list[dict[str, str]]:
@@ -1166,7 +1167,7 @@ async def _publish_creative_test_plan(
 
     - CAMPAIGN (a first test, lowest cost): one CBO campaign owns the full daily
       budget and the bid strategy (Highest volume, no cost cap), so the ad set
-      carries neither. The ad set suggests the "Jewelry" interest under
+      carries neither. The ad set suggests the "Jewelry design" interest under
       Advantage+ audience. Our ad-set row records the campaign's budget.
     - AD_SET (an older plan): the ad set carries the budget and, for a plan
       stored with COST_CAP, a cost cap (the target cost per add-to-cart for an

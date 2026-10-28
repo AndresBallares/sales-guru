@@ -26,6 +26,7 @@ from app.services.meta import MetaConnectionError
 from fastapi.testclient import TestClient
 from prisma import Prisma
 
+from tests.test_creative_test_plan import _VALID_INPUT as _VALID_PLAN_INPUT
 from tests.test_publish import (
     _FAKE_CAROUSEL_VARIANTS,
     _FAKE_VARIANTS,
@@ -91,8 +92,12 @@ def _creative_plan_campaign(
     select: int = 3,
     approve: bool = True,
     photo_count: int = 1,
+    strategy_generator: Any = None,
 ) -> tuple[str, str, list[str]]:
     """A CREATIVE_TEST_PLAN campaign with `select` creatives selected.
+
+    `strategy_generator` replaces the canned plan with the given callable (for
+    example the real generate_strategy over a mocked model).
 
     Returns:
         (business_id, campaign_id, selected_creative_ids).
@@ -100,7 +105,7 @@ def _creative_plan_campaign(
     monkeypatch.setattr(
         strategy_module,
         "generate_strategy",
-        AsyncMock(return_value=plan or _creative_plan()),
+        strategy_generator or AsyncMock(return_value=plan or _creative_plan()),
     )
     _signed_up_client(client)
     business_id = _create_business(client, website="https://acme.example")
@@ -357,6 +362,38 @@ def test_a_carousel_test_publishes_four_carousels_with_the_test_enhancements(
         assert call.kwargs["creative_test"] is True
         assert call.kwargs["link"] == "https://acme.example/product"
         assert len(call.kwargs["cards"]) == 3
+
+
+def test_a_first_test_is_planned_and_published_at_100_dollars_a_day(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    mock_services: dict[str, AsyncMock],  # noqa: F811
+) -> None:
+    """From the real strategy generation to Meta: $100/day on the campaign."""
+    monkeypatch.setattr(
+        strategist_module, "_call_agent", AsyncMock(return_value=_VALID_PLAN_INPUT)
+    )
+    business_id, campaign_id, _ = _creative_plan_campaign(
+        client,
+        monkeypatch,
+        strategy_generator=strategist_module.generate_strategy,
+    )
+
+    strategy = client.get(
+        f"/businesses/{business_id}/campaigns/{campaign_id}/strategy"
+    ).json()["content"]
+    assert strategy["dailyBudget"] == 100.0
+    assert strategy["totalBudget"] == 1000.0
+    settings = client.get(
+        f"/businesses/{business_id}/campaigns/{campaign_id}/strategy/test-settings"
+    ).json()
+    assert settings["dailyBudget"] == 100.0
+
+    response = client.post(f"/businesses/{business_id}/campaigns/{campaign_id}/publish")
+
+    assert response.status_code == 200
+    assert _kwargs(mock_services["create_campaign"])["daily_budget_cents"] == 10000
+    assert _kwargs(mock_services["create_ad_set"])["daily_budget_cents"] is None
 
 
 def test_the_carousel_choice_reaches_the_strategist(
@@ -887,7 +924,7 @@ def test_a_first_test_suggests_the_jewelry_interest_on_advantage_plus(
     client.post(f"/businesses/{business_id}/campaigns/{campaign_id}/publish")
 
     ad_set = _kwargs(mock_services["create_ad_set"])
-    assert ad_set["interests"] == [{"id": "6003266225248", "name": "Jewelry"}]
+    assert ad_set["interests"] == [{"id": "6002950145774", "name": "Jewelry design"}]
     assert ad_set["advantage_audience"] == 1
 
 
