@@ -1608,6 +1608,8 @@ describe('CampaignsSection', () => {
         features: undefined,
         benefits: undefined,
         mechanism: null,
+        personalizable: false,
+        personalizationOptions: null,
         url: 'https://acme.example/wallets',
       }),
     )
@@ -5557,6 +5559,27 @@ describe('CampaignsSection video ads and the creative test format', () => {
         undefined,
         undefined,
         'VIDEO',
+      ),
+    )
+  })
+
+  it('sends the Carousel choice with the strategy request', async () => {
+    mockedApi.listCampaigns.mockResolvedValue([SALES_CAMPAIGN])
+    mockedApi.createStrategy.mockResolvedValue(FAKE_STRATEGY)
+    const user = userEvent.setup()
+
+    renderCampaigns(<CampaignsSection businessId="biz-1" />)
+    await screen.findByRole('heading', { name: 'Sales' })
+    await user.click(screen.getByRole('radio', { name: 'Carousel' }))
+    await user.click(screen.getByRole('button', { name: 'Generate strategy' }))
+
+    await waitFor(() =>
+      expect(mockedApi.createStrategy).toHaveBeenCalledWith(
+        'biz-1',
+        'camp-1',
+        undefined,
+        undefined,
+        'CAROUSEL',
       ),
     )
   })

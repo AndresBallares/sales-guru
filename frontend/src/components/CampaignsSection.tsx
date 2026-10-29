@@ -1528,10 +1528,21 @@ export function CampaignsSection({
                               />
                               Videos
                             </label>
+                            <label>
+                              <input
+                                type="radio"
+                                name={`test-format-${campaign.id}`}
+                                checked={testFormat[campaign.id] === 'CAROUSEL'}
+                                onChange={() =>
+                                  setTestFormat((prev) => ({ ...prev, [campaign.id]: 'CAROUSEL' }))
+                                }
+                              />
+                              Carousel
+                            </label>
                             <p className="field-hint">
                               Every ad in the test shares one format, so any difference in results
-                              comes from the message, not the format. A video test can reuse one
-                              video across all its ads with different copy.
+                              comes from the message, not the format. A video or carousel test can
+                              reuse the same video or photos across all its ads with different copy.
                             </p>
                           </div>
                         </fieldset>
@@ -1734,6 +1745,17 @@ export function CampaignsSection({
                               }
                             />
                             Videos
+                          </label>
+                          <label>
+                            <input
+                              type="radio"
+                              name={`test-format-${campaign.id}`}
+                              checked={testFormat[campaign.id] === 'CAROUSEL'}
+                              onChange={() =>
+                                setTestFormat((prev) => ({ ...prev, [campaign.id]: 'CAROUSEL' }))
+                              }
+                            />
+                            Carousel
                           </label>
                           <p className="field-hint">
                             Every ad in the test shares one format, so any difference in results

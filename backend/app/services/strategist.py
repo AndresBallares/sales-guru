@@ -43,6 +43,7 @@ from anthropic import AsyncAnthropic
 from anthropic.types import Message, TextBlockParam
 from anthropic.types.cache_control_ephemeral_param import CacheControlEphemeralParam
 from prisma.models import Audience, BrandProfile, Business, Product
+from pydantic import ValidationError
 
 from app.core.config import get_settings
 from app.schemas.brand_profile import DEFAULT_AD_LANGUAGES
@@ -59,6 +60,7 @@ from app.schemas.strategy import (
     HYPOTHESIS_AUDIENCE_ID,
     MAX_STARTING_BUDGET,
     MIN_TEST_BUDGET,
+    PERSONALIZATION_CONCEPT,
     PRIMARY_HYPOTHESIS_METRIC,
     SECONDARY_HYPOTHESIS_METRICS,
     AudienceConstraints,
@@ -66,6 +68,7 @@ from app.schemas.strategy import (
     BenchmarkContext,
     BudgetRecommendation,
     CreativePersona,
+    CreativeTestFormat,
     CreativeTestHypothesis,
     CreativeTestPlanContent,
     DataDrivenStrategyContent,
@@ -286,6 +289,16 @@ def _business_product_audience_lines(
             lines.append(
                 f"Mechanism (why the benefit is believable): {product.mechanism}"
             )
+        if is_personalized(product):
+            lines.append(
+                "Personalizable: the buyer picks the options on an existing "
+                "design and buys on the website."
+                + (
+                    f" Options: {product.personalizationOptions}"
+                    if getattr(product, "personalizationOptions", None)
+                    else ""
+                )
+            )
     else:
         lines += ["", "No specific product was selected for this campaign."]
 
@@ -344,8 +357,8 @@ def _build_test_plan_prompt(
             is asked to set. Each of the two variants gets its own AdSet
             at this rate — actual total daily spend is 2x this number.
         duration_days: The already-decided test duration, same reasoning.
-        creative_format: A CREATIVE_TEST_PLAN's format: SINGLE_IMAGE (default)
-            or SINGLE_VIDEO. Stored on the plan and shaping its prompt; ignored
+        creative_format: A CREATIVE_TEST_PLAN's format: SINGLE_IMAGE (default),
+            SINGLE_VIDEO or CAROUSEL. Stored on the plan and shaping its prompt; ignored
             for the other plan types.
         brand_profile: The business's brand profile, if one exists (PRD.md
             §5 step 3.5) — folded into a "Brand voice" block via
@@ -796,8 +809,40 @@ def _build_creative_success_criteria(
     )
 
 
+def is_personalized(product: Product | None) -> bool:
+    """Whether a creative test may run a Personalized angle for this product.
+
+    Needs the product's personalizable flag and a product URL (the page where
+    the options are chosen).
+    """
+    return (
+        product is not None
+        and bool(getattr(product, "personalizable", False))
+        and bool(product.url)
+    )
+
+
+def _personalization_instruction(product: Product | None) -> str:
+    """Prompt text for the Personalized angle, empty when it doesn't apply."""
+    if not is_personalized(product):
+        return (
+            " This product is not offered as personalizable here, so do not "
+            f"use the {PERSONALIZATION_CONCEPT!r} concept for any angle."
+        )
+    return (
+        f" Exactly one of the four angles is the Personalized angle: concept "
+        f"{PERSONALIZATION_CONCEPT!r}, where the customer picks the colors or "
+        "materials on an existing design and buys on the website. Its avatar "
+        "is self_purchaser unless the other angles already cover "
+        "self-purchase, in which case it may be gift_buyer. Choose its pillar "
+        "as usual (mechanism or emotion fit best). Its description may name "
+        "only the options listed in the product details, never an option the "
+        "product doesn't offer."
+    )
+
+
 def _creative_format_instruction(
-    creative_format: Literal["SINGLE_IMAGE", "SINGLE_VIDEO"],
+    creative_format: CreativeTestFormat,
 ) -> str:
     """The prompt sentence fixing what every ad in the test looks like."""
     if creative_format == "SINGLE_VIDEO":
@@ -807,6 +852,14 @@ def _creative_format_instruction(
             "ads with different copy, so each angle must be a message "
             "(what the ad says and promises), not a different shot — don't "
             "propose carousels, still-image, or multi-image angles."
+        )
+    if creative_format == "CAROUSEL":
+        return (
+            "Every ad in this test is a carousel of the product's own photos, "
+            "and the test may reuse the same photos across all its ads with "
+            "different copy, so each angle must be a message (what the ad says "
+            "and promises), not a different set of photos — don't propose "
+            "video or single-image angles."
         )
     return (
         "Every ad in this test is a single static image, so each angle "
@@ -825,7 +878,7 @@ def _build_creative_test_plan_prompt(
     duration_days: int,
     optimization_event: OptimizationEvent,
     brand_profile: BrandProfile | None = None,
-    creative_format: Literal["SINGLE_IMAGE", "SINGLE_VIDEO"] = "SINGLE_IMAGE",
+    creative_format: CreativeTestFormat = "SINGLE_IMAGE",
 ) -> str:
     """Build the grounding prompt for a CREATIVE_TEST_PLAN generation.
 
@@ -841,7 +894,7 @@ def _build_creative_test_plan_prompt(
         duration_days: The already-decided test duration.
         optimization_event: What the ad set optimizes for.
         brand_profile: The business's brand profile, if any.
-        creative_format: SINGLE_IMAGE or SINGLE_VIDEO — what every ad in the
+        creative_format: SINGLE_IMAGE, SINGLE_VIDEO or CAROUSEL — what every ad in the
             test is, which the prompt states to the model.
 
     Returns:
@@ -896,7 +949,8 @@ def _build_creative_test_plan_prompt(
         "details, and mechanism from the product's stated mechanism or "
         "materials. Each must differ in what it says or shows, not "
         "just in wording, and each must be something this product's real "
-        "details support. The ad format is stated in the request details.",
+        "details support. The ad format is stated in the request details."
+        + _personalization_instruction(product),
         "- hypothesis_statement: a falsifiable statement naming which "
         "angle you expect to win on cost per add-to-cart and why — not a "
         'vague claim like "this should perform well."',
@@ -1031,7 +1085,7 @@ async def generate_strategy(
     plan_type: PlanType,
     account_history: list[AccountCampaignInsights] | None = None,
     brand_profile: BrandProfile | None = None,
-    creative_format: Literal["SINGLE_IMAGE", "SINGLE_VIDEO"] = "SINGLE_IMAGE",
+    creative_format: CreativeTestFormat = "SINGLE_IMAGE",
     campaign_id: str | None = None,
 ) -> StrategyContent:
     """Call the Marketing Strategist Agent and return a structured plan.
@@ -1049,8 +1103,8 @@ async def generate_strategy(
             strategy.py), never by the LLM.
         account_history: Real per-campaign Meta ad-account history, if any
             was found — only meaningful for DATA_DRIVEN_STRATEGY.
-        creative_format: A CREATIVE_TEST_PLAN's format: SINGLE_IMAGE (default)
-            or SINGLE_VIDEO. Stored on the plan and shaping its prompt; ignored
+        creative_format: A CREATIVE_TEST_PLAN's format: SINGLE_IMAGE (default),
+            SINGLE_VIDEO or CAROUSEL. Stored on the plan and shaping its prompt; ignored
             for the other plan types.
         brand_profile: The business's brand profile, if one exists (PRD.md
             §5 step 3.5) — grounds the plan in a "Brand voice" block. None
@@ -1107,19 +1161,34 @@ async def generate_strategy(
             brand_profile,
             creative_format,
         )
-        raw = await _call_agent(
-            tool_name=_CREATIVE_TEST_PLAN_TOOL_NAME,
-            tool_schema=tool_input_schema(GeneratedCreativeTestPlanFields),
-            prompt=prompt,
-            campaign_id=campaign_id,
-        )
-        try:
-            generated_creative = parse_tool_input(raw, GeneratedCreativeTestPlanFields)
-        except ToolInputRecoveryError as exc:
-            raise StrategistError(
-                "The model returned an invalid creative test plan — please "
-                "try generating the strategy again."
-            ) from exc
+        personalization = "required" if is_personalized(product) else "forbidden"
+        # One retry when the angles break the personalization rule (a missing,
+        # doubled or unwanted Personalized angle), naming the problem.
+        retry_note = ""
+        for attempt in (1, 2):
+            raw = await _call_agent(
+                tool_name=_CREATIVE_TEST_PLAN_TOOL_NAME,
+                tool_schema=tool_input_schema(GeneratedCreativeTestPlanFields),
+                prompt=prompt + retry_note,
+                campaign_id=campaign_id,
+            )
+            try:
+                generated_creative = parse_tool_input(
+                    raw,
+                    GeneratedCreativeTestPlanFields,
+                    context={"personalization": personalization},
+                )
+                break
+            except (ToolInputRecoveryError, ValidationError) as exc:
+                if attempt == 2:
+                    raise StrategistError(
+                        "The model returned an invalid creative test plan — "
+                        "please try generating the strategy again."
+                    ) from exc
+                retry_note = (
+                    "\n\nYour previous plan was rejected: "
+                    f"{exc}. Fix it and submit again."
+                )
         benchmark_context = _build_benchmark_context()
         return CreativeTestPlanContent.model_validate(
             {

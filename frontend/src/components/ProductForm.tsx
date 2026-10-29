@@ -61,6 +61,10 @@ export function ProductForm({
   const [features, setFeatures] = useState(product?.features ?? '')
   const [benefits, setBenefits] = useState(product?.benefits ?? '')
   const [mechanism, setMechanism] = useState(product?.mechanism ?? '')
+  const [personalizable, setPersonalizable] = useState(product?.personalizable ?? false)
+  const [personalizationOptions, setPersonalizationOptions] = useState(
+    product?.personalizationOptions ?? '',
+  )
   const [url, setUrl] = useState(product?.url ?? '')
   const [urlFieldError, setUrlFieldError] = useState<string | null>(null)
   const [formError, setFormError] = useState<string | null>(null)
@@ -247,6 +251,9 @@ export function ProductForm({
             benefits: benefits || undefined,
             // null clears a mechanism that was emptied; the other text fields can't be.
             mechanism: mechanism.trim() || null,
+            personalizable,
+            // null clears options that were emptied.
+            personalizationOptions: personalizable ? personalizationOptions.trim() || null : null,
             url: url ? normalizeDestinationUrl(url) : null,
           })
         : await createProduct(businessId, {
@@ -256,6 +263,10 @@ export function ProductForm({
             features: features || undefined,
             benefits: benefits || undefined,
             mechanism: mechanism.trim() || undefined,
+            personalizable,
+            personalizationOptions: personalizable
+              ? personalizationOptions.trim() || undefined
+              : undefined,
             url: url ? normalizeDestinationUrl(url) : undefined,
             campaignId,
           })
@@ -501,6 +512,40 @@ export function ProductForm({
           promise is believable.
         </span>
       </div>
+      <div className="field">
+        <label className="checkbox-label" htmlFor={`personalizable-${idSuffix}`}>
+          <input
+            id={`personalizable-${idSuffix}`}
+            type="checkbox"
+            checked={personalizable}
+            onChange={(event) => setPersonalizable(event.target.checked)}
+          />
+          Personalizable
+        </label>
+        <span className="field-hint">
+          The customer picks colors or materials on an existing design and buys on your website.
+          Needs a product URL. Lets a creative test include a &ldquo;Personalized&rdquo; ad.
+        </span>
+      </div>
+      {personalizable && (
+        <div className="field">
+          <label htmlFor={`personalization-options-${idSuffix}`}>
+            Personalization options <span className="field-hint">(optional)</span>
+          </label>
+          <input
+            id={`personalization-options-${idSuffix}`}
+            type="text"
+            maxLength={300}
+            aria-describedby={`personalization-options-help-${idSuffix}`}
+            value={personalizationOptions}
+            onChange={(event) => setPersonalizationOptions(event.target.value)}
+          />
+          <span className="field-hint" id={`personalization-options-help-${idSuffix}`}>
+            For example &ldquo;6 ceramic colors, yellow/white/rose gold&rdquo;. Ads name only the
+            options listed here and never promise others.
+          </span>
+        </div>
+      )}
       {formError && (
         <p className="form-error" role="alert">
           {formError}

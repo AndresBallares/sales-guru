@@ -12,6 +12,8 @@ from app.services.url_validation import validate_destination_url
 _MAX_DESCRIPTION_LENGTH = 1000
 # The mechanism is a sentence or two, pasted into the same prompts.
 _MAX_MECHANISM_LENGTH = 300
+# The personalization options are one short line, e.g. "6 ceramic colors".
+_MAX_PERSONALIZATION_LENGTH = 300
 
 
 class ProductCreateRequest(CamelCaseModel):
@@ -30,6 +32,12 @@ class ProductCreateRequest(CamelCaseModel):
     features: str | None = None
     benefits: str | None = None
     mechanism: str | None = Field(default=None, max_length=_MAX_MECHANISM_LENGTH)
+    # The buyer picks colors or materials on an existing design and buys on the
+    # website; the options are what the Creative Agent may name.
+    personalizable: bool = False
+    personalization_options: str | None = Field(
+        default=None, max_length=_MAX_PERSONALIZATION_LENGTH
+    )
     url: str | None = None
     # The campaign this product is being created for, if any — scopes
     # auto-attach (app/services/campaign_readiness.py's auto_attach_product)
@@ -63,6 +71,10 @@ class ProductUpdateRequest(CamelCaseModel):
     features: str | None = None
     benefits: str | None = None
     mechanism: str | None = Field(default=None, max_length=_MAX_MECHANISM_LENGTH)
+    personalizable: bool | None = None
+    personalization_options: str | None = Field(
+        default=None, max_length=_MAX_PERSONALIZATION_LENGTH
+    )
     url: str | None = None
 
     @field_validator("url")
@@ -81,6 +93,8 @@ class ProductResponse(CamelCaseModel):
     features: str | None
     benefits: str | None
     mechanism: str | None
+    personalizable: bool
+    personalization_options: str | None
     url: str | None
     # The product's primary (position 0 — ProductImage.position) uploaded
     # photo, if any — lets a campaign list show a thumbnail without a

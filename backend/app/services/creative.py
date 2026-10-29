@@ -97,6 +97,8 @@ from app.schemas.creative import (
 )
 from app.schemas.product_image import MAX_VIDEO_BYTES, MAX_VIDEO_SECONDS
 from app.schemas.strategy import (
+    CREATIVE_TEST_AD_COUNT,
+    PERSONALIZATION_CONCEPT,
     CreativeTestPlanContent,
     StrategyContent,
     primary_audience,
@@ -108,6 +110,7 @@ from app.services.creative_naming import angle_label
 from app.services.llm_usage import CallType, create_logged
 from app.services.media_info import is_square
 from app.services.prompt_safety import quarantine
+from app.services.strategist import is_personalized
 from app.services.tool_use import (
     ToolInputRecoveryError,
     candidate_payloads,
@@ -620,6 +623,34 @@ def _build_system_prompt() -> str:
     return "\n".join(lines)
 
 
+def _personalization_rules(product: Product | None) -> str:
+    """Rules for the Personalized angle's copy (the customer picks the options).
+
+    Names only the options the product lists, so no ad promises a color or
+    material the product doesn't offer.
+    """
+    options = getattr(product, "personalizationOptions", None)
+    named = (
+        f"The only options you may name are these: {options}. Never mention, "
+        "imply or promise any other color, stone, metal or material."
+        if options
+        else "No option list was given, so do not name any specific color, "
+        "stone, metal or material: say only that the customer chooses their "
+        "own."
+    )
+    return (
+        "The Personalized angle: the customer picks the colors or materials "
+        "on an existing design and buys on the website. Write it as "
+        "choosing and making it theirs. " + named + " The ad sends the buyer "
+        "to the product page where the options are chosen, so use SHOP_NOW as "
+        "the shared CTA for every variant. For a gift buyer, you may write it "
+        'as picking her favorite color. For example: headline "Made in Your '
+        'Colors", primary text "Choose the ceramic color and gold for your '
+        'piece. Handcrafted in New York to order." (adapt the wording and '
+        "never copy this example)."
+    )
+
+
 def _build_prompt_parts(
     business: Business,
     product: Product | None,
@@ -774,6 +805,16 @@ def _build_prompt_parts(
             lines.append(
                 f"Mechanism (why the benefit is believable): {product.mechanism}"
             )
+        if is_personalized(product):
+            lines.append(
+                "Personalizable: the buyer picks the options on an existing "
+                "design and buys on the website."
+                + (
+                    f" Options on offer: {product.personalizationOptions}"
+                    if getattr(product, "personalizationOptions", None)
+                    else " (No option list was given.)"
+                )
+            )
         if format == "SINGLE_VIDEO" and video_seconds is not None:
             lines.append(
                 f"This ad is a {video_seconds:.0f}-second video of the product. "
@@ -855,6 +896,8 @@ def _build_prompt_parts(
                 f"- Variant {chr(ord('A') + position)}: {name}{pillar} — "
                 f"{angle.description}"
             )
+        if any(a.concept == PERSONALIZATION_CONCEPT for _, a in listed):
+            tail.append(_personalization_rules(product))
         if single_variant is not None:
             tail.append(
                 "This ad competes against others in one ad set: build it on "
@@ -1076,6 +1119,9 @@ def _coerce_batch(
     objective: Objective,
     failure: Exception,
     variant_count: int = _VARIANT_COUNT,
+    distinct_text: bool = False,
+    other_texts: list[tuple[str, str]] | None = None,
+    check_fields: tuple[str, ...] = ("headline", "bodyText"),
 ) -> list[GeneratedCreativeVariant]:
     """Best-effort recovery after two failed attempts at a valid batch.
 
@@ -1101,7 +1147,13 @@ def _coerce_batch(
         failure: The validation failure being recovered from, logged for
             visibility into what the model kept getting wrong.
         variant_count: How many variants were asked for — the one rule the
-            re-check still enforces, as the only context it passes.
+            re-check always enforces.
+        distinct_text: Also enforce that the ads' texts are clearly different
+            (a creative test). Coercion can't fix that, so it still raises.
+        other_texts: The test's other ads' (headline, primary text), for a
+            single-ad regenerate.
+        check_fields: Which of "headline" and "bodyText" the distinctness check
+            looks at.
 
     Returns:
         The coerced batch's variants.
@@ -1157,7 +1209,14 @@ def _coerce_batch(
         # GET_OFFER specifically) reject a CTA we deliberately moved away
         # from anyway.
         batch = parse_tool_input(
-            coerced, GeneratedCreativeBatch, context={"variant_count": variant_count}
+            coerced,
+            GeneratedCreativeBatch,
+            context={
+                "variant_count": variant_count,
+                "distinct_text": distinct_text,
+                "other_texts": other_texts or [],
+                "check_fields": check_fields,
+            },
         )
     except (ValidationError, ToolInputRecoveryError) as exc:
         raise CreativeAgentError(
@@ -1215,6 +1274,10 @@ async def test_ads_required(campaign: Campaign, plan: CreativeTestPlanContent) -
     Returns:
         The number of selected ads the test needs before it can be approved.
     """
+    if plan.creative_format == "CAROUSEL":
+        # Every carousel reuses the product's same photos, so photos don't
+        # limit the ad count (generation needs the carousel minimum anyway).
+        return CREATIVE_TEST_AD_COUNT
     if campaign.productId is None:
         return required_test_ads(0)
     media_type = "VIDEO" if plan.creative_format == "SINGLE_VIDEO" else "IMAGE"
@@ -1265,6 +1328,8 @@ async def generate_creatives(
     video: VideoInput | None = None,
     single_variant: SingleVariantTarget | None = None,
     campaign_id: str | None = None,
+    other_texts: list[tuple[str, str]] | None = None,
+    check_fields: tuple[str, ...] = ("headline", "bodyText"),
 ) -> list[GeneratedCreativeVariant]:
     """Call the Creative Agent and return a batch of ad creative variants.
 
@@ -1309,6 +1374,12 @@ async def generate_creatives(
             avatar/concept/pillar context.
         campaign_id: The campaign the call is for, only used to tag the
             token-usage log line.
+
+        other_texts: For a creative test's single-ad regenerate, the (headline,
+            primary text) of the test's other ads; the new text must be clearly
+            different from them, or the model retries.
+        check_fields: Which of "headline" and "bodyText" the regenerate will
+            replace, so only those are compared.
 
     Returns:
         Exactly four generated creative variants (Creative A-D) — or exactly
@@ -1483,6 +1554,11 @@ async def generate_creatives(
         "standing_offer": brand_profile.offer if brand_profile is not None else None,
         "format": format,
         "variant_count": variant_count,
+        # A creative test's ads must read as different ads, not rewordings.
+        "distinct_text": strategy.plan_type == "CREATIVE_TEST_PLAN",
+        # A single-ad regenerate is compared with the test's other ads.
+        "other_texts": other_texts or [],
+        "check_fields": check_fields,
     }
     expected_card_count = len(card_images) if is_carousel and card_images else None
 
@@ -1520,7 +1596,13 @@ async def generate_creatives(
                 variants = batch.variants
             except (ValidationError, ToolInputRecoveryError) as second_failure:
                 variants = _coerce_batch(
-                    raw, strategy.objective, second_failure, variant_count
+                    raw,
+                    strategy.objective,
+                    second_failure,
+                    variant_count,
+                    bool(context["distinct_text"]),
+                    other_texts,
+                    check_fields,
                 )
 
     if expected_card_count is not None:
@@ -1569,6 +1651,21 @@ def _keep_requested_angle(
     return [variants[0].model_copy(update={"creative_angle": target.creative_angle})]
 
 
+def personalization_snapshot(product: Product | None) -> str:
+    """A product's personalization as stored on a creative: empty if it has none.
+
+    Args:
+        product: The campaign's product, if any.
+
+    Returns:
+        "" when the product is not personalizable, else the flag and options
+        joined, so editing either changes it.
+    """
+    if not getattr(product, "personalizable", False):
+        return ""
+    return f"1|{(getattr(product, 'personalizationOptions', None) or '').strip()}"
+
+
 def is_creative_stale(
     creative: Creative, campaign: Campaign, product: Product | None, business: Business
 ) -> bool:
@@ -1611,4 +1708,9 @@ def is_creative_stale(
     assert product is not None  # campaign.productId set implies its row exists (FK)
     if creative.sourceDescription != product.description:
         return True
-    return creative.sourceUrl != product.url
+    if creative.sourceUrl != product.url:
+        return True
+    # Personalization edits matter only until the ad is on Meta.
+    if getattr(campaign, "metaCampaignId", None) is not None:
+        return False
+    return (creative.sourcePersonalization or "") != personalization_snapshot(product)

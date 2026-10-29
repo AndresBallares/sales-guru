@@ -262,6 +262,101 @@ async def test_generate_strategy_returns_a_creative_test_plan(
     assert result.baseline_metrics.cost_per_add_to_cart is None
 
 
+def _with_personalized_angle(raw: dict[str, Any]) -> dict[str, Any]:
+    """The valid plan input with its last angle swapped for the Personalized one."""
+    angles = [*raw["creative_angles"]]
+    angles[-1] = {
+        "avatar": "self_purchaser",
+        "concept": "personalization",
+        "pillar": "offer",
+        "description": "Pick your colors",
+    }
+    return {**raw, "creative_angles": angles}
+
+
+@pytest.mark.asyncio
+async def test_a_personalizable_product_gets_the_personalized_angle(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    agent = _mock_agent(monkeypatch, _with_personalized_angle(_VALID_INPUT))
+    product = _product(personalizable=True, url="https://acme.example/ring")
+
+    result = await strategist.generate_strategy(
+        business=_business(),
+        product=product,
+        audience=None,
+        objective="SALES",
+        plan_type="CREATIVE_TEST_PLAN",
+    )
+
+    assert agent.await_count == 1
+    assert isinstance(result, CreativeTestPlanContent)
+    concepts = [
+        a.concept for a in result.creative_angles if isinstance(a, CreativeAngle)
+    ]
+    assert concepts.count("personalization") == 1
+
+
+@pytest.mark.asyncio
+async def test_a_missing_personalized_angle_is_asked_for_again_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    agent = AsyncMock(
+        side_effect=[_VALID_INPUT, _with_personalized_angle(_VALID_INPUT)]
+    )
+    monkeypatch.setattr(strategist, "_call_agent", agent)
+    product = _product(personalizable=True, url="https://acme.example/ring")
+
+    result = await strategist.generate_strategy(
+        business=_business(),
+        product=product,
+        audience=None,
+        objective="SALES",
+        plan_type="CREATIVE_TEST_PLAN",
+    )
+
+    assert agent.await_count == 2
+    assert "was rejected" in agent.await_args_list[1].kwargs["prompt"]
+    assert isinstance(result, CreativeTestPlanContent)
+    concepts = [
+        a.concept for a in result.creative_angles if isinstance(a, CreativeAngle)
+    ]
+    assert "personalization" in concepts
+
+
+@pytest.mark.asyncio
+async def test_a_plan_that_never_gets_the_angle_right_fails_clearly(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _mock_agent(monkeypatch, _VALID_INPUT)
+    product = _product(personalizable=True, url="https://acme.example/ring")
+
+    with pytest.raises(strategist.StrategistError):
+        await strategist.generate_strategy(
+            business=_business(),
+            product=product,
+            audience=None,
+            objective="SALES",
+            plan_type="CREATIVE_TEST_PLAN",
+        )
+
+
+@pytest.mark.asyncio
+async def test_an_unwanted_personalized_angle_is_asked_for_again(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _mock_agent(monkeypatch, _with_personalized_angle(_VALID_INPUT))
+
+    with pytest.raises(strategist.StrategistError):
+        await strategist.generate_strategy(
+            business=_business(),
+            product=_product(),
+            audience=None,
+            objective="SALES",
+            plan_type="CREATIVE_TEST_PLAN",
+        )
+
+
 @pytest.mark.asyncio
 async def test_creative_test_plan_budget_is_one_ad_set_at_the_full_daily_rate(
     monkeypatch: pytest.MonkeyPatch,
@@ -620,9 +715,15 @@ def test_a_creative_test_plan_can_be_a_video_test() -> None:
     assert plan.creative_format == "SINGLE_VIDEO"
 
 
-def test_a_creative_test_plan_cannot_be_a_carousel_test() -> None:
+def test_a_creative_test_plan_can_be_a_carousel_test() -> None:
+    plan = CreativeTestPlanContent(**_plan_dict(creative_format="CAROUSEL"))
+
+    assert plan.creative_format == "CAROUSEL"
+
+
+def test_a_creative_test_plan_rejects_an_unknown_format() -> None:
     with pytest.raises(ValidationError):
-        CreativeTestPlanContent(**_plan_dict(creative_format="CAROUSEL"))
+        CreativeTestPlanContent(**_plan_dict(creative_format="COLLECTION"))
 
 
 @pytest.mark.asyncio

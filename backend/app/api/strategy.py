@@ -20,6 +20,7 @@ from app.core.published_guard import ALREADY_PUBLISHED, ensure_not_published
 from app.schemas.strategy import (
     CAMPAIGN_BUDGET_LEVEL,
     CreateStrategyRequest,
+    CreativeTestFormat,
     CreativeTestPlanContent,
     StrategyContentAdapter,
     StrategyResponse,
@@ -43,6 +44,13 @@ from app.services.strategist import (
     apply_test_settings,
     generate_strategy,
 )
+
+# CreateStrategyRequest.test_format -> the plan's creative_format.
+_TEST_FORMATS: dict[str, CreativeTestFormat] = {
+    "IMAGE": "SINGLE_IMAGE",
+    "VIDEO": "SINGLE_VIDEO",
+    "CAROUSEL": "CAROUSEL",
+}
 
 router = APIRouter(
     prefix="/businesses/{business_id}/campaigns/{campaign_id}/strategy",
@@ -224,10 +232,9 @@ async def create_strategy(
             plan_type=plan_type,
             account_history=account_history,
             brand_profile=brand_profile,
-            creative_format=(
-                "SINGLE_VIDEO"
-                if body is not None and body.test_format == "VIDEO"
-                else "SINGLE_IMAGE"
+            creative_format=_TEST_FORMATS.get(
+                body.test_format if body is not None and body.test_format else "IMAGE",
+                "SINGLE_IMAGE",
             ),
             campaign_id=campaign.id,
         )
