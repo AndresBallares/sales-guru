@@ -5397,3 +5397,299 @@ output.preview-missing {
     width: 100%;
   }
 }
+
+/* ---------- Campaigns overview: a card per campaign ---------- */
+
+/* The business page is wide enough for a card grid; every section below keeps filling
+   the width it is given. */
+.business-detail:not(.ad-workspace-page) {
+  max-width: 1120px;
+}
+
+/* In the overview the grid is the content, so the section drops its own card. */
+main > section.campaigns-overview {
+  background: transparent;
+  border: none;
+  padding: 0;
+}
+
+.section-subtitle {
+  margin: -0.5rem 0 0;
+  color: var(--text-secondary);
+}
+
+.campaign-grid {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 1.25rem;
+}
+
+@media (min-width: 640px) {
+  .campaign-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (min-width: 1040px) {
+  .campaign-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+.campaign-tile {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  justify-content: flex-start;
+  flex-wrap: nowrap;
+  gap: 0.75rem;
+  min-width: 0;
+  padding: 1.25rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card-lg);
+  box-shadow: var(--shadow-card);
+}
+
+.campaign-tile-top {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.9rem;
+}
+
+.campaign-tile-media {
+  flex: 0 0 auto;
+  width: 84px;
+  aspect-ratio: 1 / 1;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--row-bg);
+}
+
+.campaign-tile-media img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.campaign-tile-placeholder {
+  display: grid;
+  place-items: center;
+  width: 100%;
+  height: 100%;
+  color: var(--text-tertiary);
+}
+
+.campaign-tile-placeholder svg {
+  width: 32px;
+  height: 32px;
+}
+
+.campaign-tile-identity {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.25rem;
+  min-width: 0;
+}
+
+.campaign-tile-title {
+  margin: 0;
+  font-size: 1.05rem;
+  line-height: 1.3;
+  /* A long name wraps, then truncates, so it never pushes the status or action away. */
+  overflow-wrap: anywhere;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.campaign-tile-subtitle {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 0.9rem;
+}
+
+.campaign-tile-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin-top: 0.15rem;
+  padding: 0.15rem 0.7rem 0.15rem 0.55rem;
+  border-radius: 999px;
+  background: var(--pill-bg);
+  color: var(--pill-text);
+  font-size: 0.85rem;
+  font-weight: 600;
+  line-height: 1.5;
+}
+
+.campaign-tile-badge-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.campaign-tile-badge[data-tone='info'] {
+  background: var(--primary-soft);
+  color: var(--primary-soft-text);
+}
+
+.campaign-tile-badge[data-tone='ready'] {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  color: var(--accent);
+}
+
+.campaign-tile-badge[data-tone='attention'] {
+  background: var(--warning-bg);
+  color: var(--warning);
+}
+
+.campaign-tile-badge[data-tone='busy'] {
+  background: var(--primary-soft);
+  color: var(--primary-soft-text);
+}
+
+.campaign-tile-badge[data-tone='busy'] .campaign-tile-badge-dot {
+  animation: campaign-tile-pulse 1.4s ease-in-out infinite;
+}
+
+.campaign-tile-badge[data-tone='success'] {
+  background: var(--success-bg);
+  color: var(--success);
+}
+
+.campaign-tile-badge[data-tone='danger'] {
+  background: var(--error-bg);
+  color: var(--error);
+}
+
+@keyframes campaign-tile-pulse {
+  50% {
+    opacity: 0.35;
+  }
+}
+
+.campaign-tile-meta {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 0.9rem;
+}
+
+.campaign-tile-message {
+  margin: 0;
+  font-size: 0.92rem;
+}
+
+.campaign-tile-progress {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.campaign-tile-progress progress {
+  width: 100%;
+  height: 6px;
+  appearance: none;
+  border: none;
+  border-radius: 999px;
+  overflow: hidden;
+  background: var(--border);
+}
+
+.campaign-tile-progress progress::-webkit-progress-bar {
+  background: var(--border);
+}
+
+.campaign-tile-progress progress::-webkit-progress-value {
+  background: var(--primary);
+  border-radius: 999px;
+}
+
+.campaign-tile-progress progress::-moz-progress-bar {
+  background: var(--primary);
+  border-radius: 999px;
+}
+
+.campaign-tile-progress-label {
+  color: var(--text-tertiary);
+  font-size: 0.8rem;
+}
+
+/* The action sits at the bottom of every card, so a row of cards lines up. */
+.campaign-tile-footer {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-top: auto;
+  padding-top: 0.25rem;
+}
+
+.campaign-tile-primary {
+  flex: 1 1 auto;
+  min-width: 0;
+  justify-content: center;
+}
+
+.campaign-tile-menu {
+  margin-left: 0;
+  flex: 0 0 auto;
+}
+
+.campaign-tile-skeleton {
+  min-height: 210px;
+  background: var(--row-bg);
+  animation: campaign-tile-pulse 1.4s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .campaign-tile-skeleton,
+  .campaign-tile-badge[data-tone='busy'] .campaign-tile-badge-dot {
+    animation: none;
+  }
+}
+
+.campaign-detail-nav {
+  margin: 0;
+}
+
+.campaign-back-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  align-self: flex-start;
+  padding: 0.4rem 0.9rem 0.4rem 0.5rem;
+  background: transparent;
+  color: var(--text-secondary);
+  border: 1px solid var(--border-strong);
+}
+
+.campaign-back-link:hover:not(:disabled) {
+  background: var(--surface-hover);
+  color: var(--text);
+  box-shadow: none;
+}
+
+.campaign-back-link svg {
+  width: 18px;
+  height: 18px;
+}
+
+/* On the narrowest phones the thumbnail gives way, so a status pill fits on one line. */
+@media (max-width: 360px) {
+  .campaign-tile-media {
+    width: 64px;
+  }
+
+  .campaign-tile-top {
+    gap: 0.7rem;
+  }
+}

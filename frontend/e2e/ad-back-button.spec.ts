@@ -47,7 +47,7 @@ test('the ad preview has a round back button that returns to the ad choices with
   expect(await back.evaluate((el) => getComputedStyle(el).outlineStyle)).not.toBe('none')
   await page.keyboard.press('Enter')
 
-  await expect(page).toHaveURL(/\/businesses\/[^/]+\?metaLater=1$/)
+  await expect(page).toHaveURL(/\/businesses\/[^/]+\?metaLater=1&campaign=[^&]+$/)
   // The three chosen ads are still selected, ready to edit.
   await expect(page.getByRole('heading', { name: 'Choose your test ads' })).toBeVisible()
   await expect(page.getByText('3 of 3–4 ads selected')).toBeVisible()

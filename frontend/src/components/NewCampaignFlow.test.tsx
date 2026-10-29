@@ -68,12 +68,12 @@ function renderFlow({
   products = [],
   audiences = [],
   onCancel = vi.fn<() => void>(),
-  onDone = vi.fn<() => void>(),
+  onDone = vi.fn<(campaignId: string) => void>(),
 }: {
   products?: api.Product[]
   audiences?: api.Audience[]
   onCancel?: () => void
-  onDone?: () => void
+  onDone?: (campaignId: string) => void
 } = {}) {
   render(
     <NewCampaignFlow
@@ -107,7 +107,7 @@ describe('NewCampaignFlow, when the option lists could not load', () => {
         optionsError="This list couldn't load. Check your connection and try again."
         onRetryOptions={onRetry}
         onCancel={vi.fn<() => void>()}
-        onDone={vi.fn<() => void>()}
+        onDone={vi.fn<(campaignId: string) => void>()}
       />,
     )
 
@@ -275,7 +275,8 @@ describe('NewCampaignFlow', () => {
     await waitFor(() =>
       expect(mockedApi.createStrategy).toHaveBeenCalledWith('biz-1', 'camp-2', undefined),
     )
-    expect(onDone).toHaveBeenCalled()
+    // The page opens the new campaign, so it is told which one this was.
+    expect(onDone).toHaveBeenCalledWith('camp-2')
   })
 
   it('asks the one-time ad-experience question on a 428, then retries with the answer', async () => {

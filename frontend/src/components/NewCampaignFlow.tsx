@@ -49,7 +49,8 @@ export function NewCampaignFlow({
   optionsError?: string | null
   onRetryOptions?: () => void
   onCancel: () => void
-  onDone: () => void
+  // Called with the new campaign's id once its strategy is generated, so the page can open it.
+  onDone: (campaignId: string) => void
 }) {
   const [step, setStep] = useState<Step>('details')
   const [campaign, setCampaign] = useState<Campaign | null>(null)
@@ -136,7 +137,7 @@ export function NewCampaignFlow({
     try {
       await createStrategy(businessId, campaign.id, hasPriorAdvertisingExperience)
       setNeedsAdExperienceAnswer(false)
-      onDone()
+      onDone(campaign.id)
     } catch (err) {
       if (err instanceof ApiError && err.status === 428) {
         // The one-time "has this business advertised before?" question

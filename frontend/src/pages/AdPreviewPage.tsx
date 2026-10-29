@@ -402,7 +402,10 @@ export function AdPreviewPage() {
       <div className="ad-workspace">
         <header className="ad-header">
           {businessId && (
-            <BackButton to={`/businesses/${businessId}?metaLater=1`} label="Back to ad choices" />
+            <BackButton
+              to={`/businesses/${businessId}?metaLater=1&campaign=${campaignId}`}
+              label="Back to ad choices"
+            />
           )}
           <div className="ad-header-text">
             <h1>{campaign?.name ?? 'Ad preview'}</h1>
