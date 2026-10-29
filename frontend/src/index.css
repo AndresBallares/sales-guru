@@ -5206,12 +5206,47 @@ output.preview-missing {
 
 .business-item-meta {
   min-width: 0;
+  /* Auto margins on both sides centre it between the name and whatever closes the row
+     (the logo, or the row's right edge). */
+  margin-inline: auto;
   color: var(--text-secondary);
   font-size: 0.9rem;
   overflow-wrap: anywhere;
 }
 
+/* The saved logo closes the row, flush right. */
+.business-item-logo {
+  width: 40px;
+  height: 40px;
+  flex: none;
+  object-fit: cover;
+  border-radius: 50%;
+  border: 1px solid var(--border-strong);
+}
+
+/* With no logo after it the row's gap sits only on the name's side; half of it evens the two. */
+.business-item-meta:last-child {
+  translate: -0.5rem 0;
+}
+
+/* With no industry or place line, the logo takes the free space itself and stays flush right. */
+.business-item-name + .business-item-logo {
+  margin-left: auto;
+}
+
 @media (max-width: 720px) {
+  .business-item-meta,
+  .business-item-meta:last-child {
+    margin-inline: 0;
+    translate: none;
+  }
+
+  .business-item-logo,
+  .business-item-name + .business-item-logo {
+    align-self: flex-end;
+    margin-left: 0;
+  }
+
   .company-actions {
     flex-direction: column;
     align-items: stretch;

@@ -167,6 +167,35 @@ describe('DashboardPage', () => {
       const neither = screen.getByRole('link', { name: 'Neither' }).closest('li') as HTMLElement
       expect(neither.children).toHaveLength(1)
     })
+
+    it('shows the saved logo at the end of the row, after the industry and place', async () => {
+      mockedApi.listBusinesses.mockResolvedValue([
+        biz({
+          industry: 'FASHION_JEWELRY',
+          location: 'New York',
+          logoUrl: 'https://img.example/venzi.png',
+        }),
+      ])
+
+      renderDashboard()
+
+      const item = (await screen.findByRole('link', { name: 'VENZI JEWELRY' })).closest('li') as HTMLElement
+      expect(item.children).toHaveLength(3)
+      expect(item.children[1]).toHaveTextContent('Fashion / Jewelry · New York')
+      const logo = item.children[2]
+      expect(logo.tagName).toBe('IMG')
+      expect(logo).toHaveAttribute('src', 'https://img.example/venzi.png')
+      expect(logo).toHaveAttribute('alt', 'VENZI JEWELRY logo')
+    })
+
+    it('shows no logo, and no placeholder, for a business without one', async () => {
+      mockedApi.listBusinesses.mockResolvedValue([biz({ location: 'Austin' })])
+
+      renderDashboard()
+
+      const item = (await screen.findByRole('link', { name: 'VENZI JEWELRY' })).closest('li') as HTMLElement
+      expect(item.querySelector('img')).toBeNull()
+    })
   })
 
   describe('the page header', () => {

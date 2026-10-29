@@ -286,6 +286,13 @@ export function DashboardPage() {
                     .join(' · ')}
                 </span>
               )}
+              {business.logoUrl && (
+                <img
+                  className="business-item-logo"
+                  src={business.logoUrl}
+                  alt={`${business.name} logo`}
+                />
+              )}
             </li>
           ))}
         </ul>
