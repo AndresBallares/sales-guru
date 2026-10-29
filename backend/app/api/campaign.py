@@ -25,7 +25,12 @@ from app.schemas.campaign import (
     PublishCampaignRequest,
     PublishStatusResponse,
 )
-from app.schemas.strategy import MAX_CREATIVE_ANGLES, StrategyContentAdapter
+from app.schemas.strategy import (
+    CAMPAIGN_BUDGET_LEVEL,
+    MAX_CREATIVE_ANGLES,
+    StrategyContentAdapter,
+    min_creative_test_daily_budget,
+)
 from app.services import campaign_lifecycle, publish_jobs
 from app.services.campaign_readiness import advance_to_ready_if_complete, is_ready
 from app.services.creative import (
@@ -68,6 +73,10 @@ _META_NOT_CONNECTED_TO_ACTIVATE = (
 _CREATIVE_TEST_AD_COUNT = (
     "A creative test needs {count} selected ads before it can be published"
 )
+_CREATIVE_TEST_BUDGET_TOO_LOW = (
+    "The daily budget must be at least ${minimum:,.0f} for a test of {count} "
+    "ads ($10 each). Raise it in the test settings, then publish again."
+)
 _COPY_NOT_PUBLISHABLE = (
     "Can't publish yet — fix the ad copy first: {failures}. Regenerate the ads "
     "or edit them, then try again."
@@ -79,6 +88,10 @@ _CREATIVE_TEST_SINGLE_IMAGE = (
 _VIDEO_TEST_VIDEOS_ONLY = (
     "This is a video test: every ad in it must be a video, so other formats "
     "can't be mixed in"
+)
+_CAROUSEL_TEST_CAROUSELS_ONLY = (
+    "This is a carousel test: every ad in it must be a carousel, so other "
+    "formats can't be mixed in"
 )
 _HAS_DELIVERED = (
     "This campaign has delivered, so it can't be deleted — archive it to keep its "
@@ -677,14 +690,24 @@ async def publish_campaign(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=_CREATIVE_TEST_AD_COUNT.format(count=required_ads),
             )
+        minimum = min_creative_test_daily_budget(len(creatives))
+        if (
+            campaign.budgetLevel == CAMPAIGN_BUDGET_LEVEL
+            and strategy_content.daily_budget < minimum
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=_CREATIVE_TEST_BUDGET_TOO_LOW.format(
+                    minimum=minimum, count=len(creatives)
+                ),
+            )
         if any(c.format != strategy_content.creative_format for c in creatives):
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail=(
-                    _VIDEO_TEST_VIDEOS_ONLY
-                    if strategy_content.creative_format == "SINGLE_VIDEO"
-                    else _CREATIVE_TEST_SINGLE_IMAGE
-                ),
+                detail={
+                    "SINGLE_VIDEO": _VIDEO_TEST_VIDEOS_ONLY,
+                    "CAROUSEL": _CAROUSEL_TEST_CAROUSELS_ONLY,
+                }.get(strategy_content.creative_format, _CREATIVE_TEST_SINGLE_IMAGE),
             )
     if any(is_creative_stale(c, campaign, product, business) for c in creatives):
         raise HTTPException(

@@ -117,6 +117,10 @@ describe('ProductsSection', () => {
         margin: undefined,
         features: 'Full-grain leather',
         benefits: 'Lasts a lifetime',
+        mechanism: undefined,
+        personalizable: false,
+        personalizationOptions: undefined,
+        campaignId: undefined,
         url: 'https://acme.example/wallets',
       }),
     )
@@ -170,6 +174,9 @@ describe('ProductsSection', () => {
         features: undefined,
         benefits: undefined,
         mechanism: undefined,
+        personalizable: false,
+        personalizationOptions: undefined,
+        campaignId: undefined,
         url: undefined,
       }),
     )
@@ -438,6 +445,8 @@ describe('ProductsSection', () => {
         features: undefined,
         benefits: undefined,
         mechanism: null,
+        personalizable: false,
+        personalizationOptions: null,
         url: null,
       }),
     )

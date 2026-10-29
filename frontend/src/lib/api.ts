@@ -146,6 +146,11 @@ export interface Product {
   // The specific design, material or method that makes the product deliver its
   // benefit — why the promise is believable. Optional.
   mechanism: string | null
+  // The buyer picks colors or materials on an existing design and buys on the
+  // website. Lets a creative test run a "Personalized" angle (needs a url).
+  personalizable?: boolean
+  // The options on offer ("6 ceramic colors, yellow/white/rose gold"); the ads name only these.
+  personalizationOptions?: string | null
   url: string | null
   // The primary (first, ProductImage position 0) uploaded photo's URL, or
   // null if this product has no photos yet — used for campaign-list
@@ -160,6 +165,8 @@ export interface ProductCreateInput {
   features?: string
   benefits?: string
   mechanism?: string
+  personalizable?: boolean
+  personalizationOptions?: string
   url?: string
   // The campaign this product is being created for, if any — scopes
   // backend auto-attach to that one campaign (app/services/
@@ -180,6 +187,8 @@ export interface ProductUpdateInput {
   benefits?: string
   // null clears it, like url.
   mechanism?: string | null
+  personalizable?: boolean
+  personalizationOptions?: string | null
   url?: string | null
 }
 
@@ -929,7 +938,7 @@ export interface Strategy {
 export type StrategyMode = 'CREATIVE_TEST' | 'STANDARD'
 
 // A creative test's format, chosen up front: every ad is an image or every ad a video.
-export type TestFormat = 'IMAGE' | 'VIDEO'
+export type TestFormat = 'IMAGE' | 'VIDEO' | 'CAROUSEL'
 
 export function createStrategy(
   businessId: string,
@@ -1134,6 +1143,51 @@ export function removeCreativeCard(
   return request<Creative>(
     `/businesses/${businessId}/campaigns/${campaignId}/creatives/${creativeId}/cards/${cardId}`,
     { method: 'DELETE' },
+  )
+}
+
+export type OptimizationEvent = 'PURCHASE' | 'ADD_TO_CART'
+
+// Whether Add to Cart is worth considering instead of Purchase, and why. Advice
+// only: the backend never switches the event itself.
+export interface EventAdvice {
+  recommended: OptimizationEvent | null
+  reasons: string[]
+  // False when the Pixel's 30-day events couldn't be read.
+  pixelChecked: boolean
+}
+
+// A creative test's per-campaign settings (app/schemas/strategy.py's
+// TestSettingsResponse).
+export interface TestSettings {
+  dailyBudget: number
+  minDailyBudget: number
+  durationDays: number
+  totalBudget: number
+  optimizationEvent: OptimizationEvent
+  adCount: number
+  advice: EventAdvice
+}
+
+export interface TestSettingsInput {
+  dailyBudget?: number
+  optimizationEvent?: OptimizationEvent
+}
+
+export function getTestSettings(businessId: string, campaignId: string): Promise<TestSettings> {
+  return request<TestSettings>(
+    `/businesses/${businessId}/campaigns/${campaignId}/strategy/test-settings`,
+  )
+}
+
+export function updateTestSettings(
+  businessId: string,
+  campaignId: string,
+  input: TestSettingsInput,
+): Promise<TestSettings> {
+  return request<TestSettings>(
+    `/businesses/${businessId}/campaigns/${campaignId}/strategy/test-settings`,
+    { method: 'PATCH', body: JSON.stringify(input) },
   )
 }
 

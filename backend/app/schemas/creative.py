@@ -2,6 +2,8 @@
 
 import re
 from datetime import datetime
+from difflib import SequenceMatcher
+from itertools import combinations
 from typing import Literal, Self, get_args
 
 from pydantic import Field, ValidationInfo, field_validator, model_validator
@@ -275,6 +277,86 @@ def offer_mentioned(standing_offer: str, body_text: str) -> bool:
     return not offer_tokens or any(token in body_lower for token in offer_tokens)
 
 
+# Words that carry no angle, left out when comparing two ads' text.
+_STOP_WORDS = frozenset(
+    {
+        "a",
+        "an",
+        "and",
+        "are",
+        "as",
+        "at",
+        "be",
+        "but",
+        "by",
+        "for",
+        "from",
+        "has",
+        "have",
+        "i",
+        "in",
+        "is",
+        "it",
+        "its",
+        "of",
+        "on",
+        "or",
+        "our",
+        "so",
+        "that",
+        "the",
+        "their",
+        "this",
+        "to",
+        "us",
+        "we",
+        "with",
+        "you",
+        "your",
+    }
+)
+# How alike two ads' text may be before they count as near-duplicates. Headlines
+# are short, so they get a stricter ratio check as well as the word overlap.
+_HEADLINE_OVERLAP_LIMIT = 0.6
+_HEADLINE_RATIO_LIMIT = 0.8
+_BODY_OVERLAP_LIMIT = 0.5
+
+
+def _content_words(text: str) -> frozenset[str]:
+    return frozenset(
+        word
+        for word in re.findall(r"[a-z0-9]+", text.lower())
+        if word not in _STOP_WORDS
+    )
+
+
+def too_similar(
+    first: str, second: str, *, overlap_limit: float, ratio_limit: float | None = None
+) -> bool:
+    """Whether two ad texts are near-duplicates, by shared words or by spelling.
+
+    Args:
+        first: One text.
+        second: The other.
+        overlap_limit: Reject at this share of shared content words (the words
+            in both, over the words in either).
+        ratio_limit: When given, also reject at this character-level
+            similarity (catches reworded copies of the same short line).
+
+    Returns:
+        True if the texts are too alike to test as different ads.
+    """
+    a, b = _content_words(first), _content_words(second)
+    if a and b and len(a & b) / len(a | b) >= overlap_limit:
+        return True
+    if ratio_limit is None:
+        return False
+    return (
+        SequenceMatcher(None, first.lower().strip(), second.lower().strip()).ratio()
+        >= ratio_limit
+    )
+
+
 class GeneratedCreativeBatch(CamelCaseModel):
     """The full tool-call payload: the requested number of variants (A-D).
 
@@ -349,6 +431,56 @@ class GeneratedCreativeBatch(CamelCaseModel):
                 "All variants must have a distinct creative_angle; got "
                 f"{[variant.creative_angle for variant in self.variants]}"
             )
+        return self
+
+    @model_validator(mode="after")
+    def _check_distinct_text(self, info: ValidationInfo) -> Self:
+        """A creative test's ads must differ in wording, not just in photo.
+
+        Only when the caller sets context["distinct_text"] (a creative test's
+        batch): the primary texts must be clearly different from one another,
+        and so must the headlines, each taking a different angle and wording.
+        Near-duplicates are rejected by shared words (and, for headlines, by
+        character similarity), which makes the model retry.
+
+        A single-ad regenerate has nobody to compare with in its own batch, so
+        the caller also passes context["other_texts"], the (headline, primary
+        text) of the test's other ads, and context["check_fields"], which of
+        the two the regenerate will actually replace (both by default).
+        """
+        context = info.context or {}
+        if not context.get("distinct_text"):
+            return self
+        fields = context.get("check_fields", ("headline", "bodyText"))
+        others: list[tuple[str, str]] = list(context.get("other_texts", []))
+        entries = [(v.headline, v.body_text) for v in self.variants] + others
+        # Only pairs with at least one new variant: the existing ads were
+        # already accepted.
+        new_count = len(self.variants)
+        for i, j in combinations(range(len(entries)), 2):
+            if j >= new_count and i >= new_count:
+                continue
+            first, second = entries[i], entries[j]
+            if "headline" in fields and too_similar(
+                first[0],
+                second[0],
+                overlap_limit=_HEADLINE_OVERLAP_LIMIT,
+                ratio_limit=_HEADLINE_RATIO_LIMIT,
+            ):
+                raise ValueError(
+                    "Every ad needs a clearly different headline; these are too "
+                    f"alike: {first[0]!r} and {second[0]!r}. Give each ad its "
+                    "own angle and wording."
+                )
+            if "bodyText" in fields and too_similar(
+                first[1], second[1], overlap_limit=_BODY_OVERLAP_LIMIT
+            ):
+                raise ValueError(
+                    "Every ad needs a clearly different primary text; two of "
+                    f"them are too alike (headlines {first[0]!r} and "
+                    f"{second[0]!r}). Give each ad its own angle, opening and "
+                    "wording."
+                )
         return self
 
     @model_validator(mode="after")

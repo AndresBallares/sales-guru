@@ -39,6 +39,7 @@ from app.services.creative import (
     find_plan_angle_index,
     generate_creatives,
     is_creative_stale,
+    personalization_snapshot,
     test_ads_required,
 )
 from app.services.creative_naming import angle_label
@@ -93,9 +94,15 @@ _SQUARE_NOT_FEED = "The Square asset must be different from the feed asset"
 _FEED_NOT_SQUARE = (
     "This ad's Square asset is that one — the feed asset must be a different asset"
 )
-_CREATIVE_PLAN_SINGLE_IMAGE_ONLY = (
-    "A creative test plan uses single-image ads only for now"
+_CAROUSEL_TEST_CAROUSELS_ONLY = (
+    "This is a carousel test: every ad in it must be a carousel, so other "
+    "formats can't be mixed in"
 )
+_TEST_FORMAT_ONLY = {
+    "SINGLE_IMAGE": _IMAGE_TEST_IMAGES_ONLY,
+    "SINGLE_VIDEO": _VIDEO_TEST_VIDEOS_ONLY,
+    "CAROUSEL": _CAROUSEL_TEST_CAROUSELS_ONLY,
+}
 _NOT_A_CREATIVE_TEST_PLAN = (
     "Only a creative test plan lets you add or remove ads from the test"
 )
@@ -347,19 +354,10 @@ async def create_creatives(
     plan = StrategyContentAdapter.validate_json(strategy.content)
     if plan.plan_type == "CREATIVE_TEST_PLAN":
         creative_format = requested_format or plan.creative_format
-        if creative_format == "CAROUSEL":
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=_CREATIVE_PLAN_SINGLE_IMAGE_ONLY,
-            )
         if creative_format != plan.creative_format:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail=(
-                    _VIDEO_TEST_VIDEOS_ONLY
-                    if plan.creative_format == "SINGLE_VIDEO"
-                    else _IMAGE_TEST_IMAGES_ONLY
-                ),
+                detail=_TEST_FORMAT_ONLY[plan.creative_format],
             )
     else:
         creative_format = requested_format or "SINGLE_IMAGE"
@@ -490,6 +488,7 @@ async def create_creatives(
             "sourceProductId": product.id if product is not None else None,
             "sourceDescription": source_description,
             "sourceUrl": source_url,
+            "sourcePersonalization": personalization_snapshot(product),
             "sourceBusinessDescription": business.description,
         }
         if photo_pair is not None:
@@ -1134,6 +1133,10 @@ async def regenerate_creative_copy(
                 current_angle, find_plan_angle_index(plan, current_angle)
             ),
             campaign_id=campaign.id,
+            other_texts=await _other_ads_text(campaign, creative),
+            check_fields=tuple(
+                f for f in ("headline", "bodyText") if f in payload.fields
+            ),
         )
     except CreativeAgentError as exc:
         raise HTTPException(
@@ -1158,6 +1161,26 @@ async def regenerate_creative_copy(
     await _reopen_approval_if_selected(campaign, updated)
 
     return _to_response(updated, campaign, product, business)
+
+
+async def _other_ads_text(
+    campaign: Campaign, creative: Creative
+) -> list[tuple[str, str]]:
+    """The (headline, primary text) of the test's other ads, to stay clear of.
+
+    Args:
+        campaign: The campaign.
+        creative: The ad being regenerated, left out.
+
+    Returns:
+        One pair per other ad; empty outside a creative test.
+    """
+    if not await _is_creative_test_plan(campaign):
+        return []
+    others = await db.creative.find_many(
+        where={"campaignId": campaign.id, "id": {"not": creative.id}}
+    )
+    return [(c.headline, c.bodyText) for c in others]
 
 
 async def _find_carousel_creative(creative_id: str, campaign: Campaign) -> Creative:

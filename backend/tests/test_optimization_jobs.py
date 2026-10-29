@@ -1332,6 +1332,58 @@ async def test_generate_and_store_recommendation_auto_applies_when_eligible(
 
 
 @pytest.mark.asyncio
+async def test_a_budget_change_on_a_campaign_budget_goes_to_the_campaign(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Under CBO Meta rejects a budget on the ad set: the change is posted to the
+    campaign, and our one ad-set row follows it."""
+    _, campaign_id = _live_campaign(client)
+    await _make_campaign_budget(campaign_id, packs=0)
+    now = datetime.now(UTC)
+    await _seed_metric(campaign_id, fetched_at=now - timedelta(hours=25), spend=10.0)
+    await _seed_metric(campaign_id, fetched_at=now, spend=25.0)
+    auto_eligible = GeneratedRecommendation(
+        action_type="INCREASE_BUDGET",
+        reasoning="Strong, consistent performance across all windows.",
+        confidence=0.95,
+        risk="LOW",
+        suggested_budget=27.0,
+    )
+    monkeypatch.setattr(
+        optimizer_module,
+        "generate_recommendation",
+        AsyncMock(return_value=_fake_result(auto_eligible)),
+    )
+    update_campaign = AsyncMock()
+    update_ad_set = AsyncMock()
+    monkeypatch.setattr(
+        optimization_jobs, "update_meta_campaign_budget", update_campaign
+    )
+    monkeypatch.setattr(optimization_jobs, "update_meta_ad_set_budget", update_ad_set)
+    seeder = Prisma()
+    await seeder.connect()
+    campaign = await seeder.campaign.find_unique(where={"id": campaign_id})
+    await seeder.disconnect()
+    assert campaign is not None
+
+    result = _run(client, optimization_jobs.generate_and_store_recommendation, campaign)
+
+    assert result is not None and result.status == "APPLIED"
+    update_ad_set.assert_not_awaited()
+    update_campaign.assert_awaited_once()
+    assert update_campaign.await_args is not None
+    kwargs = update_campaign.await_args.kwargs
+    assert kwargs["meta_campaign_id"] == campaign.metaCampaignId
+    assert kwargs["daily_budget_cents"] == 2700
+    seeder = Prisma()
+    await seeder.connect()
+    ad_set = await seeder.adset.find_first(where={"campaignId": campaign_id})
+    await seeder.disconnect()
+    assert ad_set is not None
+    assert ad_set.budget == pytest.approx(27.0)
+
+
+@pytest.mark.asyncio
 async def test_generate_and_store_recommendation_falls_back_when_auto_apply_fails(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -2189,6 +2241,52 @@ async def test_circuit_breaker_pauses_a_creative_test_that_overspent_its_one_ad_
     assert "600.00" in str(campaign.pausedReason)
     assert "500.00" in str(campaign.pausedReason)
     mock_services["pause_ad_set"].assert_awaited()
+
+
+@pytest.mark.asyncio
+async def test_circuit_breaker_ceiling_for_a_100_dollar_cbo_test_is_1000_dollars(
+    client: TestClient, mock_services: dict[str, AsyncMock]
+) -> None:
+    """One campaign budget of $100/day for 10 days is a $1,000 ceiling, whatever
+    the number of ad sets under it. $1,100 spent pauses the campaign."""
+    campaign_id = await _make_creative_plan_campaign(
+        client,
+        optimization_event="PURCHASE",
+        daily_budget=100.0,
+        bid_strategy="LOWEST_COST",
+    )
+    await _make_campaign_budget(campaign_id, packs=2)
+    mock_services["insights"].return_value = CampaignInsights(
+        impressions=1000, clicks=100, spend=1100.0, conversions=2
+    )
+
+    _run(client, optimization_jobs.collect_metrics_for_all_live_campaigns)
+
+    campaign = await _fetch_campaign(campaign_id)
+    assert campaign.status == "PAUSED"
+    assert "1,100.00" in str(campaign.pausedReason)
+    assert "1,000.00" in str(campaign.pausedReason)
+
+
+@pytest.mark.asyncio
+async def test_circuit_breaker_leaves_a_cbo_test_under_1000_dollars_live(
+    client: TestClient, mock_services: dict[str, AsyncMock]
+) -> None:
+    campaign_id = await _make_creative_plan_campaign(
+        client,
+        optimization_event="PURCHASE",
+        daily_budget=100.0,
+        bid_strategy="LOWEST_COST",
+    )
+    await _make_campaign_budget(campaign_id, packs=0)
+    mock_services["insights"].return_value = CampaignInsights(
+        impressions=1000, clicks=100, spend=999.0, conversions=2
+    )
+
+    _run(client, optimization_jobs.collect_metrics_for_all_live_campaigns)
+
+    assert (await _fetch_campaign(campaign_id)).status == "LIVE"
+    mock_services["pause_ad_set"].assert_not_awaited()
 
 
 @pytest.mark.asyncio

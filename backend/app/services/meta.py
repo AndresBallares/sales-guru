@@ -604,6 +604,7 @@ async def create_meta_campaign(
     name: str,
     objective: str,
     status: Literal["ACTIVE", "PAUSED"] = "ACTIVE",
+    daily_budget_cents: int | None = None,
 ) -> str:
     """Create a Campaign object on Meta (PRD.md build step 8).
 
@@ -622,6 +623,12 @@ async def create_meta_campaign(
             sends "PAUSED" here and to create_meta_ad_set/create_meta_ad
             so nothing spends until a human clicks Activate, in this app
             or directly in Ads Manager.
+        daily_budget_cents: A campaign budget (CBO), in the ad account's minor
+            currency unit (cents for USD). When given, the campaign owns the
+            daily budget and the bid strategy (LOWEST_COST_WITHOUT_CAP, "Highest
+            volume", so no cost cap), and its ad sets must carry neither. None
+            keeps the budget on each ad set (create_meta_ad_set's
+            daily_budget_cents).
 
     Returns:
         The new Meta campaign id.
@@ -631,24 +638,29 @@ async def create_meta_campaign(
     """
     if get_settings().fake_meta_enabled:
         return f"fake_campaign_{uuid4().hex[:12]}"
-    body = await _post_json(
-        f"{_GRAPH_BASE_URL}/{ad_account_id}/campaigns",
-        {
-            "access_token": access_token,
-            "name": name,
-            "objective": CAMPAIGN_OBJECTIVE_MAP[objective],
-            "status": status,
-            "special_ad_categories": "[]",
-            # Meta requires this explicitly once a campaign doesn't use a
-            # campaign-level budget (real API behavior confirmed
-            # 2026-08-29, not caught by any mocked test before — error
-            # was "Must specify True or False in is_adset_budget_sharing_
-            # enabled field"). False because budget lives on the AdSet
-            # (create_meta_ad_set's daily_budget), not shared/optimized
-            # across ad sets at the campaign level.
-            "is_adset_budget_sharing_enabled": "false",
-        },
-    )
+    payload: dict[str, str] = {
+        "access_token": access_token,
+        "name": name,
+        "objective": CAMPAIGN_OBJECTIVE_MAP[objective],
+        "status": status,
+        "special_ad_categories": "[]",
+        # AUCTION is Meta's default; sent so the campaign's buying type never
+        # depends on a default.
+        "buying_type": "AUCTION",
+    }
+    if daily_budget_cents is not None:
+        payload["daily_budget"] = str(daily_budget_cents)
+        payload["bid_strategy"] = "LOWEST_COST_WITHOUT_CAP"
+    else:
+        # Meta requires this explicitly once a campaign doesn't use a
+        # campaign-level budget (real API behavior confirmed
+        # 2026-08-29, not caught by any mocked test before — error
+        # was "Must specify True or False in is_adset_budget_sharing_
+        # enabled field"). False because budget lives on the AdSet
+        # (create_meta_ad_set's daily_budget), not shared/optimized
+        # across ad sets at the campaign level.
+        payload["is_adset_budget_sharing_enabled"] = "false"
+    body = await _post_json(f"{_GRAPH_BASE_URL}/{ad_account_id}/campaigns", payload)
     campaign_id: str = body["id"]
     return campaign_id
 
@@ -733,7 +745,7 @@ async def create_meta_ad_set(
     ad_account_id: str,
     name: str,
     meta_campaign_id: str,
-    daily_budget_cents: int,
+    daily_budget_cents: int | None,
     optimization_goal: str,
     age_min: int,
     age_max: int | None,
@@ -785,7 +797,9 @@ async def create_meta_ad_set(
         name: The ad set's display name on Meta.
         meta_campaign_id: The parent Meta campaign id.
         daily_budget_cents: Daily budget in the ad account's minor
-            currency unit (cents for USD).
+            currency unit (cents for USD). None when the campaign owns the
+            budget (CBO, create_meta_campaign's daily_budget_cents): the ad
+            set then sends no daily_budget, bid_strategy or bid_amount.
         optimization_goal: A Meta optimization_goal value.
         age_min: Minimum target age.
         age_max: Maximum target age, or None to omit it. Meta rejects an
@@ -864,7 +878,11 @@ async def create_meta_ad_set(
 
     Raises:
         MetaConnectionError: If the call fails.
+        ValueError: If target_cac_cents is given without a daily_budget_cents:
+            a cost cap belongs to the ad-set-budget path only.
     """
+    if daily_budget_cents is None and target_cac_cents is not None:
+        raise ValueError("A cost cap needs the ad set's own budget, not a CBO campaign")
     if get_settings().fake_meta_enabled:
         return f"fake_adset_{uuid4().hex[:12]}"
     if custom_location is not None:
@@ -908,15 +926,16 @@ async def create_meta_ad_set(
         "access_token": access_token,
         "name": name,
         "campaign_id": meta_campaign_id,
-        "daily_budget": str(daily_budget_cents),
         "billing_event": "IMPRESSIONS",
         "optimization_goal": optimization_goal,
-        "bid_strategy": "COST_CAP"
-        if target_cac_cents is not None
-        else "LOWEST_COST_WITHOUT_CAP",
         "targeting": targeting,
         "status": status,
     }
+    if daily_budget_cents is not None:
+        data["daily_budget"] = str(daily_budget_cents)
+        data["bid_strategy"] = (
+            "COST_CAP" if target_cac_cents is not None else "LOWEST_COST_WITHOUT_CAP"
+        )
     if target_cac_cents is not None:
         data["bid_amount"] = str(target_cac_cents)
     if pixel_id is not None:
@@ -1315,6 +1334,8 @@ async def create_meta_placement_ad_creative(
     square: PlacementAsset | None = None,
     instagram_user_id: str | None = None,
     url_tags: str | None = None,
+    creative_test: bool = False,
+    refused_features: list[str] | None = None,
 ) -> str:
     """Create one ad creative with a feed asset plus a story and/or square asset.
 
@@ -1339,6 +1360,8 @@ async def create_meta_placement_ad_creative(
             account. Omitted from the request when None.
         url_tags: The ad's UTM parameters as a query string, sent as the
             creative's `url_tags`. Omitted when None.
+        creative_test: Apply a creative test's enhancement settings.
+        refused_features: Appended with every enhancement key Meta refuses.
 
     Returns:
         The new Meta ad creative id.
@@ -1374,6 +1397,8 @@ async def create_meta_placement_ad_creative(
         url_tags=url_tags,
         # Meta checks the assets while creating the creative; 5s was not enough.
         timeout=_VIDEO_CREATIVE_TIMEOUT_SECONDS,
+        creative_test=creative_test,
+        refused_features=refused_features,
     )
 
 
@@ -1392,6 +1417,8 @@ async def create_meta_video_ad_creative(
     image_hash: str,
     instagram_user_id: str | None = None,
     url_tags: str | None = None,
+    creative_test: bool = False,
+    refused_features: list[str] | None = None,
 ) -> str:
     """Create a single-video ad creative (object_story_spec.video_data).
 
@@ -1415,6 +1442,8 @@ async def create_meta_video_ad_creative(
             account linked).
         url_tags: The ad's UTM parameters as a query string, sent as the
             creative's `url_tags`. Omitted when None.
+        creative_test: Apply a creative test's enhancement settings.
+        refused_features: Appended with every enhancement key Meta refuses.
 
     Returns:
         The new Meta ad creative id.
@@ -1446,6 +1475,8 @@ async def create_meta_video_ad_creative(
         url_tags=url_tags,
         # Meta checks the video while creating the creative; 5s was not enough.
         timeout=_VIDEO_CREATIVE_TIMEOUT_SECONDS,
+        creative_test=creative_test,
+        refused_features=refused_features,
     )
 
 
@@ -1461,12 +1492,15 @@ CREATIVE_OPT_OUT_FEATURES: tuple[str, ...] = (
     "add_text_overlay",
     "advantage_plus_creative",
     "ads_with_benefits",
+    "audio",
+    "biz_ai",
     "carousel_to_video",
     "creative_stickers",
     "cv_transformation",
     "description_automation",
     "enhance_cta",
     "fb_feed_tag",
+    "generate_cta",
     "ig_video_native_subtitle",
     "image_animation",
     "image_auto_crop",
@@ -1477,6 +1511,7 @@ CREATIVE_OPT_OUT_FEATURES: tuple[str, ...] = (
     "inline_comment",
     "media_type_automation",
     "multi_photo_to_video",
+    "music_generation",
     "pac_relaxation",
     "product_extensions",
     "profile_card",
@@ -1490,6 +1525,30 @@ CREATIVE_OPT_OUT_FEATURES: tuple[str, ...] = (
     "video_auto_crop",
 )
 
+# A creative test runs with a chosen few enhancements ON; every other key above
+# stays opted out. Each key is accepted by Meta's validate-only mode on Graph
+# v21.0 (2026-10-28), and appears in a created creative's stored spec (read back
+# the same day). Mapping to Ads Manager's labels:
+#   generate_cta = Generate CTA, text_optimizations = Text improvements,
+#   add_text_overlay = Add overlays, music_generation = Add music.
+# Off: biz_ai (Add business AI), replace_media_text (Enhance media text: it can
+# alter text inside the image), image_touchups (Visual touch-ups),
+# image_animation (Add animation), media_type_automation (Flex media) and
+# text_translation (Translation). enhance_cta ("Enhance CTA") is a different
+# setting from Generate CTA and stays off.
+CREATIVE_TEST_OPT_IN_FEATURES: tuple[str, ...] = (
+    "generate_cta",
+    "text_optimizations",
+    "add_text_overlay",
+    "music_generation",
+)
+
+# Settings a creative test asks for that Meta's API has no key for on v21.0
+# (no key of that name is accepted or stored on a created creative), so they
+# stay at Meta's default. Kept here so the gap is written down and reported at
+# publish, not discovered later.
+CREATIVE_TEST_UNSUPPORTED_SETTINGS: tuple[str, ...] = ("Optimize website destination",)
+
 _REFUSED_FEATURE = re.compile(
     r"creative_features_spec\] must be one of|Param key '([^']+)'"
 )
@@ -1501,8 +1560,14 @@ async def _post_creative(
     *,
     url_tags: str | None = None,
     timeout: float | None = None,
+    creative_test: bool = False,
+    refused_features: list[str] | None = None,
 ) -> str:
-    """Create an ad creative with its UTM tags and every enhancement opted out.
+    """Create an ad creative with its UTM tags and the enhancement policy.
+
+    Every enhancement is opted out, except on a creative test, where
+    CREATIVE_TEST_OPT_IN_FEATURES are opted in and multi-advertiser ads
+    (`contextual_multi_ads`) are opted out.
 
     If Meta refuses an enhancement key (it renames and retires them), that
     key is dropped with a logged warning and the call repeats, and if the
@@ -1514,6 +1579,9 @@ async def _post_creative(
         payload: The creative's form fields, including the access token.
         url_tags: The ad's UTM parameters as a query string, if any.
         timeout: Seconds to allow for the call.
+        creative_test: Apply the creative test's policy (see above).
+        refused_features: When given, every enhancement key Meta refuses is
+            appended, so the caller can report them.
 
     Returns:
         The new creative's id.
@@ -1524,14 +1592,24 @@ async def _post_creative(
     data = dict(payload)
     if url_tags:
         data["url_tags"] = url_tags
+    if creative_test:
+        data["contextual_multi_ads"] = json.dumps({"enroll_status": "OPT_OUT"})
     features = list(CREATIVE_OPT_OUT_FEATURES)
+    if creative_test:
+        features += [
+            name for name in CREATIVE_TEST_OPT_IN_FEATURES if name not in features
+        ]
+    opt_in = set(CREATIVE_TEST_OPT_IN_FEATURES) if creative_test else set()
     while True:
         attempt = dict(data)
         if features:
             attempt["degrees_of_freedom_spec"] = json.dumps(
                 {
                     "creative_features_spec": {
-                        name: {"enroll_status": "OPT_OUT"} for name in features
+                        name: {
+                            "enroll_status": "OPT_IN" if name in opt_in else "OPT_OUT"
+                        }
+                        for name in features
                     }
                 }
             )
@@ -1555,11 +1633,15 @@ async def _post_creative(
                 logger.warning(
                     "Meta refused creative enhancement %r; skipping it", refused
                 )
+                if refused_features is not None:
+                    refused_features.append(refused)
                 features.remove(refused)
             else:
                 logger.warning(
-                    "Meta refused the creative enhancement opt-outs; sending none"
+                    "Meta refused the creative enhancement settings; sending none"
                 )
+                if refused_features is not None:
+                    refused_features.extend(features)
                 features = []
             continue
         creative_id: str = body["id"]
@@ -1580,6 +1662,8 @@ async def create_meta_ad_creative(
     image_hash: str | None,
     instagram_user_id: str | None = None,
     url_tags: str | None = None,
+    creative_test: bool = False,
+    refused_features: list[str] | None = None,
 ) -> str:
     """Create an ad creative object on Meta, ready to attach to an Ad.
 
@@ -1610,6 +1694,8 @@ async def create_meta_ad_creative(
             account linked).
         url_tags: The ad's UTM parameters as a query string, sent as the
             creative's `url_tags`. Omitted when None.
+        creative_test: Apply a creative test's enhancement settings.
+        refused_features: Appended with every enhancement key Meta refuses.
 
     Returns:
         The new Meta ad creative id.
@@ -1638,7 +1724,13 @@ async def create_meta_ad_creative(
     }
     if instagram_user_id:
         payload["instagram_user_id"] = instagram_user_id
-    return await _post_creative(ad_account_id, payload, url_tags=url_tags)
+    return await _post_creative(
+        ad_account_id,
+        payload,
+        url_tags=url_tags,
+        creative_test=creative_test,
+        refused_features=refused_features,
+    )
 
 
 class CarouselCard(NamedTuple):
@@ -1669,6 +1761,8 @@ async def create_meta_carousel_ad_creative(
     cards: list[CarouselCard],
     instagram_user_id: str | None = None,
     url_tags: str | None = None,
+    creative_test: bool = False,
+    refused_features: list[str] | None = None,
 ) -> str:
     """Create a CAROUSEL ad creative object on Meta (link_data.child_attachments).
 
@@ -1705,6 +1799,9 @@ async def create_meta_carousel_ad_creative(
             account linked).
         url_tags: The ad's UTM parameters as a query string, sent as the
             creative's `url_tags`. Omitted when None.
+        creative_test: Apply a creative test's enhancement settings and keep
+            the card order (no Meta reordering, no end card).
+        refused_features: Appended with every enhancement key Meta refuses.
 
     Returns:
         The new Meta ad creative id.
@@ -1728,6 +1825,12 @@ async def create_meta_carousel_ad_creative(
             for card in cards
         ],
     }
+    if creative_test:
+        # Meta defaults both to true: it may reorder the cards for performance
+        # and appends an end card. A test keeps the user's card order and adds
+        # nothing (validate-only on v21.0 accepts both, 2026-10-28).
+        link_data["multi_share_optimized"] = False
+        link_data["multi_share_end_card"] = False
     object_story_spec = json.dumps({"page_id": page_id, "link_data": link_data})
     payload = {
         "access_token": access_token,
@@ -1736,7 +1839,13 @@ async def create_meta_carousel_ad_creative(
     }
     if instagram_user_id:
         payload["instagram_user_id"] = instagram_user_id
-    return await _post_creative(ad_account_id, payload, url_tags=url_tags)
+    return await _post_creative(
+        ad_account_id,
+        payload,
+        url_tags=url_tags,
+        creative_test=creative_test,
+        refused_features=refused_features,
+    )
 
 
 async def create_meta_ad(
@@ -2487,6 +2596,31 @@ async def update_meta_ad_set_budget(
         return
     await _post_json(
         f"{_GRAPH_BASE_URL}/{meta_ad_set_id}",
+        {"access_token": access_token, "daily_budget": str(daily_budget_cents)},
+    )
+
+
+async def update_meta_campaign_budget(
+    *, access_token: str, meta_campaign_id: str, daily_budget_cents: int
+) -> None:
+    """Update a CBO campaign's daily budget on Meta.
+
+    The campaign-budget counterpart of update_meta_ad_set_budget: under a
+    campaign budget Meta rejects a budget on the ad set.
+
+    Args:
+        access_token: The business's Meta access token.
+        meta_campaign_id: The Meta campaign id (Campaign.metaCampaignId).
+        daily_budget_cents: The new daily budget, in the ad account's minor
+            currency unit (cents for USD).
+
+    Raises:
+        MetaConnectionError: If the call fails.
+    """
+    if get_settings().fake_meta_enabled:
+        return
+    await _post_json(
+        f"{_GRAPH_BASE_URL}/{meta_campaign_id}",
         {"access_token": access_token, "daily_budget": str(daily_budget_cents)},
     )
 

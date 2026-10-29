@@ -38,6 +38,7 @@ from prisma.types import CampaignUpdateInput
 from app.core.db import db
 from app.core.meta_connection import effective_instagram_user_id
 from app.schemas.strategy import (
+    CAMPAIGN_BUDGET_LEVEL,
     AudienceVariant,
     CreativeTestPlanContent,
     StrategyContent,
@@ -108,6 +109,23 @@ def _resolve_custom_location(campaign: Campaign) -> CustomLocation | None:
     return CustomLocation(
         lat=venue.lat, lng=venue.lng, radius_miles=venue.recommended_radius_miles
     )
+
+
+# The detailed-targeting suggestion every campaign-budget creative test sends,
+# a backend default (never LLM-chosen). Meta has no interest called "Fine
+# jewelry" (its search for it returns only "Jewelry brands" and one tiny brand
+# page), so the suggestion is the curated "Jewelry design" interest (shown in
+# Ads Manager as "Jewelry design (jewelry)"). Under Advantage+ audience Meta
+# treats it as a suggestion, not a limit.
+SUGGESTED_INTEREST_KEYS = ("jewelry_design",)
+
+
+def _suggested_interests() -> list[dict[str, str]]:
+    """The default interest suggestion as Meta's {id, name} targeting shape."""
+    return [
+        {"id": INTERESTS[key].meta_id, "name": INTERESTS[key].name}
+        for key in SUGGESTED_INTEREST_KEYS
+    ]
 
 
 def _resolve_interests(audience: TargetAudience) -> list[dict[str, str]]:
@@ -357,6 +375,7 @@ async def _publish_test_plan_variant(
                 "sourceProductId": creative.sourceProductId,
                 "sourceDescription": creative.sourceDescription,
                 "sourceUrl": creative.sourceUrl,
+                "sourcePersonalization": creative.sourcePersonalization,
                 "sourceBusinessDescription": creative.sourceBusinessDescription,
                 # Deliberately different from the source row, not copied:
                 # this is a new local row for a new Ad, tied to this
@@ -619,6 +638,8 @@ async def _create_video_meta_creative(
     destination_url: str,
     instagram_user_id: str | None,
     url_tags: str | None = None,
+    creative_test: bool = False,
+    refused_features: list[str] | None = None,
 ) -> str:
     """Create the Meta creative (video_data) for a SINGLE_VIDEO creative."""
     assert creative.productImageId is not None
@@ -637,6 +658,8 @@ async def _create_video_meta_creative(
         image_hash=asset.image_hash,
         instagram_user_id=instagram_user_id,
         url_tags=url_tags,
+        creative_test=creative_test,
+        refused_features=refused_features,
     )
 
 
@@ -650,6 +673,8 @@ async def _create_pair_meta_creative(
     destination_url: str,
     instagram_user_id: str | None,
     url_tags: str | None = None,
+    creative_test: bool = False,
+    refused_features: list[str] | None = None,
 ) -> str:
     """Create the one Meta creative for an ad with a story and/or square asset.
 
@@ -703,6 +728,8 @@ async def _create_pair_meta_creative(
         square=square,
         instagram_user_id=instagram_user_id,
         url_tags=url_tags,
+        creative_test=creative_test,
+        refused_features=refused_features,
     )
 
 
@@ -1134,11 +1161,19 @@ async def _publish_creative_test_plan(
 
     The ad set is a broad Advantage+ audience with hard constraints only:
     country, age_min and language (`locales`); no interests, no age_max (Meta
-    rejects one when Advantage+ is on), no generated audience. The full daily
-    budget sits on that one ad set. It optimizes for the plan's optimization
-    event (Purchase, or AddToCart for a high-ticket product), and its cost cap
-    is the target cost per add-to-cart for an AddToCart plan, else the target
-    CAC. Languages are resolved to Meta locale ids BEFORE anything is created
+    rejects one when Advantage+ is on), no generated audience. It optimizes for
+    the plan's optimization event (Purchase unless the user chose Add to Cart).
+    Where the budget sits depends on the campaign (Campaign.budgetLevel):
+
+    - CAMPAIGN (a first test, lowest cost): one CBO campaign owns the full daily
+      budget and the bid strategy (Highest volume, no cost cap), so the ad set
+      carries neither. The ad set suggests the "Jewelry design" interest under
+      Advantage+ audience. Our ad-set row records the campaign's budget.
+    - AD_SET (an older plan): the ad set carries the budget and, for a plan
+      stored with COST_CAP, a cost cap (the target cost per add-to-cart for an
+      Add to Cart plan, else the target CAC).
+
+    Languages are resolved to Meta locale ids BEFORE anything is created
     on Meta, so an unresolvable language never leaves a half-published
     campaign behind.
 
@@ -1190,12 +1225,15 @@ async def _publish_creative_test_plan(
     pixel_id = connection.pixelId if requires_pixel(campaign.objective) else None
     purchasers_audience_id = await _purchasers_audience_id(connection)
 
+    daily_budget_cents = round(strategy.daily_budget * 100)
+    campaign_owns_budget = campaign.budgetLevel == CAMPAIGN_BUDGET_LEVEL
     meta_campaign_id = await meta.create_meta_campaign(
         access_token=access_token,
         ad_account_id=ad_account_id,
         name=object_name,
         objective=campaign.objective,
         status=meta_status,
+        daily_budget_cents=daily_budget_cents if campaign_owns_budget else None,
     )
     created_campaign_ids.append(meta_campaign_id)
     meta_ad_set_id = await meta.create_meta_ad_set(
@@ -1203,17 +1241,17 @@ async def _publish_creative_test_plan(
         ad_account_id=ad_account_id,
         name=f"{object_name} — Creative test",
         meta_campaign_id=meta_campaign_id,
-        daily_budget_cents=round(strategy.daily_budget * 100),
+        daily_budget_cents=None if campaign_owns_budget else daily_budget_cents,
         optimization_goal=_OPTIMIZATION_GOAL_BY_OBJECTIVE[campaign.objective],
         age_min=constraints.age_min,
         age_max=None,
         pixel_id=pixel_id,
         custom_location=None,
         resolved_locations=None,
-        interests=None,
+        interests=_suggested_interests() if campaign_owns_budget else None,
         advantage_audience=1,
         end_time=end_time,
-        target_cac_cents=bid_cents,
+        target_cac_cents=None if campaign_owns_budget else bid_cents,
         status=meta_status,
         locales=locale_ids,
         custom_event_type=(
@@ -1237,6 +1275,7 @@ async def _publish_creative_test_plan(
         }
     )
 
+    refused_features: list[str] = []
     for creative in creatives:
         ad_name = creative_naming.ad_name(
             creative.avatar, creative.concept, creative.headline, creative.pillar
@@ -1248,7 +1287,24 @@ async def _publish_creative_test_plan(
             name=ad_name,
             pillar=creative.pillar,
         )
-        if (
+        if creative.format == "CAROUSEL":
+            meta_creative_id = await meta.create_meta_carousel_ad_creative(
+                access_token=access_token,
+                ad_account_id=ad_account_id,
+                page_id=connection.pageId,
+                instagram_user_id=effective_instagram_user_id(connection),
+                name=creative.headline,
+                body_text=creative.bodyText,
+                cta=creative.cta,
+                link=destination_url,
+                cards=await _resolve_carousel_cards(
+                    creative, access_token=access_token, ad_account_id=ad_account_id
+                ),
+                url_tags=url_tags,
+                creative_test=True,
+                refused_features=refused_features,
+            )
+        elif (
             creative.storyProductImageId or creative.squareProductImageId
         ) and creative.format != "CAROUSEL":
             meta_creative_id = await _create_pair_meta_creative(
@@ -1260,6 +1316,8 @@ async def _publish_creative_test_plan(
                 destination_url=destination_url,
                 instagram_user_id=effective_instagram_user_id(connection),
                 url_tags=url_tags,
+                creative_test=True,
+                refused_features=refused_features,
             )
         elif creative.format == "SINGLE_VIDEO":
             meta_creative_id = await _create_video_meta_creative(
@@ -1271,6 +1329,8 @@ async def _publish_creative_test_plan(
                 instagram_user_id=effective_instagram_user_id(connection),
                 destination_url=destination_url,
                 url_tags=url_tags,
+                creative_test=True,
+                refused_features=refused_features,
             )
         else:
             image_hash = await _resolve_image_hash(
@@ -1289,6 +1349,8 @@ async def _publish_creative_test_plan(
                 link=destination_url,
                 image_hash=image_hash,
                 url_tags=url_tags,
+                creative_test=True,
+                refused_features=refused_features,
             )
         meta_ad_id = await meta.create_meta_ad(
             access_token=access_token,
@@ -1310,6 +1372,21 @@ async def _publish_creative_test_plan(
             where={"id": creative.id},
             data={"ad": {"connect": {"id": ad.id}}, "metaCreativeId": meta_creative_id},
         )
+
+    # Anything Meta would not take is logged, never silent: a refused
+    # enhancement key stays at Meta's default, and the settings the API has no
+    # key for are listed so the gap is visible on every test publish.
+    if refused_features:
+        logger.warning(
+            "Creative test %s: Meta refused enhancement keys %s",
+            campaign.id,
+            sorted(set(refused_features)),
+        )
+    logger.warning(
+        "Creative test %s: settings with no Meta API key, left at Meta's default: %s",
+        campaign.id,
+        ", ".join(meta.CREATIVE_TEST_UNSUPPORTED_SETTINGS),
+    )
 
     update_data: CampaignUpdateInput = {
         "status": local_status,

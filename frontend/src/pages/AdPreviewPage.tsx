@@ -41,6 +41,7 @@ import {
 import { useAssetRatio } from '../lib/useAssetRatio'
 import { ExtraAssetSlot } from '../components/ExtraAssetSlot'
 import { InstagramNote } from '../components/InstagramNote'
+import { TestSettingsPanel } from '../components/TestSettingsPanel'
 import { clearPublishPaused, getPublishPaused, setPublishPaused } from '../lib/publishPaused'
 
 const _PUBLISHABLE_STATUSES = ['PENDING_APPROVAL', 'APPROVED', 'FAILED']
@@ -516,6 +517,14 @@ export function AdPreviewPage() {
                       Test settings
                     </h2>
                     <p>{adCount} ads in this test</p>
+                    {businessId && campaignId && (
+                      <TestSettingsPanel
+                        businessId={businessId}
+                        campaignId={campaignId}
+                        published={published}
+                        onSaved={() => void refresh()}
+                      />
+                    )}
                     {!published && (
                       <>
                         <p className="field-hint">

@@ -110,6 +110,7 @@ from app.services.meta import (
     pause_meta_ad,
     update_meta_ad_set_bid,
     update_meta_ad_set_budget,
+    update_meta_campaign_budget,
 )
 from app.services.publish import pause_campaign
 
@@ -1456,11 +1457,21 @@ async def apply_recommendation(
             recommendation.suggestedBudget is not None
             and ad_set.metaAdSetId is not None
         )
-        await update_meta_ad_set_budget(
-            access_token=connection.accessToken,
-            meta_ad_set_id=ad_set.metaAdSetId,
-            daily_budget_cents=round(recommendation.suggestedBudget * 100),
-        )
+        daily_budget_cents = round(recommendation.suggestedBudget * 100)
+        if campaign.budgetLevel == CAMPAIGN_BUDGET_LEVEL:
+            # Under a campaign budget Meta rejects a budget on the ad set.
+            assert campaign.metaCampaignId is not None
+            await update_meta_campaign_budget(
+                access_token=connection.accessToken,
+                meta_campaign_id=campaign.metaCampaignId,
+                daily_budget_cents=daily_budget_cents,
+            )
+        else:
+            await update_meta_ad_set_budget(
+                access_token=connection.accessToken,
+                meta_ad_set_id=ad_set.metaAdSetId,
+                daily_budget_cents=daily_budget_cents,
+            )
         await db.adset.update(
             where={"id": ad_set.id}, data={"budget": recommendation.suggestedBudget}
         )
