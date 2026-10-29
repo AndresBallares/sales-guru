@@ -15,7 +15,9 @@ import {
   getBusiness,
   getMetaConnection,
   getOptions,
+  listAudiences,
   listCampaigns,
+  listProducts,
   type Audience,
   type Business,
   type Campaign,
@@ -104,7 +106,7 @@ export function BusinessDetailPage() {
     let current = true
     async function check(id: string) {
       try {
-        const [hasBrand, connection, campaignList] = await Promise.all([
+        const [hasBrand, connection, campaignList, productList, audienceList] = await Promise.all([
           getBrandProfile(id).then(
             () => true,
             (err: unknown) => {
@@ -120,8 +122,16 @@ export function BusinessDetailPage() {
             },
           ),
           listCampaigns(id),
+          // Asked here, with the rest, so the steps below can be chosen without mounting a
+          // section just to find out whether it is already done. A failure here is not fatal:
+          // the state stays null and that step's own section loads (and reports) as before.
+          listProducts(id).catch(() => null),
+          listAudiences(id).catch(() => null),
         ])
         if (!current) return
+        setCampaigns(campaignList)
+        if (productList) setProducts(productList)
+        if (audienceList) setAudiences(audienceList)
         const metaComplete =
           connection !== null &&
           connection.adAccountId !== null &&

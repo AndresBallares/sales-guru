@@ -548,6 +548,95 @@ describe('BusinessDetailPage', () => {
     expect(screen.queryByRole('heading', { name: 'Audiences' })).not.toBeInTheDocument()
   })
 
+  describe('opening a business that is already set up', () => {
+    const product: api.Product = {
+      id: 'prod-1',
+      description: 'Handmade leather wallets',
+      price: 49.99,
+      margin: null,
+      features: null,
+      benefits: null,
+      mechanism: null,
+      primaryImageUrl: null,
+      url: null,
+    }
+    const audience: api.Audience = {
+      id: 'aud-1',
+      description: 'Busy professionals, 30-55',
+      ageMin: 30,
+      ageMax: 55,
+      location: null,
+      interests: null,
+      problem: null,
+      desire: null,
+    }
+    const connection: api.MetaConnection = {
+      id: 'conn-1',
+      businessId: 'biz-1',
+      metaUserId: 'meta-user-1',
+      adAccountId: 'act_1',
+      pageId: 'page_1',
+      instagramUserId: 'ig_1',
+      instagramUserIdDiscovered: 'ig_1',
+      instagramUserIdManual: null,
+      pixelId: 'pixel_1',
+      pixelSkipped: false,
+      tokenExpiresAt: '2026-10-01T00:00:00Z',
+      createdAt: '2026-08-08T00:00:00Z',
+    }
+
+    function setUp() {
+      mockedApi.listCampaigns.mockResolvedValue([draftCampaign])
+      mockedApi.listProducts.mockResolvedValue([product])
+      mockedApi.listAudiences.mockResolvedValue([audience])
+      mockedApi.getMetaConnection.mockResolvedValue(connection)
+    }
+
+    it('never shows the Products or Audiences step on the way to the dashboard', async () => {
+      setUp()
+      const seen = new Set<string>()
+      const record = () => {
+        for (const heading of document.querySelectorAll('h2')) {
+          if (heading.textContent) seen.add(heading.textContent)
+        }
+      }
+      const observer = new MutationObserver(record)
+      observer.observe(document.body, { childList: true, subtree: true, characterData: true })
+
+      renderPage()
+      await screen.findByRole('heading', { name: 'Results' })
+      await screen.findByRole('heading', { name: 'Sales' })
+      record()
+      observer.disconnect()
+
+      expect(seen.has('Products')).toBe(false)
+      expect(seen.has('Audiences')).toBe(false)
+      expect(seen.has('Create a campaign')).toBe(false)
+    })
+
+    it('shows one loading message, and no step, until products and audiences are known too', async () => {
+      setUp()
+      mockedApi.listAudiences.mockReturnValue(new Promise(() => {}))
+
+      renderPage()
+
+      expect(await screen.findByText('Loading…')).toBeInTheDocument()
+      await waitFor(() => expect(mockedApi.listAudiences).toHaveBeenCalled())
+      expect(screen.queryByRole('heading', { name: 'Sales' })).not.toBeInTheDocument()
+      expect(screen.queryByRole('heading', { name: 'Products' })).not.toBeInTheDocument()
+      expect(screen.queryByRole('heading', { name: 'Audiences' })).not.toBeInTheDocument()
+    })
+
+    it('still reaches the right step if the up-front products check fails', async () => {
+      mockedApi.listCampaigns.mockResolvedValue([draftCampaign])
+      mockedApi.listProducts.mockRejectedValue(new api.ApiError(500, 'Boom'))
+
+      renderPage()
+
+      expect(await screen.findByRole('heading', { name: 'Products' })).toBeInTheDocument()
+    })
+  })
+
   it('moves straight to the full Campaigns view once Meta Ads is already fully connected', async () => {
     mockedApi.listCampaigns.mockResolvedValue([draftCampaign])
     mockedApi.listProducts.mockResolvedValue([
