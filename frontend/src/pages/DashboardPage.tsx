@@ -19,7 +19,7 @@ import {
 import { BrandBusinessSection, type BrandFocusRequest } from '../components/BrandBusinessSection'
 import { DeleteBusinessSection } from '../components/DeleteBusinessSection'
 import { EditBusinessSection } from '../components/EditBusinessSection'
-import { PlusIcon, SaveIcon } from '../components/icons'
+import { CloseIcon, PlusIcon, SaveIcon } from '../components/icons'
 import { ThemeToggle } from '../components/ThemeToggle'
 import { OptionsLoadError } from '../components/OptionsLoadError'
 import { useOptions } from '../lib/useOptions'
@@ -472,6 +472,18 @@ export function DashboardPage() {
               businesses={businesses}
               onDeleted={() => void refreshBusinesses()}
             />
+            {showForm && businesses.length > 0 && (
+              // Collapses the fields, the same as clicking Add Business again; nothing typed
+              // is cleared and nothing is saved or deleted.
+              <button
+                type="button"
+                className="circle-close"
+                aria-label="Close Company Information"
+                onClick={() => setShowForm(false)}
+              >
+                <CloseIcon size={24} />
+              </button>
+            )}
           </div>
         </form>
       </section>

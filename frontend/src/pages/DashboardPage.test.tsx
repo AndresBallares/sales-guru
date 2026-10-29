@@ -342,6 +342,76 @@ describe('DashboardPage', () => {
       expect(screen.queryByRole('button', { name: 'Save Business' })).not.toBeInTheDocument()
     })
 
+    describe('the circular close control', () => {
+      const acme = {
+        id: 'biz-1',
+        name: 'Acme Widgets',
+        website: null,
+        industry: null,
+        location: null,
+        description: null,
+        logoUrl: null,
+      }
+
+      it('is not shown while the form is closed', async () => {
+        mockedApi.listBusinesses.mockResolvedValue([acme])
+
+        renderDashboard()
+        await screen.findByText('Acme Widgets')
+
+        expect(
+          screen.queryByRole('button', { name: 'Close Company Information' }),
+        ).not.toBeInTheDocument()
+      })
+
+      it('sits immediately after Delete Business once the form is open', async () => {
+        mockedApi.listBusinesses.mockResolvedValue([acme])
+        Element.prototype.scrollIntoView = vi.fn<() => void>()
+        const user = userEvent.setup()
+
+        renderDashboard()
+        await screen.findByText('Acme Widgets')
+        await user.click(screen.getByRole('button', { name: 'Add Business' }))
+
+        const close = screen.getByRole('button', { name: 'Close Company Information' })
+        const del = screen.getByRole('button', { name: 'Delete Business' })
+        expect(del.nextElementSibling).toBe(close)
+        expect(close).toHaveAttribute('type', 'button')
+      })
+
+      it('collapses the form without deleting or discarding what was typed', async () => {
+        mockedApi.listBusinesses.mockResolvedValue([acme])
+        Element.prototype.scrollIntoView = vi.fn<() => void>()
+        const user = userEvent.setup()
+
+        renderDashboard()
+        await screen.findByText('Acme Widgets')
+        const add = screen.getByRole('button', { name: 'Add Business' })
+        await user.click(add)
+        await user.type(screen.getByLabelText('Name'), 'Half typed')
+        await user.click(screen.getByRole('button', { name: 'Close Company Information' }))
+
+        expect(add).toHaveAttribute('aria-expanded', 'false')
+        expect(screen.queryByLabelText('Name')).not.toBeInTheDocument()
+        expect(mockedApi.deleteBusiness).not.toHaveBeenCalled()
+        expect(mockedApi.createBusiness).not.toHaveBeenCalled()
+
+        await user.click(add)
+        expect(screen.getByLabelText('Name')).toHaveValue('Half typed')
+      })
+
+      it('is not offered when the form is the only thing on the page', async () => {
+        mockedApi.listBusinesses.mockResolvedValue([])
+
+        renderDashboard()
+
+        await screen.findByLabelText('Name')
+        expect(
+          screen.queryByRole('button', { name: 'Close Company Information' }),
+        ).not.toBeInTheDocument()
+      })
+    })
+
     it('shows the fields straight away for an account with no businesses yet', async () => {
       mockedApi.listBusinesses.mockResolvedValue([])
 

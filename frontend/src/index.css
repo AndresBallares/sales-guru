@@ -5150,6 +5150,48 @@ output.preview-missing {
   margin-left: 0;
 }
 
+/* Soft circular close control at the end of the Company Information actions. The
+   fill is a translucent wash of the text colour, so it reads as light grey in the
+   light theme and charcoal in the dark one. */
+.company-actions > .circle-close {
+  display: inline-grid;
+  place-items: center;
+  flex: none;
+  align-self: center;
+  width: 48px;
+  height: 48px;
+  min-height: 48px;
+  padding: 0;
+  /* Auto margins on both sides split the free space after Delete Business evenly,
+     which centres the circle between that button and the section's right edge. */
+  margin-inline: auto;
+  /* The row's 1rem gap only sits on Delete's side; shifting by half of it evens the two. */
+  translate: -0.5rem 0;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--text) 8%, transparent);
+  color: var(--text);
+}
+
+.company-actions > .circle-close:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--text) 15%, transparent);
+  box-shadow: none;
+}
+
+.company-actions > .circle-close:active:not(:disabled) {
+  background: color-mix(in srgb, var(--text) 22%, transparent);
+  transform: scale(0.94);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .company-actions > .circle-close {
+    transition: none;
+  }
+
+  .company-actions > .circle-close:active:not(:disabled) {
+    transform: none;
+  }
+}
+
 /* The business list: the name, then the industry and place as one muted line. */
 .business-item {
   flex-wrap: wrap;
@@ -5180,6 +5222,13 @@ output.preview-missing {
   .company-actions > button {
     width: 100%;
     justify-content: center;
+  }
+
+  .company-actions > .circle-close {
+    width: 48px;
+    align-self: flex-end;
+    margin-inline: 0;
+    translate: none;
   }
 
   .company-actions > section {

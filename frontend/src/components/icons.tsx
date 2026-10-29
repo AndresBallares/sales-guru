@@ -231,9 +231,9 @@ export function CheckIcon() {
   )
 }
 
-export function CloseIcon() {
+export function CloseIcon({ size = 18 }: { size?: number } = {}) {
   return (
-    <Icon size={18}>
+    <Icon size={size}>
       <path d="M6 6l12 12M18 6 6 18" />
     </Icon>
   )
