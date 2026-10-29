@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test'
-import { createBusinessWithBrand, reachMetaPixelStep } from './support/fakeMetaFlow'
+import { createBusinessWithBrand, openFirstCampaign, reachMetaPixelStep } from './support/fakeMetaFlow'
 
 // Regression coverage for a real bug: "Skip for now" (the optional Meta
 // Pixel step) used to only set local React state, forgotten on every
@@ -95,6 +95,7 @@ test('skipping Meta after saving the audience opens the campaigns without Meta',
 
   await expect(page.getByRole('heading', { name: 'Campaigns' })).toBeVisible()
   await expect(page.getByText("Meta isn't connected yet.")).toBeVisible()
+  await openFirstCampaign(page)
   await page.getByRole('button', { name: 'Generate strategy' }).click()
   await expect(
     page.getByText('Has this business run advertising campaigns before?'),

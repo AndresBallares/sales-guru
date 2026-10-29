@@ -163,7 +163,7 @@ describe('AdPreviewPage', () => {
 
     // Straight to the business page, staying on the campaigns even if Meta is not connected yet.
     expect(
-      await screen.findByText('Ad choices at /businesses/biz-1?metaLater=1'),
+      await screen.findByText('Ad choices at /businesses/biz-1?metaLater=1&campaign=camp-1'),
     ).toBeInTheDocument()
   })
 

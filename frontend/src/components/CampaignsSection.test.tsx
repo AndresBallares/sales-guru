@@ -1,7 +1,7 @@
 import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import type { ReactElement } from 'react'
-import { MemoryRouter, Route, Routes } from 'react-router-dom'
+import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { CampaignsSection } from './CampaignsSection'
 import * as api from '../lib/api'
@@ -11,8 +11,12 @@ import { ADS_LOCKED_NOTE } from '../lib/publishedCampaign'
 // Selecting a creative navigates to its dedicated ad-preview page
 // (useNavigate), which needs a Router in scope even though nothing here
 // asserts on the resulting route.
-function renderCampaigns(ui: ReactElement) {
-  return render(<MemoryRouter>{ui}</MemoryRouter>)
+//
+// The section shows a card per campaign and opens one campaign's expanded view at a time
+// (?campaign=<id>). These tests are about that expanded view, so they open camp-1 by
+// default; the overview itself is tested in "CampaignsSection overview" at the end.
+function renderCampaigns(ui: ReactElement, url = '/?campaign=camp-1') {
+  return render(<MemoryRouter initialEntries={[url]}>{ui}</MemoryRouter>)
 }
 
 // The editing controls live in each card's collapsed "Edit creative" section.
@@ -904,7 +908,7 @@ describe('CampaignsSection', () => {
     mockedApi.createStrategy.mockResolvedValue(FAKE_STRATEGY)
     const user = userEvent.setup()
 
-    renderCampaigns(<CampaignsSection businessId="biz-1" />)
+    renderOverview(<CampaignsSection businessId="biz-1" />)
     await user.click(await screen.findByRole('button', { name: 'Create campaign' }))
     await user.type(screen.getByLabelText('Name'), 'Second campaign')
     await user.selectOptions(screen.getByLabelText('Objective'), 'LEADS')
@@ -949,9 +953,11 @@ describe('CampaignsSection', () => {
     await user.click(screen.getByRole('button', { name: 'Generate strategy' }))
 
     await waitFor(() => expect(mockedApi.createStrategy).toHaveBeenCalledWith('biz-1', 'camp-2', undefined))
-    // Back to the (refreshed) list — no manual reload, and the guided
-    // flow is gone again.
-    expect(await screen.findByRole('heading', { name: 'First campaign' })).toBeInTheDocument()
+    // The guided flow is gone, and the page carries on in the campaign just created —
+    // no manual reload.
+    expect(await screen.findByRole('button', { name: /back to campaigns/i })).toBeInTheDocument()
+    expect(screen.getByTestId('location')).toHaveTextContent('campaign=camp-2')
+    expect(screen.getByRole('heading', { level: 3, name: 'Second campaign' })).toBeInTheDocument()
     expect(screen.queryByRole('heading', { name: 'New campaign' })).not.toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Create campaign' })).toBeInTheDocument()
   })
@@ -2444,22 +2450,28 @@ describe('CampaignsSection', () => {
     )
     const user = userEvent.setup()
 
-    renderCampaigns(<CampaignsSection businessId="biz-1" />)
+    // Selecting an ad hands off to the dedicated ad page, which owns the rest of the flow.
+    render(
+      <MemoryRouter initialEntries={['/businesses/biz-1?campaign=camp-1']}>
+        <Routes>
+          <Route path="/businesses/:id" element={<CampaignsSection businessId="biz-1" />} />
+          <Route
+            path="/businesses/biz-1/campaigns/camp-1/ad"
+            element={<p>AD PAGE REACHED</p>}
+          />
+        </Routes>
+      </MemoryRouter>,
+    )
     await screen.findByText('Headline A')
 
     await user.click(screen.getAllByRole('button', { name: 'Continue with this creative' })[0])
 
     expect(mockedApi.selectCreative).toHaveBeenCalledWith('biz-1', 'camp-1', 'creative-1')
-    // Selecting an ad collapses the 4-variant list down to just that one
-    // ad — the ad-set preview — so the sibling variant disappears too.
-    expect(await screen.findByRole('button', { name: 'Selected' })).toBeInTheDocument()
-    expect(screen.queryByText('Headline B')).not.toBeInTheDocument()
-    // Selecting an ad must refresh the campaign list so its now-current
-    // PENDING_APPROVAL status unlocks the Approve & Publish button without
-    // a reload.
-    expect(
-      await screen.findByRole('button', { name: 'Approve & Publish' }),
-    ).toBeInTheDocument()
+    // Selecting an ad must refresh the campaign list and its creatives first, so the
+    // campaign's now-current PENDING_APPROVAL status is what the page shows on return.
+    expect(await screen.findByText('AD PAGE REACHED')).toBeInTheDocument()
+    expect(mockedApi.listCampaigns).toHaveBeenCalledTimes(2)
+    expect(mockedApi.listCreatives).toHaveBeenCalledTimes(2)
   })
 
   it('manages a selected carousel ad\'s cards from the compact view', async () => {
@@ -2917,7 +2929,7 @@ describe('CampaignsSection', () => {
 
     function renderWithPreviewRoute() {
       return render(
-        <MemoryRouter initialEntries={['/businesses/biz-1']}>
+        <MemoryRouter initialEntries={['/businesses/biz-1?campaign=camp-1']}>
           <Routes>
             <Route path="/businesses/:businessId" element={<CampaignsSection businessId="biz-1" />} />
             <Route
@@ -3981,19 +3993,22 @@ describe('CampaignsSection', () => {
         mockedApi.listCampaigns.mockResolvedValue([draftCampaignFixture, archived])
         const user = userEvent.setup()
 
-        renderCampaigns(<CampaignsSection businessId="biz-1" />)
-        await screen.findByRole('button', { name: 'Delete campaign' })
+        renderCampaigns(<CampaignsSection businessId="biz-1" />, '/')
+        await screen.findByRole('button', { name: 'More actions for Sales' })
 
         expect(screen.queryByText(/Old test/)).not.toBeInTheDocument()
         await user.click(screen.getByLabelText(/Show archived \(1\)/))
 
-        expect(screen.getByText(/Old test — Sales — Archived/)).toBeInTheDocument()
+        const tile = within(
+          screen.getByRole('heading', { level: 3, name: 'Old test' }).closest('li') as HTMLElement,
+        )
+        expect(tile.getByText('Archived')).toBeInTheDocument()
         expect(
-          screen.getByText('Paused on Meta and hidden from your list. Its results are kept.'),
+          tile.getByText('Paused on Meta and hidden from your list. Its results are kept.'),
         ).toBeInTheDocument()
-        // An archived campaign has no actions of its own.
-        expect(screen.getAllByRole('button', { name: 'Delete campaign' })).toHaveLength(1)
-        expect(screen.queryByRole('button', { name: 'Archive campaign' })).not.toBeInTheDocument()
+        // An archived campaign has no actions of its own: just Restore.
+        expect(tile.queryByRole('button', { name: /More actions/ })).not.toBeInTheDocument()
+        expect(tile.getByRole('button', { name: 'Restore campaign' })).toBeInTheDocument()
 
         await user.click(screen.getByLabelText(/Show archived \(1\)/))
         expect(screen.queryByText(/Old test/)).not.toBeInTheDocument()
@@ -5248,7 +5263,7 @@ describe('CampaignsSection creative test (CREATIVE_TEST_PLAN)', () => {
     const user = userEvent.setup()
 
     render(
-      <MemoryRouter initialEntries={['/businesses/biz-1']}>
+      <MemoryRouter initialEntries={['/businesses/biz-1?campaign=camp-1']}>
         <Routes>
           <Route path="/businesses/:id" element={<CampaignsSection businessId="biz-1" />} />
           <Route
@@ -6060,12 +6075,19 @@ describe('CampaignsSection card layout', () => {
       { ...CAMPAIGN, id: 'camp-2', name: 'Delivered one', hasDelivered: true },
     ])
 
-    renderCampaigns(<CampaignsSection businessId="biz-1" />)
+    const user = userEvent.setup()
+    renderCampaigns(<CampaignsSection businessId="biz-1" />, '/')
 
-    expect(await screen.findByRole('button', { name: 'Delete campaign' })).toHaveTextContent(
-      'Delete',
+    await user.click(
+      await screen.findByRole('button', { name: 'More actions for Placement pair test' }),
     )
-    expect(screen.getByRole('button', { name: 'Archive campaign' })).toHaveTextContent('Archive')
+    expect(screen.getByRole('menuitem', { name: 'Delete' })).toBeInTheDocument()
+    expect(screen.queryByRole('menuitem', { name: 'Archive' })).not.toBeInTheDocument()
+    await user.keyboard('{Escape}')
+
+    await user.click(screen.getByRole('button', { name: 'More actions for Delivered one' }))
+    expect(screen.getByRole('menuitem', { name: 'Archive' })).toBeInTheDocument()
+    expect(screen.queryByRole('menuitem', { name: 'Delete' })).not.toBeInTheDocument()
   })
 
   it('shows industry, price positioning and ad format as tags next to the selected ad', async () => {
@@ -6264,5 +6286,428 @@ describe('CampaignsSection editing toolbar and publish footer', () => {
     expect(screen.queryByRole('group', { name: 'Edit campaign' })).not.toBeInTheDocument()
     expect(screen.queryByText('Ready to publish?')).not.toBeInTheDocument()
     expect(screen.queryByRole('radio', { name: 'Single image' })).not.toBeInTheDocument()
+  })
+})
+
+
+// ── Campaigns overview: a card per campaign, one campaign's detail at a time ────────
+
+function LocationProbe() {
+  const location = useLocation()
+  return <output data-testid="location">{`${location.pathname}${location.search}`}</output>
+}
+
+function renderOverview(ui: ReactElement, url = '/') {
+  return render(
+    <MemoryRouter initialEntries={[url]}>
+      {ui}
+      <LocationProbe />
+    </MemoryRouter>,
+  )
+}
+
+describe('CampaignsSection overview', () => {
+  const ring: api.Product = {
+    id: 'prod-1',
+    description: 'Bombshell Ring',
+    price: null,
+    margin: null,
+    features: null,
+    benefits: null,
+    mechanism: null,
+    url: 'https://acme.example/ring',
+    primaryImageUrl: 'https://img.example/ring.jpg',
+  }
+  const plainProduct: api.Product = { ...ring, id: 'prod-2', primaryImageUrl: null }
+
+  function campaign(overrides: Partial<api.Campaign> = {}): api.Campaign {
+    return {
+      id: 'camp-1',
+      name: 'Spring Sale',
+      objective: 'SALES',
+      status: 'ADS_GENERATED',
+      productId: 'prod-1',
+      audienceId: 'aud-1',
+      metaCampaignId: null,
+      eventVenueKey: null,
+      startDate: null,
+      endDate: null,
+      pausedReason: null,
+      dailySpendFlag: null,
+      needsDestinationUrl: false,
+      ...overrides,
+    }
+  }
+
+  function card(name: string): HTMLElement {
+    return screen.getByRole('heading', { level: 3, name }).closest('li') as HTMLElement
+  }
+
+  beforeEach(() => {
+    mockedApi.listProducts.mockResolvedValue([ring, plainProduct])
+  })
+
+  it('shows a titled page header with supporting text and the Create campaign action', async () => {
+    mockedApi.listCampaigns.mockResolvedValue([campaign()])
+
+    renderOverview(<CampaignsSection businessId="biz-1" />)
+
+    expect(await screen.findByRole('heading', { level: 2, name: 'Campaigns' })).toBeInTheDocument()
+    expect(
+      screen.getByText('Manage your campaigns, creatives, and publishing status.'),
+    ).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Create campaign' })).toBeInTheDocument()
+  })
+
+  it('shows each campaign as a card with its name, product photo, status and creative count', async () => {
+    mockedApi.listCampaigns.mockResolvedValue([campaign()])
+    mockedApi.getStrategy.mockResolvedValue(FAKE_STRATEGY)
+    mockedApi.listCreatives.mockResolvedValue([
+      fakeCreative({ id: 'c1' }),
+      fakeCreative({ id: 'c2' }),
+      fakeCreative({ id: 'c3' }),
+      fakeCreative({ id: 'c4' }),
+    ])
+
+    renderOverview(<CampaignsSection businessId="biz-1" />)
+
+    const tile = within(await screen.findByRole('heading', { level: 3, name: 'Spring Sale' }).then(
+      (heading) => heading.closest('li') as HTMLElement,
+    ))
+    expect(tile.getByRole('img', { name: 'Bombshell Ring' })).toHaveAttribute(
+      'src',
+      'https://img.example/ring.jpg',
+    )
+    expect(tile.getByText('Needs your review')).toBeInTheDocument()
+    expect(await tile.findByText('4 creatives')).toBeInTheDocument()
+    expect(tile.getByText('Sales')).toBeInTheDocument()
+  })
+
+  it('does not render the expanded campaign view in the overview', async () => {
+    mockedApi.listCampaigns.mockResolvedValue([campaign()])
+
+    renderOverview(<CampaignsSection businessId="biz-1" />)
+    await screen.findByRole('heading', { level: 3, name: 'Spring Sale' })
+
+    expect(screen.queryByRole('button', { name: 'Generate strategy' })).not.toBeInTheDocument()
+    expect(screen.queryByText('Back to campaigns')).not.toBeInTheDocument()
+  })
+
+  it('falls back to the objective as the name and to a placeholder without a product photo', async () => {
+    mockedApi.listCampaigns.mockResolvedValue([
+      campaign({ name: null, productId: 'prod-2', status: 'DRAFT' }),
+    ])
+
+    renderOverview(<CampaignsSection businessId="biz-1" />)
+
+    const tile = card(await screen.findByRole('heading', { level: 3 }).then((h) => h.textContent ?? ''))
+    expect(within(tile).getByRole('heading', { level: 3 })).toHaveTextContent('Sales')
+    expect(within(tile).queryByRole('img')).not.toBeInTheDocument()
+    expect(tile.querySelector('.campaign-tile-placeholder')).toBeInTheDocument()
+  })
+
+  it('says "No creatives yet" for a draft and never shows a count it has not loaded', async () => {
+    mockedApi.listCampaigns.mockResolvedValue([campaign({ status: 'DRAFT', productId: null })])
+
+    renderOverview(<CampaignsSection businessId="biz-1" />)
+
+    expect(await screen.findByText('No creatives yet')).toBeInTheDocument()
+  })
+
+  it('shows a loading state, not zero, while a campaign\'s creatives are still loading', async () => {
+    mockedApi.listCampaigns.mockResolvedValue([campaign()])
+    mockedApi.getStrategy.mockResolvedValue(FAKE_STRATEGY)
+    mockedApi.listCreatives.mockReturnValue(new Promise(() => {}))
+
+    renderOverview(<CampaignsSection businessId="biz-1" />)
+
+    expect(await screen.findByText('Loading creatives…')).toBeInTheDocument()
+    expect(screen.queryByText('No creatives yet')).not.toBeInTheDocument()
+  })
+
+  it('counts only the creatives that are still in play, not rejected ones', async () => {
+    mockedApi.listCampaigns.mockResolvedValue([campaign({ status: 'LIVE' })])
+    mockedApi.getStrategy.mockResolvedValue(FAKE_STRATEGY)
+    mockedApi.listCreatives.mockResolvedValue([
+      fakeCreative({ id: 'c1', status: 'SELECTED' }),
+      fakeCreative({ id: 'c2', status: 'REJECTED' }),
+      fakeCreative({ id: 'c3', status: 'REJECTED' }),
+    ])
+
+    renderOverview(<CampaignsSection businessId="biz-1" />)
+
+    expect(await screen.findByText('1 creative')).toBeInTheDocument()
+  })
+
+  it('says the creatives are unavailable when they could not be loaded', async () => {
+    mockedApi.listCampaigns.mockResolvedValue([campaign()])
+    mockedApi.getStrategy.mockResolvedValue(FAKE_STRATEGY)
+    mockedApi.listCreatives.mockRejectedValue(new api.ApiError(500, 'boom'))
+
+    renderOverview(<CampaignsSection businessId="biz-1" />)
+
+    expect(await screen.findByText('Creatives unavailable')).toBeInTheDocument()
+    expect(screen.queryByText('No creatives yet')).not.toBeInTheDocument()
+  })
+
+  it('shows a real setup progress bar for a draft and none for an active campaign', async () => {
+    mockedApi.listCampaigns.mockResolvedValue([
+      campaign({ id: 'camp-1', name: 'Draft one', status: 'DRAFT', productId: 'prod-1', audienceId: null }),
+      campaign({ id: 'camp-2', name: 'Live one', status: 'LIVE' }),
+    ])
+    mockedApi.getStrategy.mockResolvedValue(FAKE_STRATEGY)
+
+    renderOverview(<CampaignsSection businessId="biz-1" />)
+
+    const draft = card(await screen.findByRole('heading', { level: 3, name: 'Draft one' }).then((h) => h.textContent ?? ''))
+    expect(
+      within(draft).getByRole('progressbar', { name: '2 of 3 setup steps done' }),
+    ).toBeInTheDocument()
+    expect(within(draft).getByText('Next: Attach an audience')).toBeInTheDocument()
+    expect(within(card('Live one')).queryByRole('progressbar')).not.toBeInTheDocument()
+  })
+
+  it.each([
+    ['DRAFT', 'Continue setup', 'Draft'],
+    ['READY', 'Continue setup', 'Ready for strategy'],
+    ['STRATEGY_GENERATED', 'Continue setup', 'Strategy ready'],
+    ['ADS_GENERATED', 'Review campaign', 'Needs your review'],
+    ['PENDING_APPROVAL', 'Review and publish', 'Ready to publish'],
+    ['APPROVED', 'Review and publish', 'Ready to publish'],
+    ['LIVE', 'View campaign', 'Active'],
+    ['FAILED', 'Retry publish', 'Failed'],
+  ])('a %s campaign shows "%s" as its primary action and the badge "%s"', async (status, action, badge) => {
+    mockedApi.listCampaigns.mockResolvedValue([campaign({ status })])
+    mockedApi.getStrategy.mockResolvedValue(FAKE_STRATEGY)
+
+    renderOverview(<CampaignsSection businessId="biz-1" />)
+
+    const tile = within(card(await screen.findByRole('heading', { level: 3 }).then((h) => h.textContent ?? '')))
+    expect(tile.getByText(badge)).toBeInTheDocument()
+    expect(tile.getByRole('button', { name: action })).toBeInTheDocument()
+  })
+
+  it('shows Resume only for a campaign the app published paused', async () => {
+    mockedApi.listCampaigns.mockResolvedValue([
+      campaign({ id: 'camp-1', name: 'App paused', status: 'PAUSED', pausedReason: 'Published paused' }),
+      campaign({ id: 'camp-2', name: 'Paused elsewhere', status: 'PAUSED', pausedReason: 'Paused in Meta' }),
+    ])
+    mockedApi.getStrategy.mockResolvedValue(FAKE_STRATEGY)
+
+    renderOverview(<CampaignsSection businessId="biz-1" />)
+
+    await screen.findByRole('heading', { level: 3, name: 'App paused' })
+    expect(within(card('App paused')).getByRole('button', { name: 'Resume campaign' })).toBeInTheDocument()
+    expect(within(card('Paused elsewhere')).queryByRole('button', { name: 'Resume campaign' })).not.toBeInTheDocument()
+    expect(within(card('Paused elsewhere')).getByRole('button', { name: 'View campaign' })).toBeInTheDocument()
+  })
+
+  it('resumes the campaign and updates its badge only after the request succeeds', async () => {
+    const paused = campaign({ status: 'PAUSED', pausedReason: 'Published paused' })
+    mockedApi.listCampaigns
+      .mockResolvedValueOnce([paused])
+      .mockResolvedValue([{ ...paused, status: 'LIVE', pausedReason: null }])
+    mockedApi.getStrategy.mockResolvedValue(FAKE_STRATEGY)
+    let finish: () => void = () => {}
+    mockedApi.activateCampaign.mockReturnValue(new Promise((resolve) => { finish = () => resolve(paused) }))
+    const user = userEvent.setup()
+
+    renderOverview(<CampaignsSection businessId="biz-1" />)
+    await user.click(await screen.findByRole('button', { name: 'Resume campaign' }))
+
+    expect(mockedApi.activateCampaign).toHaveBeenCalledWith('biz-1', 'camp-1')
+    expect(within(card('Spring Sale')).getByText('Paused')).toBeInTheDocument()
+    expect(within(card('Spring Sale')).queryByText('Active')).not.toBeInTheDocument()
+
+    finish()
+    expect(await within(card('Spring Sale')).findByText('Active')).toBeInTheDocument()
+  })
+
+  it('keeps the campaign paused and shows the error when resuming fails', async () => {
+    mockedApi.listCampaigns.mockResolvedValue([
+      campaign({ status: 'PAUSED', pausedReason: 'Published paused' }),
+    ])
+    mockedApi.getStrategy.mockResolvedValue(FAKE_STRATEGY)
+    mockedApi.activateCampaign.mockRejectedValue(new api.ApiError(502, 'Meta refused'))
+    const user = userEvent.setup()
+
+    renderOverview(<CampaignsSection businessId="biz-1" />)
+    await user.click(await screen.findByRole('button', { name: 'Resume campaign' }))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Meta refused')
+    expect(within(card('Spring Sale')).getByText('Paused')).toBeInTheDocument()
+  })
+
+  it('shows publishing while the server says a publish is running', async () => {
+    mockedApi.listCampaigns.mockResolvedValue([campaign({ status: 'PENDING_APPROVAL', publishing: true })])
+    mockedApi.getStrategy.mockResolvedValue(FAKE_STRATEGY)
+    mockedApi.getPublishStatus.mockResolvedValue({ state: 'PUBLISHING' } as never)
+
+    renderOverview(<CampaignsSection businessId="biz-1" />)
+
+    const tile = within(card(await screen.findByRole('heading', { level: 3 }).then((h) => h.textContent ?? '')))
+    expect(tile.getByText('Publishing…')).toBeInTheDocument()
+    expect(tile.getByRole('button', { name: 'View publishing status' })).toBeInTheDocument()
+  })
+
+  describe('opening a campaign', () => {
+    it('opens that campaign\'s detail view and adds it to the URL', async () => {
+      mockedApi.listCampaigns.mockResolvedValue([
+        campaign({ id: 'camp-1', name: 'Spring Sale', status: 'DRAFT', productId: null }),
+        campaign({ id: 'camp-2', name: 'Other', status: 'DRAFT', productId: null }),
+      ])
+      const user = userEvent.setup()
+
+      renderOverview(<CampaignsSection businessId="biz-1" />, '/businesses/biz-1?metaLater=1')
+      await screen.findByRole('heading', { level: 3, name: 'Spring Sale' })
+      await user.click(within(card('Spring Sale')).getByRole('button', { name: 'Continue setup' }))
+
+      expect(screen.getByTestId('location')).toHaveTextContent('campaign=camp-1')
+      expect(screen.getByTestId('location')).toHaveTextContent('metaLater=1')
+      expect(await screen.findByRole('button', { name: /back to campaigns/i })).toBeInTheDocument()
+      expect(screen.queryByRole('heading', { level: 3, name: 'Other' })).not.toBeInTheDocument()
+    })
+
+    it('opens straight into a campaign from the URL', async () => {
+      mockedApi.listCampaigns.mockResolvedValue([campaign({ status: 'DRAFT', productId: null })])
+
+      renderOverview(<CampaignsSection businessId="biz-1" />, '/?campaign=camp-1')
+
+      expect(await screen.findByRole('button', { name: /back to campaigns/i })).toBeInTheDocument()
+      expect(screen.getByLabelText(/Campaign readiness for/)).toBeInTheDocument()
+    })
+
+    it('goes back to the overview, keeping the other URL parameters', async () => {
+      mockedApi.listCampaigns.mockResolvedValue([campaign({ status: 'DRAFT', productId: null })])
+      const user = userEvent.setup()
+
+      renderOverview(<CampaignsSection businessId="biz-1" />, '/?campaign=camp-1&metaLater=1')
+      await user.click(await screen.findByRole('button', { name: /back to campaigns/i }))
+
+      expect(await screen.findByRole('heading', { level: 3, name: 'Spring Sale' })).toBeInTheDocument()
+      expect(screen.getByTestId('location')).not.toHaveTextContent('campaign=')
+      expect(screen.getByTestId('location')).toHaveTextContent('metaLater=1')
+      expect(screen.queryByRole('button', { name: /back to campaigns/i })).not.toBeInTheDocument()
+    })
+
+    it('falls back to the overview when the campaign in the URL does not exist', async () => {
+      mockedApi.listCampaigns.mockResolvedValue([campaign({ status: 'DRAFT', productId: null })])
+
+      renderOverview(<CampaignsSection businessId="biz-1" />, '/?campaign=ghost')
+
+      expect(await screen.findByRole('heading', { level: 3, name: 'Spring Sale' })).toBeInTheDocument()
+      await waitFor(() => expect(screen.getByTestId('location')).not.toHaveTextContent('campaign='))
+    })
+  })
+
+  describe('the more-actions menu', () => {
+    it('opens the details from the menu', async () => {
+      mockedApi.listCampaigns.mockResolvedValue([campaign({ status: 'LIVE' })])
+      mockedApi.getStrategy.mockResolvedValue(FAKE_STRATEGY)
+      const user = userEvent.setup()
+
+      renderOverview(<CampaignsSection businessId="biz-1" />)
+      await user.click(await screen.findByRole('button', { name: 'More actions for Spring Sale' }))
+      await user.click(screen.getByRole('menuitem', { name: 'View details' }))
+
+      expect(screen.getByTestId('location')).toHaveTextContent('campaign=camp-1')
+    })
+
+    it('confirms before deleting, in the card, and only deletes on confirmation', async () => {
+      mockedApi.listCampaigns.mockResolvedValueOnce([campaign({ status: 'DRAFT', productId: null })]).mockResolvedValue([])
+      mockedApi.deleteCampaign.mockResolvedValue(undefined)
+      const user = userEvent.setup()
+
+      renderOverview(<CampaignsSection businessId="biz-1" />)
+      await user.click(await screen.findByRole('button', { name: 'More actions for Spring Sale' }))
+      await user.click(screen.getByRole('menuitem', { name: 'Delete' }))
+
+      const dialog = within(card('Spring Sale')).getByRole('alertdialog', { name: 'Delete this campaign?' })
+      expect(mockedApi.deleteCampaign).not.toHaveBeenCalled()
+      await user.click(within(dialog).getByRole('button', { name: 'Delete campaign' }))
+
+      expect(mockedApi.deleteCampaign).toHaveBeenCalledWith('biz-1', 'camp-1')
+    })
+
+    it('does nothing when the delete confirmation is cancelled', async () => {
+      mockedApi.listCampaigns.mockResolvedValue([campaign({ status: 'DRAFT', productId: null })])
+      const user = userEvent.setup()
+
+      renderOverview(<CampaignsSection businessId="biz-1" />)
+      await user.click(await screen.findByRole('button', { name: 'More actions for Spring Sale' }))
+      await user.click(screen.getByRole('menuitem', { name: 'Delete' }))
+      await user.click(screen.getByRole('button', { name: 'Cancel' }))
+
+      expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
+      expect(mockedApi.deleteCampaign).not.toHaveBeenCalled()
+    })
+
+    it('offers Archive, not Delete, for a campaign that has delivered', async () => {
+      mockedApi.listCampaigns.mockResolvedValue([campaign({ status: 'LIVE', hasDelivered: true })])
+      mockedApi.getStrategy.mockResolvedValue(FAKE_STRATEGY)
+      const user = userEvent.setup()
+
+      renderOverview(<CampaignsSection businessId="biz-1" />)
+      await user.click(await screen.findByRole('button', { name: 'More actions for Spring Sale' }))
+
+      expect(screen.queryByRole('menuitem', { name: 'Delete' })).not.toBeInTheDocument()
+      await user.click(screen.getByRole('menuitem', { name: 'Archive' }))
+      expect(within(card('Spring Sale')).getByRole('alertdialog', { name: 'Archive this campaign?' })).toBeInTheDocument()
+    })
+  })
+
+  describe('archived campaigns', () => {
+    it('are hidden until "Show archived" is on, then can be restored', async () => {
+      const archived = campaign({ status: 'ARCHIVED', name: 'Old one' })
+      mockedApi.listCampaigns.mockResolvedValue([campaign({ id: 'camp-2', name: 'Current' , status: 'DRAFT', productId: null}), archived])
+      mockedApi.restoreCampaign.mockResolvedValue(archived)
+      const user = userEvent.setup()
+
+      renderOverview(<CampaignsSection businessId="biz-1" />)
+      await screen.findByRole('heading', { level: 3, name: 'Current' })
+      expect(screen.queryByRole('heading', { level: 3, name: 'Old one' })).not.toBeInTheDocument()
+
+      await user.click(screen.getByRole('checkbox', { name: /Show archived/ }))
+      await user.click(within(card('Old one')).getByRole('button', { name: 'Restore campaign' }))
+
+      expect(mockedApi.restoreCampaign).toHaveBeenCalledWith('biz-1', 'camp-1')
+    })
+  })
+
+  describe('loading, empty and error states', () => {
+    it('shows loading skeletons, not fake campaigns, while the list loads', async () => {
+      mockedApi.listCampaigns.mockReturnValue(new Promise(() => {}))
+
+      renderOverview(<CampaignsSection businessId="biz-1" />)
+
+      expect(await screen.findByText('Loading…')).toBeInTheDocument()
+      expect(screen.queryByRole('heading', { level: 3 })).not.toBeInTheDocument()
+      expect(document.querySelectorAll('.campaign-tile-skeleton').length).toBeGreaterThan(0)
+    })
+
+    it('shows the empty state with the create flow when there are no campaigns', async () => {
+      mockedApi.listCampaigns.mockResolvedValue([])
+
+      renderOverview(<CampaignsSection businessId="biz-1" />)
+
+      expect(await screen.findByText(/No campaigns yet/)).toBeInTheDocument()
+      expect(screen.queryByRole('heading', { level: 3 })).not.toBeInTheDocument()
+    })
+
+    it('shows an error with a retry, and no cards, when the list fails to load', async () => {
+      mockedApi.listCampaigns
+        .mockRejectedValueOnce(new api.ApiError(500, 'Could not load campaigns'))
+        .mockResolvedValue([campaign({ status: 'DRAFT', productId: null })])
+      const user = userEvent.setup()
+
+      renderOverview(<CampaignsSection businessId="biz-1" />)
+
+      expect(await screen.findByRole('alert')).toHaveTextContent('Could not load campaigns')
+      expect(screen.queryByRole('heading', { level: 3 })).not.toBeInTheDocument()
+
+      await user.click(screen.getByRole('button', { name: 'Try again' }))
+
+      expect(await screen.findByRole('heading', { level: 3, name: 'Spring Sale' })).toBeInTheDocument()
+    })
   })
 })

@@ -17,7 +17,7 @@ async function reachDraftCampaign(page: Page) {
   await page.getByLabel('Who buys?').fill('Busy professionals, 30-55')
   await page.getByRole('button', { name: 'Add audience' }).click()
   await page.getByRole('button', { name: 'Skip for now' }).click()
-  await expect(page.getByRole('button', { name: 'Delete campaign' })).toBeVisible()
+  await expect(page.locator('.campaign-tile')).toHaveCount(1)
   await page.getByRole('button', { name: 'Create campaign' }).click()
   const created = page.waitForResponse(
     (r) => r.request().method() === 'POST' && /\/campaigns$/.test(r.url()),
@@ -25,12 +25,28 @@ async function reachDraftCampaign(page: Page) {
   await page.getByRole('button', { name: 'Next' }).click()
   await created
   await page.reload()
-  await expect(page.getByRole('button', { name: 'Delete campaign' })).toHaveCount(2)
+  await expect(page.locator('.campaign-tile')).toHaveCount(2)
+}
+
+// The second campaign, left as a draft that still needs a product and an audience.
+function draftCard(page: Page) {
+  return page.locator('.campaign-tile[data-status="DRAFT"]')
 }
 
 test('a draft card shows its setup progress and continues the missing step', async ({ page }) => {
   await reachDraftCampaign(page)
 
+  // The overview card: a real progress bar and what is next, with Continue setup.
+  const card = draftCard(page)
+  await expect(card.getByText('Draft')).toBeVisible()
+  await expect(card.getByRole('progressbar', { name: '1 of 3 setup steps done' })).toBeVisible()
+  await expect(card.getByText('Next: Choose a product')).toBeVisible()
+  await expect(card.getByText('No creatives yet')).toBeVisible()
+  await expectNoAxeViolations(page)
+
+  // Continue setup opens the campaign, where the readiness checklist lives.
+  await card.getByRole('button', { name: 'Continue setup' }).click()
+  await expect(page).toHaveURL(/campaign=/)
   const setup = page.getByRole('region', { name: /Campaign readiness for/ })
   await expect(setup).toContainText('1 of 3 setup steps complete')
   await expect(setup).toContainText('33%')
@@ -38,12 +54,19 @@ test('a draft card shows its setup progress and continues the missing step', asy
 
   await page.getByRole('button', { name: 'Continue setup' }).click()
   await expect(page.getByLabel('What do you sell?')).toBeVisible()
+  await expectNoAxeViolations(page)
 
+  // Back to campaigns returns to the cards.
+  await page.getByRole('button', { name: /back to campaigns/i }).click()
+  await expect(page.locator('.campaign-tile')).toHaveCount(2)
+})
+
+async function expectNoAxeViolations(page: Page) {
   const axe = await new AxeBuilder({ page })
     .withTags(['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa'])
     .analyze()
   expect(axe.violations).toEqual([])
-})
+}
 
 for (const width of [320, 375]) {
   test(`the campaign cards fit a ${width}px screen`, async ({ page }) => {
@@ -54,8 +77,9 @@ for (const width of [320, 375]) {
       () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
     )
     expect(overflow).toBeLessThanOrEqual(0)
-    const box = await page.getByRole('button', { name: 'Continue setup' }).boundingBox()
+    const box = await draftCard(page).getByRole('button', { name: 'Continue setup' }).boundingBox()
     expect(box?.height).toBeGreaterThanOrEqual(44)
+    await expectNoAxeViolations(page)
   })
 }
 
@@ -63,9 +87,11 @@ test('the delete confirmation has room around its text and aligned, underlined C
   page,
 }) => {
   await reachDraftCampaign(page)
-  await page.getByRole('button', { name: 'Delete campaign' }).first().click()
+  // Delete lives in the card's more-actions menu and confirms in the card.
+  await draftCard(page).getByRole('button', { name: /More actions for/ }).click()
+  await page.getByRole('menuitem', { name: 'Delete' }).click()
 
-  const dialog = page.getByRole('alertdialog')
+  const dialog = draftCard(page).getByRole('alertdialog')
   const confirm = dialog.getByRole('button', { name: 'Delete campaign' })
   const cancel = dialog.getByRole('button', { name: 'Cancel' })
   const [panel, text, confirmBox, cancelBox] = await Promise.all([

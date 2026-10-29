@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test'
-import { signUpAndReachFakeMetaConnectedBusiness } from './support/fakeMetaFlow'
+import { openFirstCampaign, signUpAndReachFakeMetaConnectedBusiness } from './support/fakeMetaFlow'
 
 // Same fully-faked backend as fake-meta-publish.spec.ts (FAKE_META +
 // FAKE_LLM, see playwright.config.ts) — no real Meta or Anthropic call
@@ -74,6 +74,8 @@ test('deleting a business is blocked while a campaign is live, and succeeds once
   // goes through. Wait for the pause itself to succeed and the LIVE state to
   // go away (the Pause button is gone) before trying the delete again.
   await page.getByRole('link', { name: 'Acme Widgets' }).click()
+  // The business page lists a card per campaign; pausing happens in the campaign's own view.
+  await openFirstCampaign(page)
   await expect(page.getByText(/Live on Meta/)).toBeVisible()
   const paused = page.waitForResponse(
     (response) =>

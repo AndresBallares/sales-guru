@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type ChangeEvent, type FormEvent } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import { ADS_LOCKED_NOTE, isPublished as isPublishedCampaign } from '../lib/publishedCampaign'
 import { CampaignSetup, type SetupStep } from './CampaignSetup'
 import { CreativeCard } from './CreativeCard'
@@ -8,10 +8,18 @@ import { ActionRow } from './ActionRow'
 import { ExtraAssetSlot } from './ExtraAssetSlot'
 import { CardToolbar, type ToolbarAction } from './CardToolbar'
 import { CarouselEditor } from './CarouselEditor'
+import { CampaignCard, type CardMenuItem } from './CampaignCard'
+import {
+  cardModel,
+  creativeCountText,
+  draftSetupProgress,
+  setupStepStatus,
+} from '../lib/campaignCard'
 import {
   ArrowRightIcon,
   ArchiveIcon,
   CheckIcon,
+  ChevronLeftIcon,
   CloseIcon,
   ImageIcon,
   PackageIcon,
@@ -124,6 +132,10 @@ export function CampaignsSection({
   onCampaignsChange?: (campaigns: Campaign[]) => void
 }) {
   const navigate = useNavigate()
+  // The campaign whose detail view is open, kept in the URL (?campaign=<id>) so the
+  // browser's Back button and a reload both work. Null shows the overview cards.
+  const [searchParams, setSearchParams] = useSearchParams()
+  const openCampaignId = searchParams.get('campaign')
   const [campaigns, setCampaigns] = useState<Campaign[]>([])
   // Feeds the "add a business description" nudge on the create-campaign
   // step below, and the logo/name shown on a selected ad's
@@ -197,6 +209,8 @@ export function CampaignsSection({
   >(null)
 
   const [creatives, setCreatives] = useState<Record<string, Creative[]>>({})
+  // Campaigns whose creatives could not be fetched, so a card says so instead of "none".
+  const [creativeLoadFailed, setCreativeLoadFailed] = useState<Record<string, boolean>>({})
   const [generatingCreativesId, setGeneratingCreativesId] = useState<string | null>(null)
   const [creativeErrors, setCreativeErrors] = useState<Record<string, string>>({})
   const [selectingId, setSelectingId] = useState<string | null>(null)
@@ -342,16 +356,19 @@ export function CampaignsSection({
         generated.map((c) =>
           listCreatives(businessId, c.id)
             .then((list) => [c.id, list] as const)
-            .catch(() => null),
+            .catch(() => [c.id, null] as const),
         ),
       )
       setCreatives((prev) => {
         const next = { ...prev }
-        for (const entry of fetchedCreatives) {
-          if (entry && entry[1].length > 0) next[entry[0]] = entry[1]
+        for (const [id, list] of fetchedCreatives) {
+          if (list && list.length > 0) next[id] = list
         }
         return next
       })
+      setCreativeLoadFailed(
+        Object.fromEntries(fetchedCreatives.filter(([, list]) => list === null).map(([id]) => [id, true])),
+      )
 
       // Same reasoning again — only LIVE campaigns can have results, and
       // the campaign list itself doesn't include them.
@@ -1011,9 +1028,224 @@ export function CampaignsSection({
     ? campaigns
     : campaigns.filter((c) => c.status !== 'ARCHIVED')
 
+  // The delete/archive confirmation and its errors. The same panel shows on a campaign's
+  // card in the overview and in its detail view, so the confirmation never differs.
+  function renderRemovalPanel(campaign: Campaign) {
+    return (
+      <>
+        {confirmingAction[campaign.id] === 'delete' ? (
+          <div role="alertdialog" aria-label="Delete this campaign?" className="confirm-panel">
+            <p>
+              {campaign.metaCampaignId === null
+                ? 'This removes the campaign from Sales Guru. It never ran, so no results are lost.'
+                : 'This removes the campaign from Sales Guru and from Meta Ads Manager. It never ran, so no results are lost.'}
+            </p>
+            <div className="button-row">
+              <button
+                type="button"
+                onClick={() => void handleDelete(campaign.id)}
+                disabled={deletingId === campaign.id}
+              >
+                {deletingId === campaign.id ? 'Deleting…' : 'Delete campaign'}
+              </button>
+              <button
+                type="button"
+                className="cancel-link"
+                onClick={() =>
+                  setConfirmingAction((prev) => ({ ...prev, [campaign.id]: undefined }))
+                }
+                disabled={deletingId === campaign.id}
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        ) : confirmingAction[campaign.id] === 'archive' ? (
+          <div role="alertdialog" aria-label="Archive this campaign?" className="confirm-panel">
+            <p>This pauses the campaign on Meta and hides it here. Its results are kept.</p>
+            <div className="button-row">
+              <button
+                type="button"
+                onClick={() => void handleArchive(campaign.id)}
+                disabled={archivingId === campaign.id}
+              >
+                {archivingId === campaign.id ? 'Archiving…' : 'Archive campaign'}
+              </button>
+              <button
+                type="button"
+                className="cancel-link"
+                onClick={() =>
+                  setConfirmingAction((prev) => ({ ...prev, [campaign.id]: undefined }))
+                }
+                disabled={archivingId === campaign.id}
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        ) : null}
+        {deleteErrors[campaign.id] && (
+          <p role="alert">{deleteErrors[campaign.id]}</p>
+        )}
+        {archiveErrors[campaign.id] && (
+          <p role="alert">{archiveErrors[campaign.id]}</p>
+        )}
+      </>
+    )
+  }
+
+  function openCampaign(campaignId: string) {
+    setSearchParams((prev) => {
+      const next = new URLSearchParams(prev)
+      next.set('campaign', campaignId)
+      return next
+    })
+  }
+
+  function closeCampaign() {
+    setSearchParams(
+      (prev) => {
+        const next = new URLSearchParams(prev)
+        next.delete('campaign')
+        return next
+      },
+      { replace: true },
+    )
+  }
+
+  const detailCampaign = openCampaignId
+    ? visibleCampaigns.find((c) => c.id === openCampaignId && c.status !== 'ARCHIVED')
+    : undefined
+
+  // A link to a campaign that no longer exists (deleted, archived, mistyped) lands on the
+  // overview rather than on an empty page.
+  useEffect(() => {
+    if (!loading && !listError && openCampaignId && !detailCampaign) closeCampaign()
+    // closeCampaign only closes over setSearchParams.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loading, listError, openCampaignId, detailCampaign])
+
+  // One campaign on the overview: what it is, where it stands, and the next step.
+  function renderCampaignCard(campaign: Campaign) {
+    const product = products.find((p) => p.id === campaign.productId)
+    const objectiveLabel = objectiveLabels[campaign.objective] ?? campaign.objective
+    const title = campaign.name ?? objectiveLabel
+    const list = creatives[campaign.id]
+    const creativesFailed = !list && Boolean(creativeLoadFailed[campaign.id])
+    // null means "not known yet", never zero: a draft has none by definition; anything
+    // else is either loaded, failed to load, or still loading.
+    const creativeCount =
+      campaign.status === 'DRAFT'
+        ? 0
+        : list
+          ? list.filter((c) => c.status !== 'REJECTED').length
+          : creativesFailed || loading
+            ? null
+            : 0
+    const venue = campaign.eventVenueKey
+      ? (eventVenueOptions.find((v) => v.value === campaign.eventVenueKey)?.label ??
+        campaign.eventVenueKey)
+      : null
+    // Calendar dates, sliced rather than parsed so the viewer's timezone cannot shift a day.
+    const eventText = venue
+      ? `Event: ${venue}${
+          campaign.startDate && campaign.endDate
+            ? ` (${campaign.startDate.slice(0, 10)} – ${campaign.endDate.slice(0, 10)})`
+            : ''
+        }`
+      : null
+    const strategy = strategies[campaign.id]
+    const model = cardModel({
+      status: campaign.status,
+      fallbackStatusLabel: statusLabels[campaign.status] ?? campaign.status,
+      isPublishing:
+        Boolean(campaign.publishing) ||
+        approvingId === campaign.id ||
+        campaign.id in publishStatuses,
+      generating:
+        generatingId === campaign.id
+          ? 'strategy'
+          : generatingCreativesId === campaign.id
+            ? 'ads'
+            : null,
+      isActivatable: campaign.status === 'PAUSED' && campaign.pausedReason === 'Published paused',
+      pausedReason: campaign.pausedReason,
+      adSelection:
+        strategy?.planType === 'CREATIVE_TEST_PLAN'
+          ? {
+              selected: (list ?? []).filter((c) => c.status === 'SELECTED').length,
+              required: requiredAds[campaign.id] ?? MIN_TEST_ADS,
+            }
+          : null,
+      setup: campaign.status === 'DRAFT' ? draftSetupProgress(campaign) : null,
+    })
+    const working = (kind: 'resume' | 'restore') =>
+      kind === 'resume' ? activatingId === campaign.id : restoringId === campaign.id
+    const primary =
+      model.primary.kind === 'open'
+        ? { label: model.primary.label, onClick: () => openCampaign(campaign.id) }
+        : model.primary.kind === 'resume'
+          ? {
+              label: working('resume') ? 'Resuming…' : model.primary.label,
+              onClick: () => void handleActivate(campaign.id),
+              disabled: working('resume'),
+            }
+          : {
+              label: working('restore') ? 'Restoring…' : model.primary.label,
+              onClick: () => void handleRestore(campaign.id),
+              disabled: working('restore'),
+            }
+    const menuItems: CardMenuItem[] = []
+    if (campaign.status !== 'ARCHIVED') {
+      menuItems.push({
+        key: 'details',
+        label: 'View details',
+        icon: <ArrowRightIcon />,
+        onClick: () => openCampaign(campaign.id),
+      })
+      if (!confirmingAction[campaign.id]) {
+        // Same rule as the detail view: a campaign that has delivered keeps its results
+        // (Archive); one that never ran can be deleted.
+        const delivered = campaign.hasDelivered || deliveredOverride[campaign.id]
+        menuItems.push({
+          key: delivered ? 'archive' : 'delete',
+          label: delivered ? 'Archive' : 'Delete',
+          icon: delivered ? <ArchiveIcon size={18} /> : <TrashIcon size={18} />,
+          danger: !delivered,
+          onClick: () =>
+            setConfirmingAction((prev) => ({
+              ...prev,
+              [campaign.id]: delivered ? 'archive' : 'delete',
+            })),
+        })
+      }
+    }
+    return (
+      <CampaignCard
+        key={campaign.id}
+        title={title}
+        subtitle={campaign.name ? objectiveLabel : null}
+        thumbnailUrl={product?.primaryImageUrl ?? null}
+        thumbnailAlt={product?.description ?? title}
+        status={campaign.status}
+        badge={model.badge}
+        creativeText={creativeCountText(creativeCount, creativesFailed)}
+        eventText={eventText}
+        message={model.message}
+        progress={model.progress}
+        primary={primary}
+        menuItems={menuItems}
+      >
+        {renderRemovalPanel(campaign)}
+        {activateErrors[campaign.id] && <p role="alert">{activateErrors[campaign.id]}</p>}
+        {restoreErrors[campaign.id] && <p role="alert">{restoreErrors[campaign.id]}</p>}
+      </CampaignCard>
+    )
+  }
+
   return (
     <>
-      <section>
+      <section className={detailCampaign ? undefined : 'campaigns-overview'}>
         <div className="section-header">
           <h2>Campaigns</h2>
           {!loading && !listError && campaigns.length > 0 && !showCreateForm && (
@@ -1027,11 +1259,17 @@ export function CampaignsSection({
             </button>
           )}
         </div>
+        <p className="section-subtitle">Manage your campaigns, creatives, and publishing status.</p>
         {loading && <p>Loading…</p>}
         {listError && (
-          <p className="form-error" role="alert">
-            {listError}
-          </p>
+          <>
+            <p className="form-error" role="alert">
+              {listError}
+            </p>
+            <button type="button" className="btn-outline" onClick={() => void refresh()}>
+              Try again
+            </button>
+          </>
         )}
         {!loading && !listError && campaigns.length === 0 && (
           <p>No campaigns yet — create your first one below.</p>
@@ -1046,9 +1284,11 @@ export function CampaignsSection({
             optionsError={optionsError}
             onRetryOptions={retryOptions}
             onCancel={handleCancelCreate}
-            onDone={() => {
+            onDone={(campaignId) => {
               setShowCreateForm(false)
               void refresh()
+              // The guided flow ends with a strategy, so carry on in the new campaign.
+              openCampaign(campaignId)
             }}
           />
         )}
@@ -1062,8 +1302,26 @@ export function CampaignsSection({
             Show archived ({archivedCount})
           </label>
         )}
+        {detailCampaign && (
+          <p className="campaign-detail-nav">
+            <button type="button" className="campaign-back-link" onClick={closeCampaign}>
+              <ChevronLeftIcon />
+              Back to campaigns
+            </button>
+          </p>
+        )}
+        {!detailCampaign && !listError && (loading || campaigns.length > 0) && (
+          <ul className="campaign-grid">
+            {loading && campaigns.length === 0
+              ? [0, 1, 2].map((n) => (
+                  <li key={n} className="campaign-tile campaign-tile-skeleton" aria-hidden="true" />
+                ))
+              : visibleCampaigns.map(renderCampaignCard)}
+          </ul>
+        )}
+        {detailCampaign && (
         <ul>
-          {visibleCampaigns.map((campaign) => {
+          {[detailCampaign].map((campaign) => {
             if (campaign.status === 'ARCHIVED') {
               return (
                 <li key={campaign.id} className="campaign-archived">
@@ -1356,6 +1614,7 @@ export function CampaignsSection({
               setProductPickerId(campaign.id)
             }
             const openAudiencePicker = () => setAudiencePickerId(campaign.id)
+            const setupStatus = setupStepStatus(campaign)
             const setupSteps: SetupStep[] = [
               {
                 key: 'objective',
@@ -1370,7 +1629,7 @@ export function CampaignsSection({
                 key: 'product',
                 label: 'Choose a product',
                 icon: <PackageIcon />,
-                done: campaign.productId !== null,
+                done: setupStatus.product,
                 doneText: currentProduct?.description ?? 'Product selected',
                 missingText: 'Select what you want to advertise',
                 onAction: openProductPicker,
@@ -1379,7 +1638,7 @@ export function CampaignsSection({
                 key: 'audience',
                 label: 'Attach an audience',
                 icon: <UsersIcon />,
-                done: campaign.audienceId !== null,
+                done: setupStatus.audience,
                 doneText:
                   audiences.find((audience) => audience.id === campaign.audienceId)?.description ??
                   'Audience attached',
@@ -1601,63 +1860,7 @@ export function CampaignsSection({
                     )}
                   </p>
                 )}
-                {confirmingAction[campaign.id] === 'delete' ? (
-                  <div role="alertdialog" aria-label="Delete this campaign?" className="confirm-panel">
-                    <p>
-                      {campaign.metaCampaignId === null
-                        ? 'This removes the campaign from Sales Guru. It never ran, so no results are lost.'
-                        : 'This removes the campaign from Sales Guru and from Meta Ads Manager. It never ran, so no results are lost.'}
-                    </p>
-                    <div className="button-row">
-                      <button
-                        type="button"
-                        onClick={() => void handleDelete(campaign.id)}
-                        disabled={deletingId === campaign.id}
-                      >
-                        {deletingId === campaign.id ? 'Deleting…' : 'Delete campaign'}
-                      </button>
-                      <button
-                        type="button"
-                        className="cancel-link"
-                        onClick={() =>
-                          setConfirmingAction((prev) => ({ ...prev, [campaign.id]: undefined }))
-                        }
-                        disabled={deletingId === campaign.id}
-                      >
-                        Cancel
-                      </button>
-                    </div>
-                  </div>
-                ) : confirmingAction[campaign.id] === 'archive' ? (
-                  <div role="alertdialog" aria-label="Archive this campaign?" className="confirm-panel">
-                    <p>This pauses the campaign on Meta and hides it here. Its results are kept.</p>
-                    <div className="button-row">
-                      <button
-                        type="button"
-                        onClick={() => void handleArchive(campaign.id)}
-                        disabled={archivingId === campaign.id}
-                      >
-                        {archivingId === campaign.id ? 'Archiving…' : 'Archive campaign'}
-                      </button>
-                      <button
-                        type="button"
-                        className="cancel-link"
-                        onClick={() =>
-                          setConfirmingAction((prev) => ({ ...prev, [campaign.id]: undefined }))
-                        }
-                        disabled={archivingId === campaign.id}
-                      >
-                        Cancel
-                      </button>
-                    </div>
-                  </div>
-                ) : null}
-                {deleteErrors[campaign.id] && (
-                  <p role="alert">{deleteErrors[campaign.id]}</p>
-                )}
-                {archiveErrors[campaign.id] && (
-                  <p role="alert">{archiveErrors[campaign.id]}</p>
-                )}
+                {renderRemovalPanel(campaign)}
                 {((isPublished && !strategy) || campaign.needsDestinationUrl) && (
                 <div
                   className="campaign-block"
@@ -2588,6 +2791,7 @@ export function CampaignsSection({
             )
           })}
         </ul>
+        )}
       </section>
 
       {!loading && !listError && campaigns.length === 0 && (

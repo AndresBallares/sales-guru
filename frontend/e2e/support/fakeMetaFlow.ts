@@ -161,6 +161,16 @@ export async function finishOnboarding(
   await page.getByRole('button', { name: 'Add audience' }).click()
 
   await expect(page.getByRole('heading', { name: 'Campaigns' })).toBeVisible()
+  // The campaigns page is a card per campaign; carry on in the one just created.
+  await openFirstCampaign(page)
+}
+
+// From the campaigns overview, open the first campaign's detail view through its card's
+// primary action (its label depends on the campaign's status), where strategy, ad choices
+// and publishing live.
+export async function openFirstCampaign(page: Page): Promise<void> {
+  await page.locator('.campaign-tile-primary').first().click()
+  await expect(page.getByRole('button', { name: /back to campaigns/i })).toBeVisible()
 }
 
 // "Continue to campaigns", then create the first campaign (AWARENESS needs no
