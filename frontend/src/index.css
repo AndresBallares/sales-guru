@@ -5150,6 +5150,48 @@ output.preview-missing {
   margin-left: 0;
 }
 
+/* Soft circular close control at the end of the Company Information actions. The
+   fill is a translucent wash of the text colour, so it reads as light grey in the
+   light theme and charcoal in the dark one. */
+.company-actions > .circle-close {
+  display: inline-grid;
+  place-items: center;
+  flex: none;
+  align-self: center;
+  width: 48px;
+  height: 48px;
+  min-height: 48px;
+  padding: 0;
+  /* Auto margins on both sides split the free space after Delete Business evenly,
+     which centres the circle between that button and the section's right edge. */
+  margin-inline: auto;
+  /* The row's 1rem gap only sits on Delete's side; shifting by half of it evens the two. */
+  translate: -0.5rem 0;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--text) 8%, transparent);
+  color: var(--text);
+}
+
+.company-actions > .circle-close:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--text) 15%, transparent);
+  box-shadow: none;
+}
+
+.company-actions > .circle-close:active:not(:disabled) {
+  background: color-mix(in srgb, var(--text) 22%, transparent);
+  transform: scale(0.94);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .company-actions > .circle-close {
+    transition: none;
+  }
+
+  .company-actions > .circle-close:active:not(:disabled) {
+    transform: none;
+  }
+}
+
 /* The business list: the name, then the industry and place as one muted line. */
 .business-item {
   flex-wrap: wrap;
@@ -5164,12 +5206,47 @@ output.preview-missing {
 
 .business-item-meta {
   min-width: 0;
+  /* Auto margins on both sides centre it between the name and whatever closes the row
+     (the logo, or the row's right edge). */
+  margin-inline: auto;
   color: var(--text-secondary);
   font-size: 0.9rem;
   overflow-wrap: anywhere;
 }
 
+/* The saved logo closes the row, flush right. */
+.business-item-logo {
+  width: 40px;
+  height: 40px;
+  flex: none;
+  object-fit: cover;
+  border-radius: 50%;
+  border: 1px solid var(--border-strong);
+}
+
+/* With no logo after it the row's gap sits only on the name's side; half of it evens the two. */
+.business-item-meta:last-child {
+  translate: -0.5rem 0;
+}
+
+/* With no industry or place line, the logo takes the free space itself and stays flush right. */
+.business-item-name + .business-item-logo {
+  margin-left: auto;
+}
+
 @media (max-width: 720px) {
+  .business-item-meta,
+  .business-item-meta:last-child {
+    margin-inline: 0;
+    translate: none;
+  }
+
+  .business-item-logo,
+  .business-item-name + .business-item-logo {
+    align-self: flex-end;
+    margin-left: 0;
+  }
+
   .company-actions {
     flex-direction: column;
     align-items: stretch;
@@ -5180,6 +5257,13 @@ output.preview-missing {
   .company-actions > button {
     width: 100%;
     justify-content: center;
+  }
+
+  .company-actions > .circle-close {
+    width: 48px;
+    align-self: flex-end;
+    margin-inline: 0;
+    translate: none;
   }
 
   .company-actions > section {
