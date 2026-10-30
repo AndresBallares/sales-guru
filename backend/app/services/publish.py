@@ -186,10 +186,10 @@ async def _publish_single_variant(
     campaign: Campaign,
     connection: MetaConnection,
     ad_account_id: str,
-    creative: Creative,
+    creatives: list[Creative],
+    meta_creative_ids: list[str],
     strategy: StrategyContent,
     meta_campaign_id: str,
-    meta_creative_id: str,
     object_name: str,
     optimization_goal: str,
     pixel_id: str | None,
@@ -198,7 +198,11 @@ async def _publish_single_variant(
     target_cac_cents: int,
     meta_status: Literal["ACTIVE", "PAUSED"],
 ) -> None:
-    """DATA_DRIVEN_STRATEGY (and pre-"Phase C" TEST_PLAN) path — one AdSet/Ad."""
+    """DATA_DRIVEN_STRATEGY path: one AdSet carrying one Ad per selected creative.
+
+    Meta spreads the ad set's budget across its ads toward the ones that
+    perform, so several ads in one ad set is all the allocation needs.
+    """
     audience = primary_audience(strategy)
     daily_budget_cents = round(daily_budget(strategy) * 100)
     resolved_locations = await _resolve_locations(
@@ -225,15 +229,6 @@ async def _publish_single_variant(
         target_cac_cents=target_cac_cents,
         status=meta_status,
     )
-    meta_ad_id = await meta.create_meta_ad(
-        access_token=connection.accessToken,
-        ad_account_id=ad_account_id,
-        name=creative.headline,
-        meta_ad_set_id=meta_ad_set_id,
-        meta_creative_id=meta_creative_id,
-        status=meta_status,
-    )
-
     ad_set = await db.adset.create(
         data={
             "campaignId": campaign.id,
@@ -244,18 +239,27 @@ async def _publish_single_variant(
             "metaAdSetId": meta_ad_set_id,
         }
     )
-    ad = await db.ad.create(
-        data={
-            "adSetId": ad_set.id,
-            "name": creative.headline,
-            "status": local_status,
-            "metaAdId": meta_ad_id,
-        }
-    )
-    await db.creative.update(
-        where={"id": creative.id},
-        data={"ad": {"connect": {"id": ad.id}}, "metaCreativeId": meta_creative_id},
-    )
+    for creative, meta_creative_id in zip(creatives, meta_creative_ids, strict=True):
+        meta_ad_id = await meta.create_meta_ad(
+            access_token=connection.accessToken,
+            ad_account_id=ad_account_id,
+            name=creative.headline,
+            meta_ad_set_id=meta_ad_set_id,
+            meta_creative_id=meta_creative_id,
+            status=meta_status,
+        )
+        ad = await db.ad.create(
+            data={
+                "adSetId": ad_set.id,
+                "name": creative.headline,
+                "status": local_status,
+                "metaAdId": meta_ad_id,
+            }
+        )
+        await db.creative.update(
+            where={"id": creative.id},
+            data={"ad": {"connect": {"id": ad.id}}, "metaCreativeId": meta_creative_id},
+        )
 
 
 async def _publish_test_plan_variant(
@@ -878,6 +882,83 @@ async def _roll_back_failed_publish(
         )
 
 
+async def _create_standard_meta_creative(
+    creative: Creative,
+    *,
+    connection: MetaConnection,
+    ad_account_id: str,
+    video_assets: dict[str, VideoAsset],
+    destination_url: str,
+) -> str:
+    """Create the Meta ad creative for one ad of a standard (non-test) campaign.
+
+    Args:
+        creative: The selected creative.
+        connection: The business's Meta connection (account and Page set).
+        ad_account_id: The ad account to create it in.
+        video_assets: The already-processed videos, for a video or pair ad.
+        destination_url: Where the ad's CTA links to.
+
+    Returns:
+        The Meta ad creative id.
+    """
+    assert connection.pageId is not None
+    if (
+        creative.storyProductImageId or creative.squareProductImageId
+    ) and creative.format != "CAROUSEL":
+        return await _create_pair_meta_creative(
+            creative,
+            assets=video_assets,
+            access_token=connection.accessToken,
+            ad_account_id=ad_account_id,
+            page_id=connection.pageId,
+            destination_url=destination_url,
+            instagram_user_id=effective_instagram_user_id(connection),
+        )
+    elif creative.format == "SINGLE_VIDEO":
+        return await _create_video_meta_creative(
+            creative,
+            assets=video_assets,
+            access_token=connection.accessToken,
+            ad_account_id=ad_account_id,
+            page_id=connection.pageId,
+            instagram_user_id=effective_instagram_user_id(connection),
+            destination_url=destination_url,
+        )
+    elif creative.format == "CAROUSEL":
+        carousel_cards = await _resolve_carousel_cards(
+            creative, access_token=connection.accessToken, ad_account_id=ad_account_id
+        )
+        return await meta.create_meta_carousel_ad_creative(
+            access_token=connection.accessToken,
+            ad_account_id=ad_account_id,
+            page_id=connection.pageId,
+            instagram_user_id=effective_instagram_user_id(connection),
+            name=creative.headline,
+            body_text=creative.bodyText,
+            cta=creative.cta,
+            link=destination_url,
+            cards=carousel_cards,
+        )
+    else:
+        image_hash = await _resolve_image_hash(
+            creative, access_token=connection.accessToken, ad_account_id=ad_account_id
+        )
+        return await meta.create_meta_ad_creative(
+            access_token=connection.accessToken,
+            ad_account_id=ad_account_id,
+            page_id=connection.pageId,
+            instagram_user_id=effective_instagram_user_id(connection),
+            name=creative.headline,
+            headline=creative.headline,
+            body_text=creative.bodyText,
+            description=creative.description,
+            cta=creative.cta,
+            link=destination_url,
+            image_hash=image_hash,
+        )
+
+
 async def _publish_to_meta(
     *,
     campaign: Campaign,
@@ -998,60 +1079,17 @@ async def _publish_to_meta(
         status=meta_status,
     )
     created_campaign_ids.append(meta_campaign_id)
-    if (
-        creative.storyProductImageId or creative.squareProductImageId
-    ) and creative.format != "CAROUSEL":
-        meta_creative_id = await _create_pair_meta_creative(
-            creative,
-            assets=video_assets,
-            access_token=connection.accessToken,
+    meta_creative_ids = [
+        await _create_standard_meta_creative(
+            ad,
+            connection=connection,
             ad_account_id=ad_account_id,
-            page_id=connection.pageId,
-            destination_url=destination_url,
-            instagram_user_id=effective_instagram_user_id(connection),
-        )
-    elif creative.format == "SINGLE_VIDEO":
-        meta_creative_id = await _create_video_meta_creative(
-            creative,
-            assets=video_assets,
-            access_token=connection.accessToken,
-            ad_account_id=ad_account_id,
-            page_id=connection.pageId,
-            instagram_user_id=effective_instagram_user_id(connection),
+            video_assets=video_assets,
             destination_url=destination_url,
         )
-    elif creative.format == "CAROUSEL":
-        carousel_cards = await _resolve_carousel_cards(
-            creative, access_token=connection.accessToken, ad_account_id=ad_account_id
-        )
-        meta_creative_id = await meta.create_meta_carousel_ad_creative(
-            access_token=connection.accessToken,
-            ad_account_id=ad_account_id,
-            page_id=connection.pageId,
-            instagram_user_id=effective_instagram_user_id(connection),
-            name=creative.headline,
-            body_text=creative.bodyText,
-            cta=creative.cta,
-            link=destination_url,
-            cards=carousel_cards,
-        )
-    else:
-        image_hash = await _resolve_image_hash(
-            creative, access_token=connection.accessToken, ad_account_id=ad_account_id
-        )
-        meta_creative_id = await meta.create_meta_ad_creative(
-            access_token=connection.accessToken,
-            ad_account_id=ad_account_id,
-            page_id=connection.pageId,
-            instagram_user_id=effective_instagram_user_id(connection),
-            name=creative.headline,
-            headline=creative.headline,
-            body_text=creative.bodyText,
-            description=creative.description,
-            cta=creative.cta,
-            link=destination_url,
-            image_hash=image_hash,
-        )
+        for ad in (creatives or [creative])
+    ]
+    meta_creative_id = meta_creative_ids[0]
 
     if strategy.plan_type == "TEST_PLAN":
         daily_budget_cents = round(daily_budget(strategy) * 100)
@@ -1077,10 +1115,10 @@ async def _publish_to_meta(
             campaign=campaign,
             connection=connection,
             ad_account_id=ad_account_id,
-            creative=creative,
+            creatives=creatives or [creative],
+            meta_creative_ids=meta_creative_ids,
             strategy=strategy,
             meta_campaign_id=meta_campaign_id,
-            meta_creative_id=meta_creative_id,
             object_name=object_name,
             optimization_goal=optimization_goal,
             pixel_id=pixel_id,

@@ -98,6 +98,7 @@ from app.schemas.creative import (
 from app.schemas.product_image import MAX_VIDEO_BYTES, MAX_VIDEO_SECONDS
 from app.schemas.strategy import (
     CREATIVE_TEST_AD_COUNT,
+    MULTI_AD_PLAN_TYPES,
     PERSONALIZATION_CONCEPT,
     CreativeTestPlanContent,
     StrategyContent,
@@ -1554,9 +1555,10 @@ async def generate_creatives(
         "standing_offer": brand_profile.offer if brand_profile is not None else None,
         "format": format,
         "variant_count": variant_count,
-        # A creative test's ads must read as different ads, not rewordings.
-        "distinct_text": strategy.plan_type == "CREATIVE_TEST_PLAN",
-        # A single-ad regenerate is compared with the test's other ads.
+        # The ads of a campaign that runs several must read as different ads,
+        # not rewordings.
+        "distinct_text": strategy.plan_type in MULTI_AD_PLAN_TYPES,
+        # A single-ad regenerate is compared with the campaign's other ads.
         "other_texts": other_texts or [],
         "check_fields": check_fields,
     }

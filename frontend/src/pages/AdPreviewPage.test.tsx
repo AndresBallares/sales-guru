@@ -39,6 +39,7 @@ vi.mock('../lib/api', async (importOriginal) => {
     reorderCreativeCards: vi.fn<typeof actual.reorderCreativeCards>(),
     removeCreativeCard: vi.fn<typeof actual.removeCreativeCard>(),
     deselectCreative: vi.fn<typeof actual.deselectCreative>(),
+    getStrategy: vi.fn<typeof actual.getStrategy>(),
   }
 })
 const mockedApi = vi.mocked(api)
@@ -133,7 +134,18 @@ beforeEach(() => {
   })
   mockedApi.listCampaigns.mockResolvedValue([makeCampaign()])
   mockedApi.listCreatives.mockResolvedValue([makeCreative()])
+  mockedApi.getStrategy.mockRejectedValue(new api.ApiError(404, 'Strategy not found'))
 })
+
+// Only the plan type matters to this page.
+function strategyOf(planType: string): api.Strategy {
+  return {
+    id: 'strat-1',
+    campaignId: 'camp-1',
+    createdAt: '2026-10-06T00:00:00Z',
+    content: { planType } as api.Strategy['content'],
+  }
+}
 
 describe('AdPreviewPage', () => {
   it('has a round back button before the title that returns to the ad choices', async () => {
@@ -175,6 +187,7 @@ describe('AdPreviewPage', () => {
     ]
 
     beforeEach(() => {
+      mockedApi.getStrategy.mockResolvedValue(strategyOf('CREATIVE_TEST_PLAN'))
       mockedApi.getOptions.mockResolvedValue({
         industries: [],
         objectives: [{ value: 'SALES', label: 'Sales' }],
@@ -286,9 +299,13 @@ describe('AdPreviewPage', () => {
       expect(await screen.findByRole('alert')).toHaveTextContent('Cannot remove')
     })
 
-    it('has no Test settings for a single ad, and none for a published test', async () => {
+    it('has no Test settings for a campaign that is not a creative test', async () => {
+      mockedApi.getStrategy.mockRejectedValue(new api.ApiError(404, 'Strategy not found'))
+      mockedApi.listCreatives.mockResolvedValue([three[0]])
+
       renderPage()
       await screen.findByRole('tabpanel')
+
       expect(screen.queryByRole('region', { name: 'Test settings' })).not.toBeInTheDocument()
     })
 
@@ -668,6 +685,10 @@ describe('AdPreviewPage', () => {
       makeCreative({ id: 'creative-4', headline: 'Not in the test', status: 'GENERATED' }),
     ]
 
+    beforeEach(() => {
+      mockedApi.getStrategy.mockResolvedValue(strategyOf('CREATIVE_TEST_PLAN'))
+    })
+
     it('previews the selected ads one at a time and none of the unselected ones', async () => {
       mockedApi.listCreatives.mockResolvedValue(three)
       const user = userEvent.setup()
@@ -755,6 +776,67 @@ describe('AdPreviewPage', () => {
     await screen.findByRole('tabpanel')
 
     expect(screen.queryByRole('button', { name: 'Upload Image' })).not.toBeInTheDocument()
+  })
+
+  describe('a standard campaign with several selected ads', () => {
+    const two = [
+      makeCreative({ id: 'creative-1', headline: 'Angle one headline' }),
+      makeCreative({ id: 'creative-2', headline: 'Angle two headline' }),
+      makeCreative({ id: 'creative-3', headline: 'Not chosen', status: 'GENERATED' }),
+    ]
+
+    beforeEach(() => {
+      mockedApi.getStrategy.mockResolvedValue(strategyOf('DATA_DRIVEN_STRATEGY'))
+      mockedApi.listCreatives.mockResolvedValue(two)
+    })
+
+    it('says the ads run together as a campaign, with no test settings', async () => {
+      renderPage()
+
+      const section = within(await screen.findByRole('region', { name: 'Your ads' }))
+      expect(section.getByText('2 ads in this campaign')).toBeInTheDocument()
+      expect(screen.queryByRole('region', { name: 'Test settings' })).not.toBeInTheDocument()
+      expect(document.querySelector('.pager-position')).toHaveTextContent('1 of 2')
+    })
+
+    it('takes one ad out of the campaign without calling it a test', async () => {
+      mockedApi.listCreatives.mockResolvedValueOnce(two)
+      mockedApi.listCreatives.mockResolvedValue(two.slice(1))
+      mockedApi.deselectCreative.mockResolvedValue(
+        makeCreative({ id: 'creative-1', status: 'GENERATED' }),
+      )
+      const user = userEvent.setup()
+
+      renderPage()
+      const section = within(await screen.findByRole('region', { name: 'Your ads' }))
+      expect(section.queryByRole('button', { name: 'Remove from test' })).not.toBeInTheDocument()
+      await user.click(section.getByRole('button', { name: 'Remove this ad' }))
+
+      await waitFor(() =>
+        expect(mockedApi.deselectCreative).toHaveBeenCalledWith('biz-1', 'camp-1', 'creative-1'),
+      )
+      expect(await screen.findByText('1 ad in this campaign')).toBeInTheDocument()
+    })
+
+    it('shows one ad, with the same section, for a standard campaign with a single selection', async () => {
+      mockedApi.listCreatives.mockResolvedValue([two[0]])
+
+      renderPage()
+
+      expect(await screen.findByText('1 ad in this campaign')).toBeInTheDocument()
+    })
+  })
+
+  describe('an audience test', () => {
+    it('previews its one ad with no section for adding or removing ads', async () => {
+      mockedApi.getStrategy.mockResolvedValue(strategyOf('TEST_PLAN'))
+
+      renderPage()
+      await screen.findByRole('tabpanel')
+
+      expect(screen.queryByRole('region', { name: 'Your ads' })).not.toBeInTheDocument()
+      expect(screen.queryByRole('region', { name: 'Test settings' })).not.toBeInTheDocument()
+    })
   })
 
   describe('a published campaign', () => {

@@ -34,11 +34,39 @@ _ONE_VARIANT: dict[str, Any] = {
     "creativeAngle": "Craftsmanship",
 }
 
+# A standard campaign's ads must read as different ads, so a four-ad batch gives
+# each its own wording (the first is _ONE_VARIANT's own).
+_ANGLES = ["Craftsmanship", "Luxury", "Personalization", "Heritage"]
+_DISTINCT_TEXT = [
+    (_ONE_VARIANT["headline"], _ONE_VARIANT["bodyText"]),
+    ("Wear Your Own Taste", "Pieces chosen to say who you are, not what you spent."),
+    ("Made Small, Made Right", "Small-batch jewelry finished by hand in New York."),
+    ("Gifts They Will Keep", "A ring for the milestone worth marking, ready to wrap."),
+]
+
+
+# Four unlike openings, for tests that give every ad the same closing line.
+_OFFER_LEADS = [
+    "Heirloom emerald rings shaped slowly around your own hands.",
+    "Quiet confident pieces chosen because they suit your taste.",
+    "Small batches finished carefully by artisans across Manhattan studios.",
+    "Milestone presents wrapped beautifully and delivered before the big day.",
+]
+
+
+def _distinct_variant(index: int, **overrides: Any) -> dict[str, Any]:
+    headline, body = _DISTINCT_TEXT[index]
+    return {
+        **_ONE_VARIANT,
+        "headline": headline,
+        "bodyText": body,
+        "creativeAngle": _ANGLES[index],
+        **overrides,
+    }
+
+
 _VALID_TOOL_INPUT: dict[str, Any] = {
-    "variants": [
-        {**_ONE_VARIANT, "creativeAngle": angle}
-        for angle in ["Craftsmanship", "Luxury", "Personalization", "Heritage"]
-    ]
+    "variants": [_distinct_variant(i) for i in range(4)]
 }
 
 _FAKE_STRATEGY = DataDrivenStrategyContent(
@@ -647,14 +675,8 @@ async def test_generate_creatives_raises_on_malformed_tool_input(
 def _batch_with(cta: str | list[str]) -> dict[str, Any]:
     """A four-variant tool input, each on a distinct angle, sharing one
     CTA unless a list of four is given (for the mixed-CTA test)."""
-    angles = ["Craftsmanship", "Luxury", "Personalization", "Heritage"]
     ctas = cta if isinstance(cta, list) else [cta] * 4
-    return {
-        "variants": [
-            {**_ONE_VARIANT, "cta": c, "creativeAngle": a}
-            for c, a in zip(ctas, angles, strict=True)
-        ]
-    }
+    return {"variants": [_distinct_variant(i, cta=c) for i, c in enumerate(ctas)]}
 
 
 def _sequenced_client(
@@ -774,13 +796,12 @@ async def test_generate_creatives_allows_get_offer_when_primary_text_mentions_it
     no retry needed."""
     mentioning_batch = {
         "variants": [
-            {
-                **_ONE_VARIANT,
-                "cta": "GET_OFFER",
-                "creativeAngle": angle,
-                "bodyText": "Get 20% off with code WELCOME20 today.",
-            }
-            for angle in ["Craftsmanship", "Luxury", "Personalization", "Heritage"]
+            _distinct_variant(
+                i,
+                cta="GET_OFFER",
+                bodyText=f"{_OFFER_LEADS[i]} Get 20% off with code WELCOME20 today.",
+            )
+            for i in range(4)
         ]
     }
     create = _sequenced_client(monkeypatch, mentioning_batch)
@@ -873,11 +894,9 @@ async def test_generate_creatives_truncates_an_over_length_headline_after_retry(
     long_headline = (
         "This headline is deliberately far too long for Meta's forty character limit"
     )
+    long_headlines = [f"{lead} {long_headline}" for lead in _OFFER_LEADS]
     bad_batch = {
-        "variants": [
-            {**_ONE_VARIANT, "headline": long_headline, "creativeAngle": angle}
-            for angle in ["Craftsmanship", "Luxury", "Personalization", "Heritage"]
-        ]
+        "variants": [_distinct_variant(i, headline=long_headlines[i]) for i in range(4)]
     }
     create = _sequenced_client(monkeypatch, bad_batch, bad_batch)
 
@@ -886,10 +905,10 @@ async def test_generate_creatives_truncates_an_over_length_headline_after_retry(
     )
 
     assert create.call_count == 2
-    for variant in result:
+    for variant, original in zip(result, long_headlines, strict=True):
         assert len(variant.headline) <= 40
         assert not variant.headline.endswith(" ")
-        assert long_headline.startswith(variant.headline)
+        assert original.startswith(variant.headline)
 
 
 # ---------- Part 5(e): generation succeeds with an empty brand profile ----------

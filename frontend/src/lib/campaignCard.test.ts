@@ -105,7 +105,7 @@ describe('cardModel', () => {
       input({ status: 'ADS_GENERATED', adSelection: { selected: 2, required: 4 } }),
     )
     expect(test.badge).toEqual({ label: 'Needs your review', tone: 'attention' })
-    expect(test.message).toBe('Choose the ads to run in this test.')
+    expect(test.message).toBe('Choose the ads to run.')
     expect(test.progress).toEqual({ value: 2, max: 4, label: '2 of 4 ads chosen' })
     expect(test.primary.label).toBe('Review campaign')
 

@@ -24,6 +24,7 @@ from tests.test_creative_service import (
     _FAKE_STRATEGY,
     _ONE_VARIANT,
     _creative_plan,
+    _distinct_variant,
     _fake_brand_profile,
     _fake_business,
     _fake_product,
@@ -36,12 +37,7 @@ _NO_VISUAL_PROMPTS = dict(_ONE_VARIANT)
 
 
 def _batch_of(count: int) -> dict[str, Any]:
-    angles = ["Craftsmanship", "Luxury", "Personalization", "Heritage"]
-    return {
-        "variants": [
-            {**_NO_VISUAL_PROMPTS, "creativeAngle": angles[i]} for i in range(count)
-        ]
-    }
+    return {"variants": [_distinct_variant(i) for i in range(count)]}
 
 
 def _client_returning(

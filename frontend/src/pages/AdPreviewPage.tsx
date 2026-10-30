@@ -7,6 +7,7 @@ import {
   deselectCreative,
   getBusiness,
   getOptions,
+  getStrategy,
   listCampaigns,
   listCreatives,
   listProductImages,
@@ -57,6 +58,10 @@ export function AdPreviewPage() {
   // Every selected ad. One for the original single-ad flow; 3-4 for a
   // creative test (CREATIVE_TEST_PLAN), where they all publish together.
   const [selectedCreatives, setSelectedCreatives] = useState<Creative[]>([])
+  // The campaign's plan type, which decides whether its ads run together (a creative
+  // test or a standard campaign) or alone (an audience test). Null until known, or
+  // when the campaign has no strategy.
+  const [planType, setPlanType] = useState<string | null>(null)
   // Which of them is being previewed. Moving it never selects or changes an ad.
   const [activeIndex, setActiveIndex] = useState(0)
   const creative: Creative | null = selectedCreatives[activeIndex] ?? null
@@ -112,11 +117,16 @@ export function AdPreviewPage() {
     if (!businessId || !campaignId) return
     setLoading(true)
     try {
-      const [loadedBusiness, campaigns, creatives] = await Promise.all([
+      const [loadedBusiness, campaigns, creatives, loadedPlanType] = await Promise.all([
         getBusiness(businessId),
         listCampaigns(businessId),
         listCreatives(businessId, campaignId),
+        getStrategy(businessId, campaignId).then(
+          (strategy) => strategy.content.planType as string,
+          () => null,
+        ),
       ])
+      setPlanType(loadedPlanType)
       setBusiness(loadedBusiness)
       setCampaign(campaigns.find((c) => c.id === campaignId) ?? null)
       const selected = creatives.filter((c) => c.status === 'SELECTED')
@@ -292,7 +302,7 @@ export function AdPreviewPage() {
       await deselectCreative(businessId, campaignId, creative.id)
       await refresh()
     } catch (err) {
-      setRemoveError(err instanceof ApiError ? err.message : 'Could not remove this ad from the test.')
+      setRemoveError(err instanceof ApiError ? err.message : 'Could not remove this ad.')
     } finally {
       setRemovingId(null)
     }
@@ -301,8 +311,9 @@ export function AdPreviewPage() {
   const published = isPublished(campaign)
   const canPublish =
     campaign !== null && !published && _PUBLISHABLE_STATUSES.includes(campaign.status)
-  const isTest = selectedCreatives.length > 1
-  const isCarousel = creative?.format === 'CAROUSEL' && !isTest
+  const isCreativeTest = planType === 'CREATIVE_TEST_PLAN'
+  const runsSeveralAds = isCreativeTest || planType === 'DATA_DRIVEN_STRATEGY'
+  const isCarousel = creative?.format === 'CAROUSEL' && selectedCreatives.length <= 1
   const canEditAssets =
     creative !== null &&
     !published &&
@@ -513,14 +524,17 @@ export function AdPreviewPage() {
                   </section>
                 )}
 
-                {isTest && (
+                {runsSeveralAds && (
                   <section className="detail-group" aria-labelledby="test-settings-heading">
                     <h2 id="test-settings-heading" className="detail-heading">
                       <FlaskIcon />
-                      Test settings
+                      {isCreativeTest ? 'Test settings' : 'Your ads'}
                     </h2>
-                    <p>{adCount} ads in this test</p>
-                    {businessId && campaignId && (
+                    <p>
+                      {adCount} {adCount === 1 ? 'ad' : 'ads'} in this{' '}
+                      {isCreativeTest ? 'test' : 'campaign'}
+                    </p>
+                    {isCreativeTest && businessId && campaignId && (
                       <TestSettingsPanel
                         businessId={businessId}
                         campaignId={campaignId}
@@ -531,8 +545,8 @@ export function AdPreviewPage() {
                     {!published && (
                       <>
                         <p className="field-hint">
-                          Taking an ad out of the test does not delete it; you can add it back from
-                          the ad choices.
+                          Taking an ad out of the {isCreativeTest ? 'test' : 'campaign'} does not
+                          delete it; you can add it back from the ad choices.
                         </p>
                         <button
                           type="button"
@@ -540,7 +554,11 @@ export function AdPreviewPage() {
                           onClick={() => void handleRemoveFromTest()}
                           disabled={removingId !== null}
                         >
-                          {removingId === creative.id ? 'Removing…' : 'Remove from test'}
+                          {removingId === creative.id
+                            ? 'Removing…'
+                            : isCreativeTest
+                              ? 'Remove from test'
+                              : 'Remove this ad'}
                         </button>
                         {removeError && (
                           <p className="form-error" role="alert">

@@ -148,7 +148,7 @@ export function cardModel(input: CardInput): CardModel {
       return {
         badge: { label: 'Needs your review', tone: 'attention' },
         // With a count, the progress bar says how many; the message says what to do.
-        message: selection ? 'Choose the ads to run in this test.' : 'Choose the ad you want to run.',
+        message: selection ? 'Choose the ads to run.' : 'Choose the ad you want to run.',
         progress:
           selection && selection.required > 0
             ? {

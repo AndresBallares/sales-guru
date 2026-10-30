@@ -493,6 +493,12 @@ MAX_CREATIVE_ANGLES = 4
 # (required_test_ads). The two bounds stay the limits on a stored plan, which
 # may be an older three-angle one.
 CREATIVE_TEST_AD_COUNT = 4
+# Plans whose campaign runs the ads the user selects together in one ad set:
+# 1 to MAX_CREATIVE_ANGLES of them. Selecting adds an ad, deselecting removes
+# one, and a single ad is enough to approve. The audience TEST_PLAN is not one
+# of them: it keeps one ad, carried by both of its audience ad sets.
+MULTI_AD_PLAN_TYPES = ("CREATIVE_TEST_PLAN", "DATA_DRIVEN_STRATEGY")
+MIN_ADS_TO_APPROVE = 1
 
 # Who a creative test ad speaks to. A fixed pair, not free text, so the ad's
 # name on Meta and its UTM parameters can be derived from it.

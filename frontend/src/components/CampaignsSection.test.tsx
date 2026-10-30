@@ -341,6 +341,13 @@ function fakeTestPlanContent(
   }
 }
 
+// A campaign whose strategy is an audience test (TEST_PLAN) runs a single ad: choosing
+// one rejects the rest, and the page shows that ad on its own.
+const AUDIENCE_TEST_STRATEGY: api.Strategy = {
+  ...FAKE_STRATEGY,
+  content: fakeTestPlanContent(),
+}
+
 function fakeTestEvaluation(
   overrides: Partial<api.TestEvaluation> = {},
 ): api.TestEvaluation {
@@ -2434,7 +2441,7 @@ describe('CampaignsSection', () => {
     mockedApi.listCampaigns.mockResolvedValueOnce([
       { ...draftCampaign, status: 'PENDING_APPROVAL' },
     ])
-    mockedApi.getStrategy.mockResolvedValue(FAKE_STRATEGY)
+    mockedApi.getStrategy.mockResolvedValue(AUDIENCE_TEST_STRATEGY)
     mockedApi.listCreatives.mockResolvedValueOnce([
       fakeCreative({ id: 'creative-1', headline: 'Headline A' }),
       fakeCreative({ id: 'creative-2', headline: 'Headline B' }),
@@ -2497,7 +2504,7 @@ describe('CampaignsSection', () => {
         needsDestinationUrl: false,
       },
     ])
-    mockedApi.getStrategy.mockResolvedValue(FAKE_STRATEGY)
+    mockedApi.getStrategy.mockResolvedValue(AUDIENCE_TEST_STRATEGY)
     mockedApi.listCreatives.mockResolvedValue([
       fakeCreative({ format: 'CAROUSEL', cards, status: 'SELECTED' }),
     ])
@@ -2566,7 +2573,7 @@ describe('CampaignsSection', () => {
         needsDestinationUrl: false,
       },
     ])
-    mockedApi.getStrategy.mockResolvedValue(FAKE_STRATEGY)
+    mockedApi.getStrategy.mockResolvedValue(AUDIENCE_TEST_STRATEGY)
     mockedApi.listCreatives.mockResolvedValue([
       fakeCreative({ format: 'CAROUSEL', cards, status: 'SELECTED' }),
     ])
@@ -2603,7 +2610,7 @@ describe('CampaignsSection', () => {
         needsDestinationUrl: false,
       },
     ])
-    mockedApi.getStrategy.mockResolvedValue(FAKE_STRATEGY)
+    mockedApi.getStrategy.mockResolvedValue(AUDIENCE_TEST_STRATEGY)
     mockedApi.listCreatives.mockResolvedValue([
       fakeCreative({ format: 'CAROUSEL', cards, status: 'SELECTED' }),
     ])
@@ -2644,7 +2651,7 @@ describe('CampaignsSection', () => {
       needsDestinationUrl: false,
     }
     mockedApi.listCampaigns.mockResolvedValue([campaign])
-    mockedApi.getStrategy.mockResolvedValue(FAKE_STRATEGY)
+    mockedApi.getStrategy.mockResolvedValue(AUDIENCE_TEST_STRATEGY)
     mockedApi.listCreatives.mockResolvedValue([
       fakeCreative({ id: 'creative-1', status: 'SELECTED' }),
     ])
@@ -2677,7 +2684,7 @@ describe('CampaignsSection', () => {
         needsDestinationUrl: false,
       },
     ])
-    mockedApi.getStrategy.mockResolvedValue(FAKE_STRATEGY)
+    mockedApi.getStrategy.mockResolvedValue(AUDIENCE_TEST_STRATEGY)
     mockedApi.listCreatives.mockResolvedValue([
       fakeCreative({ id: 'creative-1', headline: 'Headline A', status: 'SELECTED' }),
     ])
@@ -2705,7 +2712,7 @@ describe('CampaignsSection', () => {
       needsDestinationUrl: false,
     }
     mockedApi.listCampaigns.mockResolvedValue([campaign])
-    mockedApi.getStrategy.mockResolvedValue(FAKE_STRATEGY)
+    mockedApi.getStrategy.mockResolvedValue(AUDIENCE_TEST_STRATEGY)
     mockedApi.listCreatives.mockResolvedValue([
       fakeCreative({ id: 'creative-1', headline: 'Headline A', status: 'SELECTED' }),
     ])
@@ -2762,7 +2769,7 @@ describe('CampaignsSection', () => {
       needsDestinationUrl: false,
     }
     mockedApi.listCampaigns.mockResolvedValue([campaign])
-    mockedApi.getStrategy.mockResolvedValue(FAKE_STRATEGY)
+    mockedApi.getStrategy.mockResolvedValue(AUDIENCE_TEST_STRATEGY)
     mockedApi.listCreatives.mockResolvedValue([
       fakeCreative({ id: 'creative-1', headline: 'Headline A', status: 'SELECTED' }),
     ])
@@ -2821,7 +2828,7 @@ describe('CampaignsSection', () => {
       needsDestinationUrl: false,
     }
     mockedApi.listCampaigns.mockResolvedValue([campaign])
-    mockedApi.getStrategy.mockResolvedValue(FAKE_STRATEGY)
+    mockedApi.getStrategy.mockResolvedValue(AUDIENCE_TEST_STRATEGY)
     mockedApi.listCreatives.mockResolvedValue([
       fakeCreative({ id: 'creative-1', headline: 'Headline A', status: 'SELECTED' }),
     ])
@@ -2855,7 +2862,7 @@ describe('CampaignsSection', () => {
       needsDestinationUrl: false,
     }
     mockedApi.listCampaigns.mockResolvedValue([campaign])
-    mockedApi.getStrategy.mockResolvedValue(FAKE_STRATEGY)
+    mockedApi.getStrategy.mockResolvedValue(AUDIENCE_TEST_STRATEGY)
     mockedApi.listCreatives.mockResolvedValue([
       fakeCreative({ id: 'creative-1', headline: 'Headline A', status: 'SELECTED' }),
     ])
@@ -2890,7 +2897,7 @@ describe('CampaignsSection', () => {
       needsDestinationUrl: false,
     }
     mockedApi.listCampaigns.mockResolvedValue([campaign])
-    mockedApi.getStrategy.mockResolvedValue(FAKE_STRATEGY)
+    mockedApi.getStrategy.mockResolvedValue(AUDIENCE_TEST_STRATEGY)
     mockedApi.listCreatives.mockResolvedValue([
       fakeCreative({ id: 'creative-1', headline: 'Headline A', status: 'SELECTED' }),
       fakeCreative({ id: 'creative-2', headline: 'Headline B', status: 'REJECTED' }),
@@ -2963,7 +2970,7 @@ describe('CampaignsSection', () => {
 
     beforeEach(() => {
       mockedApi.listCampaigns.mockResolvedValue([adsGenerated])
-      mockedApi.getStrategy.mockResolvedValue(FAKE_STRATEGY)
+      mockedApi.getStrategy.mockResolvedValue(AUDIENCE_TEST_STRATEGY)
     })
 
     it('shows the page heading, intro and one card per creative with its angle', async () => {
@@ -3150,7 +3157,7 @@ describe('CampaignsSection', () => {
       needsDestinationUrl: false,
     }
     mockedApi.listCampaigns.mockResolvedValue([campaign])
-    mockedApi.getStrategy.mockResolvedValue(FAKE_STRATEGY)
+    mockedApi.getStrategy.mockResolvedValue(AUDIENCE_TEST_STRATEGY)
     mockedApi.listCreatives.mockResolvedValue([
       fakeCreative({ id: 'creative-1', headline: 'Headline A', status: 'SELECTED' }),
     ])
@@ -3183,7 +3190,7 @@ describe('CampaignsSection', () => {
       needsDestinationUrl: false,
     }
     mockedApi.listCampaigns.mockResolvedValue([campaign])
-    mockedApi.getStrategy.mockResolvedValue(FAKE_STRATEGY)
+    mockedApi.getStrategy.mockResolvedValue(AUDIENCE_TEST_STRATEGY)
     mockedApi.listCreatives.mockResolvedValue([
       fakeCreative({ id: 'creative-1', headline: 'Headline A', status: 'SELECTED' }),
     ])
@@ -3216,7 +3223,7 @@ describe('CampaignsSection', () => {
       needsDestinationUrl: false,
     }
     mockedApi.listCampaigns.mockResolvedValue([campaign])
-    mockedApi.getStrategy.mockResolvedValue(FAKE_STRATEGY)
+    mockedApi.getStrategy.mockResolvedValue(AUDIENCE_TEST_STRATEGY)
     mockedApi.listCreatives.mockResolvedValue([
       fakeCreative({ id: 'creative-1', headline: 'Headline A', status: 'SELECTED' }),
       fakeCreative({ id: 'creative-2', headline: 'Headline B', status: 'REJECTED' }),
@@ -3295,7 +3302,7 @@ describe('CampaignsSection', () => {
         needsDestinationUrl: false,
       },
     ])
-    mockedApi.getStrategy.mockResolvedValue(FAKE_STRATEGY)
+    mockedApi.getStrategy.mockResolvedValue(AUDIENCE_TEST_STRATEGY)
     mockedApi.listCreatives.mockResolvedValue([fakeCreative()])
     mockedApi.selectCreative.mockRejectedValue(new Error('Network error'))
     const user = userEvent.setup()
@@ -5435,6 +5442,145 @@ describe('CampaignsSection creative test (CREATIVE_TEST_PLAN)', () => {
   })
 })
 
+describe('CampaignsSection standard campaign with several ads (DATA_DRIVEN_STRATEGY)', () => {
+  const CAMPAIGN = {
+    id: 'camp-1',
+    name: null,
+    objective: 'SALES' as const,
+    status: 'ADS_GENERATED',
+    productId: null,
+    audienceId: null,
+    metaCampaignId: null,
+    eventVenueKey: null,
+    startDate: null,
+    endDate: null,
+    pausedReason: null,
+    dailySpendFlag: null,
+    needsDestinationUrl: false,
+  }
+
+  function four(selectedIds: string[]): api.Creative[] {
+    return ['A', 'B', 'C', 'D'].map((letter, index) =>
+      fakeCreative({
+        id: `creative-${index + 1}`,
+        headline: `Headline ${letter}`,
+        status: selectedIds.includes(`creative-${index + 1}`) ? 'SELECTED' : 'GENERATED',
+      }),
+    )
+  }
+
+  beforeEach(() => {
+    mockedApi.getStrategy.mockResolvedValue(FAKE_STRATEGY)
+  })
+
+  it('offers each ad as one to add, not one to continue with, and counts them out of four', async () => {
+    mockedApi.listCampaigns.mockResolvedValue([CAMPAIGN])
+    mockedApi.listCreatives.mockResolvedValue(four([]))
+
+    renderCampaigns(<CampaignsSection businessId="biz-1" />)
+    await screen.findByText('Headline A')
+
+    expect(screen.getByRole('heading', { name: 'Choose your ads' })).toBeInTheDocument()
+    expect(screen.getByText('0 of 4 ads selected')).toBeInTheDocument()
+    expect(screen.getAllByRole('button', { name: 'Add this ad' })).toHaveLength(4)
+    expect(
+      screen.queryByRole('button', { name: 'Continue with this creative' }),
+    ).not.toBeInTheDocument()
+    expect(
+      screen.getByText(/Meta moves the budget toward the ones that perform best/),
+    ).toBeInTheDocument()
+  })
+
+  it('adds an ad without hiding or rejecting the others', async () => {
+    mockedApi.listCampaigns.mockResolvedValue([CAMPAIGN])
+    mockedApi.listCreatives.mockResolvedValueOnce(four([]))
+    mockedApi.listCreatives.mockResolvedValue(four(['creative-2']))
+    mockedApi.selectCreative.mockResolvedValue(
+      fakeCreative({ id: 'creative-2', headline: 'Headline B', status: 'SELECTED' }),
+    )
+    const user = userEvent.setup()
+
+    renderCampaigns(<CampaignsSection businessId="biz-1" />)
+    await screen.findByText('Headline A')
+    await user.click(screen.getAllByRole('button', { name: 'Add this ad' })[1])
+
+    expect(mockedApi.selectCreative).toHaveBeenCalledWith('biz-1', 'camp-1', 'creative-2')
+    expect(await screen.findByText('1 of 4 ads selected')).toBeInTheDocument()
+    expect(screen.getByText('Headline A')).toBeInTheDocument()
+    expect(screen.getByText('Headline D')).toBeInTheDocument()
+    expect(screen.getAllByRole('button', { name: 'Add this ad' })).toHaveLength(3)
+  })
+
+  it('waits for one ad before Next, and says why', async () => {
+    mockedApi.listCampaigns.mockResolvedValue([CAMPAIGN])
+    mockedApi.listCreatives.mockResolvedValue(four([]))
+
+    renderCampaigns(<CampaignsSection businessId="biz-1" />)
+    await screen.findByText('Headline A')
+
+    expect(screen.getByRole('button', { name: 'Next' })).toBeDisabled()
+    expect(screen.getByText('Select at least 1 ad to continue.')).toBeInTheDocument()
+  })
+
+  it('opens the ad page from Next once an ad is selected', async () => {
+    mockedApi.listCampaigns.mockResolvedValue([{ ...CAMPAIGN, status: 'PENDING_APPROVAL' }])
+    mockedApi.listCreatives.mockResolvedValue(four(['creative-1', 'creative-3']))
+    const user = userEvent.setup()
+
+    render(
+      <MemoryRouter initialEntries={['/businesses/biz-1?campaign=camp-1']}>
+        <Routes>
+          <Route path="/businesses/:id" element={<CampaignsSection businessId="biz-1" />} />
+          <Route
+            path="/businesses/biz-1/campaigns/camp-1/ad"
+            element={<p>AD PAGE REACHED</p>}
+          />
+        </Routes>
+      </MemoryRouter>,
+    )
+    await screen.findByText('Headline A')
+    expect(screen.getByText('2 of 4 ads selected')).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'Next' }))
+
+    expect(await screen.findByText('AD PAGE REACHED')).toBeInTheDocument()
+  })
+
+  it('stops offering Add this ad at four, and removes one from the campaign', async () => {
+    mockedApi.listCampaigns.mockResolvedValue([{ ...CAMPAIGN, status: 'PENDING_APPROVAL' }])
+    mockedApi.listCreatives.mockResolvedValueOnce(
+      four(['creative-1', 'creative-2', 'creative-3', 'creative-4']),
+    )
+    mockedApi.listCreatives.mockResolvedValue(four(['creative-2', 'creative-3', 'creative-4']))
+    mockedApi.deselectCreative.mockResolvedValue(
+      fakeCreative({ id: 'creative-1', headline: 'Headline A', status: 'GENERATED' }),
+    )
+    const user = userEvent.setup()
+
+    renderCampaigns(<CampaignsSection businessId="biz-1" />)
+    await screen.findByText('Headline A')
+    expect(screen.getByText('4 of 4 ads selected')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Add this ad' })).not.toBeInTheDocument()
+
+    await openEditCreative()
+    expect(screen.queryByRole('button', { name: 'Remove from test' })).not.toBeInTheDocument()
+    await user.click(screen.getAllByRole('button', { name: 'Remove this ad' })[0])
+
+    expect(mockedApi.deselectCreative).toHaveBeenCalledWith('biz-1', 'camp-1', 'creative-1')
+    expect(await screen.findByText('3 of 4 ads selected')).toBeInTheDocument()
+  })
+
+  it('shows its progress on the campaign card as ads chosen out of four', async () => {
+    mockedApi.listCampaigns.mockResolvedValue([CAMPAIGN])
+    mockedApi.listCreatives.mockResolvedValue(four(['creative-1', 'creative-2']))
+
+    renderOverview(<CampaignsSection businessId="biz-1" />)
+
+    expect(await screen.findByText('2 of 4 ads chosen')).toBeInTheDocument()
+    expect(screen.getByText('Choose the ads to run.')).toBeInTheDocument()
+  })
+})
+
 describe('CampaignsSection campaign type (creative test vs standard)', () => {
   const SALES_CAMPAIGN = {
     id: 'camp-1',
@@ -5775,12 +5921,6 @@ describe('CampaignsSection changing a video ad\'s video', () => {
     dailySpendFlag: null,
     needsDestinationUrl: false,
   }
-  const STANDARD_STRATEGY = {
-    id: 'strat-1',
-    campaignId: 'camp-1',
-    createdAt: '2026-10-08T00:00:00Z',
-    content: FAKE_STRATEGY.content,
-  }
   const thumb = (id: string) => `http://localhost:8000/product-images/${id}/thumbnail`
   const video = (id: string, headline: string, status: api.Creative['status'] = 'GENERATED') =>
     fakeCreative({
@@ -5814,7 +5954,7 @@ describe('CampaignsSection changing a video ad\'s video', () => {
   const thumbnailFile = new File(['t'], 'thumbnail.jpg', { type: 'image/jpeg' })
 
   beforeEach(() => {
-    mockedApi.getStrategy.mockResolvedValue(STANDARD_STRATEGY)
+    mockedApi.getStrategy.mockResolvedValue(AUDIENCE_TEST_STRATEGY)
     mockedApi.listProductImages.mockResolvedValue(library)
     vi.mocked(media.readVideoInfo).mockResolvedValue({
       width: 1080,
@@ -5969,7 +6109,7 @@ describe('CampaignsSection extra slots for a standalone image ad', () => {
       id: 'strat-1',
       campaignId: 'camp-1',
       createdAt: '2026-10-09T00:00:00Z',
-      content: FAKE_STRATEGY.content,
+      content: AUDIENCE_TEST_STRATEGY.content,
     })
     mockedApi.listProductImages.mockResolvedValue([])
   })
@@ -6112,7 +6252,7 @@ describe('CampaignsSection card layout', () => {
       id: 'strat-1',
       campaignId: 'camp-1',
       createdAt: '2026-10-09T00:00:00Z',
-      content: FAKE_STRATEGY.content,
+      content: AUDIENCE_TEST_STRATEGY.content,
     })
     mockedApi.listProductImages.mockResolvedValue([])
     mockedApi.listCampaigns.mockResolvedValue([{ ...CAMPAIGN, status: 'PENDING_APPROVAL' }])
@@ -6155,7 +6295,7 @@ describe('CampaignsSection editing toolbar and publish footer', () => {
       id: 'strat-1',
       campaignId: 'camp-1',
       createdAt: '2026-10-09T00:00:00Z',
-      content: FAKE_STRATEGY.content,
+      content: AUDIENCE_TEST_STRATEGY.content,
     })
     mockedApi.listProductImages.mockResolvedValue([])
     mockedApi.listCampaigns.mockResolvedValue([CAMPAIGN])

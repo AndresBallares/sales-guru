@@ -243,59 +243,6 @@ def test_deselect_404s_for_an_unknown_creative(
     assert response.status_code == 404
 
 
-def test_deselect_is_only_for_a_creative_test_plan(client: TestClient) -> None:
-    """The original single-ad flow is unchanged: no deselect for it."""
-    business_id, campaign_id, _ = _legacy_selected_campaign(client)
-    creative_id = _creatives(client, business_id, campaign_id)[0]["id"]
-
-    response = client.post(
-        f"/businesses/{business_id}/campaigns/{campaign_id}"
-        f"/creatives/{creative_id}/deselect"
-    )
-
-    assert response.status_code == 400
-
-
-def _legacy_selected_campaign(client: TestClient) -> tuple[str, str, str]:
-    _signed_up_client(client)
-    business_id = _create_business(client, website="https://acme.example")
-    product_id = _create_product_with_photos(
-        client, business_id, url="https://acme.example/product", count=1
-    )
-    audience_id = _create_audience(client, business_id)
-    campaign_id: str = client.post(
-        f"/businesses/{business_id}/campaigns",
-        json={
-            "objective": "SALES",
-            "productId": product_id,
-            "audienceId": audience_id,
-        },
-    ).json()["id"]
-    client.post(
-        f"/businesses/{business_id}/campaigns/{campaign_id}/strategy",
-        json={"hasPriorAdvertisingExperience": True},
-    )
-    client.post(f"/businesses/{business_id}/campaigns/{campaign_id}/creatives")
-    first = _creatives(client, business_id, campaign_id)[0]["id"]
-    client.post(
-        f"/businesses/{business_id}/campaigns/{campaign_id}/creatives/{first}/select"
-    )
-    return business_id, campaign_id, first
-
-
-def test_a_legacy_campaign_still_selects_exclusively(client: TestClient) -> None:
-    business_id, campaign_id, first = _legacy_selected_campaign(client)
-    second = _creatives(client, business_id, campaign_id)[1]["id"]
-
-    client.post(
-        f"/businesses/{business_id}/campaigns/{campaign_id}/creatives/{second}/select"
-    )
-
-    by_id = {c["id"]: c["status"] for c in _creatives(client, business_id, campaign_id)}
-    assert by_id[second] == "SELECTED"
-    assert by_id[first] == "REJECTED"
-
-
 def test_an_image_test_refuses_a_carousel_request(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
