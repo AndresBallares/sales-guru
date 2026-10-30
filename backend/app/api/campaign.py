@@ -667,7 +667,7 @@ async def publish_campaign(
     assert connection is not None  # narrowed by connection_incomplete above
 
     creative = await db.creative.find_first(
-        where={"campaignId": campaign.id, "status": "SELECTED"},
+        where={"campaignId": campaign.id, "roundId": None, "status": "SELECTED"},
         include={"cards": {"order_by": {"position": "asc"}}},
     )
     if creative is None:
@@ -687,7 +687,7 @@ async def publish_campaign(
     creatives = [creative]
     if strategy_content.plan_type in MULTI_AD_PLAN_TYPES:
         creatives = await db.creative.find_many(
-            where={"campaignId": campaign.id, "status": "SELECTED"},
+            where={"campaignId": campaign.id, "roundId": None, "status": "SELECTED"},
             order={"createdAt": "asc"},
             include={"cards": {"order_by": {"position": "asc"}}},
         )

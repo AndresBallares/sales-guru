@@ -989,6 +989,9 @@ export interface CreativeCard {
 export interface Creative {
   id: string
   campaignId: string
+  // The follow-up round (CreativeRound) this ad belongs to; null for the
+  // campaign's first batch ("round 1").
+  roundId?: string | null
   adId: string | null
   headline: string
   bodyText: string
@@ -1021,6 +1024,25 @@ export interface Creative {
   // — true once the product this was generated from has since been
   // edited or the campaign swapped onto a different one.
   isStale: boolean
+}
+
+export type CreativeRoundStatus = 'OPEN' | 'CLOSED'
+
+// A follow-up round of ads on a creative test campaign (backend
+// app/api/creative_round.py). Generated as four ads (three when the product
+// lacks a fourth photo or video) on angles no earlier round used; the user
+// then selects 1-4 of them. Round 1, the first batch, has no row.
+export interface CreativeRound {
+  id: string
+  campaignId: string
+  // Rounds start at 2.
+  number: number
+  status: CreativeRoundStatus
+  generatedCount: number
+  selectedCount: number
+  angles: CreativeAngle[]
+  creatives: Creative[]
+  createdAt: string
 }
 
 export function createCreatives(

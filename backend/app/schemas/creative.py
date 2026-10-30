@@ -653,6 +653,8 @@ class CreativeResponse(CamelCaseModel):
 
     id: str
     campaign_id: str
+    # The follow-up round this ad belongs to; null for the campaign's first batch.
+    round_id: str | None
     ad_id: str | None
     headline: str
     body_text: str

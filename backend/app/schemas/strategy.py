@@ -792,6 +792,70 @@ class GeneratedCreativeTestPlanFields(CamelCaseModel):
         return self
 
 
+class GeneratedRoundAngles(CamelCaseModel):
+    """The angles the LLM proposes for a follow-up creative round.
+
+    The caller sets context["count"] (how many ads the round needs: four, or
+    three for a product without a fourth photo or video),
+    context["excluded_pairs"] (every (avatar, concept) pair the first batch and
+    earlier rounds used) and, for a product that cannot run a Personalized
+    angle, context["personalization"] = "forbidden". Fresh means the exact
+    avatar and concept pair is new: the same concept for the other avatar is a
+    different angle and is allowed. An older angle stored without an avatar
+    excludes its concept for both avatars.
+    """
+
+    creative_angles: Annotated[
+        list[GeneratedCreativeAngle],
+        Field(min_length=MIN_CREATIVE_ANGLES, max_length=MAX_CREATIVE_ANGLES),
+    ]
+
+    @model_validator(mode="after")
+    def _check_fresh(self, info: ValidationInfo) -> Self:
+        context = info.context or {}
+        count = context.get("count")
+        if count is not None and len(self.creative_angles) != count:
+            raise ValueError(
+                f"Submit exactly {count} angles; got {len(self.creative_angles)}"
+            )
+        excluded = {
+            (avatar, concept) for avatar, concept in context.get("excluded_pairs", ())
+        }
+        reused = sorted(
+            f"{a.avatar} / {a.concept}"
+            for a in self.creative_angles
+            if (a.avatar, a.concept) in excluded or (None, a.concept) in excluded
+        )
+        if reused:
+            raise ValueError(
+                f"These avatar and concept pairs were already used by an earlier "
+                f"round: {reused}. Every angle needs an avatar and concept pair "
+                "that is new to this campaign"
+            )
+        pairs = [(a.avatar, a.concept) for a in self.creative_angles]
+        if len(set(pairs)) != len(pairs):
+            raise ValueError("Every angle needs its own avatar and concept pair")
+        pillars = {a.pillar for a in self.creative_angles}
+        if len(pillars) < MIN_DISTINCT_PILLARS:
+            raise ValueError(
+                f"The angles must span at least {MIN_DISTINCT_PILLARS} distinct "
+                f"pillars (offer, mechanism, education, emotion); got {sorted(pillars)}"
+            )
+        personalized = [
+            a for a in self.creative_angles if a.concept == PERSONALIZATION_CONCEPT
+        ]
+        if len(personalized) > 1:
+            raise ValueError(
+                f"At most one angle may use the {PERSONALIZATION_CONCEPT!r} concept"
+            )
+        if personalized and context.get("personalization") == "forbidden":
+            raise ValueError(
+                "This product is not personalizable (or has no product URL), so "
+                f"no angle may use the {PERSONALIZATION_CONCEPT!r} concept"
+            )
+        return self
+
+
 class CreativeTestPlanContent(CamelCaseModel):
     """The full structured CREATIVE_TEST_PLAN — what gets stored and returned.
 

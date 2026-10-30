@@ -864,7 +864,10 @@ async def _roll_back_failed_publish(
             await tx.creative.delete_many(
                 where={"campaignId": campaign.id, "id": {"not_in": creative_ids_before}}
             )
-            for kept in await tx.creative.find_many(where={"campaignId": campaign.id}):
+            # Round 1 only: a follow-up round's ads are not part of this publish.
+            for kept in await tx.creative.find_many(
+                where={"campaignId": campaign.id, "roundId": None}
+            ):
                 await tx.creative.update(
                     where={"id": kept.id},
                     data={"ad": {"disconnect": True}, "metaCreativeId": None},

@@ -67,6 +67,7 @@ from app.schemas.strategy import (
     AudienceVariant,
     BenchmarkContext,
     BudgetRecommendation,
+    CreativeAngle,
     CreativePersona,
     CreativeTestFormat,
     CreativeTestHypothesis,
@@ -75,6 +76,7 @@ from app.schemas.strategy import (
     GeneratedCreativeAngle,
     GeneratedCreativeTestPlanFields,
     GeneratedDataDrivenStrategyFields,
+    GeneratedRoundAngles,
     GeneratedTestPlanFields,
     NormalizedMetrics,
     OptimizationEvent,
@@ -115,6 +117,7 @@ _MAX_TOKENS = 8192
 _TEST_PLAN_TOOL_NAME = "submit_test_plan"
 _CREATIVE_TEST_PLAN_TOOL_NAME = "submit_creative_test_plan"
 _DATA_DRIVEN_STRATEGY_TOOL_NAME = "submit_data_driven_strategy"
+_ROUND_ANGLES_TOOL_NAME = "submit_creative_round_angles"
 
 PlanType = Literal["TEST_PLAN", "CREATIVE_TEST_PLAN", "DATA_DRIVEN_STRATEGY"]
 
@@ -172,6 +175,34 @@ _FAKE_CREATIVE_TEST_PLAN_FIELDS = GeneratedCreativeTestPlanFields(
         ),
     ],
     copy_strategy="Fake copy strategy (FAKE_LLM mode).",
+).model_dump()
+_FAKE_ROUND_ANGLES_FIELDS = GeneratedRoundAngles(
+    creative_angles=[
+        GeneratedCreativeAngle(
+            avatar="self_purchaser",
+            concept="daily-ritual",
+            pillar="emotion",
+            description="Fake round angle: a quiet daily ritual (FAKE_LLM mode).",
+        ),
+        GeneratedCreativeAngle(
+            avatar="self_purchaser",
+            concept="made-to-last",
+            pillar="mechanism",
+            description="Fake round angle: built to last (FAKE_LLM mode).",
+        ),
+        GeneratedCreativeAngle(
+            avatar="gift_buyer",
+            concept="anniversary-surprise",
+            pillar="emotion",
+            description="Fake round angle: the anniversary surprise (FAKE_LLM mode).",
+        ),
+        GeneratedCreativeAngle(
+            avatar="gift_buyer",
+            concept="easy-returns",
+            pillar="offer",
+            description="Fake round angle: risk-free gifting (FAKE_LLM mode).",
+        ),
+    ]
 ).model_dump()
 _FAKE_DATA_DRIVEN_STRATEGY_FIELDS = GeneratedDataDrivenStrategyFields(
     target_audience=TargetAudience(age_min=25, age_max=45),
@@ -975,6 +1006,142 @@ def _build_creative_test_plan_prompt(
     return "\n".join(lines)
 
 
+def _build_round_angles_prompt(
+    business: Business,
+    product: Product | None,
+    audience: Audience | None,
+    plan: CreativeTestPlanContent,
+    excluded_angles: list[CreativeAngle],
+    count: int,
+    brand_profile: BrandProfile | None,
+) -> str:
+    """Build the prompt for the angles of a follow-up creative round.
+
+    Args:
+        business: The business the campaign is for.
+        product: The product being advertised, if one was selected.
+        audience: An existing audience definition, if any (persona hint only).
+        plan: The campaign's CREATIVE_TEST_PLAN, for its persona, positioning
+            and format.
+        excluded_angles: Every angle an earlier round used, the first batch
+            included. Their concepts may not come back.
+        count: How many angles to propose.
+        brand_profile: The business's brand profile, if any.
+
+    Returns:
+        The prompt text.
+    """
+    taken = "\n".join(
+        f"- {a.avatar or 'any avatar'} / {a.concept}: {a.description}"
+        for a in excluded_angles
+    )
+    lines = [
+        "You are a marketing strategist. This campaign already ran a creative "
+        "test, and you are proposing the angles for its next round of new ads "
+        "in the same ad set structure: broad Meta audience, only the creative "
+        "changes.",
+        "",
+        _vertical_grounding(),
+        "",
+        "Your job:",
+        f"- creative_angles: exactly {count} NEW angles, each with an avatar "
+        "(self_purchaser or gift_buyer), a concept (a short lowercase slug of "
+        "one to three words joined by hyphens), a pillar (offer, mechanism, "
+        "education or emotion) and a description of what the ad shows and "
+        "promises. Never repeat an avatar and concept pair from the angles "
+        "already used, listed below; the same concept for the other avatar is "
+        "allowed when the ad says or shows something different. Never repeat "
+        "a pair within your own angles either. The angles must span at least "
+        "3 distinct pillars. Use offer only if the "
+        "request details show a real promotion or risk-reducer, and keep each "
+        "angle something this product's real details support. The ad format "
+        "is stated below." + _personalization_instruction(product),
+        "",
+        "Submit your angles using the provided tool.",
+        "",
+        _REQUEST_MARKER,
+        *_business_product_audience_lines(business, product, audience, brand_profile),
+        "",
+        f"Creative persona: {plan.creative_persona.name} — "
+        f"{plan.creative_persona.description}",
+        f"Positioning: {plan.positioning}",
+        "Ad format: " + _creative_format_instruction(plan.creative_format),
+        "",
+        "Angles already used (do not repeat their avatar and concept pairs):",
+        taken,
+    ]
+    return "\n".join(lines)
+
+
+async def generate_round_angles(
+    *,
+    business: Business,
+    product: Product | None,
+    audience: Audience | None,
+    plan: CreativeTestPlanContent,
+    excluded_angles: list[CreativeAngle],
+    count: int,
+    brand_profile: BrandProfile | None = None,
+    campaign_id: str | None = None,
+) -> list[GeneratedCreativeAngle]:
+    """Propose fresh angles for a follow-up creative round.
+
+    One model call, plus one retry that names the problem when the angles reuse
+    an earlier round's concept, repeat a pair or come back in the wrong number.
+
+    Args:
+        business: The business the campaign is for.
+        product: The product being advertised, if one was selected.
+        audience: An existing audience definition, if any.
+        plan: The campaign's CREATIVE_TEST_PLAN.
+        excluded_angles: Every angle used by the first batch and earlier rounds.
+        count: How many angles to return (four, or three for a thin product).
+        brand_profile: The business's brand profile, if any.
+        campaign_id: Only used to tag the token-usage log line.
+
+    Returns:
+        ``count`` angles whose concepts no earlier angle used.
+
+    Raises:
+        StrategistError: If the model call fails, or its angles are still
+            invalid after the retry.
+    """
+    prompt = _build_round_angles_prompt(
+        business, product, audience, plan, excluded_angles, count, brand_profile
+    )
+    context: dict[str, object] = {
+        "count": count,
+        "excluded_pairs": sorted(
+            {(a.avatar, a.concept) for a in excluded_angles},
+            key=lambda pair: (pair[0] or "", pair[1]),
+        ),
+        "personalization": None if is_personalized(product) else "forbidden",
+    }
+    retry_note = ""
+    for attempt in (1, 2):
+        raw = await _call_agent(
+            tool_name=_ROUND_ANGLES_TOOL_NAME,
+            tool_schema=tool_input_schema(GeneratedRoundAngles),
+            prompt=prompt + retry_note,
+            campaign_id=campaign_id,
+        )
+        try:
+            parsed = parse_tool_input(raw, GeneratedRoundAngles, context=context)
+        except (ToolInputRecoveryError, ValidationError) as exc:
+            if attempt == 2:
+                raise StrategistError(
+                    "The model returned invalid angles for the new round — "
+                    "please try again."
+                ) from exc
+            retry_note = (
+                f"\n\nYour previous angles were rejected: {exc}. "
+                "Fix it and submit again."
+            )
+        else:
+            return parsed.creative_angles
+    raise AssertionError("unreachable")  # pragma: no cover
+
+
 async def _call_agent(
     *,
     tool_name: str,
@@ -1007,6 +1174,8 @@ async def _call_agent(
             return dict(_FAKE_CREATIVE_TEST_PLAN_FIELDS)
         if tool_name == _DATA_DRIVEN_STRATEGY_TOOL_NAME:
             return dict(_FAKE_DATA_DRIVEN_STRATEGY_FIELDS)
+        if tool_name == _ROUND_ANGLES_TOOL_NAME:
+            return dict(_FAKE_ROUND_ANGLES_FIELDS)
         raise StrategistError(f"fake_llm_enabled has no canned reply for {tool_name!r}")
     if not settings.anthropic_api_key:
         raise StrategistError("ANTHROPIC_API_KEY is not configured")

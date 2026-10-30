@@ -13,6 +13,7 @@ from app.api.business import router as business_router
 from app.api.business import serve_router as business_logo_serve_router
 from app.api.campaign import router as campaign_router
 from app.api.creative import router as creative_router
+from app.api.creative_round import router as creative_round_router
 from app.api.dashboard import router as dashboard_router
 from app.api.meta import callback_router as meta_callback_router
 from app.api.meta import router as meta_router
@@ -72,6 +73,7 @@ app.include_router(audience_router)
 app.include_router(campaign_router)
 app.include_router(strategy_router)
 app.include_router(creative_router)
+app.include_router(creative_round_router)
 app.include_router(meta_router)
 app.include_router(meta_callback_router)
 app.include_router(metric_router)
