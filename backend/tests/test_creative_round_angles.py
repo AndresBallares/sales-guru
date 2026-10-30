@@ -124,11 +124,11 @@ async def test_the_prompt_lists_the_concepts_already_used(
 
 
 @pytest.mark.asyncio
-async def test_a_reused_concept_is_retried_once_with_the_problem_named(
+async def test_a_reused_pair_is_retried_once_with_the_problem_named(
     anthropic_api_key: None,  # noqa: F811
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    reused = [_angle("gift_buyer", "everyday-wear"), *FRESH[1:]]
+    reused = [_angle("self_purchaser", "everyday-wear"), *FRESH[1:]]
     create = _mock_model(monkeypatch, _reply(reused), _reply(FRESH))
 
     angles = await _generate()
@@ -136,7 +136,7 @@ async def test_a_reused_concept_is_retried_once_with_the_problem_named(
     assert create.call_count == 2
     retry_prompt = str(create.call_args_list[1].kwargs["messages"])
     assert "already used by an earlier round" in retry_prompt
-    assert "everyday-wear" in retry_prompt
+    assert "self_purchaser / everyday-wear" in retry_prompt
     assert len(angles) == 4
 
 
@@ -145,7 +145,7 @@ async def test_angles_still_stale_after_the_retry_fail_cleanly(
     anthropic_api_key: None,  # noqa: F811
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    reused = [_angle("gift_buyer", "everyday-wear"), *FRESH[1:]]
+    reused = [_angle("self_purchaser", "everyday-wear"), *FRESH[1:]]
     create = _mock_model(monkeypatch, _reply(reused), _reply(reused))
 
     with pytest.raises(StrategistError, match="invalid angles"):
@@ -159,7 +159,9 @@ async def test_a_thin_product_asks_for_three_and_rejects_four(
     anthropic_api_key: None,  # noqa: F811
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    create = _mock_model(monkeypatch, _reply(FRESH), _reply(FRESH[:3]))
+    create = _mock_model(
+        monkeypatch, _reply(FRESH), _reply([FRESH[0], FRESH[1], FRESH[3]])
+    )
 
     angles = await _generate(count=3)
 
@@ -181,18 +183,89 @@ async def test_fake_mode_returns_canned_angles(
     assert len(angles) == 4
 
 
-def test_the_angles_schema_enforces_count_freshness_and_distinct_pairs() -> None:
-    context = {"count": 4, "excluded_concepts": ["everyday-wear"]}
-    GeneratedRoundAngles.model_validate({"creativeAngles": FRESH}, context=context)
-    for bad, message in (
-        (FRESH[:3], "exactly 4"),
-        ([_angle("gift_buyer", "everyday-wear"), *FRESH[1:]], "earlier round"),
+@pytest.mark.asyncio
+async def test_the_same_concept_for_the_other_avatar_is_a_new_angle(
+    anthropic_api_key: None,  # noqa: F811
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    other_avatar = [_angle("gift_buyer", "everyday-wear"), *FRESH[1:]]
+    create = _mock_model(monkeypatch, _reply(other_avatar))
+
+    angles = await _generate()
+
+    assert create.call_count == 1  # accepted first time, no retry
+    assert (angles[0].avatar, angles[0].concept) == ("gift_buyer", "everyday-wear")
+
+
+def _validate(angles: list[dict[str, str]], **context: object) -> GeneratedRoundAngles:
+    base: dict[str, object] = {
+        "count": len(angles),
+        "excluded_pairs": [("self_purchaser", "everyday-wear")],
+    }
+    return GeneratedRoundAngles.model_validate(
+        {"creativeAngles": angles}, context={**base, **context}
+    )
+
+
+def test_the_angles_schema_accepts_fresh_pairs_and_a_concept_for_the_other_avatar() -> (
+    None
+):
+    _validate(FRESH)
+    _validate([_angle("gift_buyer", "everyday-wear"), *FRESH[1:]])
+
+
+@pytest.mark.parametrize(
+    ("angles", "message"),
+    [
+        (
+            [_angle("self_purchaser", "everyday-wear"), *FRESH[1:]],
+            "earlier round",
+        ),
         ([FRESH[0], FRESH[0], *FRESH[2:]], "own avatar and concept pair"),
-    ):
-        with pytest.raises(ValidationError, match=message):
-            GeneratedRoundAngles.model_validate(
-                {"creativeAngles": bad}, context=context
-            )
+        (
+            [
+                _angle("self_purchaser", "a-one"),
+                _angle("self_purchaser", "a-two"),
+                _angle("gift_buyer", "a-three"),
+                _angle("gift_buyer", "a-four"),
+            ],
+            "3 distinct pillars",
+        ),
+        (
+            [
+                _angle("self_purchaser", "personalization"),
+                _angle("gift_buyer", "personalization", "offer"),
+                _angle("self_purchaser", "a-two", "mechanism"),
+                _angle("gift_buyer", "a-three", "education"),
+            ],
+            "At most one angle",
+        ),
+    ],
+)
+def test_the_angles_schema_rejects(angles: list[dict[str, str]], message: str) -> None:
+    with pytest.raises(ValidationError, match=message):
+        _validate(angles)
+
+
+def test_the_angles_schema_rejects_the_wrong_number_of_angles() -> None:
+    with pytest.raises(ValidationError, match="exactly 4"):
+        _validate(FRESH[:3], count=4)
+
+
+def test_an_older_angle_without_an_avatar_excludes_its_concept_for_both() -> None:
+    legacy = {"excluded_pairs": [(None, "everyday-wear")]}
+    for avatar in ("self_purchaser", "gift_buyer"):
+        with pytest.raises(ValidationError, match="earlier round"):
+            _validate([_angle(avatar, "everyday-wear"), *FRESH[1:]], **legacy)
+
+
+def test_a_personalized_angle_is_refused_for_a_product_that_is_not_personalizable() -> (
+    None
+):
+    angles = [_angle("self_purchaser", "personalization", "offer"), *FRESH[1:]]
+    _validate(angles)  # allowed when the product can be personalized
+    with pytest.raises(ValidationError, match="not personalizable"):
+        _validate(angles, personalization="forbidden")
 
 
 # ── A three-ad Creative batch (a round for a thin product) ───

@@ -1048,10 +1048,11 @@ def _build_round_angles_prompt(
         "(self_purchaser or gift_buyer), a concept (a short lowercase slug of "
         "one to three words joined by hyphens), a pillar (offer, mechanism, "
         "education or emotion) and a description of what the ad shows and "
-        "promises. Never reuse a concept from the angles already used, listed "
-        "below, even with a different avatar or wording; say something the "
-        "earlier angles did not. Never repeat an avatar and concept pair. "
-        "Spread the angles over different pillars, use offer only if the "
+        "promises. Never repeat an avatar and concept pair from the angles "
+        "already used, listed below; the same concept for the other avatar is "
+        "allowed when the ad says or shows something different. Never repeat "
+        "a pair within your own angles either. The angles must span at least "
+        "3 distinct pillars. Use offer only if the "
         "request details show a real promotion or risk-reducer, and keep each "
         "angle something this product's real details support. The ad format "
         "is stated below." + _personalization_instruction(product),
@@ -1066,7 +1067,7 @@ def _build_round_angles_prompt(
         f"Positioning: {plan.positioning}",
         "Ad format: " + _creative_format_instruction(plan.creative_format),
         "",
-        "Angles already used (do not reuse their concepts):",
+        "Angles already used (do not repeat their avatar and concept pairs):",
         taken,
     ]
     return "\n".join(lines)
@@ -1110,7 +1111,11 @@ async def generate_round_angles(
     )
     context: dict[str, object] = {
         "count": count,
-        "excluded_concepts": sorted({a.concept for a in excluded_angles}),
+        "excluded_pairs": sorted(
+            {(a.avatar, a.concept) for a in excluded_angles},
+            key=lambda pair: (pair[0] or "", pair[1]),
+        ),
+        "personalization": None if is_personalized(product) else "forbidden",
     }
     retry_note = ""
     for attempt in (1, 2):
