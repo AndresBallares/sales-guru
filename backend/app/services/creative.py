@@ -131,6 +131,9 @@ logger = logging.getLogger(__name__)
 _MAX_TOKENS = 8192
 _TOOL_NAME = "submit_creatives"
 _VARIANT_COUNT = 4
+# The batch sizes the prompt spells out in words (a round for a thin product
+# asks for three).
+_COUNT_WORDS = {2: "two", 3: "three", 4: "four"}
 
 # ProductImage.contentType is a plain str at the type level (validated at
 # upload time, app/schemas/product_image.py's ALLOWED_CONTENT_TYPES), but
@@ -664,6 +667,7 @@ def _build_prompt_parts(
     card_count: int = 0,
     video_seconds: float | None = None,
     single_variant: SingleVariantTarget | None = None,
+    batch_size: int = _VARIANT_COUNT,
 ) -> tuple[str, str]:
     """Build the per-request prompt as (campaign context, per-call tail).
 
@@ -721,12 +725,15 @@ def _build_prompt_parts(
             this angle (a single-slot regenerate) instead of a batch of
             four. On a creative test it lists only that angle, keeping its
             avatar/concept/pillar and the persona.
+        batch_size: How many variants a full batch asks for (four, or three
+            for a follow-up round on a product without a fourth photo or
+            video). Ignored when single_variant is set.
 
     Returns:
         ``(context, tail)``.
     """
     objective = strategy.objective
-    variant_count = 1 if single_variant is not None else _VARIANT_COUNT
+    variant_count = 1 if single_variant is not None else batch_size
     allowed_ctas = sorted(ALLOWED_CTAS_BY_OBJECTIVE.get(objective, set()))
     standing_offer = brand_profile.offer if brand_profile is not None else None
     proof_points = (
@@ -935,13 +942,13 @@ def _build_prompt_parts(
         )
     if variant_count > 1:
         tail.append(
-            "All four variants in this batch must use that same CTA — do not "
-            "vary it across variants."
+            f"All {_COUNT_WORDS[variant_count]} variants in this batch must "
+            "use that same CTA — do not vary it across variants."
         )
     tail.append("")
     if single_variant is None:
         opening = (
-            f"Generate exactly {_VARIANT_COUNT} variants, each built around a "
+            f"Generate exactly {variant_count} variants, each built around a "
             "different creative angle (draw from the creative angles and "
             "reference structures above where possible) — every variant's "
             "angle must be distinct from the others."
@@ -1331,6 +1338,7 @@ async def generate_creatives(
     campaign_id: str | None = None,
     other_texts: list[tuple[str, str]] | None = None,
     check_fields: tuple[str, ...] = ("headline", "bodyText"),
+    batch_size: int = _VARIANT_COUNT,
 ) -> list[GeneratedCreativeVariant]:
     """Call the Creative Agent and return a batch of ad creative variants.
 
@@ -1381,10 +1389,14 @@ async def generate_creatives(
             different from them, or the model retries.
         check_fields: Which of "headline" and "bodyText" the regenerate will
             replace, so only those are compared.
+        batch_size: How many variants a full batch holds: four, or three for a
+            follow-up round on a product without a fourth photo or video.
+            Ignored when single_variant is set.
 
     Returns:
-        Exactly four generated creative variants (Creative A-D) — or exactly
-        one when single_variant is set — their shared CTA guaranteed to be
+        Exactly batch_size generated creative variants (four, Creative A-D,
+        by default) — or exactly one when single_variant is set — their
+        shared CTA guaranteed to be
         one this campaign's objective allows.
         For CAROUSEL, each variant also carries a cards list matching
         card_images 1:1 in order.
@@ -1397,7 +1409,7 @@ async def generate_creatives(
     """
     settings = get_settings()
     is_carousel = format == "CAROUSEL"
-    variant_count = 1 if single_variant is not None else _VARIANT_COUNT
+    variant_count = 1 if single_variant is not None else batch_size
     if settings.fake_llm_enabled:
         if is_carousel:
             assert card_images is not None  # caller contract, see docstring
@@ -1406,6 +1418,7 @@ async def generate_creatives(
             fakes = list(_FAKE_VARIANTS)
         if single_variant is not None:
             return fakes[:1]
+        fakes = fakes[:batch_size]
         return fakes if is_carousel else apply_plan_angles(fakes, strategy)
     if not settings.anthropic_api_key:
         raise CreativeAgentError("ANTHROPIC_API_KEY is not configured")
@@ -1425,6 +1438,7 @@ async def generate_creatives(
         card_count=len(card_images) if is_carousel and card_images else 0,
         video_seconds=video.duration_seconds if is_video and video else None,
         single_variant=single_variant,
+        batch_size=batch_size,
     )
 
     image_blocks: list[ImageBlockParam] = []

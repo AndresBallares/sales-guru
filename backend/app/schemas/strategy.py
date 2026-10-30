@@ -792,6 +792,42 @@ class GeneratedCreativeTestPlanFields(CamelCaseModel):
         return self
 
 
+class GeneratedRoundAngles(CamelCaseModel):
+    """The angles the LLM proposes for a follow-up creative round.
+
+    The caller sets context["count"] (how many ads the round needs: four, or
+    three for a product without a fourth photo or video) and
+    context["excluded_concepts"] (every concept slug an earlier round used, the
+    first batch included). Fresh means the concept itself is new, whichever
+    avatar it was paired with before.
+    """
+
+    creative_angles: Annotated[
+        list[GeneratedCreativeAngle],
+        Field(min_length=MIN_CREATIVE_ANGLES, max_length=MAX_CREATIVE_ANGLES),
+    ]
+
+    @model_validator(mode="after")
+    def _check_fresh(self, info: ValidationInfo) -> Self:
+        context = info.context or {}
+        count = context.get("count")
+        if count is not None and len(self.creative_angles) != count:
+            raise ValueError(
+                f"Submit exactly {count} angles; got {len(self.creative_angles)}"
+            )
+        excluded = set(context.get("excluded_concepts", ()))
+        reused = sorted({a.concept for a in self.creative_angles} & excluded)
+        if reused:
+            raise ValueError(
+                f"These concepts were already used by an earlier round: {reused}. "
+                "Every angle needs a concept that is new to this campaign"
+            )
+        pairs = [(a.avatar, a.concept) for a in self.creative_angles]
+        if len(set(pairs)) != len(pairs):
+            raise ValueError("Every angle needs its own avatar and concept pair")
+        return self
+
+
 class CreativeTestPlanContent(CamelCaseModel):
     """The full structured CREATIVE_TEST_PLAN — what gets stored and returned.
 

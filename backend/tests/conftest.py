@@ -66,6 +66,7 @@ _ALL_TABLES = (
     "metric",
     "optimizationrecommendation",
     "creativecard",
+    "creativeround",
     "creative",
     "ad",
     "adset",

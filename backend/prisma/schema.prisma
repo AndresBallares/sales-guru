@@ -384,6 +384,7 @@ model Campaign {
   strategy                Strategy?
   adSets                  AdSet[]
   creatives               Creative[]
+  creativeRounds          CreativeRound[]
   metrics                 Metric[]
   optimizations           OptimizationRecommendation[]
   testEvaluations         TestEvaluation[]
@@ -526,6 +527,10 @@ model Creative {
   id                        String         @id @default(cuid())
   campaign                  Campaign       @relation(fields: [campaignId], references: [id])
   campaignId                String
+  // Null for the campaign's first batch (round 1); set for a follow-up
+  // round's ads (see CreativeRound).
+  round                     CreativeRound? @relation(fields: [roundId], references: [id])
+  roundId                   String?
   ad                        Ad?            @relation(fields: [adId], references: [id])
   adId                      String?
   headline                  String
@@ -608,6 +613,32 @@ model Creative {
   cards                     CreativeCard[]
   createdAt                 DateTime       @default(now())
   updatedAt                 DateTime       @updatedAt
+}
+
+// A follow-up creative round on a campaign whose first batch is its "round 1"
+// (round 1 has no row: its creatives have roundId null, which is how every
+// existing creative stays). A round is four freshly generated ads (three only
+// when the product lacks a fourth photo or video) built on angles no earlier
+// round used; the user then selects 1 to 4 of them to publish. At most one
+// round is OPEN per campaign. generatedCount and selectedCount are stored on
+// the round; selectedCount follows the round's SELECTED creatives. angles is
+// the round's avatar x concept x pillar angles as a JSON-serialized string
+// (same app-layer serialization as Strategy.content), kept so the next round
+// can exclude them.
+model CreativeRound {
+  id             String     @id @default(cuid())
+  campaign       Campaign   @relation(fields: [campaignId], references: [id])
+  campaignId     String
+  number         Int
+  status         String     @default("OPEN")
+  generatedCount Int
+  selectedCount  Int        @default(0)
+  angles         String
+  creatives      Creative[]
+  createdAt      DateTime   @default(now())
+  updatedAt      DateTime   @updatedAt
+
+  @@unique([campaignId, number])
 }
 
 // One card of a CAROUSEL-format Creative (Meta's child_attachments, PRD.md

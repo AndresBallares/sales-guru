@@ -28,9 +28,11 @@ from app.schemas.creative import (
     SetStoryAssetRequest,
 )
 from app.schemas.strategy import (
+    CREATIVE_TEST_AD_COUNT,
     MAX_CREATIVE_ANGLES,
     MIN_ADS_TO_APPROVE,
     MULTI_AD_PLAN_TYPES,
+    CreativeTestPlanContent,
     StrategyContentAdapter,
 )
 from app.services.campaign_readiness import is_ready
@@ -159,6 +161,7 @@ def _to_response(
         {
             "id": creative.id,
             "campaignId": creative.campaignId,
+            "roundId": creative.roundId,
             "adId": creative.adId,
             "videoUrl": (
                 product_image_url(creative.productImageId)
@@ -225,7 +228,7 @@ async def _current_business(campaign: Campaign) -> Business:
 async def _list_creatives(campaign: Campaign) -> list[CreativeResponse]:
     """Fetch all creatives for a campaign, oldest first (stable A/B/C/D order)."""
     creatives = await db.creative.find_many(
-        where={"campaignId": campaign.id},
+        where={"campaignId": campaign.id, "roundId": None},
         order={"createdAt": "asc"},
         include={"cards": {"order_by": {"position": "asc"}}},
     )
@@ -336,6 +339,41 @@ async def create_creatives(
             isn't configured or the LLM call fails.
     """
     await _check_ads_can_change(campaign)
+    await generate_batch(
+        campaign, requested_format=payload.format if payload is not None else None
+    )
+    return await _list_creatives(campaign)
+
+
+async def generate_batch(
+    campaign: Campaign,
+    *,
+    requested_format: CreativeFormat | None = None,
+    plan_override: CreativeTestPlanContent | None = None,
+    round_id: str | None = None,
+    batch_size: int = CREATIVE_TEST_AD_COUNT,
+) -> list[str]:
+    """Generate a batch of creatives for a campaign and store it.
+
+    Without a round, this is the campaign's first batch (round 1): it replaces
+    the existing round-1 creatives and moves the campaign to ADS_GENERATED.
+    With a round, it adds that round's creatives beside everything else and
+    touches neither the existing creatives nor the campaign's status.
+
+    Args:
+        campaign: The campaign.
+        requested_format: The format the caller asked for, if any.
+        plan_override: A creative test plan to generate from instead of the
+            stored one (a round passes the plan with its own fresh angles).
+        round_id: The CreativeRound the new creatives belong to, if any.
+        batch_size: How many ads to generate (four unless a round says three).
+
+    Returns:
+        The ids of the newly created creatives, in creation order.
+
+    Raises:
+        HTTPException: As create_creatives documents.
+    """
     strategy = await db.strategy.find_unique(where={"campaignId": campaign.id})
     if strategy is None:
         raise HTTPException(
@@ -352,8 +390,7 @@ async def create_creatives(
     )
     brand_profile = await db.brandprofile.find_unique(where={"businessId": business.id})
 
-    requested_format = payload.format if payload is not None else None
-    plan = StrategyContentAdapter.validate_json(strategy.content)
+    plan = plan_override or StrategyContentAdapter.validate_json(strategy.content)
     if plan.plan_type == "CREATIVE_TEST_PLAN":
         creative_format = requested_format or plan.creative_format
         if creative_format != plan.creative_format:
@@ -437,6 +474,7 @@ async def create_creatives(
             card_images=card_images,
             video=video_input,
             campaign_id=campaign.id,
+            batch_size=batch_size,
         )
     except CreativeAgentError as exc:
         raise HTTPException(
@@ -450,14 +488,21 @@ async def create_creatives(
     # (this schema's usual convention — see e.g. ProductImage's own doc
     # comment), so any existing carousel's cards must go first or the
     # Creative delete below would fail the FK constraint outright.
-    stale_creative_ids = [
-        c.id for c in await db.creative.find_many(where={"campaignId": campaign.id})
-    ]
-    if stale_creative_ids:
-        await db.creativecard.delete_many(
-            where={"creativeId": {"in": stale_creative_ids}}
+    if round_id is None:
+        stale_creative_ids = [
+            c.id
+            for c in await db.creative.find_many(
+                where={"campaignId": campaign.id, "roundId": None}
+            )
+        ]
+        if stale_creative_ids:
+            await db.creativecard.delete_many(
+                where={"creativeId": {"in": stale_creative_ids}}
+            )
+        await db.creative.delete_many(
+            where={"campaignId": campaign.id, "roundId": None}
         )
-    await db.creative.delete_many(where={"campaignId": campaign.id})
+    created_ids: list[str] = []
     plan_angles = (
         {
             angle_label(str(a.avatar), a.concept, a.pillar): a
@@ -470,6 +515,7 @@ async def create_creatives(
     for variant in variants:
         data: CreativeCreateInput = {
             "campaignId": campaign.id,
+            "roundId": round_id,
             "headline": variant.headline,
             "bodyText": variant.body_text,
             "description": variant.description,
@@ -513,6 +559,7 @@ async def create_creatives(
             data["productImageId"] = video_row.id
             data["imageUrl"] = product_thumbnail_url(video_row.id)
         created = await db.creative.create(data=data)
+        created_ids.append(created.id)
         if variant.cards is not None:
             assert card_images is not None  # only set alongside CAROUSEL
             assert destination_url is not None  # gated above
@@ -530,11 +577,11 @@ async def create_creatives(
                         "linkUrl": destination_url,
                     }
                 )
-    await db.campaign.update(
-        where={"id": campaign.id}, data={"status": "ADS_GENERATED"}
-    )
-
-    return await _list_creatives(campaign)
+    if round_id is None:
+        await db.campaign.update(
+            where={"id": campaign.id}, data={"status": "ADS_GENERATED"}
+        )
+    return created_ids
 
 
 @router.get("", response_model=list[CreativeResponse])
@@ -596,7 +643,7 @@ async def _sync_selection_status(campaign: Campaign) -> None:
     ready for the approval gate), otherwise back to ADS_GENERATED.
     """
     selected = await db.creative.count(
-        where={"campaignId": campaign.id, "status": "SELECTED"}
+        where={"campaignId": campaign.id, "roundId": None, "status": "SELECTED"}
     )
     ready = selected >= await _ads_needed_to_approve(campaign)
     await db.campaign.update(
@@ -662,7 +709,7 @@ async def select_creative(
     """
     await _check_ads_can_change(campaign)
     creative = await db.creative.find_first(
-        where={"id": creative_id, "campaignId": campaign.id}
+        where={"id": creative_id, "campaignId": campaign.id, "roundId": None}
     )
     if creative is None:
         raise HTTPException(
@@ -685,7 +732,7 @@ async def select_creative(
     takes_several = await _runs_several_ads(campaign)
     if takes_several:
         selected_count = await db.creative.count(
-            where={"campaignId": campaign.id, "status": "SELECTED"}
+            where={"campaignId": campaign.id, "roundId": None, "status": "SELECTED"}
         )
         if creative.status != "SELECTED" and selected_count >= MAX_CREATIVE_ANGLES:
             raise HTTPException(
@@ -695,7 +742,11 @@ async def select_creative(
     else:
         # The audience test's single-ad flow: selecting one rejects its siblings.
         await db.creative.update_many(
-            where={"campaignId": campaign.id, "NOT": [{"id": creative.id}]},
+            where={
+                "campaignId": campaign.id,
+                "roundId": None,
+                "NOT": [{"id": creative.id}],
+            },
             data={"status": "REJECTED"},
         )
     product_image_id = payload.product_image_id if payload is not None else None
@@ -782,7 +833,7 @@ async def deselect_creative(
     """
     await _check_ads_can_change(campaign)
     creative = await db.creative.find_first(
-        where={"id": creative_id, "campaignId": campaign.id}
+        where={"id": creative_id, "campaignId": campaign.id, "roundId": None}
     )
     if creative is None:
         raise HTTPException(
@@ -826,7 +877,7 @@ async def _find_editable_creative(creative_id: str, campaign: Campaign) -> Creat
             the campaign is already published or the creative is a carousel.
     """
     creative = await db.creative.find_first(
-        where={"id": creative_id, "campaignId": campaign.id}
+        where={"id": creative_id, "campaignId": campaign.id, "roundId": None}
     )
     if creative is None:
         raise HTTPException(
@@ -1189,7 +1240,7 @@ async def _other_ads_text(
     if not await _runs_several_ads(campaign):
         return []
     others = await db.creative.find_many(
-        where={"campaignId": campaign.id, "id": {"not": creative.id}}
+        where={"campaignId": campaign.id, "roundId": None, "id": {"not": creative.id}}
     )
     return [(c.headline, c.bodyText) for c in others]
 
@@ -1212,7 +1263,7 @@ async def _find_carousel_creative(creative_id: str, campaign: Campaign) -> Creat
     """
     await _check_ads_can_change(campaign)
     creative = await db.creative.find_first(
-        where={"id": creative_id, "campaignId": campaign.id},
+        where={"id": creative_id, "campaignId": campaign.id, "roundId": None},
         include={"cards": {"order_by": {"position": "asc"}}},
     )
     if creative is None:
