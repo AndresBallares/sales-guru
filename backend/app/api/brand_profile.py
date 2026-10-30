@@ -33,6 +33,37 @@ router = APIRouter(
 
 _NOT_FOUND = "This business has no brand profile yet"
 _ALREADY_EXISTS = "This business already has a brand profile — use PATCH to edit it"
+_AVOID_PHRASES_FROZEN = (
+    "Avoid phrases are now managed as banned phrases in this business's brand "
+    "rules (PUT .../brand-rules) and can no longer be changed here"
+)
+
+
+async def _reject_changed_avoid_phrases(
+    business: Business, new: str | None, current: str | None
+) -> None:
+    """Refuse a change to avoidPhrases once the business has brand rules.
+
+    BrandRules.bannedPhrases replaces the free-text list, so the old field
+    freezes the moment a rules row exists. Sending the stored value back is not
+    a change (the profile form always sends the field), and null and blank
+    both mean empty.
+
+    Args:
+        business: The business, for the brand rules lookup.
+        new: The value being saved.
+        current: The value stored now, None for a profile being created.
+
+    Raises:
+        HTTPException: 422 if brand rules exist and the value would change.
+    """
+    if (new or None) == (current or None):
+        return
+    if await db.brandrules.find_unique(where={"businessId": business.id}) is not None:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=_AVOID_PHRASES_FROZEN,
+        )
 
 
 def _to_response(profile: BrandProfile, business: Business) -> BrandProfileResponse:
@@ -97,6 +128,7 @@ async def create_brand_profile(
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST, detail=_ALREADY_EXISTS
         )
+    await _reject_changed_avoid_phrases(business, payload.avoid_phrases, None)
 
     profile = await db.brandprofile.create(
         data={
@@ -173,6 +205,10 @@ async def update_brand_profile(
     # dump (what BusinessUpdateRequest/ProductUpdateRequest use, single-
     # word fields only) wouldn't match Prisma's camelCase column names.
     update_data = payload.model_dump(exclude_unset=True, by_alias=True)
+    if "avoidPhrases" in update_data:
+        await _reject_changed_avoid_phrases(
+            business, update_data["avoidPhrases"], profile.avoidPhrases
+        )
     if "voiceTraits" in update_data:
         update_data["voiceTraits"] = json.dumps(update_data["voiceTraits"])
     if "proofPoints" in update_data:
