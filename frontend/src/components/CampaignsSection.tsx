@@ -115,6 +115,13 @@ const FORMAT_TAG_LABELS: Record<string, string> = {
 // fourth photo or video. The backend sends the number this campaign needs.
 const MIN_TEST_ADS = 3
 const MAX_TEST_ADS = 4
+// A standard campaign takes one to four ads, kept in step with the backend's
+// MIN_ADS_TO_APPROVE and MAX_CREATIVE_ANGLES (app/schemas/strategy.py).
+const MIN_STANDARD_ADS = 1
+
+// The plans whose ads are added and removed one at a time and run together in
+// one ad set. The audience test (TEST_PLAN) runs one ad instead.
+const MULTI_AD_PLANS = ['CREATIVE_TEST_PLAN', 'DATA_DRIVEN_STRATEGY']
 
 const VARIANT_LETTERS = ['A', 'B', 'C', 'D']
 
@@ -1171,10 +1178,13 @@ export function CampaignsSection({
       isActivatable: campaign.status === 'PAUSED' && campaign.pausedReason === 'Published paused',
       pausedReason: campaign.pausedReason,
       adSelection:
-        strategy?.planType === 'CREATIVE_TEST_PLAN'
+        strategy && MULTI_AD_PLANS.includes(strategy.planType)
           ? {
               selected: (list ?? []).filter((c) => c.status === 'SELECTED').length,
-              required: requiredAds[campaign.id] ?? MIN_TEST_ADS,
+              required:
+                strategy.planType === 'CREATIVE_TEST_PLAN'
+                  ? (requiredAds[campaign.id] ?? MIN_TEST_ADS)
+                  : MAX_TEST_ADS,
             }
           : null,
       setup: campaign.status === 'DRAFT' ? draftSetupProgress(campaign) : null,
@@ -1386,7 +1396,11 @@ export function CampaignsSection({
               campaignCreatives[0]?.format ??
               'SINGLE_IMAGE'
             const testAdCount = campaignCreatives.filter((c) => c.status === 'SELECTED').length
-            const minTestAds = requiredAds[campaign.id] ?? MIN_TEST_ADS
+            const runsSeveralAds = strategy ? MULTI_AD_PLANS.includes(strategy.planType) : false
+            // A creative test needs its full set of ads; a standard campaign, just one.
+            const minAds = isCreativeTest
+              ? (requiredAds[campaign.id] ?? MIN_TEST_ADS)
+              : MIN_STANDARD_ADS
             // Own name (not just campaign.productId inline below) so its
             // narrowed non-null type survives into the JSX callbacks that
             // close over it — a plain property access re-widens to
@@ -1998,7 +2012,7 @@ export function CampaignsSection({
                       </p>
                     )}
                     {campaignCreatives.length > 0 &&
-                      (selectedCreative && !showAllCreatives[campaign.id] && !isCreativeTest ? (
+                      (selectedCreative && !showAllCreatives[campaign.id] && !runsSeveralAds ? (
                         <div
                           className="ad-selected"
                           aria-label={`Selected ad for ${campaign.name ?? campaign.id}`}
@@ -2220,14 +2234,15 @@ export function CampaignsSection({
                         </div>
                       ) : (
                         <>
-                        {isCreativeTest && (
+                        {runsSeveralAds && (
                           <div>
                             <p>
-                              {testAdCount} of {minTestAds === MAX_TEST_ADS ? MAX_TEST_ADS : `${minTestAds}–${MAX_TEST_ADS}`} ads selected
+                              {testAdCount} of {minAds === 1 || minAds === MAX_TEST_ADS ? MAX_TEST_ADS : `${minAds}–${MAX_TEST_ADS}`} ads selected
                             </p>
                             <p>
-                              These ads run together in one ad set, so the test shows which
-                              angle earns the cheapest result.
+                              {isCreativeTest
+                                ? 'These ads run together in one ad set, so the test shows which angle earns the cheapest result.'
+                                : 'These ads run together in one ad set, and Meta moves the budget toward the ones that perform best.'}
                             </p>
                           </div>
                         )}
@@ -2236,9 +2251,13 @@ export function CampaignsSection({
                           aria-labelledby={`creative-choices-${campaign.id}`}
                         >
                           <h4 id={`creative-choices-${campaign.id}`}>
-                            {isCreativeTest ? 'Choose your test ads' : 'Choose your ad creative'}
+                            {isCreativeTest
+                              ? 'Choose your test ads'
+                              : runsSeveralAds
+                                ? 'Choose your ads'
+                                : 'Choose your ad creative'}
                           </h4>
-                          {!isCreativeTest && (
+                          {!runsSeveralAds && (
                             <p className="creative-choices-intro">
                               Review your generated creative options, then continue with one to
                               preview your{' '}
@@ -2259,7 +2278,7 @@ export function CampaignsSection({
                                 creative={c}
                                 ctaLabel={ctaLabels[c.cta] ?? c.cta}
                                 action={
-                                  isPublished ? undefined : isCreativeTest ? (
+                                  isPublished ? undefined : runsSeveralAds ? (
                                     // Adding is the card's visible action. Removing lives in the
                                     // Edit creative section's Test settings, as it is a setting
                                     // of an ad that is already in the test.
@@ -2273,7 +2292,11 @@ export function CampaignsSection({
                                         }
                                         disabled={selectingId === c.id}
                                       >
-                                        {selectingId === c.id ? 'Updating…' : 'Add to test'}
+                                        {selectingId === c.id
+                                          ? 'Updating…'
+                                          : isCreativeTest
+                                            ? 'Add to test'
+                                            : 'Add this ad'}
                                       </button>
                                     )
                                   ) : (
@@ -2308,11 +2331,12 @@ export function CampaignsSection({
                                     creative={c}
                                     grouped
                                     testSettings={
-                                      isCreativeTest && c.status === 'SELECTED' ? (
+                                      runsSeveralAds && c.status === 'SELECTED' ? (
                                         <>
                                           <p className="field-hint">
-                                            Takes this ad out of the test. The ad itself is not
-                                            deleted, and you can add it back.
+                                            {isCreativeTest
+                                              ? 'Takes this ad out of the test. The ad itself is not deleted, and you can add it back.'
+                                              : 'Takes this ad out of the campaign. The ad itself is not deleted, and you can add it back.'}
                                           </p>
                                           <button
                                             type="button"
@@ -2322,7 +2346,11 @@ export function CampaignsSection({
                                             }
                                             disabled={selectingId === c.id}
                                           >
-                                            {selectingId === c.id ? 'Updating…' : 'Remove from test'}
+                                            {selectingId === c.id
+                                              ? 'Updating…'
+                                              : isCreativeTest
+                                                ? 'Remove from test'
+                                                : 'Remove this ad'}
                                           </button>
                                         </>
                                       ) : undefined
@@ -2344,19 +2372,20 @@ export function CampaignsSection({
                             </li>
                           ))}
                         </ul>
-                        {!isPublished && (isCreativeTest || selectedCreative) && (
+                        {!isPublished && (runsSeveralAds || selectedCreative) && (
                           <div className="creative-next">
-                            {isCreativeTest && testAdCount < minTestAds && (
+                            {runsSeveralAds && testAdCount < minAds && (
                               <p id={`creative-next-hint-${campaign.id}`} className="field-hint">
-                                Select {minTestAds === MAX_TEST_ADS ? 'all' : 'at least'} {minTestAds} ads to continue.
+                                Select {minAds === MAX_TEST_ADS ? 'all' : 'at least'} {minAds}{' '}
+                                {minAds === 1 ? 'ad' : 'ads'} to continue.
                               </p>
                             )}
                             <button
                               type="button"
                               className="btn-next"
-                              disabled={isCreativeTest && testAdCount < minTestAds}
+                              disabled={runsSeveralAds && testAdCount < minAds}
                               aria-describedby={
-                                isCreativeTest && testAdCount < minTestAds
+                                runsSeveralAds && testAdCount < minAds
                                   ? `creative-next-hint-${campaign.id}`
                                   : undefined
                               }

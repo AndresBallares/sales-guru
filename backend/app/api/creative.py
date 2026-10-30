@@ -29,6 +29,8 @@ from app.schemas.creative import (
 )
 from app.schemas.strategy import (
     MAX_CREATIVE_ANGLES,
+    MIN_ADS_TO_APPROVE,
+    MULTI_AD_PLAN_TYPES,
     StrategyContentAdapter,
 )
 from app.services.campaign_readiness import is_ready
@@ -103,10 +105,10 @@ _TEST_FORMAT_ONLY = {
     "SINGLE_VIDEO": _VIDEO_TEST_VIDEOS_ONLY,
     "CAROUSEL": _CAROUSEL_TEST_CAROUSELS_ONLY,
 }
-_NOT_A_CREATIVE_TEST_PLAN = (
-    "Only a creative test plan lets you add or remove ads from the test"
+_NOT_A_MULTI_AD_PLAN = (
+    "An audience test runs one ad; choose a different ad instead of removing it"
 )
-_TEST_FULL = "A creative test runs at most {max} ads — remove one before adding another"
+_TEST_FULL = "A campaign runs at most {max} ads — remove one before adding another"
 _CARD_NOT_FOUND = "Card not found"
 _CAROUSEL_EDIT_UNSUPPORTED = (
     "A carousel's images and copy are set per card — regenerate the carousel "
@@ -551,12 +553,16 @@ async def list_creatives(
     return await _list_creatives(campaign)
 
 
-async def _is_creative_test_plan(campaign: Campaign) -> bool:
+async def _plan_type(campaign: Campaign) -> str | None:
     strategy = await db.strategy.find_unique(where={"campaignId": campaign.id})
     if strategy is None:
-        return False
-    plan = StrategyContentAdapter.validate_json(strategy.content)
-    return plan.plan_type == "CREATIVE_TEST_PLAN"
+        return None
+    return StrategyContentAdapter.validate_json(strategy.content).plan_type
+
+
+async def _runs_several_ads(campaign: Campaign) -> bool:
+    """Whether the campaign takes 1-4 selected ads (see MULTI_AD_PLAN_TYPES)."""
+    return await _plan_type(campaign) in MULTI_AD_PLAN_TYPES
 
 
 async def _check_ads_can_change(campaign: Campaign) -> None:
@@ -568,28 +574,34 @@ async def _check_ads_can_change(campaign: Campaign) -> None:
     await ensure_not_published(campaign)
 
 
-async def _sync_creative_test_status(campaign: Campaign) -> None:
+async def _ads_needed_to_approve(campaign: Campaign) -> int:
+    """How many selected ads the campaign needs before it can be approved.
+
+    A creative test needs its full set (four, or three for a product without a
+    fourth photo or video): the test compares the ads. A standard campaign needs
+    just MIN_ADS_TO_APPROVE.
+    """
+    strategy = await db.strategy.find_unique(where={"campaignId": campaign.id})
+    if strategy is not None:
+        plan = StrategyContentAdapter.validate_json(strategy.content)
+        if plan.plan_type == "CREATIVE_TEST_PLAN":
+            return await test_ads_required(campaign, plan)
+    return MIN_ADS_TO_APPROVE
+
+
+async def _sync_selection_status(campaign: Campaign) -> None:
     """Move the campaign to match how many ads are selected.
 
-    PENDING_APPROVAL once the number of ads the test needs is selected (four,
-    or three for a product without a fourth photo or video; the test is ready
-    for the approval gate), otherwise back to ADS_GENERATED.
+    PENDING_APPROVAL once the number of ads it needs is selected (the campaign is
+    ready for the approval gate), otherwise back to ADS_GENERATED.
     """
     selected = await db.creative.count(
         where={"campaignId": campaign.id, "status": "SELECTED"}
     )
-    strategy = await db.strategy.find_unique(where={"campaignId": campaign.id})
-    assert strategy is not None  # a creative test always has its plan
-    plan = StrategyContentAdapter.validate_json(strategy.content)
-    assert plan.plan_type == "CREATIVE_TEST_PLAN"
-    required_ads = await test_ads_required(campaign, plan)
+    ready = selected >= await _ads_needed_to_approve(campaign)
     await db.campaign.update(
         where={"id": campaign.id},
-        data={
-            "status": (
-                "PENDING_APPROVAL" if selected >= required_ads else "ADS_GENERATED"
-            )
-        },
+        data={"status": "PENDING_APPROVAL" if ready else "ADS_GENERATED"},
     )
 
 
@@ -670,8 +682,8 @@ async def select_creative(
                 ),
             )
 
-    is_creative_plan = await _is_creative_test_plan(campaign)
-    if is_creative_plan:
+    takes_several = await _runs_several_ads(campaign)
+    if takes_several:
         selected_count = await db.creative.count(
             where={"campaignId": campaign.id, "status": "SELECTED"}
         )
@@ -681,7 +693,7 @@ async def select_creative(
                 detail=_TEST_FULL.format(max=MAX_CREATIVE_ANGLES),
             )
     else:
-        # The original single-ad flow: selecting one rejects its siblings.
+        # The audience test's single-ad flow: selecting one rejects its siblings.
         await db.creative.update_many(
             where={"campaignId": campaign.id, "NOT": [{"id": creative.id}]},
             data={"status": "REJECTED"},
@@ -733,8 +745,8 @@ async def select_creative(
     )
     assert updated is not None  # just fetched above, can't vanish mid-request
 
-    if is_creative_plan:
-        await _sync_creative_test_status(campaign)
+    if takes_several:
+        await _sync_selection_status(campaign)
     else:
         await db.campaign.update(
             where={"id": campaign.id}, data={"status": "PENDING_APPROVAL"}
@@ -750,11 +762,11 @@ async def deselect_creative(
     creative_id: str,
     campaign: Campaign = Depends(get_owned_campaign),
 ) -> CreativeResponse:
-    """Remove one ad from a creative test (a CREATIVE_TEST_PLAN campaign only).
+    """Remove one ad from a campaign that runs several (not an audience test).
 
     The creative goes back to GENERATED. The campaign drops to ADS_GENERATED
-    when fewer than the minimum ads remain selected, and to PENDING_APPROVAL
-    otherwise (what was approved changed, so it needs approving again).
+    when no ad remains selected, and to PENDING_APPROVAL otherwise (what was
+    approved changed, so it needs approving again).
 
     Args:
         creative_id: The creative to remove from the test.
@@ -766,8 +778,7 @@ async def deselect_creative(
 
     Raises:
         HTTPException: 404 if no such creative exists on this campaign; 400
-            if the campaign isn't a creative test plan or is already
-            published.
+            if the campaign is an audience test or is already published.
     """
     await _check_ads_can_change(campaign)
     creative = await db.creative.find_first(
@@ -777,10 +788,10 @@ async def deselect_creative(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail=_CREATIVE_NOT_FOUND
         )
-    if not await _is_creative_test_plan(campaign):
+    if not await _runs_several_ads(campaign):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=_NOT_A_CREATIVE_TEST_PLAN,
+            detail=_NOT_A_MULTI_AD_PLAN,
         )
 
     updated = await db.creative.update(
@@ -789,7 +800,7 @@ async def deselect_creative(
         include={"cards": {"order_by": {"position": "asc"}}},
     )
     assert updated is not None  # just fetched above, can't vanish mid-request
-    await _sync_creative_test_status(campaign)
+    await _sync_selection_status(campaign)
 
     product = await _current_product(campaign)
     business = await _current_business(campaign)
@@ -1166,16 +1177,16 @@ async def regenerate_creative_copy(
 async def _other_ads_text(
     campaign: Campaign, creative: Creative
 ) -> list[tuple[str, str]]:
-    """The (headline, primary text) of the test's other ads, to stay clear of.
+    """The (headline, primary text) of the campaign's other ads, to stay clear of.
 
     Args:
         campaign: The campaign.
         creative: The ad being regenerated, left out.
 
     Returns:
-        One pair per other ad; empty outside a creative test.
+        One pair per other ad; empty for an audience test, which runs one ad.
     """
-    if not await _is_creative_test_plan(campaign):
+    if not await _runs_several_ads(campaign):
         return []
     others = await db.creative.find_many(
         where={"campaignId": campaign.id, "id": {"not": creative.id}}

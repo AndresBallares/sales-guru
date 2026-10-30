@@ -423,10 +423,10 @@ def test_select_creative_404s_for_an_unknown_creative(client: TestClient) -> Non
     assert response.status_code == 404
 
 
-def test_select_creative_marks_it_selected_and_siblings_rejected(
+def test_select_creative_marks_it_selected_and_keeps_its_siblings(
     client: TestClient,
 ) -> None:
-    """Selecting one variant flips it to SELECTED and the rest to REJECTED."""
+    """A standard campaign runs 1-4 ads: selecting one adds it, rejecting none."""
     _signed_up_client(client)
     business_id = _create_business(client)
     campaign_id = _create_campaign(client, business_id)
@@ -449,7 +449,7 @@ def test_select_creative_marks_it_selected_and_siblings_rejected(
     statuses = {c["id"]: c["status"] for c in listed}
     assert statuses[chosen_id] == "SELECTED"
     assert all(
-        status == "REJECTED" for id_, status in statuses.items() if id_ != chosen_id
+        status == "GENERATED" for id_, status in statuses.items() if id_ != chosen_id
     )
 
 

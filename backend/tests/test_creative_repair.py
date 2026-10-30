@@ -36,6 +36,15 @@ assert len(_OVER) > MAX_BODY_TEXT_LENGTH
 assert len(_LONG_SENTENCES) >= 60
 
 
+# Unlike endings, so the ads still read as different ads.
+_ENDINGS = [
+    "Heirloom pieces shaped slowly around your own hands.",
+    "Quiet confident styles chosen because they suit your taste.",
+    "Small batches finished carefully by artisans across Manhattan.",
+    "Milestone presents wrapped beautifully and delivered early.",
+]
+
+
 def _with(batch: dict[str, Any], index: int, **fields: Any) -> dict[str, Any]:
     batch["variants"][index].update(fields)
     return batch
@@ -93,7 +102,7 @@ async def test_mixed_ctas_become_get_offer_when_every_body_mentions_the_offer(
         _with(
             batch,
             i,
-            bodyText="Free engraving on every ring.",
+            bodyText=f"Free engraving on every ring. {_ENDINGS[i]}",
             cta="GET_OFFER" if i == 0 else "SHOP_NOW",
         )
     create = _client_returning(monkeypatch, batch)
@@ -114,7 +123,7 @@ async def test_mixed_ctas_fall_back_to_shop_now_if_one_body_skips_the_offer(
         _with(
             batch,
             i,
-            bodyText="Free engraving on every ring."
+            bodyText=f"Free engraving on every ring. {_ENDINGS[i]}"
             if i
             else "Hand-finished in Bogota.",
             cta="GET_OFFER" if i == 1 else "SHOP_NOW",
