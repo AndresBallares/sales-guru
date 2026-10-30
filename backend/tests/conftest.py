@@ -67,6 +67,8 @@ _ALL_TABLES = (
     "optimizationrecommendation",
     "creativecard",
     "brandprofile",
+    "buyeravatar",
+    "brandrules",
     "creativeround",
     "creative",
     "ad",
