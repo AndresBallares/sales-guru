@@ -1681,9 +1681,10 @@ async def _roll_back_failed_round_publish(
 
     Best effort, and never raises, so the publish's own error is the one the
     user sees. Deleting the Meta ad set removes its ads; then the Meta ad
-    creatives made for them are deleted too, so a failed round publish leaves
-    nothing behind on Meta. (Meta only lets a creative go once no ad uses it,
-    hence the order.) Locally the round's creatives are detached from their ads,
+    creatives made for them are deleted too, after the ad set so no ad still
+    uses them, so a failed round publish leaves nothing behind on Meta.
+    (Deleting a creative on Meta is not yet verified against a live account.)
+    Locally the round's creatives are detached from their ads,
     then the ads and the ad set row are deleted. The campaign and every other
     ad set are not touched.
 

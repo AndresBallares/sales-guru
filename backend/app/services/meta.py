@@ -856,8 +856,11 @@ async def create_meta_ad_set(
             (`daily_min_spend_target`), in the ad account's minor currency
             unit. Only meaningful for an ad set under a campaign budget (CBO),
             which is how a creative round's pack gets its 7-day test floor.
-            None sends no minimum. The field name and its acceptance by a live
-            CBO campaign are not yet verified against a real publish.
+            None sends no minimum. Verified live on 2026-10-30 (dev ad account,
+            everything PAUSED): a CBO campaign's ad set accepts it and reads it
+            back as `daily_min_spend_target`. It is cleared by posting
+            `daily_min_spend_target=0` to the ad set (Meta answers success and
+            the field is then absent).
         target_cac_cents: The per-result cost to bid toward (COST_CAP's
             `bid_amount`), in the ad account's minor currency unit —
             same cents convention as daily_budget_cents. None uses
