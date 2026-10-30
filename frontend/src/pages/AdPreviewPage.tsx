@@ -42,6 +42,7 @@ import {
 import { useAssetRatio } from '../lib/useAssetRatio'
 import { ExtraAssetSlot } from '../components/ExtraAssetSlot'
 import { InstagramNote } from '../components/InstagramNote'
+import { CreativeRoundsPanel } from '../components/CreativeRoundsPanel'
 import { TestSettingsPanel } from '../components/TestSettingsPanel'
 import { clearPublishPaused, getPublishPaused, setPublishPaused } from '../lib/publishPaused'
 
@@ -567,6 +568,16 @@ export function AdPreviewPage() {
                         )}
                       </>
                     )}
+                  </section>
+                )}
+
+                {isCreativeTest && published && businessId && campaignId && (
+                  <section className="detail-group">
+                    <CreativeRoundsPanel
+                      businessId={businessId}
+                      campaignId={campaignId}
+                      budgetLevel={campaign?.budgetLevel}
+                    />
                   </section>
                 )}
 

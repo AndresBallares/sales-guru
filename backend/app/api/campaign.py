@@ -181,6 +181,7 @@ async def _to_response(campaign: Campaign) -> CampaignResponse:
         saturation_warning=campaign.saturationWarning,
         needs_destination_url=await _needs_destination_url(campaign),
         has_delivered=await campaign_lifecycle.has_delivered(campaign.id),
+        budget_level=campaign.budgetLevel,
     )
 
 
