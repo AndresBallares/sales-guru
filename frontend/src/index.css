@@ -4192,6 +4192,104 @@ a.btn-outline {
   min-height: 44px;
 }
 
+/* New rounds of a published creative test (CreativeRoundsPanel). */
+.rounds-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.rounds-panel h3,
+.round-card h4 {
+  margin: 0;
+}
+
+.rounds-panel > .btn-outline {
+  align-self: flex-start;
+  min-height: 44px;
+}
+
+.round-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px;
+  border: 1px solid var(--border, rgba(127, 127, 127, 0.35));
+  border-radius: 10px;
+}
+
+.round-card-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.round-card-status,
+.round-ad-live {
+  font-size: 0.85rem;
+  opacity: 0.8;
+}
+
+.round-angles,
+.round-ads {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.round-ad {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.round-ad > div {
+  flex: 1;
+  min-width: 0;
+}
+
+.round-ad p {
+  margin: 0;
+}
+
+.round-ad-headline {
+  font-weight: 600;
+}
+
+.round-ad img {
+  object-fit: cover;
+  border-radius: 6px;
+}
+
+.round-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
+.round-actions .btn-outline,
+.round-actions .btn-generate,
+.round-ad .btn-outline {
+  min-height: 44px;
+}
+
+@media (max-width: 720px) {
+  .round-ad {
+    flex-wrap: wrap;
+  }
+
+  .round-actions > button,
+  .round-ad .btn-outline,
+  .rounds-panel > .btn-outline {
+    width: 100%;
+  }
+}
+
 @media (max-width: 720px) {
   .edit-copy-button,
   .test-settings-save,

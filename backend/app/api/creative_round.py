@@ -7,12 +7,21 @@ changes the campaign's status or touches a live ad, and nothing here publishes.
 """
 
 import json
+from collections.abc import Callable
 from typing import cast
 
 from fastapi import APIRouter, Depends, HTTPException, Response, status
 from prisma.models import Campaign, CreativeRound
 from prisma.types import CreativeUpdateInput, CreativeWhereInput
 
+from app.api.campaign import (
+    _COPY_NOT_PUBLISHABLE,
+    _CREATIVE_STALE,
+    _MEDIA_NOT_PUBLISHABLE,
+    _META_NOT_CONNECTED,
+    _NO_DESTINATION_URL,
+    _NO_PIXEL_CONFIGURED,
+)
 from app.api.creative import (
     _current_business,
     _current_product,
@@ -22,14 +31,27 @@ from app.api.creative import (
 from app.api.product_image import product_image_url
 from app.core.authz import get_owned_campaign
 from app.core.db import db
+from app.core.meta_connection import get_meta_connection
+from app.schemas.campaign import PublishCampaignRequest
 from app.schemas.creative_round import CreativeRoundResponse, CreativeRoundStatus
 from app.schemas.strategy import (
+    CAMPAIGN_BUDGET_LEVEL,
+    MAX_CREATIVE_ANGLES,
     CreativeAngle,
     CreativeTestPlanContent,
     GeneratedCreativeAngle,
     StrategyContentAdapter,
+    min_creative_test_daily_budget,
 )
-from app.services.creative import test_ads_required
+from app.services import publish_jobs
+from app.services.creative import (
+    copy_problems,
+    is_creative_stale,
+    media_problems,
+    test_ads_required,
+)
+from app.services.meta import MetaConnectionError
+from app.services.publish import publish_round_to_meta, requires_pixel
 from app.services.strategist import StrategistError, generate_round_angles
 
 router = APIRouter(
@@ -48,6 +70,21 @@ _CREATIVE_NOT_FOUND = "Creative not found"
 _ROUND_CLOSED = "This round is closed and can no longer be changed"
 _ROUND_HAS_LIVE_ADS = "This round has ads on Meta and cannot be deleted"
 _NO_PRODUCT_PHOTO = "Add a photo to the product before selecting an ad"
+_CAMPAIGN_NOT_PUBLISHED = "Publish the campaign before publishing a round"
+_NEEDS_CAMPAIGN_BUDGET = (
+    "This campaign was published before campaigns had one campaign budget "
+    "shared by their ad sets: its budget sits on its single ad set. A new "
+    "round needs a campaign budget to add a pack to, so start a new creative "
+    "test to run more rounds"
+)
+_ROUND_NOT_OPEN = "This round is not open: it was already published"
+_NOTHING_SELECTED = "Select at least one ad of this round to publish"
+_ALREADY_PUBLISHING = "This campaign is already being published — wait for it to finish"
+_ROUND_FORMAT = "Every ad of a round must be a {format} ad, like the rest of the test"
+_ROUND_BUDGET_TOO_LOW = (
+    "The campaign's daily budget must be at least ${minimum:,.0f} to run "
+    "{count} ads ($10 each). Raise it in the test settings before adding this pack."
+)
 
 
 async def _round_response(
@@ -303,3 +340,171 @@ async def deselect_round_creative(
 ) -> CreativeRoundResponse:
     """Take one of an open round's ads out of the selection."""
     return await _change_selection(round_id, creative_id, campaign, select=False)
+
+
+@router.post("/{round_id}/publish", response_model=CreativeRoundResponse)
+async def publish_round(
+    round_id: str,
+    response: Response,
+    payload: PublishCampaignRequest | None = None,
+    campaign: Campaign = Depends(get_owned_campaign),
+) -> CreativeRoundResponse:
+    """Publish an open round's selected ads as a new pack of the live campaign.
+
+    The pack is a new ad set inside the campaign already on Meta (no second
+    campaign), with a 7-day minimum spend; the round is CLOSED on success. A
+    failure removes only that ad set and leaves the round open. A video round
+    runs as the campaign's background publish (answers 202; poll
+    GET .../publish/status), like a first video publish.
+
+    Args:
+        round_id: The round to publish.
+        response: The response, for the 202 of a background (video) publish.
+        payload: Optionally publishes everything PAUSED.
+        campaign: The campaign, resolved and ownership-checked.
+
+    Returns:
+        The round (CLOSED once published).
+
+    Raises:
+        HTTPException: 400 if the campaign is not published, keeps its budget on
+            its ad set (published before campaign budgets), the round has no
+            selected ad, an ad is stale, over-length or missing media, the
+            destination URL or Pixel is missing, or Meta is not connected; 404
+            if the round is not this campaign's; 409 if the round is not open or
+            the campaign is already being published; 500 if a Meta call fails.
+    """
+    round_ = await _owned_round(round_id, campaign)
+    if publish_jobs.is_running(campaign.id):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail=_ALREADY_PUBLISHING
+        )
+    if campaign.metaCampaignId is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=_CAMPAIGN_NOT_PUBLISHED
+        )
+    if campaign.budgetLevel != CAMPAIGN_BUDGET_LEVEL:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=_NEEDS_CAMPAIGN_BUDGET
+        )
+    if round_.status != "OPEN":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail=_ROUND_NOT_OPEN
+        )
+    creatives = await db.creative.find_many(
+        where={"roundId": round_.id, "status": "SELECTED"},
+        order={"createdAt": "asc"},
+        include={"cards": {"order_by": {"position": "asc"}}},
+    )
+    if not 1 <= len(creatives) <= MAX_CREATIVE_ANGLES:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=_NOTHING_SELECTED
+        )
+
+    strategy = await db.strategy.find_unique(where={"campaignId": campaign.id})
+    plan = (
+        StrategyContentAdapter.validate_json(strategy.content)
+        if strategy is not None
+        else None
+    )
+    if not isinstance(plan, CreativeTestPlanContent):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=_NEEDS_CREATIVE_TEST
+        )
+    connection = await get_meta_connection(campaign.businessId)
+    if (
+        connection is None
+        or connection.adAccountId is None
+        or connection.pageId is None
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=_META_NOT_CONNECTED
+        )
+    if requires_pixel(campaign.objective) and connection.pixelId is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=_NO_PIXEL_CONFIGURED
+        )
+
+    business = await _current_business(campaign)
+    product = await _current_product(campaign)
+    if any(c.format != plan.creative_format for c in creatives):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=_ROUND_FORMAT.format(format=plan.creative_format),
+        )
+    if any(is_creative_stale(c, campaign, product, business) for c in creatives):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=_CREATIVE_STALE
+        )
+    copy_failures = [
+        f"Ad '{c.headline}' — {'; '.join(problems)}"
+        for c in creatives
+        if (problems := copy_problems(c))
+    ]
+    media_failures = [
+        f"Ad '{c.headline}' — {'; '.join(problems)}"
+        for c in creatives
+        if (problems := await media_problems(c))
+    ]
+    if media_failures:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=_MEDIA_NOT_PUBLISHABLE.format(failures=" | ".join(media_failures)),
+        )
+    if copy_failures:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=_COPY_NOT_PUBLISHABLE.format(failures=" | ".join(copy_failures)),
+        )
+    destination_url = (product.url if product else None) or business.website
+    if not destination_url:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=_NO_DESTINATION_URL
+        )
+    ad_set_ids = [
+        a.id for a in await db.adset.find_many(where={"campaignId": campaign.id})
+    ]
+    live_ads = (
+        await db.ad.count(where={"adSetId": {"in": ad_set_ids}}) if ad_set_ids else 0
+    )
+    minimum = min_creative_test_daily_budget(live_ads + len(creatives))
+    if plan.daily_budget < minimum:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=_ROUND_BUDGET_TOO_LOW.format(
+                minimum=minimum, count=live_ads + len(creatives)
+            ),
+        )
+
+    paused = payload.paused if payload is not None else False
+
+    async def publish(report: Callable[[str, int | None], None] | None) -> None:
+        await publish_round_to_meta(
+            campaign=campaign,
+            connection=connection,
+            round_=round_,
+            creatives=creatives,
+            strategy=plan,
+            destination_url=destination_url,
+            paused=paused,
+            report=report,
+        )
+
+    if any(c.format == "SINGLE_VIDEO" for c in creatives):
+        # Uploading and processing a video takes minutes: run it as the
+        # campaign's background publish, which the frontend already polls.
+        async def mark_failed() -> None:
+            # The campaign stays as it is: a failed round never fails the campaign.
+            return None
+
+        publish_jobs.start_job(campaign.id, publish, mark_failed)
+        response.status_code = status.HTTP_202_ACCEPTED
+    else:
+        try:
+            await publish(None)
+        except MetaConnectionError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)
+            ) from exc
+    refreshed = await _owned_round(round_.id, campaign)
+    return await _round_response(campaign, refreshed)

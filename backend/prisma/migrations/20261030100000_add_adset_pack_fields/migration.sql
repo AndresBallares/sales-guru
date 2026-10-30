@@ -1,0 +1,4 @@
+-- AlterTable
+ALTER TABLE "AdSet" ADD COLUMN "dailyMinSpend" REAL;
+ALTER TABLE "AdSet" ADD COLUMN "packNumber" INTEGER;
+ALTER TABLE "AdSet" ADD COLUMN "startDate" DATETIME;

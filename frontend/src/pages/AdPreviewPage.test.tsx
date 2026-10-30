@@ -40,6 +40,7 @@ vi.mock('../lib/api', async (importOriginal) => {
     removeCreativeCard: vi.fn<typeof actual.removeCreativeCard>(),
     deselectCreative: vi.fn<typeof actual.deselectCreative>(),
     getStrategy: vi.fn<typeof actual.getStrategy>(),
+    listRounds: vi.fn<typeof actual.listRounds>(),
   }
 })
 const mockedApi = vi.mocked(api)
@@ -112,6 +113,7 @@ beforeEach(() => {
   window.sessionStorage.clear()
   vi.resetAllMocks()
   mockedApi.getBusiness.mockResolvedValue(business)
+  mockedApi.listRounds.mockResolvedValue([])
   mockedApi.getOptions.mockResolvedValue({
     industries: [],
     objectives: [],
@@ -319,6 +321,39 @@ describe('AdPreviewPage', () => {
 
       expect(await screen.findByRole('region', { name: 'Test settings' })).toBeInTheDocument()
       expect(screen.queryByRole('button', { name: 'Remove from test' })).not.toBeInTheDocument()
+    })
+
+    it('offers new rounds once a creative test is published', async () => {
+      mockedApi.listCreatives.mockResolvedValue(three)
+      mockedApi.listCampaigns.mockResolvedValue([
+        makeCampaign({ status: 'LIVE', metaCampaignId: 'meta-1', budgetLevel: 'CAMPAIGN' }),
+      ])
+
+      renderPage()
+
+      expect(await screen.findByRole('button', { name: 'Add new round' })).toBeInTheDocument()
+      expect(mockedApi.listRounds).toHaveBeenCalledWith('biz-1', 'camp-1')
+    })
+
+    it('explains why a test published before campaign budgets gets no new round', async () => {
+      mockedApi.listCreatives.mockResolvedValue(three)
+      mockedApi.listCampaigns.mockResolvedValue([
+        makeCampaign({ status: 'LIVE', metaCampaignId: 'meta-1', budgetLevel: 'AD_SET' }),
+      ])
+
+      renderPage()
+
+      expect(await screen.findByText(/start a new creative test/i)).toBeInTheDocument()
+      expect(screen.queryByRole('button', { name: 'Add new round' })).not.toBeInTheDocument()
+    })
+
+    it('offers no new round before the test is published', async () => {
+      mockedApi.listCreatives.mockResolvedValue(three)
+
+      renderPage()
+      await screen.findByRole('region', { name: 'Test settings' })
+
+      expect(screen.queryByRole('heading', { name: 'New rounds' })).not.toBeInTheDocument()
     })
 
     it('puts Approve & Publish in its own bar, with the paused choice beside it', async () => {

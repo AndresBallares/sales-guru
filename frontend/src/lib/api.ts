@@ -269,6 +269,10 @@ export interface Campaign {
   // True once the campaign has results (a snapshot with spend or a purchase): it is
   // then archived (results kept) rather than deleted.
   hasDelivered?: boolean
+  // Where the daily budget lives: 'CAMPAIGN' (one budget shared by the ad sets,
+  // so the campaign can take a new round as a pack) or 'AD_SET' (published
+  // before that, with the budget on its single ad set).
+  budgetLevel?: 'CAMPAIGN' | 'AD_SET'
 }
 
 export interface CampaignCreateInput {
@@ -1043,6 +1047,54 @@ export interface CreativeRound {
   angles: CreativeAngle[]
   creatives: Creative[]
   createdAt: string
+}
+
+const roundsPath = (businessId: string, campaignId: string) =>
+  `/businesses/${businessId}/campaigns/${campaignId}/rounds`
+
+export function listRounds(businessId: string, campaignId: string): Promise<CreativeRound[]> {
+  return request<CreativeRound[]>(roundsPath(businessId, campaignId))
+}
+
+export function createRound(businessId: string, campaignId: string): Promise<CreativeRound> {
+  return request<CreativeRound>(roundsPath(businessId, campaignId), { method: 'POST' })
+}
+
+export async function deleteRound(
+  businessId: string,
+  campaignId: string,
+  roundId: string,
+): Promise<void> {
+  await request<void>(`${roundsPath(businessId, campaignId)}/${roundId}`, { method: 'DELETE' })
+}
+
+export function setRoundCreativeSelected(
+  businessId: string,
+  campaignId: string,
+  roundId: string,
+  creativeId: string,
+  selected: boolean,
+): Promise<CreativeRound> {
+  return request<CreativeRound>(
+    `${roundsPath(businessId, campaignId)}/${roundId}/creatives/${creativeId}/${
+      selected ? 'select' : 'deselect'
+    }`,
+    { method: 'POST' },
+  )
+}
+
+// Publishes the round's selected ads as a new pack. A video round answers while
+// the publish still runs in the background: poll getPublishStatus, then listRounds.
+export function publishRound(
+  businessId: string,
+  campaignId: string,
+  roundId: string,
+  options?: { paused?: boolean },
+): Promise<CreativeRound> {
+  return request<CreativeRound>(`${roundsPath(businessId, campaignId)}/${roundId}/publish`, {
+    method: 'POST',
+    body: JSON.stringify({ paused: options?.paused ?? false }),
+  })
 }
 
 export function createCreatives(

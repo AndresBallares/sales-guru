@@ -4684,3 +4684,39 @@ async def test_window_insights_are_none_in_fake_mode(
         get_settings.cache_clear()
 
     assert window is None
+
+
+# ── A pack's minimum spend on the ad set ──
+
+
+@pytest.mark.asyncio
+async def test_an_ad_set_sends_its_daily_minimum_spend_target(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = _mock_client_returning(monkeypatch, _FakeResponse({"id": "adset_1"}))
+
+    await meta.create_meta_ad_set(
+        access_token="token",
+        ad_account_id="act_1",
+        name="Pack 2",
+        meta_campaign_id="campaign_1",
+        daily_budget_cents=None,
+        optimization_goal="OFFSITE_CONVERSIONS",
+        age_min=18,
+        age_max=None,
+        daily_min_spend_cents=2000,
+    )
+
+    assert client.calls[0][1]["daily_min_spend_target"] == "2000"
+    assert "daily_budget" not in client.calls[0][1]
+
+
+@pytest.mark.asyncio
+async def test_an_ad_set_has_no_minimum_spend_by_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = _mock_client_returning(monkeypatch, _FakeResponse({"id": "adset_1"}))
+
+    await _ad_set(None)
+
+    assert "daily_min_spend_target" not in client.calls[0][1]

@@ -184,6 +184,20 @@ async def test_fake_mode_returns_canned_angles(
 
 
 @pytest.mark.asyncio
+async def test_fake_mode_honours_a_three_ad_round(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        strategist, "get_settings", lambda: SimpleNamespace(fake_llm_enabled=True)
+    )
+
+    angles = await _generate(count=3)
+
+    assert len(angles) == 3
+    assert len({a.pillar for a in angles}) >= 3  # the first three span 3 pillars
+
+
+@pytest.mark.asyncio
 async def test_the_same_concept_for_the_other_avatar_is_a_new_angle(
     anthropic_api_key: None,  # noqa: F811
     monkeypatch: pytest.MonkeyPatch,

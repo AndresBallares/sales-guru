@@ -488,6 +488,15 @@ model AdSet {
   // collection and the TEST_PLAN evaluator (step 10) map an AdSet back
   // to which variant it is without fragile name-matching.
   variantId        String?
+  // Set only for a creative round's pack, an ad set added to a CBO campaign by
+  // "Add new round" (PRD.md, creative rounds B2): its number (the round's
+  // number, so the first ad set is implicitly Pack 1), when it started, and the
+  // daily minimum spend it was created with (about 1x the target CPA, at most
+  // 20% of the campaign budget). dailyMinSpend is cleared once the day-7
+  // evaluation removes the minimum (B3). All null for every other ad set.
+  packNumber       Int?
+  startDate        DateTime?
+  dailyMinSpend    Float?
   createdAt        DateTime @default(now())
   updatedAt        DateTime @updatedAt
 }

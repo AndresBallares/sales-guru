@@ -148,6 +148,10 @@ class CampaignResponse(CamelCaseModel):
     # Decides the action offered: a campaign that has delivered is archived (its
     # results are kept), one that never did is deleted.
     has_delivered: bool = False
+    # Where the daily budget lives: "CAMPAIGN" (one budget shared by the ad sets,
+    # so the campaign can take a new round as a pack) or "AD_SET" (a campaign
+    # published before that, whose budget sits on its single ad set).
+    budget_level: str = "AD_SET"
 
 
 class PublishStatusResponse(CamelCaseModel):

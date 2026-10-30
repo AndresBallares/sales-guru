@@ -32,7 +32,7 @@ from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from typing import Literal, NamedTuple
 
-from prisma.models import Campaign, Creative, MetaConnection
+from prisma.models import AdSet, Campaign, Creative, CreativeRound, MetaConnection
 from prisma.types import CampaignUpdateInput
 
 from app.core.db import db
@@ -1187,6 +1187,163 @@ async def _purchasers_audience_id(connection: MetaConnection) -> str | None:
     return audience_id
 
 
+async def _create_creative_test_ads(
+    *,
+    campaign: Campaign,
+    connection: MetaConnection,
+    creatives: list[Creative],
+    ad_set: AdSet,
+    meta_ad_set_id: str,
+    object_name: str,
+    destination_url: str,
+    meta_status: Literal["ACTIVE", "PAUSED"],
+    local_status: str,
+    video_assets: dict[str, VideoAsset],
+    created_meta_creative_ids: list[str] | None = None,
+) -> None:
+    """Create one Meta ad, with its creative, per selected creative, in an ad set.
+
+    Shared by a creative test's first ad set and by a round's pack, so both get
+    the same naming, UTM tags, creative-test enhancement policy and logging.
+    Each creative is linked to its local Ad and Meta creative id as it goes.
+
+    Args:
+        campaign: The campaign the ad set belongs to.
+        connection: The business's Meta connection (account and Page set).
+        creatives: The creatives to publish, all of one format.
+        ad_set: The local ad set row the ads belong to.
+        meta_ad_set_id: The ad set's Meta id.
+        object_name: The campaign's name, for the ads' UTM tags.
+        destination_url: Where each ad's CTA links to.
+        meta_status: ACTIVE or PAUSED on Meta.
+        local_status: LIVE or PAUSED locally.
+        video_assets: The processed videos of a video test's ads.
+        created_meta_creative_ids: Appended with each Meta ad creative id as soon
+            as it exists, so a caller can delete them if a later step fails.
+
+    Raises:
+        MetaConnectionError: If any Graph API call fails.
+    """
+    assert connection.adAccountId is not None
+    assert connection.pageId is not None
+    ad_account_id = connection.adAccountId
+    access_token = connection.accessToken
+    refused_features: list[str] = []
+    for creative in creatives:
+        ad_name = creative_naming.ad_name(
+            creative.avatar, creative.concept, creative.headline, creative.pillar
+        )
+        url_tags = creative_naming.url_tags(
+            campaign_name=object_name,
+            avatar=creative.avatar,
+            concept=creative.concept,
+            name=ad_name,
+            pillar=creative.pillar,
+        )
+        if creative.format == "CAROUSEL":
+            meta_creative_id = await meta.create_meta_carousel_ad_creative(
+                access_token=access_token,
+                ad_account_id=ad_account_id,
+                page_id=connection.pageId,
+                instagram_user_id=effective_instagram_user_id(connection),
+                name=creative.headline,
+                body_text=creative.bodyText,
+                cta=creative.cta,
+                link=destination_url,
+                cards=await _resolve_carousel_cards(
+                    creative, access_token=access_token, ad_account_id=ad_account_id
+                ),
+                url_tags=url_tags,
+                creative_test=True,
+                refused_features=refused_features,
+            )
+        elif (
+            creative.storyProductImageId or creative.squareProductImageId
+        ) and creative.format != "CAROUSEL":
+            meta_creative_id = await _create_pair_meta_creative(
+                creative,
+                assets=video_assets,
+                access_token=access_token,
+                ad_account_id=ad_account_id,
+                page_id=connection.pageId,
+                destination_url=destination_url,
+                instagram_user_id=effective_instagram_user_id(connection),
+                url_tags=url_tags,
+                creative_test=True,
+                refused_features=refused_features,
+            )
+        elif creative.format == "SINGLE_VIDEO":
+            meta_creative_id = await _create_video_meta_creative(
+                creative,
+                assets=video_assets,
+                access_token=access_token,
+                ad_account_id=ad_account_id,
+                page_id=connection.pageId,
+                instagram_user_id=effective_instagram_user_id(connection),
+                destination_url=destination_url,
+                url_tags=url_tags,
+                creative_test=True,
+                refused_features=refused_features,
+            )
+        else:
+            image_hash = await _resolve_image_hash(
+                creative, access_token=access_token, ad_account_id=ad_account_id
+            )
+            meta_creative_id = await meta.create_meta_ad_creative(
+                access_token=access_token,
+                ad_account_id=ad_account_id,
+                page_id=connection.pageId,
+                instagram_user_id=effective_instagram_user_id(connection),
+                name=creative.headline,
+                headline=creative.headline,
+                body_text=creative.bodyText,
+                description=creative.description,
+                cta=creative.cta,
+                link=destination_url,
+                image_hash=image_hash,
+                url_tags=url_tags,
+                creative_test=True,
+                refused_features=refused_features,
+            )
+        if created_meta_creative_ids is not None:
+            created_meta_creative_ids.append(meta_creative_id)
+        meta_ad_id = await meta.create_meta_ad(
+            access_token=access_token,
+            ad_account_id=ad_account_id,
+            name=ad_name,
+            meta_ad_set_id=meta_ad_set_id,
+            meta_creative_id=meta_creative_id,
+            status=meta_status,
+        )
+        ad = await db.ad.create(
+            data={
+                "adSetId": ad_set.id,
+                "name": ad_name,
+                "status": local_status,
+                "metaAdId": meta_ad_id,
+            }
+        )
+        await db.creative.update(
+            where={"id": creative.id},
+            data={"ad": {"connect": {"id": ad.id}}, "metaCreativeId": meta_creative_id},
+        )
+
+    # Anything Meta would not take is logged, never silent: a refused
+    # enhancement key stays at Meta's default, and the settings the API has no
+    # key for are listed so the gap is visible on every test publish.
+    if refused_features:
+        logger.warning(
+            "Creative test %s: Meta refused enhancement keys %s",
+            campaign.id,
+            sorted(set(refused_features)),
+        )
+    logger.warning(
+        "Creative test %s: settings with no Meta API key, left at Meta's default: %s",
+        campaign.id,
+        ", ".join(meta.CREATIVE_TEST_UNSUPPORTED_SETTINGS),
+    )
+
+
 async def _publish_creative_test_plan(
     *,
     campaign: Campaign,
@@ -1316,117 +1473,17 @@ async def _publish_creative_test_plan(
         }
     )
 
-    refused_features: list[str] = []
-    for creative in creatives:
-        ad_name = creative_naming.ad_name(
-            creative.avatar, creative.concept, creative.headline, creative.pillar
-        )
-        url_tags = creative_naming.url_tags(
-            campaign_name=object_name,
-            avatar=creative.avatar,
-            concept=creative.concept,
-            name=ad_name,
-            pillar=creative.pillar,
-        )
-        if creative.format == "CAROUSEL":
-            meta_creative_id = await meta.create_meta_carousel_ad_creative(
-                access_token=access_token,
-                ad_account_id=ad_account_id,
-                page_id=connection.pageId,
-                instagram_user_id=effective_instagram_user_id(connection),
-                name=creative.headline,
-                body_text=creative.bodyText,
-                cta=creative.cta,
-                link=destination_url,
-                cards=await _resolve_carousel_cards(
-                    creative, access_token=access_token, ad_account_id=ad_account_id
-                ),
-                url_tags=url_tags,
-                creative_test=True,
-                refused_features=refused_features,
-            )
-        elif (
-            creative.storyProductImageId or creative.squareProductImageId
-        ) and creative.format != "CAROUSEL":
-            meta_creative_id = await _create_pair_meta_creative(
-                creative,
-                assets=video_assets,
-                access_token=access_token,
-                ad_account_id=ad_account_id,
-                page_id=connection.pageId,
-                destination_url=destination_url,
-                instagram_user_id=effective_instagram_user_id(connection),
-                url_tags=url_tags,
-                creative_test=True,
-                refused_features=refused_features,
-            )
-        elif creative.format == "SINGLE_VIDEO":
-            meta_creative_id = await _create_video_meta_creative(
-                creative,
-                assets=video_assets,
-                access_token=access_token,
-                ad_account_id=ad_account_id,
-                page_id=connection.pageId,
-                instagram_user_id=effective_instagram_user_id(connection),
-                destination_url=destination_url,
-                url_tags=url_tags,
-                creative_test=True,
-                refused_features=refused_features,
-            )
-        else:
-            image_hash = await _resolve_image_hash(
-                creative, access_token=access_token, ad_account_id=ad_account_id
-            )
-            meta_creative_id = await meta.create_meta_ad_creative(
-                access_token=access_token,
-                ad_account_id=ad_account_id,
-                page_id=connection.pageId,
-                instagram_user_id=effective_instagram_user_id(connection),
-                name=creative.headline,
-                headline=creative.headline,
-                body_text=creative.bodyText,
-                description=creative.description,
-                cta=creative.cta,
-                link=destination_url,
-                image_hash=image_hash,
-                url_tags=url_tags,
-                creative_test=True,
-                refused_features=refused_features,
-            )
-        meta_ad_id = await meta.create_meta_ad(
-            access_token=access_token,
-            ad_account_id=ad_account_id,
-            name=ad_name,
-            meta_ad_set_id=meta_ad_set_id,
-            meta_creative_id=meta_creative_id,
-            status=meta_status,
-        )
-        ad = await db.ad.create(
-            data={
-                "adSetId": ad_set.id,
-                "name": ad_name,
-                "status": local_status,
-                "metaAdId": meta_ad_id,
-            }
-        )
-        await db.creative.update(
-            where={"id": creative.id},
-            data={"ad": {"connect": {"id": ad.id}}, "metaCreativeId": meta_creative_id},
-        )
-
-    # Anything Meta would not take is logged, never silent: a refused
-    # enhancement key stays at Meta's default, and the settings the API has no
-    # key for are listed so the gap is visible on every test publish.
-    if refused_features:
-        logger.warning(
-            "Creative test %s: Meta refused enhancement keys %s",
-            campaign.id,
-            sorted(set(refused_features)),
-        )
-    logger.warning(
-        "Creative test %s: settings with no Meta API key, left at Meta's default: %s",
-        campaign.id,
-        ", ".join(meta.CREATIVE_TEST_UNSUPPORTED_SETTINGS),
+    await _create_creative_test_ads(
+        campaign=campaign,
+        connection=connection,
+        creatives=creatives,
+        ad_set=ad_set,
+        meta_ad_set_id=meta_ad_set_id,
+        object_name=object_name,
+        destination_url=destination_url,
+        meta_status=meta_status,
+        local_status=local_status,
+        video_assets=video_assets,
     )
 
     update_data: CampaignUpdateInput = {
@@ -1439,6 +1496,253 @@ async def _publish_creative_test_plan(
     updated = await db.campaign.update(where={"id": campaign.id}, data=update_data)
     assert updated is not None  # just fetched by the caller, can't vanish mid-request
     return updated
+
+
+# A pack's daily minimum spend is capped at this share of the campaign's daily
+# budget (PRD.md "Pack lifecycle"): the floor must never starve the packs
+# already running.
+PACK_MIN_SPEND_BUDGET_SHARE = 0.2
+
+
+def pack_daily_min_spend(campaign_daily_budget: float, target_cac: float) -> float:
+    """The daily minimum spend a new pack gets for its 7-day test window.
+
+    About 1x the target CPA, but never more than 20% of the campaign budget:
+    below roughly 5x CPA of campaign budget the cap wins (at $150/day and a CPA
+    near $100 it is $30).
+
+    Args:
+        campaign_daily_budget: The CBO campaign's daily budget.
+        target_cac: The campaign's target cost per acquisition.
+
+    Returns:
+        The daily minimum, in the campaign's currency, to the cent.
+    """
+    return round(
+        min(target_cac, PACK_MIN_SPEND_BUDGET_SHARE * campaign_daily_budget), 2
+    )
+
+
+async def publish_round_to_meta(
+    *,
+    campaign: Campaign,
+    connection: MetaConnection,
+    round_: CreativeRound,
+    creatives: list[Creative],
+    strategy: CreativeTestPlanContent,
+    destination_url: str,
+    paused: bool,
+    report: StatusReporter | None = None,
+) -> AdSet:
+    """Publish a creative round as a new pack: one new ad set in the live campaign.
+
+    The campaign is already on Meta and owns its budget (CBO), so this adds an
+    ad set to it, with the first test's targeting and exclusions, no budget or
+    bid of its own and a daily minimum spend for its 7-day test window
+    (pack_daily_min_spend). The round's selected ads become that ad set's ads.
+    On success the round is CLOSED and the ad set row records its pack number
+    (the round's number), start date and minimum.
+
+    If anything fails, only this ad set is removed: the Meta ad set (which takes
+    its ads with it) and the local ad set, ads and creative links. The campaign,
+    its first ad set and round 1's ads are never touched, and the round stays
+    OPEN with its selection so the user can retry.
+
+    Args:
+        campaign: The published campaign (CBO, already on Meta).
+        connection: The business's Meta connection (account and Page set).
+        round_: The OPEN round being published.
+        creatives: The round's SELECTED creatives, one format.
+        strategy: The campaign's CREATIVE_TEST_PLAN.
+        destination_url: Where each ad's CTA links to.
+        paused: Create the ad set and ads PAUSED instead of ACTIVE.
+        report: Progress reporter for a video upload.
+
+    Returns:
+        The new local ad set row.
+
+    Raises:
+        MetaConnectionError: If a language has no Meta locale or any Graph API
+            call fails (after the cleanup above).
+    """
+    assert connection.adAccountId is not None
+    ad_account_id = connection.adAccountId
+    access_token = connection.accessToken
+    constraints = strategy.audience_constraints
+    meta_status: Literal["ACTIVE", "PAUSED"] = "PAUSED" if paused else "ACTIVE"
+    local_status = "PAUSED" if paused else "LIVE"
+    object_name = campaign.name or f"Sales Guru campaign {campaign.id}"
+
+    # Everything that can fail before anything exists on Meta comes first.
+    video_assets = await _resolve_video_assets(
+        creatives, access_token=access_token, ad_account_id=ad_account_id, report=report
+    )
+    locale_ids = await locales.resolve_languages(
+        access_token=access_token, languages=constraints.languages
+    )
+    purchasers_audience_id = await _purchasers_audience_id(connection)
+    pixel_id = connection.pixelId if requires_pixel(campaign.objective) else None
+    min_spend = pack_daily_min_spend(
+        strategy.daily_budget, resolve_target_cac(strategy.unit_economics)
+    )
+    pack_name = f"{object_name} — Pack {round_.number}"
+
+    meta_ad_set_id: str | None = None
+    ad_set: AdSet | None = None
+    created_meta_creative_ids: list[str] = []
+    try:
+        meta_ad_set_id = await meta.create_meta_ad_set(
+            access_token=access_token,
+            ad_account_id=ad_account_id,
+            name=pack_name,
+            meta_campaign_id=_require_meta_campaign_id(campaign),
+            daily_budget_cents=None,
+            optimization_goal=_OPTIMIZATION_GOAL_BY_OBJECTIVE[campaign.objective],
+            age_min=constraints.age_min,
+            age_max=None,
+            pixel_id=pixel_id,
+            custom_location=None,
+            resolved_locations=None,
+            interests=_suggested_interests(),
+            advantage_audience=1,
+            end_time=campaign.endDate,
+            target_cac_cents=None,
+            status=meta_status,
+            locales=locale_ids,
+            custom_event_type=(
+                "ADD_TO_CART"
+                if strategy.optimization_event == "ADD_TO_CART"
+                else "PURCHASE"
+            ),
+            excluded_custom_audience_ids=(
+                [purchasers_audience_id] if purchasers_audience_id else None
+            ),
+            attribution_spec=meta.ATTRIBUTION_SPEC,
+            daily_min_spend_cents=round(min_spend * 100),
+        )
+        ad_set = await db.adset.create(
+            data={
+                "campaignId": campaign.id,
+                "name": pack_name,
+                "budget": strategy.daily_budget,
+                "optimizationGoal": _OPTIMIZATION_GOAL_BY_OBJECTIVE[campaign.objective],
+                "status": local_status,
+                "metaAdSetId": meta_ad_set_id,
+                "packNumber": round_.number,
+                "startDate": datetime.now(UTC),
+                "dailyMinSpend": min_spend,
+            }
+        )
+        await _create_creative_test_ads(
+            campaign=campaign,
+            connection=connection,
+            creatives=creatives,
+            ad_set=ad_set,
+            meta_ad_set_id=meta_ad_set_id,
+            object_name=object_name,
+            destination_url=destination_url,
+            meta_status=meta_status,
+            local_status=local_status,
+            video_assets=video_assets,
+            created_meta_creative_ids=created_meta_creative_ids,
+        )
+        await db.creativeround.update(
+            where={"id": round_.id}, data={"status": "CLOSED"}
+        )
+    except Exception:
+        await _roll_back_failed_round_publish(
+            campaign=campaign,
+            connection=connection,
+            round_=round_,
+            meta_ad_set_id=meta_ad_set_id,
+            ad_set=ad_set,
+            meta_creative_ids=created_meta_creative_ids,
+        )
+        raise
+    return ad_set
+
+
+def _require_meta_campaign_id(campaign: Campaign) -> str:
+    """The campaign's Meta id; a round can only be published into a live campaign."""
+    assert campaign.metaCampaignId is not None, "the campaign is published"
+    return campaign.metaCampaignId
+
+
+async def _roll_back_failed_round_publish(
+    *,
+    campaign: Campaign,
+    connection: MetaConnection,
+    round_: CreativeRound,
+    meta_ad_set_id: str | None,
+    ad_set: AdSet | None,
+    meta_creative_ids: list[str],
+) -> None:
+    """Undo a failed round publish: delete the new ad set and what was made for it.
+
+    Best effort, and never raises, so the publish's own error is the one the
+    user sees. Deleting the Meta ad set removes its ads; then the Meta ad
+    creatives made for them are deleted too, after the ad set so no ad still
+    uses them, so a failed round publish leaves nothing behind on Meta.
+    (Deleting a creative on Meta is not yet verified against a live account.)
+    Locally the round's creatives are detached from their ads,
+    then the ads and the ad set row are deleted. The campaign and every other
+    ad set are not touched.
+
+    Args:
+        campaign: The campaign the round belongs to.
+        connection: The business's Meta connection.
+        round_: The round whose publish failed.
+        meta_ad_set_id: The Meta ad set this attempt created, if it got that far.
+        ad_set: The local ad set row this attempt created, if it got that far.
+        meta_creative_ids: The Meta ad creatives this attempt created.
+    """
+    assert connection.adAccountId is not None
+    if meta_ad_set_id is not None:
+        try:
+            await meta.delete_meta_object(
+                access_token=connection.accessToken,
+                ad_account_id=connection.adAccountId,
+                meta_object_id=meta_ad_set_id,
+            )
+        except MetaConnectionError:
+            logger.exception(
+                "Could not delete Meta ad set %s left by a failed publish of "
+                "round %s of campaign %s; delete it in Ads Manager",
+                meta_ad_set_id,
+                round_.id,
+                campaign.id,
+            )
+    for meta_creative_id in dict.fromkeys(meta_creative_ids):
+        try:
+            await meta.delete_meta_object(
+                access_token=connection.accessToken,
+                ad_account_id=connection.adAccountId,
+                meta_object_id=meta_creative_id,
+            )
+        except MetaConnectionError:
+            logger.exception(
+                "Could not delete Meta ad creative %s left by a failed publish of "
+                "round %s of campaign %s; delete it in Ads Manager",
+                meta_creative_id,
+                round_.id,
+                campaign.id,
+            )
+    try:
+        async with db.tx() as tx:
+            for creative in await tx.creative.find_many(where={"roundId": round_.id}):
+                await tx.creative.update(
+                    where={"id": creative.id},
+                    data={"ad": {"disconnect": True}, "metaCreativeId": None},
+                )
+            if ad_set is not None:
+                await tx.ad.delete_many(where={"adSetId": ad_set.id})
+                await tx.adset.delete(where={"id": ad_set.id})
+    except Exception:
+        logger.exception(
+            "Could not clear local rows of failed publish of round %s of campaign %s",
+            round_.id,
+            campaign.id,
+        )
 
 
 async def pause_campaign(

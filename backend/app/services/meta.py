@@ -761,6 +761,7 @@ async def create_meta_ad_set(
     custom_event_type: str = "PURCHASE",
     excluded_custom_audience_ids: list[str] | None = None,
     attribution_spec: list[dict[str, Any]] | None = None,
+    daily_min_spend_cents: int | None = None,
 ) -> str:
     """Create an AdSet object on Meta, under an already-created campaign.
 
@@ -851,6 +852,15 @@ async def create_meta_ad_set(
             backstop for a campaign published before this parameter
             existed, or in case Meta doesn't actually honor end_time as
             documented.
+        daily_min_spend_cents: A daily minimum spend for this ad set
+            (`daily_min_spend_target`), in the ad account's minor currency
+            unit. Only meaningful for an ad set under a campaign budget (CBO),
+            which is how a creative round's pack gets its 7-day test floor.
+            None sends no minimum. Verified live on 2026-10-30 (dev ad account,
+            everything PAUSED): a CBO campaign's ad set accepts it and reads it
+            back as `daily_min_spend_target`. It is cleared by posting
+            `daily_min_spend_target=0` to the ad set (Meta answers success and
+            the field is then absent).
         target_cac_cents: The per-result cost to bid toward (COST_CAP's
             `bid_amount`), in the ad account's minor currency unit —
             same cents convention as daily_budget_cents. None uses
@@ -938,6 +948,8 @@ async def create_meta_ad_set(
         )
     if target_cac_cents is not None:
         data["bid_amount"] = str(target_cac_cents)
+    if daily_min_spend_cents is not None:
+        data["daily_min_spend_target"] = str(daily_min_spend_cents)
     if pixel_id is not None:
         data["promoted_object"] = json.dumps(
             {"pixel_id": pixel_id, "custom_event_type": custom_event_type}

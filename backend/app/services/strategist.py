@@ -177,6 +177,8 @@ _FAKE_CREATIVE_TEST_PLAN_FIELDS = GeneratedCreativeTestPlanFields(
     copy_strategy="Fake copy strategy (FAKE_LLM mode).",
 ).model_dump()
 _FAKE_ROUND_ANGLES_FIELDS = GeneratedRoundAngles(
+    # Ordered so the first three (a round for a product without a fourth photo)
+    # already span three pillars.
     creative_angles=[
         GeneratedCreativeAngle(
             avatar="self_purchaser",
@@ -192,15 +194,15 @@ _FAKE_ROUND_ANGLES_FIELDS = GeneratedRoundAngles(
         ),
         GeneratedCreativeAngle(
             avatar="gift_buyer",
-            concept="anniversary-surprise",
-            pillar="emotion",
-            description="Fake round angle: the anniversary surprise (FAKE_LLM mode).",
-        ),
-        GeneratedCreativeAngle(
-            avatar="gift_buyer",
             concept="easy-returns",
             pillar="offer",
             description="Fake round angle: risk-free gifting (FAKE_LLM mode).",
+        ),
+        GeneratedCreativeAngle(
+            avatar="gift_buyer",
+            concept="anniversary-surprise",
+            pillar="emotion",
+            description="Fake round angle: the anniversary surprise (FAKE_LLM mode).",
         ),
     ]
 ).model_dump()
@@ -1125,6 +1127,11 @@ async def generate_round_angles(
             prompt=prompt + retry_note,
             campaign_id=campaign_id,
         )
+        if get_settings().fake_llm_enabled:
+            # The canned reply holds four angles; a thin product's round needs
+            # only the first `count`.
+            canned = cast(list[object], raw["creative_angles"])
+            raw = {**raw, "creative_angles": canned[:count]}
         try:
             parsed = parse_tool_input(raw, GeneratedRoundAngles, context=context)
         except (ToolInputRecoveryError, ValidationError) as exc:
