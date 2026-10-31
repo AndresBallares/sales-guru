@@ -27,6 +27,9 @@ import {
   normalizeDestinationUrl,
 } from '../lib/urlValidation'
 
+// Mirrors backend/app/schemas/product.py's _MAX_NAME_LENGTH (the backend's cap is authoritative).
+const MAX_NAME_LENGTH = 80
+
 // Shared by ProductsSection's "Add a product" / "Edit" rows and
 // CampaignsSection's "Change product" picker (Part 1 + Part 2) — one
 // form, not two near-duplicates, so create/edit validation and field
@@ -60,6 +63,7 @@ export function ProductForm({
   const [margin, setMargin] = useState(product?.margin != null ? String(product.margin) : '')
   const [features, setFeatures] = useState(product?.features ?? '')
   const [benefits, setBenefits] = useState(product?.benefits ?? '')
+  const [name, setName] = useState(product?.name ?? '')
   const [mechanism, setMechanism] = useState(product?.mechanism ?? '')
   const [personalizable, setPersonalizable] = useState(product?.personalizable ?? false)
   const [personalizationOptions, setPersonalizationOptions] = useState(
@@ -245,6 +249,8 @@ export function ProductForm({
       const saved = isEditing
         ? await updateProduct(businessId, product.id, {
             description,
+            // null clears a name that was emptied.
+            name: name.trim() || null,
             price: price ? Number(price) : undefined,
             margin: margin ? Number(margin) : undefined,
             features: features || undefined,
@@ -258,6 +264,7 @@ export function ProductForm({
           })
         : await createProduct(businessId, {
             description,
+            name: name.trim() || undefined,
             price: price ? Number(price) : undefined,
             margin: margin ? Number(margin) : undefined,
             features: features || undefined,
@@ -340,6 +347,20 @@ export function ProductForm({
           required
           value={description}
           onChange={(event) => setDescription(event.target.value)}
+        />
+      </div>
+      <div className="field">
+        <label htmlFor={`product-name-${idSuffix}`}>
+          Product name{' '}
+          <span className="field-hint">
+            (optional, up to 80 characters — shown in lists in place of the description)
+          </span>
+        </label>
+        <input
+          id={`product-name-${idSuffix}`}
+          maxLength={MAX_NAME_LENGTH}
+          value={name}
+          onChange={(event) => setName(event.target.value)}
         />
       </div>
       <div className="field">

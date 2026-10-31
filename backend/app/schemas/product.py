@@ -12,8 +12,17 @@ from app.services.url_validation import validate_destination_url
 _MAX_DESCRIPTION_LENGTH = 1000
 # The mechanism is a sentence or two, pasted into the same prompts.
 _MAX_MECHANISM_LENGTH = 300
+# A label the owner types; screens fall back to the description while it is empty.
+_MAX_NAME_LENGTH = 80
 # The personalization options are one short line, e.g. "6 ceramic colors".
 _MAX_PERSONALIZATION_LENGTH = 300
+
+
+def _strip_name(value: object) -> object:
+    """Trim a name before its length is checked; a blank one means no name."""
+    if isinstance(value, str):
+        return value.strip() or None
+    return value
 
 
 class ProductCreateRequest(CamelCaseModel):
@@ -27,6 +36,7 @@ class ProductCreateRequest(CamelCaseModel):
     """
 
     description: str = Field(max_length=_MAX_DESCRIPTION_LENGTH)
+    name: str | None = Field(default=None, max_length=_MAX_NAME_LENGTH)
     price: float | None = None
     margin: float | None = None
     features: str | None = None
@@ -43,6 +53,11 @@ class ProductCreateRequest(CamelCaseModel):
     # auto-attach (app/services/campaign_readiness.py's auto_attach_product)
     # to just that campaign instead of guessing across the whole business.
     campaign_id: str | None = None
+
+    @field_validator("name", mode="before")
+    @classmethod
+    def _clean_name(cls, value: object) -> object:
+        return _strip_name(value)
 
     @field_validator("url")
     @classmethod
@@ -66,6 +81,8 @@ class ProductUpdateRequest(CamelCaseModel):
     """
 
     description: str | None = Field(default=None, max_length=_MAX_DESCRIPTION_LENGTH)
+    # null clears the name (exclude_unset, like url): the description shows again.
+    name: str | None = Field(default=None, max_length=_MAX_NAME_LENGTH)
     price: float | None = None
     margin: float | None = None
     features: str | None = None
@@ -76,6 +93,11 @@ class ProductUpdateRequest(CamelCaseModel):
         default=None, max_length=_MAX_PERSONALIZATION_LENGTH
     )
     url: str | None = None
+
+    @field_validator("name", mode="before")
+    @classmethod
+    def _clean_name(cls, value: object) -> object:
+        return _strip_name(value)
 
     @field_validator("url")
     @classmethod
@@ -88,6 +110,7 @@ class ProductResponse(CamelCaseModel):
 
     id: str
     description: str
+    name: str | None
     price: float | None
     margin: float | None
     features: str | None

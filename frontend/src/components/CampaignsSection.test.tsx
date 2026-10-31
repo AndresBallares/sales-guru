@@ -1102,6 +1102,25 @@ describe('CampaignsSection', () => {
       )
     })
 
+    it('shows the product by its name, and by its description when it has no name', async () => {
+      mockedApi.listCampaigns.mockResolvedValue([{ ...draftCampaignFixture, productId: 'prod-1' }])
+      mockedApi.listProducts.mockResolvedValue([{ ...walletProduct, name: 'Wallet' }])
+
+      const { unmount } = renderCampaigns(<CampaignsSection businessId="biz-1" />)
+
+      const named = await screen.findByLabelText('Campaign readiness for camp-1')
+      expect(named).toHaveTextContent('Wallet')
+      expect(named).not.toHaveTextContent('Handmade wallets')
+      expect(await screen.findByRole('img', { name: 'Wallet' })).toBeInTheDocument()
+      unmount()
+
+      mockedApi.listProducts.mockResolvedValue([{ ...walletProduct, name: null }])
+      renderCampaigns(<CampaignsSection businessId="biz-1" />)
+      expect(await screen.findByLabelText('Campaign readiness for camp-1')).toHaveTextContent(
+        'Handmade wallets',
+      )
+    })
+
     it('shows a placeholder, not a broken image, when the product has no photo', async () => {
       mockedApi.listCampaigns.mockResolvedValue([{ ...draftCampaignFixture, productId: 'prod-1' }])
       mockedApi.listProducts.mockResolvedValue([{ ...walletProduct, primaryImageUrl: null }])
@@ -1616,6 +1635,7 @@ describe('CampaignsSection', () => {
     await waitFor(() =>
       expect(mockedApi.updateProduct).toHaveBeenCalledWith('biz-1', 'prod-1', {
         description: 'Handmade wallets',
+        name: null,
         price: undefined,
         margin: undefined,
         features: undefined,
@@ -2283,6 +2303,9 @@ describe('CampaignsSection', () => {
       competitors: null,
       exampleCopy: null,
       proofPoints: [],
+      keyMessages: [],
+      customerProblems: [],
+      mechanisms: [],
       offer: null,
       adLanguages: ['English'],
       logoUrl: null,

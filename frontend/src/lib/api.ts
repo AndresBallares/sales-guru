@@ -98,6 +98,11 @@ export interface BrandProfile {
   // Languages this business's ads target (a hard constraint on a creative
   // test plan's ad set); the backend defaults to ["English"].
   adLanguages: string[]
+  // The owner's own view of the brand, short lines each (up to 10 of 200
+  // characters). They fill the research agent's prompt; nothing else reads them.
+  keyMessages: string[]
+  customerProblems: string[]
+  mechanisms: string[]
   // Rides along from the parent business (app/api/brand_profile.py) so
   // the brand-profile view can show the whole identity together, without
   // a second business fetch.
@@ -117,6 +122,9 @@ export interface BrandProfileCreateInput {
   proofPoints?: string[]
   offer?: string
   adLanguages?: string[]
+  keyMessages?: string[]
+  customerProblems?: string[]
+  mechanisms?: string[]
 }
 
 // Partial update — only fields explicitly provided change (same
@@ -134,11 +142,17 @@ export interface BrandProfileUpdateInput {
   proofPoints?: string[]
   offer?: string | null
   adLanguages?: string[]
+  keyMessages?: string[]
+  customerProblems?: string[]
+  mechanisms?: string[]
 }
 
 export interface Product {
   id: string
   description: string
+  // A short label the owner typed (up to 80 characters); screens show it in place
+  // of the description once set, and the description while it is empty.
+  name?: string | null
   price: number | null
   margin: number | null
   features: string | null
@@ -160,6 +174,7 @@ export interface Product {
 
 export interface ProductCreateInput {
   description: string
+  name?: string
   price?: number
   margin?: number
   features?: string
@@ -181,6 +196,8 @@ export interface ProductCreateInput {
 // `| null` rather than reusing ProductCreateInput's `?: string`.
 export interface ProductUpdateInput {
   description?: string
+  // null clears it, like url.
+  name?: string | null
   price?: number
   margin?: number
   features?: string

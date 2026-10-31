@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { ApiError, listCampaigns, listProducts, type Product } from '../lib/api'
 import { requiresDestinationUrl } from '../lib/urlValidation'
 import { ProductForm } from './ProductForm'
+import { productLabel } from '../lib/productLabel'
 
 export function ProductsSection({
   businessId,
@@ -94,13 +95,13 @@ export function ProductsSection({
                 {product.primaryImageUrl && (
                   <img
                     src={product.primaryImageUrl}
-                    alt={product.description}
+                    alt={productLabel(product)}
                     width={48}
                     height={48}
                     style={{ objectFit: 'cover', borderRadius: 6, marginRight: '0.5rem' }}
                   />
                 )}
-                {product.description}{' '}
+                {productLabel(product)}{' '}
                 <button type="button" onClick={() => setEditingId(product.id)}>
                   Edit
                 </button>

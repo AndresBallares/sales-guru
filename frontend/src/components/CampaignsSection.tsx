@@ -102,6 +102,7 @@ import { NewCampaignFlow } from './NewCampaignFlow'
 import { StrategyOverview } from './StrategyOverview'
 import { ProductForm } from './ProductForm'
 import { SocialPostPreview } from './SocialPostPreview'
+import { productLabel } from '../lib/productLabel'
 
 // A creative test (CREATIVE_TEST_PLAN) publishes 3-4 ads in one ad set — kept
 // in step with the backend's MIN/MAX_CREATIVE_ANGLES (app/schemas/strategy.py).
@@ -1236,7 +1237,7 @@ export function CampaignsSection({
         title={title}
         subtitle={campaign.name ? objectiveLabel : null}
         thumbnailUrl={product?.primaryImageUrl ?? null}
-        thumbnailAlt={product?.description ?? title}
+        thumbnailAlt={product ? productLabel(product) : title}
         status={campaign.status}
         badge={model.badge}
         creativeText={creativeCountText(creativeCount, creativesFailed)}
@@ -1644,7 +1645,7 @@ export function CampaignsSection({
                 label: 'Choose a product',
                 icon: <PackageIcon />,
                 done: setupStatus.product,
-                doneText: currentProduct?.description ?? 'Product selected',
+                doneText: currentProduct ? productLabel(currentProduct) : 'Product selected',
                 missingText: 'Select what you want to advertise',
                 onAction: openProductPicker,
               },
@@ -1678,7 +1679,7 @@ export function CampaignsSection({
             const productThumb = currentProduct?.primaryImageUrl ? (
               <img
                 src={currentProduct.primaryImageUrl}
-                alt={currentProduct.description}
+                alt={productLabel(currentProduct)}
                 width={80}
                 height={80}
                 className="campaign-thumb"
@@ -1707,7 +1708,7 @@ export function CampaignsSection({
                     {productThumb}
                     <div className="config-product-text">
                       <h3 className="campaign-card-title">
-                        {currentProduct?.description ?? cardTitle}
+                        {currentProduct ? productLabel(currentProduct) : cardTitle}
                       </h3>
                       <p className="config-meta">
                         <span className="config-badge">{objectiveLabel}</span>
@@ -2457,7 +2458,7 @@ export function CampaignsSection({
                           <option value="">Choose a product…</option>
                           {products.map((product) => (
                             <option key={product.id} value={product.id}>
-                              {product.description}
+                              {productLabel(product)}
                             </option>
                           ))}
                         </select>

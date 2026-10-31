@@ -66,6 +66,16 @@ async def _reject_changed_avoid_phrases(
         )
 
 
+def _stored_list(stored: str | None) -> list[str]:
+    """A list column's value: the JSON array it holds, or empty when null."""
+    return cast(list[str], json.loads(stored)) if stored else []
+
+
+def _stored_json(entries: list[str]) -> str | None:
+    """The column value for a list: a JSON array, or null when it is empty."""
+    return json.dumps(entries) if entries else None
+
+
 def _to_response(profile: BrandProfile, business: Business) -> BrandProfileResponse:
     """Map a Prisma BrandProfile record to its public response shape.
 
@@ -94,6 +104,9 @@ def _to_response(profile: BrandProfile, business: Business) -> BrandProfileRespo
         ad_languages=json.loads(profile.adLanguages)
         if profile.adLanguages
         else list(DEFAULT_AD_LANGUAGES),
+        key_messages=_stored_list(profile.keyMessages),
+        customer_problems=_stored_list(profile.customerProblems),
+        mechanisms=_stored_list(profile.mechanisms),
         logo_url=business_logo_url(business.id)
         if business.logoData is not None
         else None,
@@ -149,6 +162,9 @@ async def create_brand_profile(
             "adLanguages": json.dumps(payload.ad_languages)
             if payload.ad_languages
             else None,
+            "keyMessages": _stored_json(payload.key_messages),
+            "customerProblems": _stored_json(payload.customer_problems),
+            "mechanisms": _stored_json(payload.mechanisms),
         }
     )
     return _to_response(profile, business)
@@ -217,6 +233,9 @@ async def update_brand_profile(
     if "adLanguages" in update_data:
         ad_languages = update_data["adLanguages"]
         update_data["adLanguages"] = json.dumps(ad_languages) if ad_languages else None
+    for column in ("keyMessages", "customerProblems", "mechanisms"):
+        if column in update_data:
+            update_data[column] = _stored_json(update_data[column])
 
     if not update_data:
         return _to_response(profile, business)
