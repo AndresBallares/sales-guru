@@ -101,6 +101,24 @@ async def test_a_document_becomes_drafts(
 
 
 @pytest.mark.asyncio
+async def test_an_answer_without_warnings_needs_no_retry(
+    real_key: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Sonnet 5 left `warnings` out on a real document (2026-10-31); that cost a
+    whole retry for a field that only carries optional notes."""
+    no_warnings = SimpleNamespace(
+        type="tool_use", name="submit_avatar_drafts", input={"avatars": [_avatar()]}
+    )
+    create = _client(monkeypatch, _response(no_warnings))
+
+    result = await generate_avatar_drafts(_DOC)
+
+    assert create.await_count == 1
+    assert result.warnings == []
+    assert len(result.drafts) == 1
+
+
+@pytest.mark.asyncio
 async def test_the_document_is_quarantined_and_cannot_reach_the_instructions(
     real_key: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:

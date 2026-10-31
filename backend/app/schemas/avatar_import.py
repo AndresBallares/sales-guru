@@ -92,7 +92,10 @@ class GeneratedAvatarDrafts(BaseModel):
         max_length=MAX_BUYER_AVATARS_PER_BUSINESS,
         description="Every distinct buyer avatar the document describes.",
     )
+    # Optional notes: a real Sonnet 5 answer left this out (2026-10-31) and the
+    # rejection cost a full retry, so a missing field means "no notes".
     warnings: list[str] = Field(
+        default_factory=list,
         max_length=MAX_MODEL_WARNINGS,
         description="Short notes on gaps: fields the document does not cover.",
     )
