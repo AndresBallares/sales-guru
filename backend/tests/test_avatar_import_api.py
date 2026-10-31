@@ -224,3 +224,30 @@ def test_bulk_needs_between_one_and_twelve_avatars(
     response = client.post(_bulk(business_id), json={"avatars": [_payload()] * count})
 
     assert response.status_code == 422
+
+
+def test_bulk_saves_in_one_batch_not_an_interactive_transaction(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An interactive transaction expires when SQLite is busy (a full e2e run hit it:
+    the commit failed with a 500 and the browser saw "Failed to fetch"). One batch is
+    a single quick write and just as atomic, so the endpoint must not open one."""
+    from prisma import Prisma
+
+    def no_interactive_transaction(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("bulk save must not open an interactive transaction")
+
+    monkeypatch.setattr(Prisma, "tx", no_interactive_transaction)
+    _signed_up_client(client)
+    business_id = _create_business(client)
+
+    response = client.post(
+        _bulk(business_id),
+        json={"avatars": [_payload(name="One"), _payload(name="Two")]},
+    )
+
+    assert response.status_code == 201
+    assert [a["name"] for a in response.json()] == ["One", "Two"]
+    assert len({a["id"] for a in response.json()}) == 2
+    listed = client.get(f"/businesses/{business_id}/avatars").json()
+    assert [a["name"] for a in listed] == ["One", "Two"]
