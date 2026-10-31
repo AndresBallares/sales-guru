@@ -1,7 +1,7 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter, Route, Routes, useParams } from 'react-router-dom'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { DashboardPage } from './DashboardPage'
 import { AuthProvider } from '../context/AuthContext'
 import { ThemeProvider } from '../context/ThemeContext'
@@ -44,6 +44,10 @@ const INDUSTRY_OPTIONS = [
 
 beforeEach(() => {
   vi.resetAllMocks()
+  // jsdom has no scrollIntoView and the dashboard calls it when the form opens. Every
+  // test gets its own stub, removed again afterwards (see afterEach), so no test
+  // passes only because an earlier one left one behind.
+  Element.prototype.scrollIntoView = vi.fn<() => void>()
   // The Brand section under Company Information loads a profile for a business.
   mockedApi.getBrandProfile.mockRejectedValue(
     new api.ApiError(404, 'This business has no brand profile yet'),
@@ -59,6 +63,10 @@ beforeEach(() => {
     voiceTraits: [],
     pricePositionings: [],
   })
+})
+
+afterEach(() => {
+  delete (Element.prototype as { scrollIntoView?: unknown }).scrollIntoView
 })
 
 function BusinessStub() {

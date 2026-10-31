@@ -36,13 +36,14 @@ and no dependency on live model output.
 
 import json
 import logging
+from collections.abc import Sequence
 from typing import Literal, cast
 
 import anthropic
 from anthropic import AsyncAnthropic
 from anthropic.types import Message, TextBlockParam
 from anthropic.types.cache_control_ephemeral_param import CacheControlEphemeralParam
-from prisma.models import Audience, BrandProfile, Business, Product
+from prisma.models import Audience, BrandProfile, Business, BuyerAvatar, Product
 from pydantic import ValidationError
 
 from app.core.config import get_settings
@@ -76,6 +77,8 @@ from app.schemas.strategy import (
     GeneratedCreativeAngle,
     GeneratedCreativeTestPlanFields,
     GeneratedDataDrivenStrategyFields,
+    GeneratedLibraryRoundAngles,
+    GeneratedLibraryTestPlanFields,
     GeneratedRoundAngles,
     GeneratedTestPlanFields,
     NormalizedMetrics,
@@ -89,6 +92,16 @@ from app.schemas.strategy import (
     UnitEconomicsFields,
     benchmark_context_entry,
 )
+from app.services.avatar_library_prompt import (
+    coverage_sentence,
+    fake_library_angles,
+    library_block,
+    library_by_id,
+    log_relaxed_kind_rule,
+    results_lines,
+    steering_gap,
+    winning_avatar_id,
+)
 from app.services.benchmarks import (
     JEWELRY_GOOGLE_BENCHMARKS,
     JEWELRY_META_BENCHMARKS,
@@ -99,6 +112,7 @@ from app.services.brand_voice import brand_voice_lines
 from app.services.llm_call import ToolSpec, call_with_tool
 from app.services.meta import AccountCampaignInsights
 from app.services.prompt_safety import quarantine
+from app.services.round_results import RoundResults
 from app.services.tool_use import (
     ToolInputRecoveryError,
     parse_tool_input,
@@ -912,6 +926,7 @@ def _build_creative_test_plan_prompt(
     optimization_event: OptimizationEvent,
     brand_profile: BrandProfile | None = None,
     creative_format: CreativeTestFormat = "SINGLE_IMAGE",
+    avatars: Sequence[BuyerAvatar] | None = None,
 ) -> str:
     """Build the grounding prompt for a CREATIVE_TEST_PLAN generation.
 
@@ -929,6 +944,9 @@ def _build_creative_test_plan_prompt(
         brand_profile: The business's brand profile, if any.
         creative_format: SINGLE_IMAGE, SINGLE_VIDEO or CAROUSEL — what every ad in the
             test is, which the prompt states to the model.
+        avatars: The business's assignable library avatars. When given, each angle
+            names one by id and the prompt lists them; None or empty keeps the
+            classic self_purchaser / gift_buyer angles.
 
     Returns:
         The prompt text.
@@ -940,6 +958,57 @@ def _build_creative_test_plan_prompt(
         if optimization_event == "ADD_TO_CART"
         else "The ad set optimizes for Purchase."
     )
+    pillar_text = (
+        "a pillar, its main persuasion lever: offer (the standing promotion or a "
+        "risk-reducer such as a guarantee or free returns), mechanism (the design, "
+        "material or method that makes the product deliver its benefit), education "
+        "(teach one thing the buyer doesn't know) or emotion (the feeling, the "
+        "moment, the gift). The four angles must span at least 3 distinct pillars, "
+        "never four versions of the same one; use offer only if there is a real "
+        "promotion or risk-reducer in the request details, and mechanism from the "
+        "product's stated mechanism or materials. Each must differ in what it says "
+        "or shows, not just in wording, and each must be something this product's "
+        "real details support. The ad format is stated in the request details."
+    )
+    if avatars:
+        angles_bullet = (
+            "- creative_angles: exactly 4 distinct angles to test. Each angle is "
+            "written for one avatar of the buyer avatar library in the request "
+            "details: set buyer_avatar_id to that avatar's id, copied exactly. "
+            + coverage_sentence(library_by_id(avatars))
+            + " Each angle also has a concept (a short lowercase slug of one to "
+            "three words joined by hyphens, such as everyday-wear, craftsmanship, "
+            "the-perfect-gift or social-proof), a description of what the ad shows "
+            "and promises, and "
+            + pillar_text
+            + " Draw on the avatar's own problems and hooks. Never repeat an "
+            "avatar and concept pair, and no two angles may have the same buyer "
+            "type, concept and pillar." + _personalization_instruction(product)
+        )
+    else:
+        angles_bullet = (
+            "- creative_angles: exactly 4 distinct angles to test, organized as "
+            "avatars x concepts. Each angle has an avatar (self_purchaser: "
+            "someone buying for themselves; gift_buyer: someone buying for "
+            "another person), a concept (a short lowercase slug of one to "
+            "three words joined by hyphens, such as everyday-wear, "
+            "craftsmanship, the-perfect-gift or social-proof) and a "
+            "description of what the ad shows and promises. Use both avatars, "
+            "typically two concepts each, and never repeat an avatar and "
+            "concept pair. Each also has a pillar, its main persuasion lever: "
+            "offer (the standing promotion or a risk-reducer such as a "
+            "guarantee or free returns), mechanism (the design, material or "
+            "method that makes the product deliver its benefit), education "
+            "(teach one thing the buyer doesn't know) or emotion (the feeling, "
+            "the moment, the gift). The four angles must span at least 3 "
+            "distinct pillars, never four versions of the same one; use offer "
+            "only if there is a real promotion or risk-reducer in the request "
+            "details, and mechanism from the product's stated mechanism or "
+            "materials. Each must differ in what it says or shows, not "
+            "just in wording, and each must be something this product's real "
+            "details support. The ad format is stated in the request details."
+            + _personalization_instruction(product)
+        )
     lines = [
         "You are a marketing strategist. This business has no meaningful "
         "advertising history yet, so you're designing a structured "
@@ -963,27 +1032,7 @@ def _build_creative_test_plan_prompt(
         "This is context for the ad copywriter and designer, not used for "
         "targeting — don't describe interests or demographics as if they "
         "would be selected in the ad set.",
-        "- creative_angles: exactly 4 distinct angles to test, organized as "
-        "avatars x concepts. Each angle has an avatar (self_purchaser: "
-        "someone buying for themselves; gift_buyer: someone buying for "
-        "another person), a concept (a short lowercase slug of one to "
-        "three words joined by hyphens, such as everyday-wear, "
-        "craftsmanship, the-perfect-gift or social-proof) and a "
-        "description of what the ad shows and promises. Use both avatars, "
-        "typically two concepts each, and never repeat an avatar and "
-        "concept pair. Each also has a pillar, its main persuasion lever: "
-        "offer (the standing promotion or a risk-reducer such as a "
-        "guarantee or free returns), mechanism (the design, material or "
-        "method that makes the product deliver its benefit), education "
-        "(teach one thing the buyer doesn't know) or emotion (the feeling, "
-        "the moment, the gift). The four angles must span at least 3 "
-        "distinct pillars, never four versions of the same one; use offer "
-        "only if there is a real promotion or risk-reducer in the request "
-        "details, and mechanism from the product's stated mechanism or "
-        "materials. Each must differ in what it says or shows, not "
-        "just in wording, and each must be something this product's real "
-        "details support. The ad format is stated in the request details."
-        + _personalization_instruction(product),
+        angles_bullet,
         "- hypothesis_statement: a falsifiable statement naming which "
         "angle you expect to win on cost per add-to-cart and why — not a "
         'vague claim like "this should perform well."',
@@ -1005,6 +1054,8 @@ def _build_creative_test_plan_prompt(
     ]
     if unit_economics is not None:
         lines += ["", _unit_economics_line(unit_economics)]
+    if avatars:
+        lines += ["", library_block(avatars)]
     return "\n".join(lines)
 
 
@@ -1016,6 +1067,8 @@ def _build_round_angles_prompt(
     excluded_angles: list[CreativeAngle],
     count: int,
     brand_profile: BrandProfile | None,
+    avatars: Sequence[BuyerAvatar] | None = None,
+    results: RoundResults | None = None,
 ) -> str:
     """Build the prompt for the angles of a follow-up creative round.
 
@@ -1029,14 +1082,52 @@ def _build_round_angles_prompt(
             included. Their concepts may not come back.
         count: How many angles to propose.
         brand_profile: The business's brand profile, if any.
+        avatars: The business's assignable library avatars. When given, each
+            angle names one by id; None or empty keeps the classic buyer types.
+        results: The campaign's results so far (the dashboard's leader), if any
+            ad has numbers.
 
     Returns:
         The prompt text.
     """
     taken = "\n".join(
-        f"- {a.avatar or 'any avatar'} / {a.concept}: {a.description}"
+        f"- {a.buyer_avatar_id or a.avatar or 'any avatar'} / {a.concept}: "
+        f"{a.description}"
         for a in excluded_angles
     )
+    if avatars:
+        angles_bullet = (
+            f"- creative_angles: exactly {count} NEW angles, each written for "
+            "one avatar of the buyer avatar library in the request details "
+            "(set buyer_avatar_id to that avatar's id, copied exactly), with a "
+            "concept (a short lowercase slug of one to three words joined by "
+            "hyphens), a pillar (offer, mechanism, education or emotion) and a "
+            "description of what the ad shows and promises. Never repeat an "
+            "avatar and concept pair from the angles already used, listed "
+            "below; the same concept for another avatar is allowed when the ad "
+            "says or shows something different. Never repeat a pair within "
+            "your own angles either, and no two angles may have the same buyer "
+            "type, concept and pillar. The angles must span at least 3 "
+            "distinct pillars. Use offer only if the request details show a "
+            "real promotion or risk-reducer, and keep each angle something "
+            "this product's real details support. The ad format is stated "
+            "below." + _personalization_instruction(product)
+        )
+    else:
+        angles_bullet = (
+            f"- creative_angles: exactly {count} NEW angles, each with an avatar "
+            "(self_purchaser or gift_buyer), a concept (a short lowercase slug of "
+            "one to three words joined by hyphens), a pillar (offer, mechanism, "
+            "education or emotion) and a description of what the ad shows and "
+            "promises. Never repeat an avatar and concept pair from the angles "
+            "already used, listed below; the same concept for the other avatar is "
+            "allowed when the ad says or shows something different. Never repeat "
+            "a pair within your own angles either. The angles must span at least "
+            "3 distinct pillars. Use offer only if the "
+            "request details show a real promotion or risk-reducer, and keep each "
+            "angle something this product's real details support. The ad format "
+            "is stated below." + _personalization_instruction(product)
+        )
     lines = [
         "You are a marketing strategist. This campaign already ran a creative "
         "test, and you are proposing the angles for its next round of new ads "
@@ -1046,18 +1137,7 @@ def _build_round_angles_prompt(
         _vertical_grounding(),
         "",
         "Your job:",
-        f"- creative_angles: exactly {count} NEW angles, each with an avatar "
-        "(self_purchaser or gift_buyer), a concept (a short lowercase slug of "
-        "one to three words joined by hyphens), a pillar (offer, mechanism, "
-        "education or emotion) and a description of what the ad shows and "
-        "promises. Never repeat an avatar and concept pair from the angles "
-        "already used, listed below; the same concept for the other avatar is "
-        "allowed when the ad says or shows something different. Never repeat "
-        "a pair within your own angles either. The angles must span at least "
-        "3 distinct pillars. Use offer only if the "
-        "request details show a real promotion or risk-reducer, and keep each "
-        "angle something this product's real details support. The ad format "
-        "is stated below." + _personalization_instruction(product),
+        angles_bullet,
         "",
         "Submit your angles using the provided tool.",
         "",
@@ -1072,6 +1152,15 @@ def _build_round_angles_prompt(
         "Angles already used (do not repeat their avatar and concept pairs):",
         taken,
     ]
+    if avatars:
+        lines += ["", library_block(avatars)]
+    if results is not None:
+        library = library_by_id(avatars or [])
+        steer_to = winning_avatar_id(results, library)
+        lines += [
+            "",
+            *results_lines(results, steer_to=steer_to, explore=len(library) > 1),
+        ]
     return "\n".join(lines)
 
 
@@ -1085,11 +1174,15 @@ async def generate_round_angles(
     count: int,
     brand_profile: BrandProfile | None = None,
     campaign_id: str | None = None,
+    buyer_avatars: Sequence[BuyerAvatar] | None = None,
+    previous_results: RoundResults | None = None,
 ) -> list[GeneratedCreativeAngle]:
     """Propose fresh angles for a follow-up creative round.
 
-    One model call, plus one retry that names the problem when the angles reuse
-    an earlier round's concept, repeat a pair or come back in the wrong number.
+    One model call, plus one retry when the angles break a hard rule (an earlier
+    round's pair, a repeated pair, the wrong number, an unknown library avatar) or
+    ignore the winner (a soft rule). A soft miss that survives the retry is
+    accepted with a warning in the log; a hard failure never is.
 
     Args:
         business: The business the campaign is for.
@@ -1100,6 +1193,12 @@ async def generate_round_angles(
         count: How many angles to return (four, or three for a thin product).
         brand_profile: The business's brand profile, if any.
         campaign_id: Only used to tag the token-usage log line.
+        buyer_avatars: The business's assignable library avatars. When there are
+            any, each angle names one (buyer_avatar_id) and its fixed avatar is
+            derived from that avatar's purchase_for.
+        previous_results: The campaign's results so far (the dashboard's leader),
+            if any ad has numbers. When the winning ad has an assignable library
+            avatar, at least half of the angles should be written for it.
 
     Returns:
         ``count`` angles whose concepts no earlier angle used.
@@ -1108,33 +1207,66 @@ async def generate_round_angles(
         StrategistError: If the model call fails, or its angles are still
             invalid after the retry.
     """
+    library_avatars = list(buyer_avatars or [])
+    library = library_by_id(library_avatars)
     prompt = _build_round_angles_prompt(
-        business, product, audience, plan, excluded_angles, count, brand_profile
+        business,
+        product,
+        audience,
+        plan,
+        excluded_angles,
+        count,
+        brand_profile,
+        library_avatars,
+        previous_results,
+    )
+    round_model: type[GeneratedRoundAngles] = (
+        GeneratedLibraryRoundAngles if library else GeneratedRoundAngles
     )
     context: dict[str, object] = {
         "count": count,
         "excluded_pairs": sorted(
-            {(a.avatar, a.concept) for a in excluded_angles},
+            {(a.buyer_avatar_id or a.avatar, a.concept) for a in excluded_angles},
             key=lambda pair: (pair[0] or "", pair[1]),
         ),
         "personalization": None if is_personalized(product) else "forbidden",
     }
+    if library:
+        context["library"] = library
+    winner_id = winning_avatar_id(previous_results, library)
     retry_note = ""
+    # A valid answer that ignored the winner, kept in case the retry breaks a hard
+    # rule; and what it missed, for the log.
+    fallback: list[GeneratedCreativeAngle] | None = None
+    fallback_gap = ""
     for attempt in (1, 2):
         raw = await _call_agent(
             tool_name=_ROUND_ANGLES_TOOL_NAME,
-            tool_schema=tool_input_schema(GeneratedRoundAngles),
+            tool_schema=tool_input_schema(round_model),
             prompt=prompt + retry_note,
             campaign_id=campaign_id,
         )
         if get_settings().fake_llm_enabled:
             # The canned reply holds four angles; a thin product's round needs
             # only the first `count`.
-            canned = cast(list[object], raw["creative_angles"])
-            raw = {**raw, "creative_angles": canned[:count]}
+            canned = cast(list[object], raw["creative_angles"])[:count]
+            if library:
+                canned = cast(
+                    list[object],
+                    fake_library_angles(canned, library_avatars, winner_id),
+                )
+            raw = {**raw, "creative_angles": canned}
         try:
-            parsed = parse_tool_input(raw, GeneratedRoundAngles, context=context)
+            parsed = parse_tool_input(raw, round_model, context=context)
         except (ToolInputRecoveryError, ValidationError) as exc:
+            if fallback is not None:
+                logger.warning(
+                    "Round angles kept without following the winner (%s); the "
+                    "retry was invalid: %s",
+                    fallback_gap,
+                    exc,
+                )
+                return fallback
             if attempt == 2:
                 raise StrategistError(
                     "The model returned invalid angles for the new round — "
@@ -1144,8 +1276,28 @@ async def generate_round_angles(
                 f"\n\nYour previous angles were rejected: {exc}. "
                 "Fix it and submit again."
             )
-        else:
+            continue
+        gap = (
+            steering_gap(
+                [a.buyer_avatar_id for a in parsed.creative_angles],
+                winner_id,
+                library,
+            )
+            if winner_id is not None
+            else None
+        )
+        if gap is None:
             return parsed.creative_angles
+        if attempt == 2:
+            logger.warning(
+                "Round angles accepted without following the winner: %s", gap
+            )
+            return parsed.creative_angles
+        fallback, fallback_gap = parsed.creative_angles, gap
+        retry_note = (
+            f"\n\nYour previous angles were valid but did not follow the results: "
+            f"{gap}. Fix it and submit again."
+        )
     raise AssertionError("unreachable")  # pragma: no cover
 
 
@@ -1260,6 +1412,7 @@ async def generate_strategy(
     brand_profile: BrandProfile | None = None,
     creative_format: CreativeTestFormat = "SINGLE_IMAGE",
     campaign_id: str | None = None,
+    buyer_avatars: Sequence[BuyerAvatar] | None = None,
 ) -> StrategyContent:
     """Call the Marketing Strategist Agent and return a structured plan.
 
@@ -1284,6 +1437,10 @@ async def generate_strategy(
             (the default — no profile yet) falls back to current behavior.
         campaign_id: The campaign the plan is for, only used to tag the
             token-usage log line.
+        buyer_avatars: The business's assignable library avatars. For a
+            CREATIVE_TEST_PLAN, when there are any, each angle names one
+            (buyer_avatar_id) and its fixed avatar is derived from that avatar's
+            purchase_for; with none the plan is written as before.
 
     Returns:
         The generated plan, with every backend-computed field (see
@@ -1322,6 +1479,8 @@ async def generate_strategy(
         duration_days = DEFAULT_TEST_DURATION
         optimization_event: OptimizationEvent = "PURCHASE"
         target_cost_per_add_to_cart: float | None = None
+        library_avatars = list(buyer_avatars or [])
+        library = library_by_id(library_avatars)
         prompt = _build_creative_test_plan_prompt(
             business,
             product,
@@ -1333,23 +1492,39 @@ async def generate_strategy(
             optimization_event,
             brand_profile,
             creative_format,
+            library_avatars,
         )
         personalization = "required" if is_personalized(product) else "forbidden"
-        # One retry when the angles break the personalization rule (a missing,
-        # doubled or unwanted Personalized angle), naming the problem.
+        plan_model: type[GeneratedCreativeTestPlanFields] = (
+            GeneratedLibraryTestPlanFields
+            if library
+            else GeneratedCreativeTestPlanFields
+        )
+        plan_context: dict[str, object] = {"personalization": personalization}
+        if library:
+            plan_context["library"] = library
+            log_relaxed_kind_rule(library)
+        # One retry when the angles break a rule (a missing, doubled or unwanted
+        # Personalized angle, too few library avatars, a repeated pair...), naming
+        # the problem.
         retry_note = ""
         for attempt in (1, 2):
             raw = await _call_agent(
                 tool_name=_CREATIVE_TEST_PLAN_TOOL_NAME,
-                tool_schema=tool_input_schema(GeneratedCreativeTestPlanFields),
+                tool_schema=tool_input_schema(plan_model),
                 prompt=prompt + retry_note,
                 campaign_id=campaign_id,
             )
+            if library and get_settings().fake_llm_enabled:
+                raw = {
+                    **raw,
+                    "creative_angles": fake_library_angles(
+                        cast(list[object], raw["creative_angles"]), library_avatars
+                    ),
+                }
             try:
                 generated_creative = parse_tool_input(
-                    raw,
-                    GeneratedCreativeTestPlanFields,
-                    context={"personalization": personalization},
+                    raw, plan_model, context=plan_context
                 )
                 break
             except (ToolInputRecoveryError, ValidationError) as exc:

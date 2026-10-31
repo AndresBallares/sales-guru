@@ -19,12 +19,19 @@ test('pasted research becomes drafts, and only the kept ones are saved', async (
   await expect(page.getByRole('article', { name: 'Self-Purchaser Collector' })).toBeVisible()
   expect(await (await page.request.get(avatarsUrl)).json()).toEqual([])
 
-  await page.getByRole('article', { name: 'Deadline Gift-Giver' }).getByLabel('Name').fill('Last-minute giver')
+  const giver = page.getByRole('article', { name: 'Deadline Gift-Giver' })
+  await expect(giver.getByLabel('Buys for')).toHaveValue('gift')
+  await giver.getByLabel('Name').fill('Last-minute giver')
   await page.getByRole('checkbox', { name: 'Keep Self-Purchaser Collector' }).uncheck()
   await page.getByRole('button', { name: 'Save 1 selected' }).click()
 
   await expect(page.getByText('Saved 1 avatar.')).toBeVisible()
-  const saved = (await (await page.request.get(avatarsUrl)).json()) as { name: string; hooks: string[] }[]
+  const saved = (await (await page.request.get(avatarsUrl)).json()) as {
+    name: string
+    hooks: string[]
+    purchaseFor: string
+  }[]
   expect(saved.map((a) => a.name)).toEqual(['Last-minute giver'])
+  expect(saved[0].purchaseFor).toBe('gift')
   expect(saved[0].hooks).toContain('Gold that outlasts the card.')
 })

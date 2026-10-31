@@ -28,6 +28,7 @@ from app.schemas.strategy import (
     UpdateTestSettingsRequest,
     min_creative_test_daily_budget,
 )
+from app.services.buyer_avatars import assignable_avatars
 from app.services.campaign_readiness import is_ready
 from app.services.creative import test_ads_required
 from app.services.creative_test_settings import PIXEL_WINDOW_DAYS, event_advice
@@ -237,6 +238,7 @@ async def create_strategy(
                 "SINGLE_IMAGE",
             ),
             campaign_id=campaign.id,
+            buyer_avatars=await assignable_avatars(business.id),
         )
     except StrategistError as exc:
         raise HTTPException(
