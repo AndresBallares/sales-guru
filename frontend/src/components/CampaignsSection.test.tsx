@@ -2187,6 +2187,51 @@ describe('CampaignsSection', () => {
     ).toBeInTheDocument()
   })
 
+  it('keeps freshly generated ads when an older creatives request finishes afterwards', async () => {
+    // The page loads each campaign's creatives when it opens. If ads are generated while that
+    // request is still in flight, its (older, partial) answer must not replace the new batch.
+    mockedApi.listCampaigns.mockResolvedValue([
+      {
+        id: 'camp-1',
+        name: null,
+        objective: 'SALES',
+        status: 'STRATEGY_GENERATED',
+        productId: null,
+        audienceId: null,
+        metaCampaignId: null,
+        eventVenueKey: null,
+        startDate: null,
+        endDate: null,
+        pausedReason: null,
+        dailySpendFlag: null,
+        needsDestinationUrl: false,
+      },
+    ])
+    mockedApi.getStrategy.mockResolvedValue(FAKE_STRATEGY)
+    let finishOlderRequest: (list: api.Creative[]) => void = () => undefined
+    mockedApi.listCreatives.mockReturnValue(
+      new Promise<api.Creative[]>((resolve) => {
+        finishOlderRequest = resolve
+      }),
+    )
+    mockedApi.createCreatives.mockResolvedValue([
+      fakeCreative({ id: 'creative-1', headline: 'Headline A' }),
+      fakeCreative({ id: 'creative-2', headline: 'Headline B' }),
+    ])
+    const user = userEvent.setup()
+
+    renderCampaigns(<CampaignsSection businessId="biz-1" />)
+    await screen.findByText(/Custom emerald rings/)
+    await user.click(screen.getByRole('button', { name: 'Generate Ads' }))
+    expect(await screen.findByText('Headline B')).toBeInTheDocument()
+
+    finishOlderRequest([fakeCreative({ id: 'creative-1', headline: 'Headline A' })])
+    await new Promise((resolve) => setTimeout(resolve, 50))
+
+    expect(screen.getByText('Headline A')).toBeInTheDocument()
+    expect(screen.getByText('Headline B')).toBeInTheDocument()
+  })
+
   it('generates a carousel batch when the Carousel format is picked', async () => {
     mockedApi.listCampaigns.mockResolvedValue([
       {
