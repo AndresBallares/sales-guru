@@ -18,12 +18,17 @@ import os
 import subprocess
 from collections.abc import Iterator
 from pathlib import Path
+from typing import IO
 
 from cryptography.fernet import Fernet
 from dotenv import load_dotenv
 
 from tests.db_cleanup import clean_all_tables, database_path_for_tests
-from tests.process_guards import restore_default_sigint
+from tests.process_guards import (
+    DatabaseBusyError,
+    acquire_database_lock,
+    restore_default_sigint,
+)
 
 # Before anything below can start a query engine; see the function's docstring.
 restore_default_sigint()
@@ -90,6 +95,24 @@ _ALL_TABLES = (
     "organization",
     "user",
 )
+
+
+# Held for the whole run; the operating system releases it when we exit.
+_database_lock: IO[bytes] | None = None
+
+
+def pytest_configure(config: pytest.Config) -> None:
+    """Refuse to start if another run is using test.db (see process_guards).
+
+    Runs before the session fixture below resets the database, so a second run
+    stops with a message instead of wiping the first one's data.
+    """
+    global _database_lock
+    lock_path = database_path_for_tests().with_name("test.db.lock")
+    try:
+        _database_lock = acquire_database_lock(lock_path)
+    except DatabaseBusyError as exc:
+        pytest.exit(str(exc), returncode=3)
 
 
 @pytest.fixture(scope="session", autouse=True)

@@ -3,7 +3,10 @@
 Imported by tests/conftest.py before anything starts a subprocess.
 """
 
+import fcntl
 import signal
+from pathlib import Path
+from typing import IO
 
 
 def restore_default_sigint() -> None:
@@ -20,3 +23,32 @@ def restore_default_sigint() -> None:
     """
     if signal.getsignal(signal.SIGINT) is signal.SIG_IGN:
         signal.signal(signal.SIGINT, signal.default_int_handler)
+
+
+class DatabaseBusyError(RuntimeError):
+    """Another pytest run already holds the shared test database."""
+
+
+def acquire_database_lock(lock_path: Path) -> IO[bytes]:
+    """Take the exclusive lock on the shared test.db, or fail at once.
+
+    Two runs on one SQLite file reset it under each other and stall or fail in
+    confusing ways (it has happened twice). The lock is an flock, which the
+    operating system drops when the holder exits or dies, so a crashed run
+    never leaves a stale lock behind. Keep the returned handle open for as
+    long as the run lasts.
+
+    Raises:
+        DatabaseBusyError: If another run holds the lock.
+    """
+    handle = lock_path.open("ab")
+    try:
+        fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        handle.close()
+        raise DatabaseBusyError(
+            f"another pytest run is using the shared test database "
+            f"(lock: {lock_path}). Wait for it to finish, or stop it, then try "
+            f"again; two runs at once corrupt each other."
+        ) from None
+    return handle
