@@ -33,7 +33,7 @@ from app.services import avatar_import
 from app.services.avatar_import import AvatarImportError, generate_avatar_drafts
 from app.services.llm_call import UsageTotals, price_for
 
-MODELS = ("claude-sonnet-5", "claude-haiku-5-5")
+DEFAULT_MODELS = ("claude-sonnet-5", "claude-haiku-5-5")
 _CHARS_PER_TOKEN = 3.5  # conservative: prose averages closer to 4
 _OVERHEAD_TOKENS = 1500  # system prompt, tool schema, wrapper
 
@@ -74,16 +74,18 @@ def _cost(model: str, lines: list[dict[str, str]]) -> tuple[UsageTotals, int]:
     return totals, len(lines)
 
 
-def _plan(document: str) -> None:
+def _plan(document: str, models: tuple[str, ...]) -> None:
     print(f"Document: {len(document)} characters (limit {MAX_DOCUMENT_LENGTH})")
-    for model in MODELS:
+    for model in models:
         print(f"  {model}: worst case ${_worst_case_usd(model, len(document)):.2f}")
-    total = sum(_worst_case_usd(m, len(document)) for m in MODELS)
+    total = sum(_worst_case_usd(m, len(document)) for m in models)
     print(f"Worst case for both: ${total:.2f}. A typical run costs a few cents each.")
     print("No API calls made. Re-run with --run --cap <dollars> to spend.")
 
 
-async def _run(document: str, cap: float, out_dir: Path) -> int:
+async def _run(
+    document: str, cap: float, out_dir: Path, models: tuple[str, ...]
+) -> int:
     settings = get_settings()
     if settings.fake_llm_enabled or not settings.anthropic_api_key:
         print("Needs a real ANTHROPIC_API_KEY and FAKE_LLM unset.")
@@ -95,7 +97,7 @@ async def _run(document: str, cap: float, out_dir: Path) -> int:
 
     spent = 0.0
     summary: list[str] = []
-    for model in MODELS:
+    for model in models:
         worst = _worst_case_usd(model, len(document))
         if spent + worst > cap:
             print(
@@ -167,18 +169,25 @@ def main() -> int:
     parser.add_argument("--run", action="store_true", help="make real, paid calls")
     parser.add_argument("--cap", type=float, help="dollar cap for the whole run")
     parser.add_argument("--out", type=Path, default=Path("."), help="where drafts go")
+    parser.add_argument(
+        "--models",
+        nargs="+",
+        default=list(DEFAULT_MODELS),
+        help="models to compare (default: both)",
+    )
     args = parser.parse_args()
+    models = tuple(args.models)
     document = args.document.read_text().strip()
     if not document or len(document) > MAX_DOCUMENT_LENGTH:
         print(f"The document must be 1 to {MAX_DOCUMENT_LENGTH} characters.")
         return 2
     if not args.run:
-        _plan(document)
+        _plan(document, models)
         return 0
     if args.cap is None or args.cap <= 0:
         print("--run needs an explicit --cap in dollars.")
         return 2
-    return asyncio.run(_run(document, args.cap, args.out))
+    return asyncio.run(_run(document, args.cap, args.out, models))
 
 
 if __name__ == "__main__":

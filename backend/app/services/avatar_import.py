@@ -60,6 +60,11 @@ Never fill a gap with a guess.
 avatar, leave them empty.
 - One avatar per distinct kind of customer. Do not repeat an avatar under a new \
 name, and do not split one customer into near-duplicates.
+- When an avatar refers to items of a numbered list elsewhere in the document \
+(for example "Primary problems: 4, 5, 13"), copy the exact text of the item with \
+that number into the field, checking each number against the list. If a number \
+is ambiguous or out of range, or the list is not numbered, leave that entry out \
+and say so in warnings. Never guess which item a number means.
 - Write in the document's language.
 - Keep every entry short and specific: one idea per entry, under 200 characters.
 - Put anything worth telling the owner (for example "no objections were given") \
