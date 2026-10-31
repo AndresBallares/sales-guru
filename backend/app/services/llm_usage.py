@@ -25,13 +25,14 @@ from anthropic.types import Message
 
 logger = logging.getLogger(__name__)
 
-Agent = Literal["strategist", "creative", "optimizer"]
+Agent = Literal["strategist", "creative", "optimizer", "research"]
 CallType = Literal[
     "strategy",
     "creative_batch",
     "slot_regenerate",
     "optimizer_eval",
     "test_eval",
+    "research_smoke",
 ]
 
 
@@ -47,6 +48,7 @@ async def create_logged(
     call_type: CallType,
     campaign_id: str | None = None,
     attempt: int = 1,
+    step: int = 1,
     **create_kwargs: Any,  # noqa: ANN401 — forwarded verbatim to messages.create
 ) -> Message:
     """Call ``client.messages.create`` and log the token usage of the response.
@@ -62,6 +64,9 @@ async def create_logged(
         attempt: 1 for the first try, 2+ for a retry after a failed or
             truncated first response. Retries are logged with
             ``retry=true`` so they can be summed separately.
+        step: 1 for the first request of a multi-request exchange, 2+ for each
+            continuation (a ``pause_turn`` resume). Not a retry: it costs
+            money but repeats nothing.
         **create_kwargs: Forwarded verbatim to ``client.messages.create``.
 
     Returns:
@@ -73,11 +78,13 @@ async def create_logged(
 
     usage = getattr(response, "usage", None)
     details = getattr(usage, "output_tokens_details", None)
+    server_tools = getattr(usage, "server_tool_use", None)
     logger.info(
         "llm_usage agent=%s call_type=%s campaign_id=%s attempt=%d retry=%s "
         "model=%s input_tokens=%d output_tokens=%d thinking_tokens=%d "
         "cache_creation_input_tokens=%d cache_read_input_tokens=%d "
-        "stop_reason=%s latency_ms=%d",
+        "stop_reason=%s latency_ms=%d web_search_requests=%d "
+        "web_fetch_requests=%d step=%d",
         agent,
         call_type,
         campaign_id or "none",
@@ -91,5 +98,8 @@ async def create_logged(
         _count(getattr(usage, "cache_read_input_tokens", 0)),
         getattr(response, "stop_reason", None),
         latency_ms,
+        _count(getattr(server_tools, "web_search_requests", 0)),
+        _count(getattr(server_tools, "web_fetch_requests", 0)),
+        step,
     )
     return response

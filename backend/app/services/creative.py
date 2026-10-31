@@ -108,7 +108,8 @@ from app.schemas.strategy import (
 from app.services import ad_quality
 from app.services.brand_voice import brand_voice_lines
 from app.services.creative_naming import angle_label
-from app.services.llm_usage import CallType, create_logged
+from app.services.llm_call import ToolSpec, call_with_tool
+from app.services.llm_usage import CallType
 from app.services.media_info import is_square
 from app.services.prompt_safety import quarantine
 from app.services.strategist import is_personalized
@@ -1535,7 +1536,7 @@ async def generate_creatives(
         ]
         message: MessageParam = {"role": "user", "content": content}
         try:
-            response = await create_logged(
+            response = await call_with_tool(
                 client,
                 agent="creative",
                 call_type=call_type,
@@ -1544,14 +1545,11 @@ async def generate_creatives(
                 model=settings.creative_model,
                 max_tokens=_MAX_TOKENS,
                 system=[system_block],
-                tools=[
-                    {
-                        "name": _TOOL_NAME,
-                        "description": "Submit the generated ad creative variants.",
-                        "input_schema": tool_input_schema(GeneratedCreativeBatch),
-                    }
-                ],
-                tool_choice={"type": "tool", "name": _TOOL_NAME},
+                tool=ToolSpec(
+                    name=_TOOL_NAME,
+                    description="Submit the generated ad creative variants.",
+                    input_schema=tool_input_schema(GeneratedCreativeBatch),
+                ),
                 messages=[message],
             )
         except anthropic.AnthropicError as exc:

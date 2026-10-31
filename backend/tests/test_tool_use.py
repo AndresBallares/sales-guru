@@ -436,3 +436,86 @@ def test_every_agent_tool_schema_is_trimmed() -> None:
         assert all("description" not in d for d in schema.get("$defs", {}).values()), (
             model.__name__
         )
+
+
+# --- strict_input_schema ------------------------------------------------------
+
+
+class _StrictInner(BaseModel):
+    label: str = Field(min_length=1, max_length=20)
+    score: int = Field(ge=0, le=10)
+
+
+class _Strict(BaseModel):
+    name: str = Field(max_length=60, description="Short name")
+    items: list[str] = Field(min_length=1, max_length=8)
+    pair: list[str] = Field(min_length=2, max_length=2)
+    inner: _StrictInner
+
+
+def test_strict_schema_drops_unsupported_keywords_and_notes_them() -> None:
+    from app.services.tool_use import strict_input_schema
+
+    schema = strict_input_schema(_Strict)
+
+    name = schema["properties"]["name"]
+    assert "maxLength" not in name
+    assert "60" in name["description"] and "Short name" in name["description"]
+    items = schema["properties"]["items"]
+    assert "maxItems" not in items
+    assert items["minItems"] == 1  # 0 and 1 are the only supported values
+    assert "minItems" not in schema["properties"]["pair"]
+    inner = schema["$defs"]["_StrictInner"]["properties"]
+    assert not {"minLength", "maxLength", "minimum", "maximum"} & set(inner["label"])
+    assert not {"minimum", "maximum"} & set(inner["score"])
+
+
+def test_strict_schema_closes_every_object() -> None:
+    from app.services.tool_use import strict_input_schema
+
+    schema = strict_input_schema(_Strict)
+
+    assert schema["additionalProperties"] is False
+    assert schema["$defs"]["_StrictInner"]["additionalProperties"] is False
+
+
+def test_strict_schema_leaves_the_original_model_schema_alone() -> None:
+    from app.services.tool_use import strict_input_schema
+
+    strict_input_schema(_Strict)
+
+    assert tool_input_schema(_Strict)["properties"]["name"]["maxLength"] == 60
+
+
+def test_strict_schema_rejects_a_schema_over_the_optional_parameter_limit() -> None:
+    from app.services.tool_use import strict_input_schema
+
+    class TooMany(BaseModel):
+        f0: str = "x"
+        f1: str = "x"
+        f2: str = "x"
+        f3: str = "x"
+        f4: str = "x"
+        f5: str = "x"
+        f6: str = "x"
+        f7: str = "x"
+        f8: str = "x"
+        f9: str = "x"
+        f10: str = "x"
+        f11: str = "x"
+        f12: str = "x"
+        f13: str = "x"
+        f14: str = "x"
+        f15: str = "x"
+        f16: str = "x"
+        f17: str = "x"
+        f18: str = "x"
+        f19: str = "x"
+        f20: str = "x"
+        f21: str = "x"
+        f22: str = "x"
+        f23: str = "x"
+        f24: str = "x"
+
+    with pytest.raises(ValueError, match="optional"):
+        strict_input_schema(TooMany)

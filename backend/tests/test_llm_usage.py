@@ -163,3 +163,44 @@ async def test_create_logged_propagates_api_errors_without_logging(
         )
 
     assert "llm_usage" not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_create_logged_logs_server_tool_requests_and_step(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    usage = _usage(
+        server_tool_use=SimpleNamespace(web_search_requests=4, web_fetch_requests=2)
+    )
+    response = SimpleNamespace(content=[], stop_reason="end_turn", usage=usage)
+
+    with caplog.at_level(logging.INFO, logger="app.services.llm_usage"):
+        await create_logged(
+            _client(response),
+            agent="research",
+            call_type="research_smoke",
+            step=3,
+            model="claude-fable-5-1",
+            max_tokens=10,
+        )
+
+    assert "web_search_requests=4 web_fetch_requests=2" in caplog.text
+    assert "step=3" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_create_logged_logs_zero_server_tool_requests_when_absent(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    response = SimpleNamespace(content=[], stop_reason="end_turn", usage=_usage())
+
+    with caplog.at_level(logging.INFO, logger="app.services.llm_usage"):
+        await create_logged(
+            _client(response),
+            agent="creative",
+            call_type="creative_batch",
+            model="claude-sonnet-5",
+            max_tokens=10,
+        )
+
+    assert "web_search_requests=0 web_fetch_requests=0 step=1" in caplog.text
