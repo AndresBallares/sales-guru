@@ -4,6 +4,10 @@ on:
   push:
     branches: [main]
   pull_request:
+  # Run everything by hand (Actions tab -> CI -> Run workflow, or
+  # `gh workflow run CI --ref main`): backend-ci and frontend-ci both run, whatever
+  # the last change touched, so a docs-only push to main can still be checked in full.
+  workflow_dispatch:
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
@@ -36,8 +40,10 @@ jobs:
       frontend: ${{ steps.decide.outputs.frontend }}
     steps:
       - uses: actions/checkout@v4
+      # Nothing to compare against on a manual run, so it is skipped there.
       - uses: dorny/paths-filter@v3
         id: filter
+        if: github.event_name != 'workflow_dispatch'
         with:
           filters: |
             backend:
@@ -69,11 +75,16 @@ jobs:
           BACKEND: ${{ steps.filter.outputs.backend }}
           FRONTEND: ${{ steps.filter.outputs.frontend }}
           SHARED: ${{ steps.filter.outputs.shared }}
+          EVENT: ${{ github.event_name }}
         run: |
           set -euo pipefail
           run_backend=false
           run_frontend=false
           reasons=()
+          if [ "$EVENT" = "workflow_dispatch" ]; then
+            run_backend=true; run_frontend=true
+            reasons+=("manual run -> backend-ci + frontend-ci, whatever changed last")
+          fi
           if [ "$BACKEND" = "true" ]; then
             run_backend=true; run_frontend=true
             reasons+=("backend/** changed -> backend-ci + frontend-ci (e2e integration)")
@@ -114,6 +125,9 @@ jobs:
           set -euo pipefail
           if [ "${{ github.event_name }}" = "pull_request" ]; then
             range="${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }}"
+          elif [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            # No before/after on a manual run: check the commit it runs on.
+            range="-1 HEAD"
           else
             before="${{ github.event.before }}"
             after="${{ github.event.after }}"
