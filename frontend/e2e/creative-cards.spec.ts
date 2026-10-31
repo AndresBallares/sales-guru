@@ -19,7 +19,8 @@ test('shows the creatives as cards with editing tucked away, and passes the axe 
 }) => {
   await reachCreativeChoices(page)
   const cards = page.getByRole('article')
-  expect(await cards.count()).toBeGreaterThan(1)
+  // The heading shows before the cards are all drawn; count again until they are.
+  await expect.poll(() => cards.count()).toBeGreaterThan(1)
 
   // New creatives carry no image/video prompts (they are no longer generated), so there is no
   // "Creative details" section to open; it only appears for older creatives that have them.
