@@ -526,3 +526,24 @@ describe('NewCampaignFlow', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent('Something broke')
   })
 })
+
+describe('NewCampaignFlow — product names in the picker', () => {
+  it('lists a product by its name, or by its description when it has none', async () => {
+    mockedApi.createCampaign.mockResolvedValue(draftCampaign)
+    renderFlow({
+      products: [
+        { ...existingProduct, id: 'p-named', name: 'Geo Ring', description: 'A long description' },
+        { ...existingProduct, id: 'p-plain', name: null, description: 'Plain earrings' },
+      ],
+    })
+    const user = userEvent.setup()
+
+    await user.click(screen.getByRole('button', { name: 'Next' }))
+    await user.click(await screen.findByRole('button', { name: 'Use an existing product instead' }))
+
+    const picker = screen.getByLabelText('Choose an existing product')
+    expect(within(picker).getByRole('option', { name: 'Geo Ring' })).toBeInTheDocument()
+    expect(within(picker).getByRole('option', { name: 'Plain earrings' })).toBeInTheDocument()
+    expect(within(picker).queryByRole('option', { name: 'A long description' })).toBeNull()
+  })
+})

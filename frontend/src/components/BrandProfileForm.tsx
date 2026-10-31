@@ -25,6 +25,14 @@ const MAX_OFFER_LENGTH = 200
 // its near-limit color — a passive status until it's actually relevant.
 const NEAR_LIMIT_THRESHOLD = 50
 
+// One entry per line, trimmed, blank lines dropped.
+function toLines(text: string): string[] {
+  return text
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean)
+}
+
 function CharCounter({ current, max }: { current: number; max: number }) {
   const nearLimit = max - current <= NEAR_LIMIT_THRESHOLD
   return (
@@ -81,6 +89,12 @@ export function BrandProfileForm({
   const [proofPointsText, setProofPointsText] = useState(
     profile?.proofPoints.join('\n') ?? '',
   )
+  // The same one-entry-per-line text boxes as the proof points.
+  const [keyMessagesText, setKeyMessagesText] = useState(profile?.keyMessages?.join('\n') ?? '')
+  const [customerProblemsText, setCustomerProblemsText] = useState(
+    profile?.customerProblems?.join('\n') ?? '',
+  )
+  const [mechanismsText, setMechanismsText] = useState(profile?.mechanisms?.join('\n') ?? '')
   const [offer, setOffer] = useState(profile?.offer ?? '')
   // Comma-separated in the input, split back into a list on submit.
   const [adLanguagesText, setAdLanguagesText] = useState(
@@ -108,6 +122,9 @@ export function BrandProfileForm({
         .split('\n')
         .map((line) => line.trim())
         .filter(Boolean)
+      const keyMessages = toLines(keyMessagesText)
+      const customerProblems = toLines(customerProblemsText)
+      const mechanisms = toLines(mechanismsText)
       const adLanguages = adLanguagesText
         .split(',')
         .map((language) => language.trim())
@@ -124,6 +141,9 @@ export function BrandProfileForm({
             competitors: competitors || null,
             exampleCopy: exampleCopy || null,
             proofPoints,
+            keyMessages,
+            customerProblems,
+            mechanisms,
             offer: offer || null,
             adLanguages,
           })
@@ -138,6 +158,9 @@ export function BrandProfileForm({
             competitors: competitors || undefined,
             exampleCopy: exampleCopy || undefined,
             proofPoints,
+            keyMessages,
+            customerProblems,
+            mechanisms,
             offer: offer || undefined,
             adLanguages,
           })
@@ -289,6 +312,47 @@ export function BrandProfileForm({
           }
           value={proofPointsText}
           onChange={(event) => setProofPointsText(event.target.value)}
+        />
+      </div>
+      <div className="field">
+        <label htmlFor="key-messages">
+          Key brand messages{' '}
+          <span className="field-hint">
+            (one per line — what every ad should get across; only things that are true for
+            all your products)
+          </span>
+        </label>
+        <textarea
+          id="key-messages"
+          value={keyMessagesText}
+          onChange={(event) => setKeyMessagesText(event.target.value)}
+        />
+      </div>
+      <div className="field">
+        <label htmlFor="customer-problems">
+          Problems your customers have{' '}
+          <span className="field-hint">
+            (one per line — what you believe they struggle with, even if they don&apos;t know it
+            yet)
+          </span>
+        </label>
+        <textarea
+          id="customer-problems"
+          value={customerProblemsText}
+          onChange={(event) => setCustomerProblemsText(event.target.value)}
+        />
+      </div>
+      <div className="field">
+        <label htmlFor="brand-mechanisms">
+          What makes your solution different{' '}
+          <span className="field-hint">
+            (one per line — the materials, methods or features that make your promises believable)
+          </span>
+        </label>
+        <textarea
+          id="brand-mechanisms"
+          value={mechanismsText}
+          onChange={(event) => setMechanismsText(event.target.value)}
         />
       </div>
       <div className="field">

@@ -189,6 +189,12 @@ model BrandProfile {
   offer            String?
   // JSON array of language names for CREATIVE_TEST_PLAN targeting; null = English.
   adLanguages      String?
+  // The owner's own view of the brand, three JSON arrays of up to 10 short
+  // entries like proofPoints (null = none). They fill the Avatar Research
+  // Agent's prompt template; nothing else reads them yet.
+  keyMessages      String?
+  customerProblems String?
+  mechanisms       String?
   createdAt        DateTime @default(now())
   updatedAt        DateTime @updatedAt
 }
@@ -240,6 +246,9 @@ model Product {
   id          String         @id @default(cuid())
   business    Business       @relation(fields: [businessId], references: [id])
   businessId  String
+  // A short label the owner types (up to 80 characters). Null until they do;
+  // screens then keep showing the description. Never sent to a prompt.
+  name        String?
   description String
   price       Float?
   margin      Float?

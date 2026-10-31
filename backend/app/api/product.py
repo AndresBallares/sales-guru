@@ -72,6 +72,7 @@ async def _to_response(product: Product) -> ProductResponse:
     return ProductResponse(
         id=product.id,
         description=product.description,
+        name=product.name,
         price=product.price,
         margin=product.margin,
         features=product.features,
@@ -118,6 +119,7 @@ async def create_product(
         data={
             "businessId": business.id,
             "description": payload.description,
+            "name": payload.name,
             "price": payload.price,
             "margin": payload.margin,
             "features": payload.features,

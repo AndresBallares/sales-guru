@@ -14,6 +14,7 @@ import { requiresDestinationUrl } from '../lib/urlValidation'
 import { AudienceForm } from './AudienceForm'
 import { OptionsLoadError } from './OptionsLoadError'
 import { ProductForm } from './ProductForm'
+import { productLabel } from '../lib/productLabel'
 
 type Step = 'details' | 'product' | 'audience' | 'strategy'
 
@@ -273,7 +274,7 @@ export function NewCampaignFlow({
                 <option value="">Choose a product…</option>
                 {products.map((product) => (
                   <option key={product.id} value={product.id}>
-                    {product.description}
+                    {productLabel(product)}
                   </option>
                 ))}
               </select>

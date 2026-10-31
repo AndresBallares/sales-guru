@@ -440,6 +440,7 @@ describe('ProductsSection', () => {
     await waitFor(() =>
       expect(mockedApi.updateProduct).toHaveBeenCalledWith('biz-1', 'prod-1', {
         description: 'Handmade leather wallets',
+        name: null,
         price: 49.99,
         margin: undefined,
         features: undefined,
@@ -506,5 +507,38 @@ describe('ProductsSection', () => {
     await user.click(screen.getByRole('button', { name: 'Save' }))
 
     expect(await screen.findByRole('alert')).toHaveTextContent('Invalid URL')
+  })
+})
+
+describe('ProductsSection — product names', () => {
+  const base = {
+    id: 'prod-1',
+    description: 'Handmade wallets of vegetable-tanned leather',
+    price: null,
+    margin: null,
+    features: null,
+    benefits: null,
+    mechanism: null,
+    url: null,
+  }
+
+  it('shows the name, and uses it as the photo alt text, when there is one', async () => {
+    mockedApi.listProducts.mockResolvedValue([
+      { ...base, name: 'Wallet', primaryImageUrl: 'http://localhost:8000/product-images/img-1' },
+    ])
+
+    render(<ProductsSection businessId="biz-1" />)
+
+    expect(await screen.findByText('Wallet')).toBeInTheDocument()
+    expect(screen.getByRole('img', { name: 'Wallet' })).toBeInTheDocument()
+    expect(screen.queryByText(/vegetable-tanned/)).not.toBeInTheDocument()
+  })
+
+  it('keeps showing the description while there is no name', async () => {
+    mockedApi.listProducts.mockResolvedValue([{ ...base, name: null, primaryImageUrl: null }])
+
+    render(<ProductsSection businessId="biz-1" />)
+
+    expect(await screen.findByText(/vegetable-tanned/)).toBeInTheDocument()
   })
 })

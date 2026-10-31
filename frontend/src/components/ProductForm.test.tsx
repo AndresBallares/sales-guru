@@ -917,3 +917,59 @@ describe('ProductForm — personalization', () => {
     )
   })
 })
+
+describe('ProductForm — product name', () => {
+  it('sends the name typed when adding a product, and nothing when left empty', async () => {
+    mockedApi.createProduct.mockResolvedValue(product)
+    const user = userEvent.setup()
+    render(<ProductForm businessId="biz-1" onSaved={vi.fn<(product: api.Product) => void>()} />)
+
+    await user.type(screen.getByLabelText('What do you sell?'), 'Handmade wallets')
+    await user.type(screen.getByLabelText(/Product name/), '  Wallet  ')
+    await user.click(screen.getByRole('button', { name: 'Add product' }))
+
+    await waitFor(() => expect(mockedApi.createProduct).toHaveBeenCalled())
+    expect(mockedApi.createProduct.mock.calls[0][1]).toEqual(
+      expect.objectContaining({ name: 'Wallet' }),
+    )
+  })
+
+  it('leaves the name out of a new product when the field is empty', async () => {
+    mockedApi.createProduct.mockResolvedValue(product)
+    const user = userEvent.setup()
+    render(<ProductForm businessId="biz-1" onSaved={vi.fn<(product: api.Product) => void>()} />)
+
+    await user.type(screen.getByLabelText('What do you sell?'), 'Handmade wallets')
+    await user.click(screen.getByRole('button', { name: 'Add product' }))
+
+    await waitFor(() => expect(mockedApi.createProduct).toHaveBeenCalled())
+    expect(mockedApi.createProduct.mock.calls[0][1].name).toBeUndefined()
+  })
+
+  it('shows the saved name when editing, and sends null when it is emptied', async () => {
+    mockedApi.updateProduct.mockResolvedValue(product)
+    const user = userEvent.setup()
+    render(
+      <ProductForm
+        businessId="biz-1"
+        product={{ ...product, name: 'Wallet' }}
+        onSaved={vi.fn<(product: api.Product) => void>()}
+      />,
+    )
+
+    expect(screen.getByLabelText(/Product name/)).toHaveValue('Wallet')
+    await user.clear(screen.getByLabelText(/Product name/))
+    await user.click(screen.getByRole('button', { name: 'Save' }))
+
+    await waitFor(() => expect(mockedApi.updateProduct).toHaveBeenCalled())
+    expect(mockedApi.updateProduct.mock.calls[0][2]).toEqual(
+      expect.objectContaining({ name: null }),
+    )
+  })
+
+  it('limits the name to 80 characters', () => {
+    render(<ProductForm businessId="biz-1" onSaved={vi.fn<(product: api.Product) => void>()} />)
+
+    expect(screen.getByLabelText(/Product name/)).toHaveAttribute('maxlength', '80')
+  })
+})

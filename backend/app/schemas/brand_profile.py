@@ -8,7 +8,7 @@ across campaigns. One per business — created once, editable later.
 
 from typing import Literal, get_args
 
-from pydantic import Field, field_validator
+from pydantic import Field, ValidationInfo, field_validator
 
 from app.schemas.base import CamelCaseModel
 
@@ -25,6 +25,11 @@ _MAX_PROOF_POINT_LENGTH = 200
 _MAX_PROOF_POINTS = 10
 _MAX_OFFER_LENGTH = 200
 _MAX_AD_LANGUAGES = 5
+# Key messages, customer problems and mechanisms: the owner's own view of the
+# brand, short lines that fill the Avatar Research Agent's prompt template.
+_MAX_LIST_ENTRIES = 10
+_MAX_LIST_ENTRY_LENGTH = 200
+_LIST_FIELDS = ("key_messages", "customer_problems", "mechanisms")
 _MAX_AD_LANGUAGE_LENGTH = 40
 DEFAULT_AD_LANGUAGES = ["English"]
 
@@ -82,6 +87,32 @@ def _clean_languages(value: list[str]) -> list[str]:
     return cleaned
 
 
+def _clean_entries(value: list[str] | None, info: ValidationInfo) -> list[str] | None:
+    """Trim a list field's entries, drop blank ones and enforce the entry length.
+
+    Args:
+        value: The list as sent, or None when a patch left the field out.
+        info: Validation info, for the field's name in the error.
+
+    Returns:
+        The cleaned list, or None when value was None.
+
+    Raises:
+        ValueError: If an entry is longer than the cap.
+    """
+    if value is None:
+        return None
+    cleaned = [item.strip() for item in value if item.strip()]
+    for item in cleaned:
+        if len(item) > _MAX_LIST_ENTRY_LENGTH:
+            label = str(info.field_name).replace("_", " ")
+            raise ValueError(
+                f"Each entry in {label} must be at most {_MAX_LIST_ENTRY_LENGTH} "
+                f"characters (got {len(item)}): {item[:40]!r}..."
+            )
+    return cleaned
+
+
 class BrandProfileCreateRequest(CamelCaseModel):
     """Payload for creating a business's brand profile (PRD.md §5 step 3.5).
 
@@ -112,6 +143,18 @@ class BrandProfileCreateRequest(CamelCaseModel):
     # Languages the business's ads target (a hard constraint on the
     # CREATIVE_TEST_PLAN ad set); empty/omitted means the English default.
     ad_languages: list[str] = Field(default_factory=list, max_length=_MAX_AD_LANGUAGES)
+    key_messages: list[str] = Field(default_factory=list, max_length=_MAX_LIST_ENTRIES)
+    customer_problems: list[str] = Field(
+        default_factory=list, max_length=_MAX_LIST_ENTRIES
+    )
+    mechanisms: list[str] = Field(default_factory=list, max_length=_MAX_LIST_ENTRIES)
+
+    @field_validator(*_LIST_FIELDS)
+    @classmethod
+    def _validate_entries(cls, value: list[str], info: ValidationInfo) -> list[str]:
+        cleaned = _clean_entries(value, info)
+        assert cleaned is not None
+        return cleaned
 
     @field_validator("ad_languages")
     @classmethod
@@ -158,6 +201,19 @@ class BrandProfileUpdateRequest(CamelCaseModel):
     offer: str | None = Field(default=None, max_length=_MAX_OFFER_LENGTH)
     # An explicit empty list clears the override (back to English).
     ad_languages: list[str] | None = Field(default=None, max_length=_MAX_AD_LANGUAGES)
+    # Like proof_points: None leaves the list alone, an empty list clears it.
+    key_messages: list[str] | None = Field(default=None, max_length=_MAX_LIST_ENTRIES)
+    customer_problems: list[str] | None = Field(
+        default=None, max_length=_MAX_LIST_ENTRIES
+    )
+    mechanisms: list[str] | None = Field(default=None, max_length=_MAX_LIST_ENTRIES)
+
+    @field_validator(*_LIST_FIELDS)
+    @classmethod
+    def _validate_entries(
+        cls, value: list[str] | None, info: ValidationInfo
+    ) -> list[str] | None:
+        return _clean_entries(value, info)
 
     @field_validator("ad_languages")
     @classmethod
@@ -202,4 +258,7 @@ class BrandProfileResponse(CamelCaseModel):
     proof_points: list[str]
     offer: str | None
     ad_languages: list[str]
+    key_messages: list[str]
+    customer_problems: list[str]
+    mechanisms: list[str]
     logo_url: str | None

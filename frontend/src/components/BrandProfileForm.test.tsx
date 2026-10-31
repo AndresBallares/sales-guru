@@ -46,6 +46,9 @@ const profile: api.BrandProfile = {
   competitors: null,
   exampleCopy: null,
   proofPoints: [],
+  keyMessages: [],
+  customerProblems: [],
+  mechanisms: [],
   offer: null,
   adLanguages: ['English'],
   logoUrl: null,
@@ -113,6 +116,9 @@ describe('BrandProfileForm — create mode', () => {
         competitors: undefined,
         exampleCopy: undefined,
         proofPoints: [],
+        keyMessages: [],
+        customerProblems: [],
+        mechanisms: [],
         offer: undefined,
         adLanguages: ['English'],
       }),
@@ -215,6 +221,9 @@ describe('BrandProfileForm — create mode', () => {
         'biz-1',
         expect.objectContaining({
           proofPoints: ['Free shipping over $75', '4.8★ from 2,100 reviews'],
+          keyMessages: [],
+          customerProblems: [],
+          mechanisms: [],
           offer: '20% off with WELCOME20',
         }),
       ),
@@ -351,6 +360,9 @@ describe('BrandProfileForm — edit mode', () => {
     const withOffer = {
       ...profile,
       proofPoints: ['Free shipping over $75', '4.8★ from 2,100 reviews'],
+      keyMessages: [],
+      customerProblems: [],
+      mechanisms: [],
       offer: '20% off with WELCOME20',
     }
     render(
@@ -372,6 +384,9 @@ describe('BrandProfileForm — edit mode', () => {
     const withOffer = {
       ...profile,
       proofPoints: ['Free shipping over $75'],
+      keyMessages: [],
+      customerProblems: [],
+      mechanisms: [],
       offer: '20% off with WELCOME20',
     }
     mockedApi.updateBrandProfile.mockResolvedValue(profile)
@@ -433,5 +448,64 @@ describe('BrandProfileForm — edit mode', () => {
     await user.click(screen.getByRole('button', { name: 'Cancel' }))
 
     expect(onCancel).toHaveBeenCalled()
+  })
+})
+
+describe('BrandProfileForm — key messages, customer problems and mechanisms', () => {
+  it('sends the three lists one entry per line when creating', async () => {
+    mockedApi.createBrandProfile.mockResolvedValue({ ...profile })
+    const user = userEvent.setup()
+    render(<BrandProfileForm businessId="biz-1" onSaved={vi.fn<(profile: api.BrandProfile) => void>()} />)
+
+    await user.type(screen.getByLabelText(/Brand overview/), 'A studio.')
+    await user.type(screen.getByLabelText(/Ideal customer/), 'Women 30-55.')
+    await user.click(await screen.findByLabelText('Warm'))
+    await user.selectOptions(screen.getByLabelText('Price positioning'), 'PREMIUM')
+    await user.type(screen.getByLabelText(/Key brand messages/), 'First message{enter}  {enter}Second message')
+    await user.type(screen.getByLabelText(/Problems your customers have/), 'Plated jewelry fades')
+    await user.type(screen.getByLabelText(/What makes your solution different/), 'Ceramic inlay')
+    await user.click(screen.getByRole('button', { name: /save|create|continue/i }))
+
+    await waitFor(() => expect(mockedApi.createBrandProfile).toHaveBeenCalled())
+    expect(mockedApi.createBrandProfile.mock.calls[0][1]).toEqual(
+      expect.objectContaining({
+        keyMessages: ['First message', 'Second message'],
+        customerProblems: ['Plated jewelry fades'],
+        mechanisms: ['Ceramic inlay'],
+      }),
+    )
+  })
+
+  it('shows the saved lists when editing and sends an emptied list as empty', async () => {
+    mockedApi.updateBrandProfile.mockResolvedValue({ ...profile })
+    const user = userEvent.setup()
+    render(
+      <BrandProfileForm
+        businessId="biz-1"
+        profile={{
+          ...profile,
+          keyMessages: ['Made in New York'],
+          customerProblems: ['Fades', 'Chips'],
+          mechanisms: [],
+        }}
+        onSaved={vi.fn<(profile: api.BrandProfile) => void>()}
+      />,
+    )
+
+    expect(screen.getByLabelText(/Key brand messages/)).toHaveValue('Made in New York')
+    expect(screen.getByLabelText(/Problems your customers have/)).toHaveValue('Fades\nChips')
+    expect(screen.getByLabelText(/What makes your solution different/)).toHaveValue('')
+
+    await user.clear(screen.getByLabelText(/Key brand messages/))
+    await user.click(screen.getByRole('button', { name: /save|update/i }))
+
+    await waitFor(() => expect(mockedApi.updateBrandProfile).toHaveBeenCalled())
+    expect(mockedApi.updateBrandProfile.mock.calls[0][1]).toEqual(
+      expect.objectContaining({
+        keyMessages: [],
+        customerProblems: ['Fades', 'Chips'],
+        mechanisms: [],
+      }),
+    )
   })
 })
