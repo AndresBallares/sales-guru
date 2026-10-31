@@ -118,6 +118,23 @@ async def _clean_database() -> AsyncIterator[None]:
 
 
 @pytest.fixture(autouse=True)
+def _no_real_anthropic_key(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    """Blank ANTHROPIC_API_KEY so no test can reach the real API by accident.
+
+    Settings also reads backend/.env, so merely deleting the variable (2026-10-30)
+    still let a "missing key" test pick up the developer's real key and make a
+    paid call. An empty value overrides the file. Tests that need a key set their
+    own fake one.
+    """
+    from app.core.config import get_settings
+
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "")
+    get_settings.cache_clear()
+    yield
+    get_settings.cache_clear()
+
+
+@pytest.fixture(autouse=True)
 def _no_real_instagram_lookup(monkeypatch: pytest.MonkeyPatch) -> None:
     """Keep finalize's Instagram lookup offline: "no Instagram account linked".
 

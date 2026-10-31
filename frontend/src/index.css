@@ -5875,3 +5875,45 @@ main > section.campaigns-overview {
     gap: 0.7rem;
   }
 }
+
+/* Importing buyer avatars from a pasted research document (AvatarImportSection). */
+.avatar-import {
+  margin-top: 24px;
+  padding: 14px;
+  border: 1px solid var(--border, rgba(127, 127, 127, 0.35));
+  border-radius: 10px;
+}
+
+.avatar-import summary {
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.avatar-import-warnings {
+  margin: 12px 0;
+  padding-left: 20px;
+}
+
+.avatar-draft {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 14px;
+  padding: 14px;
+  border: 1px solid var(--border, rgba(127, 127, 127, 0.35));
+  border-radius: 10px;
+}
+
+.avatar-draft-keep {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 600;
+}
+
+.avatar-import-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 14px;
+}

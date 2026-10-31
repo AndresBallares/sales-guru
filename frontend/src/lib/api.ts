@@ -1736,3 +1736,50 @@ export function getBusinessDashboard(
     `/businesses/${businessId}/dashboard${sample ? '?sample=true' : ''}`,
   )
 }
+
+// Buyer avatars. A draft is what the import reads out of a pasted research
+// document: the same fields as a saved avatar, with nothing saved yet.
+export interface BuyerAvatarDraft {
+  name: string
+  who: string
+  primaryProblems: string[]
+  unknownProblems: string[]
+  mechanisms: string[]
+  alternatives: string[]
+  objections: string[]
+  hooks: string[]
+  creativeAngles: string[]
+  isActive?: boolean
+  sortOrder?: number | null
+}
+
+export interface BuyerAvatar extends BuyerAvatarDraft {
+  id: string
+  businessId: string
+  isActive: boolean
+  sortOrder: number
+  deletedAt: string | null
+}
+
+export interface AvatarImportResult {
+  drafts: BuyerAvatarDraft[]
+  warnings: string[]
+}
+
+export function importAvatars(businessId: string, document: string): Promise<AvatarImportResult> {
+  return request<AvatarImportResult>(`/businesses/${businessId}/avatars/import`, {
+    method: 'POST',
+    body: JSON.stringify({ document }),
+  })
+}
+
+// Saves the reviewed drafts together: all of them, or none.
+export function bulkCreateAvatars(
+  businessId: string,
+  avatars: BuyerAvatarDraft[],
+): Promise<BuyerAvatar[]> {
+  return request<BuyerAvatar[]>(`/businesses/${businessId}/avatars/bulk`, {
+    method: 'POST',
+    body: JSON.stringify({ avatars }),
+  })
+}
