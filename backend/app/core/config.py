@@ -36,6 +36,12 @@ class Settings(BaseSettings):
         optimizer_test_eval_model: Model for the Optimizer's TEST_PLAN
             evaluation, a longer judgment that stays on Sonnet 5
             (env `OPTIMIZER_TEST_EVAL_MODEL`).
+        avatar_import_enabled: Whether POST /businesses/{id}/avatars/import
+            may call the model (env `AVATAR_IMPORT_ENABLED`). Off by default
+            since each call costs tokens; FAKE_LLM turns the endpoint on with
+            canned drafts.
+        avatar_import_model: Model that reads a pasted research document
+            into avatar drafts (env `AVATAR_IMPORT_MODEL`).
         log_level: Level for the app's own loggers (env `LOG_LEVEL`, a name such
             as INFO or DEBUG). Libraries stay at WARNING regardless; see
             app/core/log_config.py.
@@ -125,6 +131,11 @@ class Settings(BaseSettings):
     creative_model: str = "claude-sonnet-5"
     optimizer_eval_model: str = "claude-haiku-5-5"
     optimizer_test_eval_model: str = "claude-sonnet-5"
+    # Avatar import (POST /businesses/{id}/avatars/import): off until someone
+    # sets AVATAR_IMPORT_ENABLED, because each call spends real tokens. Always
+    # on under FAKE_LLM, which costs nothing.
+    avatar_import_enabled: bool = False
+    avatar_import_model: str = "claude-sonnet-5"
     frontend_url: str = "http://localhost:5173"
     backend_url: str = "http://localhost:8000"
     meta_app_id: str | None = None

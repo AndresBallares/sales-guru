@@ -25,7 +25,7 @@ from anthropic.types import Message
 
 logger = logging.getLogger(__name__)
 
-Agent = Literal["strategist", "creative", "optimizer", "research"]
+Agent = Literal["strategist", "creative", "optimizer", "research", "avatar_import"]
 CallType = Literal[
     "strategy",
     "creative_batch",
@@ -33,6 +33,7 @@ CallType = Literal[
     "optimizer_eval",
     "test_eval",
     "research_smoke",
+    "avatar_import",
 ]
 
 

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useParams, useSearchParams } from 'react-router-dom'
 import { BackButton } from '../components/BackButton'
+import { AvatarImportSection } from '../components/AvatarImportSection'
 import { AudiencesSection } from '../components/AudiencesSection'
 import { BrandRequiredNotice } from '../components/BrandRequiredNotice'
 import { ArrowRightIcon } from '../components/icons'
@@ -264,6 +265,10 @@ export function BusinessDetailPage() {
             )}
           </>
         )}
+
+      {businessId && gate.state === 'ready' && gate.hasBrand && (
+        <AvatarImportSection businessId={businessId} />
+      )}
     </main>
   )
 }

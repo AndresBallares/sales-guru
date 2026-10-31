@@ -11,10 +11,20 @@ from typing import Any, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from prisma.models import Business, BuyerAvatar
-from prisma.types import BuyerAvatarUpdateInput, BuyerAvatarWhereInput
+from prisma.types import (
+    BuyerAvatarCreateInput,
+    BuyerAvatarUpdateInput,
+    BuyerAvatarWhereInput,
+)
 
 from app.core.authz import get_owned_business
+from app.core.config import get_settings
 from app.core.db import db
+from app.schemas.avatar_import import (
+    AvatarImportRequest,
+    AvatarImportResponse,
+    BuyerAvatarBulkRequest,
+)
 from app.schemas.buyer_avatar import (
     MAX_BUYER_AVATARS_PER_BUSINESS,
     MAX_ITEMS,
@@ -22,6 +32,7 @@ from app.schemas.buyer_avatar import (
     BuyerAvatarResponse,
     BuyerAvatarUpdateRequest,
 )
+from app.services.avatar_import import AvatarImportError, generate_avatar_drafts
 
 router = APIRouter(prefix="/businesses/{business_id}/avatars", tags=["avatars"])
 
@@ -104,8 +115,18 @@ async def create_avatar(
     sort_order = payload.sort_order
     if sort_order is None:
         sort_order = max((a.sortOrder for a in existing), default=-1) + 1
+    avatar = await db.buyeravatar.create(
+        data=_create_data(business.id, payload, sort_order)
+    )
+    return _to_response(avatar)
+
+
+def _create_data(
+    business_id: str, payload: BuyerAvatarCreateRequest, sort_order: int
+) -> BuyerAvatarCreateInput:
+    """The row to insert for a new avatar, its lists stored as JSON strings."""
     data: dict[str, Any] = {
-        "businessId": business.id,
+        "businessId": business_id,
         "name": payload.name,
         "who": payload.who,
         "isActive": payload.is_active,
@@ -113,8 +134,97 @@ async def create_avatar(
     }
     for field, column in _LIST_COLUMNS.items():
         data[column] = json.dumps(getattr(payload, field))
-    avatar = await db.buyeravatar.create(data=cast(Any, data))
-    return _to_response(avatar)
+    return cast(BuyerAvatarCreateInput, data)
+
+
+@router.post("/import", response_model=AvatarImportResponse)
+async def import_avatars(
+    payload: AvatarImportRequest,
+    business: Business = Depends(get_owned_business),
+) -> AvatarImportResponse:
+    """Read a pasted research document into avatar drafts. Saves nothing.
+
+    Args:
+        payload: The pasted document.
+        business: The business, resolved and ownership-checked.
+
+    Returns:
+        Drafts to review, and warnings (gaps, and names already in the library).
+
+    Raises:
+        HTTPException: 404 if import is switched off, 502 if the model's answer
+            could not be used.
+    """
+    settings = get_settings()
+    if not (settings.avatar_import_enabled or settings.fake_llm_enabled):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Avatar import is not enabled"
+        )
+    try:
+        result = await generate_avatar_drafts(payload.document)
+    except AvatarImportError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)
+        ) from exc
+
+    existing = await db.buyeravatar.find_many(
+        where={"businessId": business.id, "deletedAt": None}
+    )
+    taken = {a.name.casefold() for a in existing}
+    warnings = list(result.warnings)
+    for draft in result.drafts:
+        if draft.name.casefold() in taken:
+            warnings.append(f'"{draft.name}" is already in your library')
+    return AvatarImportResponse(drafts=result.drafts, warnings=warnings)
+
+
+@router.post(
+    "/bulk",
+    response_model=list[BuyerAvatarResponse],
+    status_code=status.HTTP_201_CREATED,
+)
+async def bulk_create_avatars(
+    payload: BuyerAvatarBulkRequest,
+    business: Business = Depends(get_owned_business),
+) -> list[BuyerAvatarResponse]:
+    """Save reviewed drafts together: all of them, or none.
+
+    Args:
+        payload: The avatars to add, after the business's existing ones unless
+            they carry a sort order.
+        business: The business, resolved and ownership-checked.
+
+    Returns:
+        The created avatars, in the order sent.
+
+    Raises:
+        HTTPException: 409 if they would not all fit under the library's limit.
+    """
+    async with db.tx() as tx:
+        existing = await tx.buyeravatar.find_many(
+            where={"businessId": business.id, "deletedAt": None}
+        )
+        if len(existing) + len(payload.avatars) > MAX_BUYER_AVATARS_PER_BUSINESS:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    f"A business can hold at most {MAX_BUYER_AVATARS_PER_BUSINESS} "
+                    f"avatars — it has {len(existing)}, so {len(payload.avatars)} "
+                    "more will not fit"
+                ),
+            )
+        next_order = max((a.sortOrder for a in existing), default=-1) + 1
+        created = [
+            await tx.buyeravatar.create(
+                data=_create_data(
+                    business.id,
+                    item,
+                    item.sort_order if item.sort_order is not None else next_order + n,
+                )
+            )
+            for n, item in enumerate(payload.avatars)
+        ]
+    return [_to_response(a) for a in created]
 
 
 @router.get("", response_model=list[BuyerAvatarResponse])
