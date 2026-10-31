@@ -1756,9 +1756,13 @@ export function getBusinessDashboard(
 
 // Buyer avatars. A draft is what the import reads out of a pasted research
 // document: the same fields as a saved avatar, with nothing saved yet.
+// Who an avatar buys for. The Strategist derives an angle's buyer type from it.
+export type PurchaseFor = 'self' | 'gift'
+
 export interface BuyerAvatarDraft {
   name: string
   who: string
+  purchaseFor: PurchaseFor
   primaryProblems: string[]
   unknownProblems: string[]
   mechanisms: string[]

@@ -32,6 +32,7 @@ from app.schemas.buyer_avatar import (
     BuyerAvatarCreateRequest,
     BuyerAvatarResponse,
     BuyerAvatarUpdateRequest,
+    PurchaseFor,
 )
 from app.services.avatar_import import AvatarImportError, generate_avatar_drafts
 
@@ -63,6 +64,7 @@ def _to_response(avatar: BuyerAvatar) -> BuyerAvatarResponse:
         business_id=avatar.businessId,
         name=avatar.name,
         who=avatar.who,
+        purchase_for=cast(PurchaseFor, avatar.purchaseFor),
         is_active=avatar.isActive,
         sort_order=avatar.sortOrder,
         deleted_at=avatar.deletedAt,
@@ -135,6 +137,7 @@ def _create_data(
         "businessId": business_id,
         "name": payload.name,
         "who": payload.who,
+        "purchaseFor": payload.purchase_for,
         "isActive": payload.is_active,
         "sortOrder": sort_order,
     }
@@ -316,6 +319,8 @@ async def update_avatar(
             continue
         if field in _LIST_COLUMNS:
             data[_LIST_COLUMNS[field]] = json.dumps(value)
+        elif field == "purchase_for":
+            data["purchaseFor"] = value
         elif field == "is_active":
             data["isActive"] = value
         elif field == "sort_order":
