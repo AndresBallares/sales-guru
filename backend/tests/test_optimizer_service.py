@@ -1053,6 +1053,48 @@ async def test_the_optimizer_models_follow_the_settings(
 
 
 @pytest.mark.asyncio
+async def test_a_default_optimizer_model_is_asked_for_a_forced_tool(
+    anthropic_api_key: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("OPTIMIZER_EVAL_MODEL", raising=False)
+    get_settings.cache_clear()
+    create = _sequenced(monkeypatch, _VALID_TOOL_INPUT)
+
+    await optimizer.generate_recommendation(
+        business=_fake_business(),
+        campaign=_fake_campaign(),
+        ad_set=_fake_ad_set(budget=50.0),
+        windows=[],
+    )
+
+    sent = create.call_args.kwargs
+    assert sent["tool_choice"] == {"type": "tool", "name": "submit_recommendation"}
+    assert "strict" not in sent["tools"][0]
+
+
+@pytest.mark.asyncio
+async def test_a_model_without_forced_tool_choice_gets_auto_and_a_strict_tool(
+    anthropic_api_key: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Opus 5.5 / Sonnet 5.5 / Fable 5.1 answer a forced tool_choice with a 400."""
+    monkeypatch.setenv("OPTIMIZER_EVAL_MODEL", "claude-opus-5-5")
+    get_settings.cache_clear()
+    create = _sequenced(monkeypatch, _VALID_TOOL_INPUT)
+
+    await optimizer.generate_recommendation(
+        business=_fake_business(),
+        campaign=_fake_campaign(),
+        ad_set=_fake_ad_set(budget=50.0),
+        windows=[],
+    )
+
+    sent = create.call_args.kwargs
+    assert sent["tool_choice"] == {"type": "auto"}
+    assert sent["tools"][0]["strict"] is True
+    assert sent["tools"][0]["input_schema"]["additionalProperties"] is False
+
+
+@pytest.mark.asyncio
 async def test_the_usage_log_records_which_model_each_optimizer_call_used(
     anthropic_api_key: None,
     monkeypatch: pytest.MonkeyPatch,

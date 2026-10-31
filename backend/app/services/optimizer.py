@@ -43,7 +43,7 @@ from app.schemas.optimization import GeneratedRecommendation
 from app.schemas.strategy import SuccessCriterion, TestPlanContent, UnitEconomicsFields
 from app.schemas.test_evaluation import Confidence, GeneratedTestEvaluation
 from app.services.benchmarks import JEWELRY_META_BENCHMARKS, classify_performance_zone
-from app.services.llm_usage import create_logged
+from app.services.llm_call import ToolSpec, call_with_tool
 from app.services.tool_use import tool_input_schema
 
 _MAX_TOKENS = 1024
@@ -508,21 +508,18 @@ async def generate_recommendation(
     prompt = _build_prompt(business, campaign, ad_set, windows, ads)
 
     try:
-        response = await create_logged(
+        response = await call_with_tool(
             client,
             agent="optimizer",
             call_type="optimizer_eval",
             campaign_id=campaign.id,
             model=settings.optimizer_eval_model,
             max_tokens=_MAX_TOKENS,
-            tools=[
-                {
-                    "name": _TOOL_NAME,
-                    "description": "Submit the recommended optimization action.",
-                    "input_schema": tool_input_schema(GeneratedRecommendation),
-                }
-            ],
-            tool_choice={"type": "tool", "name": _TOOL_NAME},
+            tool=ToolSpec(
+                name=_TOOL_NAME,
+                description="Submit the recommended optimization action.",
+                input_schema=tool_input_schema(GeneratedRecommendation),
+            ),
             messages=[{"role": "user", "content": prompt}],
         )
     except anthropic.AnthropicError as exc:
@@ -1083,7 +1080,7 @@ async def evaluate_test_plan(
 
     async def _attempt(prompt_text: str, attempt: int) -> dict[str, object]:
         try:
-            response = await create_logged(
+            response = await call_with_tool(
                 client,
                 agent="optimizer",
                 call_type="test_eval",
@@ -1091,14 +1088,11 @@ async def evaluate_test_plan(
                 attempt=attempt,
                 model=settings.optimizer_test_eval_model,
                 max_tokens=_MAX_TOKENS,
-                tools=[
-                    {
-                        "name": _TEST_EVALUATION_TOOL_NAME,
-                        "description": "Submit the test-plan evaluation.",
-                        "input_schema": tool_input_schema(GeneratedTestEvaluation),
-                    }
-                ],
-                tool_choice={"type": "tool", "name": _TEST_EVALUATION_TOOL_NAME},
+                tool=ToolSpec(
+                    name=_TEST_EVALUATION_TOOL_NAME,
+                    description="Submit the test-plan evaluation.",
+                    input_schema=tool_input_schema(GeneratedTestEvaluation),
+                ),
                 messages=[{"role": "user", "content": prompt_text}],
             )
         except anthropic.AnthropicError as exc:

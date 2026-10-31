@@ -365,3 +365,112 @@ def parse_tool_input[ModelT: BaseModel](
             except ValidationError:
                 continue
         raise exc
+
+
+# Strict tool use (grammar-constrained sampling) rejects these keywords with a
+# 400, so they are removed from the schema sent to the API and kept as a note
+# in the field's description. The Pydantic model still enforces them when the
+# response is parsed.
+_STRICT_MAX_OPTIONAL = 24
+_STRICT_MAX_UNIONS = 16
+_STRICT_NOTES: dict[str, str] = {
+    "maxLength": "at most {} characters",
+    "minLength": "at least {} characters",
+    "maxItems": "at most {} items",
+    "minimum": "minimum {}",
+    "maximum": "maximum {}",
+    "exclusiveMinimum": "greater than {}",
+    "exclusiveMaximum": "less than {}",
+    "multipleOf": "a multiple of {}",
+}
+_STRICT_DROPPED = {*_STRICT_NOTES, "uniqueItems", "maxProperties", "minProperties"}
+
+
+def _strict_node(node: dict[str, Any], counts: dict[str, int]) -> None:
+    """Rewrite one schema node (and everything under it) for strict mode."""
+    notes = [
+        template.format(node[key])
+        for key, template in _STRICT_NOTES.items()
+        if key in node
+    ]
+    min_items = node.get("minItems")
+    if isinstance(min_items, int) and min_items > 1:
+        notes.append(f"at least {min_items} items")
+    for key in _STRICT_DROPPED:
+        node.pop(key, None)
+    if isinstance(min_items, int) and min_items > 1:
+        node.pop("minItems")
+    if notes:
+        existing = node.get("description")
+        suffix = f"({', '.join(notes)})"
+        node["description"] = f"{existing} {suffix}" if existing else suffix
+
+    if isinstance(node.get("type"), list) or "anyOf" in node:
+        counts["unions"] += 1
+    properties = node.get("properties")
+    if isinstance(properties, dict):
+        extra = node.get("additionalProperties")
+        if isinstance(extra, dict) or extra is True:
+            raise ValueError("A strict tool schema cannot hold a free-form object")
+        node["additionalProperties"] = False
+        required = set(node.get("required", []))
+        counts["optional"] += len(set(properties) - required)
+        for child in properties.values():
+            _strict_node(child, counts)
+    elif node.get("type") == "object":
+        node["additionalProperties"] = False
+    for key in ("items", "additionalProperties"):
+        if isinstance(node.get(key), dict):
+            _strict_node(node[key], counts)
+    for key in ("anyOf", "allOf", "oneOf", "prefixItems"):
+        for child in node.get(key, []):
+            _strict_node(child, counts)
+    for child in node.get("$defs", {}).values():
+        _strict_node(child, counts)
+
+
+def strict_schema(schema: dict[str, Any]) -> dict[str, Any]:
+    """A copy of a tool ``input_schema`` rewritten to be valid for ``strict: true``.
+
+    Strict tool use guarantees the call matches the schema, but only accepts a
+    subset of JSON Schema: no length, size or numeric bounds, every object
+    closed, at most 24 optional properties and 16 unions in total. Bounds are
+    moved into the field descriptions so the model still sees them; parsing the
+    response still enforces them.
+
+    Args:
+        schema: A tool input schema, e.g. from ``tool_input_schema``. Not changed.
+
+    Returns:
+        The strict-compatible copy.
+
+    Raises:
+        ValueError: If the schema is over a strict-mode limit, which would
+            otherwise surface as a 400 from the API at call time.
+    """
+    strict = copy.deepcopy(schema)
+    counts = {"optional": 0, "unions": 0}
+    _strict_node(strict, counts)
+    if counts["optional"] > _STRICT_MAX_OPTIONAL:
+        raise ValueError(
+            f"Schema has {counts['optional']} optional properties; "
+            f"strict mode allows {_STRICT_MAX_OPTIONAL}"
+        )
+    if counts["unions"] > _STRICT_MAX_UNIONS:
+        raise ValueError(
+            f"Schema has {counts['unions']} union properties; "
+            f"strict mode allows {_STRICT_MAX_UNIONS}"
+        )
+    return strict
+
+
+def strict_input_schema(model: type[BaseModel]) -> dict[str, Any]:
+    """``tool_input_schema`` for a model, rewritten for ``strict: true``.
+
+    Args:
+        model: The Pydantic model the tool call must match.
+
+    Returns:
+        A fresh strict-compatible schema dict.
+    """
+    return strict_schema(tool_input_schema(model))

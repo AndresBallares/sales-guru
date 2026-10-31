@@ -96,7 +96,7 @@ from app.services.benchmarks import (
     BenchmarkRange,
 )
 from app.services.brand_voice import brand_voice_lines
-from app.services.llm_usage import create_logged
+from app.services.llm_call import ToolSpec, call_with_tool
 from app.services.meta import AccountCampaignInsights
 from app.services.prompt_safety import quarantine
 from app.services.tool_use import (
@@ -1204,7 +1204,7 @@ async def _call_agent(
 
     async def _create(attempt: int) -> Message:
         try:
-            return await create_logged(
+            return await call_with_tool(
                 client,
                 agent="strategist",
                 call_type="strategy",
@@ -1213,14 +1213,11 @@ async def _call_agent(
                 model=settings.strategist_model,
                 max_tokens=_MAX_TOKENS,
                 system=system or anthropic.NOT_GIVEN,
-                tools=[
-                    {
-                        "name": tool_name,
-                        "description": "Submit the generated plan.",
-                        "input_schema": tool_schema,
-                    }
-                ],
-                tool_choice={"type": "tool", "name": tool_name},
+                tool=ToolSpec(
+                    name=tool_name,
+                    description="Submit the generated plan.",
+                    input_schema=tool_schema,
+                ),
                 messages=[{"role": "user", "content": user_prompt}],
             )
         except anthropic.AnthropicError as exc:
