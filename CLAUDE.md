@@ -108,14 +108,16 @@ path the rule above requires explicit confirmation for).
 - **TDD**: write the failing test first, then implement. Both packages gate
   on ≥90% coverage (`pytest` / `vitest --coverage` enforce this directly —
   see README.md).
-- **Run test suites in the foreground, one at a time — never in the background
-  or at low priority.** A background pytest run hangs waiting on the Prisma
-  engine (it sat idle for over an hour at nice 5; the same file passed in 3
-  seconds in the foreground). Suites also share ./test.db, so two concurrent runs
-  (or a run during a pre-commit hook) collide on that SQLite file and stall: stop
-  dev servers and wait for hooks before starting another run. If a backend run
-  would exceed the tool's time limit, split it into chunks (a few test files per
+- **Run test suites one at a time.** Suites share ./test.db, so two concurrent
+  runs (or a run during a pre-commit hook) collide on that SQLite file: stop dev
+  servers and wait for hooks before starting another run. If a backend run would
+  exceed the tool's time limit, split it into chunks (a few test files per
   `uv run pytest <files> --no-cov` call) and run the chunks one after another.
+- *Note on background runs:* a shell starts background jobs with SIGINT ignored,
+  and Prisma stops its query engine by sending SIGINT and waiting with no
+  timeout, so a backgrounded pytest used to hang forever. `tests/conftest.py`
+  now restores the default SIGINT (`tests/process_guards.py`), so backgrounding
+  is safe; the old "never in the background" rule is gone.
 - **While building, run only the tests for the files you changed.** Run the full
   backend, frontend, and e2e suites once, before opening a PR. CI is the full
   gate before merge.
