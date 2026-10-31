@@ -44,6 +44,7 @@ from app.schemas.strategy import (
     min_creative_test_daily_budget,
 )
 from app.services import publish_jobs
+from app.services.buyer_avatars import assignable_avatars
 from app.services.creative import (
     copy_problems,
     is_creative_stale,
@@ -52,6 +53,7 @@ from app.services.creative import (
 )
 from app.services.meta import MetaConnectionError
 from app.services.publish import publish_round_to_meta, requires_pixel
+from app.services.round_results import load_round_results
 from app.services.strategist import StrategistError, generate_round_angles
 
 router = APIRouter(
@@ -212,6 +214,8 @@ async def create_round(
             count=count,
             brand_profile=brand_profile,
             campaign_id=campaign.id,
+            buyer_avatars=await assignable_avatars(business.id),
+            previous_results=await load_round_results(campaign.id),
         )
     except StrategistError as exc:
         raise HTTPException(

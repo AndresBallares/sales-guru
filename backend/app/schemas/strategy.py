@@ -12,6 +12,7 @@ invents.
 """
 
 import re
+from collections.abc import Mapping, Sequence
 from datetime import datetime
 from typing import TYPE_CHECKING, Annotated, Literal, Self
 
@@ -797,6 +798,130 @@ class GeneratedCreativeTestPlanFields(CamelCaseModel):
         return self
 
 
+# A library avatar's purchase_for, as the fixed avatar that feeds ad names and UTMs.
+AVATAR_FOR_PURCHASE: dict[str, Avatar] = {
+    "self": "self_purchaser",
+    "gift": "gift_buyer",
+}
+# A creative test's four ads speak to this many different library avatars, when
+# the library has that many.
+MIN_DISTINCT_LIBRARY_AVATARS = 3
+
+
+class LibraryAngle(GeneratedCreativeAngle):
+    """An angle written for a library avatar.
+
+    The model names the avatar by id; the code sets ``avatar`` (self_purchaser or
+    gift_buyer) from that avatar's purchase_for, so the two cannot disagree and
+    the model is not asked for both.
+    """
+
+    avatar: SkipJsonSchema[Avatar | None] = None  # type: ignore[assignment]
+    buyer_avatar_id: str = Field(
+        min_length=1,
+        description="The id of the library avatar this ad speaks to, exactly as "
+        "listed in the request details.",
+    )
+
+
+def _with_derived_avatars(data: object, info: ValidationInfo) -> object:
+    """Set each raw library angle's fixed avatar from its library avatar.
+
+    Only when the caller passes context["library"] (avatar id -> purchase_for).
+    An unknown or missing id is rejected here, naming the valid ones.
+    """
+    library = (info.context or {}).get("library")
+    if library is None or not isinstance(data, dict):
+        return data
+    # The model answers in the schema's camelCase; code and tests use snake_case.
+    key = "creativeAngles" if "creativeAngles" in data else "creative_angles"
+    angles = data.get(key)
+    if not isinstance(angles, list):
+        return data
+    derived: list[object] = []
+    for angle in angles:
+        if not isinstance(angle, dict):
+            derived.append(angle)
+            continue
+        avatar_id = angle.get("buyer_avatar_id", angle.get("buyerAvatarId"))
+        if avatar_id not in library:
+            raise ValueError(
+                f"buyer_avatar_id {avatar_id!r} is not in the buyer avatar "
+                f"library; use one of: {', '.join(sorted(library))}"
+            )
+        derived.append({**angle, "avatar": AVATAR_FOR_PURCHASE[library[avatar_id]]})
+    return {**data, key: derived}
+
+
+def _check_library_coverage(
+    angles: Sequence[GeneratedCreativeAngle],
+    library: Mapping[str, str] | None,
+) -> None:
+    """The coverage rules of library mode that both a first batch and a round share.
+
+    Raises:
+        ValueError: If two angles would share an ad name, the angles cover too few
+            library avatars, they miss a kind the library has, or span fewer than
+            MIN_DISTINCT_PILLARS pillars.
+    """
+    labels = [(a.avatar, a.concept, a.pillar) for a in angles]
+    if len(set(labels)) != len(labels):
+        raise ValueError(
+            "Two angles would get the same ad name (same buyer type, concept and "
+            "pillar); change one angle's concept or pillar"
+        )
+    if library:
+        required = min(MIN_DISTINCT_LIBRARY_AVATARS, len(library))
+        covered = {a.buyer_avatar_id for a in angles}
+        if len(covered) < required:
+            raise ValueError(
+                f"The angles must cover at least {required} different library "
+                f"avatars; got {len(covered)}"
+            )
+        if set(library.values()) >= {"self", "gift"} and {a.avatar for a in angles} != {
+            "self_purchaser",
+            "gift_buyer",
+        }:
+            raise ValueError(
+                "The library has avatars who buy for themselves and avatars who "
+                "buy gifts; the angles must cover at least one of each"
+            )
+    pillars = {a.pillar for a in angles}
+    if len(pillars) < MIN_DISTINCT_PILLARS:
+        raise ValueError(
+            f"The angles must span at least {MIN_DISTINCT_PILLARS} distinct "
+            f"pillars (offer, mechanism, education, emotion); got {sorted(pillars)}"
+        )
+
+
+class GeneratedLibraryTestPlanFields(GeneratedCreativeTestPlanFields):
+    """The creative test plan fields when the business has library avatars.
+
+    The caller sets context["library"] (every assignable avatar's id ->
+    purchase_for) and context["personalization"] as before.
+    """
+
+    creative_angles: Annotated[  # type: ignore[assignment]
+        list[LibraryAngle],
+        Field(min_length=CREATIVE_TEST_AD_COUNT, max_length=CREATIVE_TEST_AD_COUNT),
+    ]
+
+    @model_validator(mode="before")
+    @classmethod
+    def _derive_avatars(cls, data: object, info: ValidationInfo) -> object:
+        return _with_derived_avatars(data, info)
+
+    @model_validator(mode="after")
+    def _check_angles(self, info: ValidationInfo) -> Self:
+        pairs = [(a.buyer_avatar_id, a.concept) for a in self.creative_angles]
+        if len(set(pairs)) != len(pairs):
+            raise ValueError("Every angle needs its own avatar and concept pair")
+        _check_library_coverage(
+            self.creative_angles, (info.context or {}).get("library")
+        )
+        return self
+
+
 class GeneratedRoundAngles(CamelCaseModel):
     """The angles the LLM proposes for a follow-up creative round.
 
@@ -846,6 +971,66 @@ class GeneratedRoundAngles(CamelCaseModel):
                 f"The angles must span at least {MIN_DISTINCT_PILLARS} distinct "
                 f"pillars (offer, mechanism, education, emotion); got {sorted(pillars)}"
             )
+        personalized = [
+            a for a in self.creative_angles if a.concept == PERSONALIZATION_CONCEPT
+        ]
+        if len(personalized) > 1:
+            raise ValueError(
+                f"At most one angle may use the {PERSONALIZATION_CONCEPT!r} concept"
+            )
+        if personalized and context.get("personalization") == "forbidden":
+            raise ValueError(
+                "This product is not personalizable (or has no product URL), so "
+                f"no angle may use the {PERSONALIZATION_CONCEPT!r} concept"
+            )
+        return self
+
+
+class GeneratedLibraryRoundAngles(GeneratedRoundAngles):
+    """The angles for a follow-up round when the business has library avatars.
+
+    Same context as GeneratedRoundAngles plus context["library"] (every assignable
+    avatar's id -> purchase_for). Freshness is keyed by library avatar and concept:
+    an angle with no library avatar (older plans) blocks its concept for everyone.
+    """
+
+    creative_angles: Annotated[  # type: ignore[assignment]
+        list[LibraryAngle],
+        Field(min_length=MIN_CREATIVE_ANGLES, max_length=MAX_CREATIVE_ANGLES),
+    ]
+
+    @model_validator(mode="before")
+    @classmethod
+    def _derive_avatars(cls, data: object, info: ValidationInfo) -> object:
+        return _with_derived_avatars(data, info)
+
+    @model_validator(mode="after")
+    def _check_fresh(self, info: ValidationInfo) -> Self:
+        context = info.context or {}
+        count = context.get("count")
+        if count is not None and len(self.creative_angles) != count:
+            raise ValueError(
+                f"Submit exactly {count} angles; got {len(self.creative_angles)}"
+            )
+        excluded = {
+            (key, concept) for key, concept in context.get("excluded_pairs", ())
+        }
+        reused = sorted(
+            f"{a.buyer_avatar_id} / {a.concept}"
+            for a in self.creative_angles
+            if (a.buyer_avatar_id, a.concept) in excluded
+            or (None, a.concept) in excluded
+        )
+        if reused:
+            raise ValueError(
+                f"These avatar and concept pairs were already used by an earlier "
+                f"round: {reused}. Every angle needs an avatar and concept pair "
+                "that is new to this campaign"
+            )
+        pairs = [(a.buyer_avatar_id, a.concept) for a in self.creative_angles]
+        if len(set(pairs)) != len(pairs):
+            raise ValueError("Every angle needs its own avatar and concept pair")
+        _check_library_coverage(self.creative_angles, None)
         personalized = [
             a for a in self.creative_angles if a.concept == PERSONALIZATION_CONCEPT
         ]
