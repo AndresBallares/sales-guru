@@ -129,6 +129,8 @@ model Business {
   logoData                      Bytes?
   logoContentType               String?
   brandProfile                  BrandProfile?
+  brandRules                    BrandRules?
+  buyerAvatars                  BuyerAvatar[]
   products                      Product[]
   audiences                     Audience[]
   metaConnection                MetaConnection?
@@ -189,6 +191,47 @@ model BrandProfile {
   adLanguages      String?
   createdAt        DateTime @default(now())
   updatedAt        DateTime @updatedAt
+}
+
+// The business's researched buyer avatars. Named BuyerAvatar so it does not
+// clash with the two-value `Avatar` literal (self_purchaser / gift_buyer) that
+// feeds ad names and UTM parameters. Every list is a JSON-array string, like
+// BrandProfile.proofPoints; the caps live in app/schemas/buyer_avatar.py.
+model BuyerAvatar {
+  id              String   @id @default(cuid())
+  business        Business @relation(fields: [businessId], references: [id])
+  businessId      String
+  name            String
+  who             String
+  primaryProblems String   @default("[]")
+  // What this avatar doesn't know yet; feeds the education pillar.
+  unknownProblems String   @default("[]")
+  mechanisms      String   @default("[]")
+  alternatives    String   @default("[]")
+  objections      String   @default("[]")
+  hooks           String   @default("[]")
+  creativeAngles  String   @default("[]")
+  isActive        Boolean  @default(true)
+  sortOrder       Int      @default(0)
+  // Soft delete, like Business.deletedAt: set instead of removing the row, so
+  // an old angle or result can still be labeled with the avatar it used. Live
+  // reads filter it out; a deleted avatar cannot be assigned to a new angle.
+  deletedAt       DateTime?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@index([businessId, sortOrder])
+}
+
+// Per-business copy rules, at most one row. Both lists are JSON-array strings.
+model BrandRules {
+  id                  String   @id @default(cuid())
+  business            Business @relation(fields: [businessId], references: [id])
+  businessId          String   @unique
+  bannedPhrases       String   @default("[]")
+  requiredDisclosures String   @default("[]")
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
 }
 
 // Product has no separate name field — `description` ("What do you sell?")
