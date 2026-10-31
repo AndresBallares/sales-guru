@@ -1,6 +1,6 @@
-import AxeBuilder from '@axe-core/playwright'
 import { test, expect, type Page } from '@playwright/test'
 import { finishOnboarding, reachMetaPixelStep } from './support/fakeMetaFlow'
+import { analyzeWhenReady, WCAG_TAGS } from './support/axe'
 
 // A Sales creative test: pick three ads, press Next, land on the ad preview.
 async function reachPreview(page: Page) {
@@ -59,9 +59,7 @@ for (const scheme of ['light', 'dark'] as const) {
   }) => {
     await page.emulateMedia({ colorScheme: scheme })
     await reachPreview(page)
-    const axe = await new AxeBuilder({ page })
-      .withTags(['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa'])
-      .analyze()
+    const axe = await analyzeWhenReady(page, WCAG_TAGS)
     expect(axe.violations).toEqual([])
   })
 }

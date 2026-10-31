@@ -1,6 +1,6 @@
-import AxeBuilder from '@axe-core/playwright'
 import { test, expect } from '@playwright/test'
 import { signUpAndReachFakeMetaConnectedBusiness } from './support/fakeMetaFlow'
+import { analyzeWhenReady, WCAG_TAGS } from './support/axe'
 
 // The campaign card before a strategy exists: settings on the left, the strategy panel on the right.
 test('shows a two-column card on desktop with a gold Generate strategy button', async ({
@@ -34,9 +34,7 @@ test('shows a two-column card on desktop with a gold Generate strategy button', 
   expect(top!.y + top!.height).toBeLessThanOrEqual(panel!.y + 1)
   await expect(card.getByRole('button', { name: 'Delete campaign' })).toBeVisible()
 
-  const axe = await new AxeBuilder({ page })
-    .withTags(['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa'])
-    .analyze()
+  const axe = await analyzeWhenReady(page, WCAG_TAGS)
   expect(axe.violations).toEqual([])
 })
 

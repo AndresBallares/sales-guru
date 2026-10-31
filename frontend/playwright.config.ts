@@ -1,4 +1,5 @@
 import { defineConfig, devices } from '@playwright/test'
+import { E2E_API_PORT, E2E_API_URL, E2E_WEB_PORT, E2E_WEB_URL } from './e2e/support/ports'
 
 export default defineConfig({
   testDir: './e2e',
@@ -12,7 +13,7 @@ export default defineConfig({
   retries: process.env.CI ? 2 : 0,
   reporter: 'html',
   use: {
-    baseURL: 'http://localhost:4173',
+    baseURL: E2E_WEB_URL,
     trace: 'on-first-retry',
   },
   projects: [
@@ -20,23 +21,17 @@ export default defineConfig({
   ],
   // Two servers: the built frontend (preview) and a real backend, so e2e
   // exercises the actual signup/auth/business-onboarding integration, not a
-  // mocked API. The backend runs against a dedicated e2e.db (gitignored),
-  // reset fresh on every run — never the developer's dev.db.
-  //
-  // Caveat (local runs only, not CI): reuseExistingServer is true locally,
-  // so if a dev backend already happens to be running on :8000, Playwright
-  // reuses it — meaning e2e traffic would hit dev.db instead of the clean
-  // e2e.db. CI always starts fresh, so this only matters for local runs
-  // where you already have `uv run uvicorn` up on the same port.
+  // mocked API. Both are always started fresh, on their own ports (see
+  // e2e/support/ports.ts) and against e2e.db, reset on every run — never a
+  // developer's dev backend on :8000 or dev.db, and the same locally as in CI.
   webServer: [
     {
-      command:
-        'uv run prisma db push --force-reset --skip-generate && uv run uvicorn app.main:app --port 8000',
+      command: `uv run prisma db push --force-reset --skip-generate && uv run uvicorn app.main:app --port ${E2E_API_PORT}`,
       cwd: '../backend',
-      url: 'http://localhost:8000/health',
+      url: `${E2E_API_URL}/health`,
       env: {
         DATABASE_URL: 'file:./e2e.db',
-        CORS_ORIGINS: 'http://localhost:4173',
+        CORS_ORIGINS: E2E_WEB_URL,
         // Swaps every real Meta Graph API call for a canned fake response
         // and exposes POST .../meta/fake-connect (app/core/config.py's
         // fake_meta_enabled), so e2e specs can get a business past Meta
@@ -50,13 +45,17 @@ export default defineConfig({
         // opt-in, local-only spec that exercises the real thing.
         FAKE_LLM: 'true',
       },
-      reuseExistingServer: !process.env.CI,
+      reuseExistingServer: false,
       timeout: 30_000,
     },
     {
-      command: 'npm run preview',
-      url: 'http://localhost:4173',
-      reuseExistingServer: !process.env.CI,
+      // Its own build, because the API address is baked into the bundle
+      // (VITE_API_URL); dist/ keeps pointing at the real backend.
+      command: `npx vite build --outDir dist-e2e --emptyOutDir && npx vite preview --outDir dist-e2e --port ${E2E_WEB_PORT} --strictPort`,
+      env: { VITE_API_URL: E2E_API_URL },
+      url: E2E_WEB_URL,
+      reuseExistingServer: false,
+      timeout: 120_000,
     },
   ],
 })

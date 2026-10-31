@@ -1,6 +1,6 @@
-import AxeBuilder from '@axe-core/playwright'
 import { test, expect } from '@playwright/test'
 import { signUpAndReachFakeMetaConnectedBusiness } from './support/fakeMetaFlow'
+import { analyzeWhenReady } from './support/axe'
 
 // Same fully-faked backend as the other fake-meta specs (FAKE_META + FAKE_LLM,
 // see playwright.config.ts): no real Meta or Anthropic call anywhere here.
@@ -48,7 +48,7 @@ test('the results dashboard sits above the campaigns and has an empty state unti
 
   // The empty state and its confidence flag meet the accessibility rules
   // (the "Early data" tag once failed the colour-contrast check).
-  const results = await new AxeBuilder({ page }).analyze()
+  const results = await analyzeWhenReady(page)
   expect(results.violations).toEqual([])
 
   // Results come before the campaign list.

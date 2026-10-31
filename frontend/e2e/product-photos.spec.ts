@@ -1,8 +1,8 @@
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import AxeBuilder from '@axe-core/playwright'
 import { test, expect } from '@playwright/test'
 import { reachProductStep, signUpAndReachFakeMetaConnectedBusiness } from './support/fakeMetaFlow'
+import { analyzeWhenReady, WCAG_TAGS } from './support/axe'
 
 // This backend runs with both FAKE_META and FAKE_LLM on (see
 // playwright.config.ts's webServer env) — same as fake-meta-publish.spec.ts.
@@ -45,9 +45,7 @@ test('stages multiple product photos in ProductForm and reorders them', async ({
   await expect(page.getByRole('img').first()).toHaveAttribute('src', firstThumbSrc ?? '')
 
   // Automated WCAG 2.x A/AA rules over the photo list (not a full audit).
-  const axe = await new AxeBuilder({ page })
-    .withTags(['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa'])
-    .analyze()
+  const axe = await analyzeWhenReady(page, WCAG_TAGS)
   expect(axe.violations).toEqual([])
 
   await page.getByRole('button', { name: 'Add product' }).click()

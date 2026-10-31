@@ -1,5 +1,6 @@
 import { test, expect } from '@playwright/test'
 import { reachMetaPixelStep } from './support/fakeMetaFlow'
+import { E2E_API_URL } from './support/ports'
 
 // Real-world context: Meta requires the ad account's owner (not our app)
 // to have accepted Meta's Business Tools Terms before the Marketing API
@@ -42,7 +43,7 @@ test('retries loading Pixels after the ad account accepts the terms', async ({ p
   // account, then retrying from the same page — real acceptance happens
   // entirely on Meta's side, out of reach for an automated test.
   const finalizeResponse = await page.request.post(
-    `http://localhost:8000/businesses/${businessId}/meta/finalize`,
+    `${E2E_API_URL}/businesses/${businessId}/meta/finalize`,
     { data: { adAccountId: 'act_fake_account', pageId: 'fake_page' } },
   )
   expect(finalizeResponse.ok()).toBe(true)

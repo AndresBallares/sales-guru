@@ -1,6 +1,6 @@
-import AxeBuilder from '@axe-core/playwright'
 import { test, expect, type Page } from '@playwright/test'
 import { signUpAndReachFakeMetaConnectedBusiness } from './support/fakeMetaFlow'
+import { analyzeWhenReady, WCAG_TAGS } from './support/axe'
 
 // FAKE_LLM backend (see playwright.config.ts): generates the ad creatives without a model.
 
@@ -38,9 +38,7 @@ test('shows the creatives as cards with editing tucked away, and passes the axe 
   await expect(cards.first().getByRole('button', { name: 'Regenerate headline' })).toBeVisible()
 
   // Automated WCAG 2.x A/AA rules (not a full audit).
-  const axe = await new AxeBuilder({ page })
-    .withTags(['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa'])
-    .analyze()
+  const axe = await analyzeWhenReady(page, WCAG_TAGS)
   expect(axe.violations).toEqual([])
 })
 

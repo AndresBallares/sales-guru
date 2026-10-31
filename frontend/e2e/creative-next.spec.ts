@@ -1,6 +1,6 @@
-import AxeBuilder from '@axe-core/playwright'
 import { test, expect, type Page } from '@playwright/test'
 import { finishOnboarding, reachMetaPixelStep } from './support/fakeMetaFlow'
+import { analyzeWhenReady, WCAG_TAGS } from './support/axe'
 
 // Same fully-faked backend as creative-test-publish.spec.ts: a Sales campaign gets a creative test,
 // the user adds ads to it, and Next at the bottom right of the choices opens the preview.
@@ -45,9 +45,7 @@ test('Next sits at the bottom right of the ad choices, waits for three ads, then
   expect(Math.abs(box!.x + box!.width - (choices!.x + choices!.width))).toBeLessThanOrEqual(1)
   expect(box!.y).toBeGreaterThanOrEqual(lastCard!.y + lastCard!.height)
 
-  const axe = await new AxeBuilder({ page })
-    .withTags(['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa'])
-    .analyze()
+  const axe = await analyzeWhenReady(page, WCAG_TAGS)
   expect(axe.violations).toEqual([])
 
   await next.click()

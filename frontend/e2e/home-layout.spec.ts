@@ -1,6 +1,6 @@
-import AxeBuilder from '@axe-core/playwright'
 import { test, expect, type Page } from '@playwright/test'
 import { uniqueEmail } from './support/fakeMetaFlow'
+import { analyzeWhenReady, WCAG_TAGS } from './support/axe'
 
 // The signed-in home page at phone and desktop widths. Set SCREENSHOT_DIR to also save a
 // picture of each case (used for the pull request; nothing is saved by default).
@@ -127,9 +127,7 @@ test('the home page passes the axe checks in light and dark', async ({ page }) =
   for (const scheme of ['light', 'dark'] as const) {
     await page.emulateMedia({ colorScheme: scheme })
     await page.addStyleTag({ content: '*, *::before, *::after { transition: none !important; }' })
-    const axe = await new AxeBuilder({ page })
-      .withTags(['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa'])
-      .analyze()
+    const axe = await analyzeWhenReady(page, WCAG_TAGS)
     expect(axe.violations).toEqual([])
   }
 })

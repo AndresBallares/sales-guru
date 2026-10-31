@@ -1,6 +1,6 @@
-import AxeBuilder from '@axe-core/playwright'
 import { test, expect } from '@playwright/test'
 import { createBusinessWithBrand } from './support/fakeMetaFlow'
+import { analyzeWhenReady, WCAG_TAGS } from './support/axe'
 
 test('the business page has a round back button at the top left that returns to the dashboard', async ({
   page,
@@ -45,9 +45,7 @@ for (const scheme of ['light', 'dark'] as const) {
     ])
     expect(surface).not.toBe(page_bg)
 
-    const axe = await new AxeBuilder({ page })
-      .withTags(['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa'])
-      .analyze()
+    const axe = await analyzeWhenReady(page, WCAG_TAGS)
     expect(axe.violations).toEqual([])
   })
 }

@@ -1,6 +1,6 @@
-import AxeBuilder from '@axe-core/playwright'
 import { test, expect, type Page } from '@playwright/test'
 import { finishOnboarding, reachMetaPixelStep } from './support/fakeMetaFlow'
+import { analyzeWhenReady, WCAG_TAGS } from './support/axe'
 
 // A Sales creative test with generated ads; same fully-faked backend as creative-test-publish.spec.ts.
 async function reachTestAds(page: Page) {
@@ -70,9 +70,7 @@ test('Edit creative shows Images, Ad copy and Test settings as separate groups',
   expect(heights[0]).toBeGreaterThanOrEqual(44)
 
   await settleTransitions(page)
-  const axe = await new AxeBuilder({ page })
-    .withTags(['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa'])
-    .analyze()
+  const axe = await analyzeWhenReady(page, WCAG_TAGS)
   expect(axe.violations).toEqual([])
 })
 
@@ -96,9 +94,7 @@ for (const scheme of ['light', 'dark'] as const) {
     await reachTestAds(page)
     await openFirstEditCreative(page)
     await settleTransitions(page)
-    const axe = await new AxeBuilder({ page })
-      .withTags(['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa'])
-      .analyze()
+    const axe = await analyzeWhenReady(page, WCAG_TAGS)
     expect(axe.violations).toEqual([])
   })
 }
