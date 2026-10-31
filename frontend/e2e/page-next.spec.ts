@@ -9,14 +9,25 @@ test('the dashboard ends with a gold Next button at the bottom right that opens 
   const next = page.getByRole('button', { name: 'Next' })
   await expect(next).toBeVisible()
 
-  const [box, main] = await Promise.all([
-    next.boundingBox(),
-    page.locator('main > section').first().boundingBox(),
-  ])
-  // Right edge on the content column's right edge, below the sections.
-  expect(Math.abs(box!.x + box!.width - (main!.x + main!.width))).toBeLessThanOrEqual(1)
-  const lastSection = await page.locator('main > section').last().boundingBox()
-  expect(box!.y).toBeGreaterThanOrEqual(lastSection!.y + lastSection!.height)
+  // Next shows as soon as the page renders, but the sections above it fill in as their data
+  // arrives and push it down. Read every position in one frame, and retry until they agree.
+  await expect
+    .poll(() =>
+      page.evaluate(() => {
+        const button = [...document.querySelectorAll('button')].find(
+          (b) => b.textContent?.trim() === 'Next',
+        )!.getBoundingClientRect()
+        const sections = document.querySelectorAll('main > section')
+        const first = sections[0].getBoundingClientRect()
+        const last = sections[sections.length - 1].getBoundingClientRect()
+        return {
+          // Right edge on the content column's right edge, below the sections.
+          alignedRight: Math.abs(button.right - first.right) <= 1,
+          belowSections: button.top >= last.bottom,
+        }
+      }),
+    )
+    .toEqual({ alignedRight: true, belowSections: true })
   expect(await next.evaluate((el) => getComputedStyle(el).backgroundColor)).toBe('rgb(236, 214, 138)')
 
   await next.click()

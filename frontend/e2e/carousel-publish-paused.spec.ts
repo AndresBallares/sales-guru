@@ -40,6 +40,7 @@ test('publishes a carousel ad paused, with all three cards intact', async ({ pag
   // it once a creative is actually selected.
   await expect(page.getByRole('heading', { name: 'Ad preview' })).toBeVisible()
   await page.getByRole('button', { name: 'Back to ad choices' }).click()
+  await expect(page.getByRole('heading', { name: 'Ad preview' })).not.toBeVisible()
 
   // Publish paused defaults to checked — the happy path here is the
   // default, not an explicit opt-in click.

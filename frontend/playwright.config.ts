@@ -32,6 +32,9 @@ export default defineConfig({
       env: {
         DATABASE_URL: 'file:./e2e.db',
         CORS_ORIGINS: E2E_WEB_URL,
+        // The address product-image URLs are built from. Left at its default it points
+        // at :8000, i.e. the developer's own backend, not the one this run started.
+        BACKEND_URL: E2E_API_URL,
         // Swaps every real Meta Graph API call for a canned fake response
         // and exposes POST .../meta/fake-connect (app/core/config.py's
         // fake_meta_enabled), so e2e specs can get a business past Meta
