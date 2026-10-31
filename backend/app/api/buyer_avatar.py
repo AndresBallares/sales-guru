@@ -6,6 +6,7 @@ route goes through get_owned_business, so another user's business is a 404.
 """
 
 import json
+import secrets
 from datetime import UTC, datetime
 from typing import Any, cast
 
@@ -121,6 +122,11 @@ async def create_avatar(
     return _to_response(avatar)
 
 
+def _new_id() -> str:
+    """A fresh row id shaped like a Prisma cuid (25 characters, 'c' first)."""
+    return "c" + secrets.token_hex(12)
+
+
 def _create_data(
     business_id: str, payload: BuyerAvatarCreateRequest, sort_order: int
 ) -> BuyerAvatarCreateInput:
@@ -200,31 +206,40 @@ async def bulk_create_avatars(
     Raises:
         HTTPException: 409 if they would not all fit under the library's limit.
     """
-    async with db.tx() as tx:
-        existing = await tx.buyeravatar.find_many(
-            where={"businessId": business.id, "deletedAt": None}
+    existing = await db.buyeravatar.find_many(
+        where={"businessId": business.id, "deletedAt": None}
+    )
+    if len(existing) + len(payload.avatars) > MAX_BUYER_AVATARS_PER_BUSINESS:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                f"A business can hold at most {MAX_BUYER_AVATARS_PER_BUSINESS} "
+                f"avatars — it has {len(existing)}, so {len(payload.avatars)} "
+                "more will not fit"
+            ),
         )
-        if len(existing) + len(payload.avatars) > MAX_BUYER_AVATARS_PER_BUSINESS:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail=(
-                    f"A business can hold at most {MAX_BUYER_AVATARS_PER_BUSINESS} "
-                    f"avatars — it has {len(existing)}, so {len(payload.avatars)} "
-                    "more will not fit"
-                ),
-            )
-        next_order = max((a.sortOrder for a in existing), default=-1) + 1
-        created = [
-            await tx.buyeravatar.create(
-                data=_create_data(
-                    business.id,
-                    item,
-                    item.sort_order if item.sort_order is not None else next_order + n,
-                )
-            )
-            for n, item in enumerate(payload.avatars)
-        ]
-    return [_to_response(a) for a in created]
+    next_order = max((a.sortOrder for a in existing), default=-1) + 1
+    ids = [_new_id() for _ in payload.avatars]
+    rows = [
+        {
+            **_create_data(
+                business.id,
+                item,
+                item.sort_order if item.sort_order is not None else next_order + n,
+            ),
+            "id": ids[n],
+        }
+        for n, item in enumerate(payload.avatars)
+    ]
+    # One batch is a single write that commits or fails as a whole. An interactive
+    # transaction held open across these reads and writes expired whenever SQLite
+    # was busy (a full e2e run), and its commit then failed with a 500.
+    async with db.batch_() as batcher:
+        for row in rows:
+            batcher.buyeravatar.create(data=cast(BuyerAvatarCreateInput, row))
+    created = await db.buyeravatar.find_many(where={"id": {"in": ids}})
+    by_id = {a.id: a for a in created}
+    return [_to_response(by_id[avatar_id]) for avatar_id in ids]
 
 
 @router.get("", response_model=list[BuyerAvatarResponse])
