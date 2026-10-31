@@ -18,6 +18,7 @@ from app.schemas.buyer_avatar import (
     MAX_NAME_LENGTH,
     MAX_WHO_LENGTH,
     BuyerAvatarCreateRequest,
+    PurchaseFor,
 )
 
 MAX_DOCUMENT_LENGTH = 30_000
@@ -53,6 +54,9 @@ class AvatarDraft(BaseModel):
         min_length=1,
         max_length=MAX_WHO_LENGTH,
         description="Who they are, in a sentence or two, from the document.",
+    )
+    purchase_for: PurchaseFor = Field(
+        description="gift if this customer buys for someone else, otherwise self."
     )
     primary_problems: list[_Item] = Field(
         max_length=MAX_ITEMS["primary_problems"],

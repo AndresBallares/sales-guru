@@ -526,6 +526,7 @@ async def generate_batch(
             else None,
             "concept": plan_angle.concept if plan_angle else None,
             "pillar": plan_angle.pillar if plan_angle else None,
+            "buyerAvatarId": plan_angle.buyer_avatar_id if plan_angle else None,
             "format": creative_format,
             # Snapshot the business/product this batch was actually
             # grounded in (app/services/creative.py's is_creative_stale

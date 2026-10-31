@@ -16,6 +16,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING, Annotated, Literal, Self
 
 from pydantic import Field, TypeAdapter, ValidationInfo, model_validator
+from pydantic.json_schema import SkipJsonSchema
 
 from app.schemas.base import CamelCaseModel
 from app.schemas.campaign import Objective
@@ -593,6 +594,10 @@ class GeneratedCreativeAngle(CamelCaseModel):
     concept: Annotated[str, Field(pattern=_CONCEPT_PATTERN, max_length=30)]
     pillar: Pillar
     description: str
+    # The library avatar (BuyerAvatar.id) the angle was written for. Left out of
+    # the tool schema: the model only names one in library mode (LibraryAngle),
+    # and the code sets avatar from that avatar's purchase_for.
+    buyer_avatar_id: SkipJsonSchema[str | None] = None
 
 
 class CreativeAngle(GeneratedCreativeAngle):
