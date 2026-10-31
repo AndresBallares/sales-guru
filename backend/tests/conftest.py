@@ -16,11 +16,22 @@ below) — everything else in this file comes straight from it.
 
 import os
 import subprocess
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import Iterator
 from pathlib import Path
+from typing import IO
 
 from cryptography.fernet import Fernet
 from dotenv import load_dotenv
+
+from tests.db_cleanup import clean_all_tables, database_path_for_tests
+from tests.process_guards import (
+    DatabaseBusyError,
+    acquire_database_lock,
+    restore_default_sigint,
+)
+
+# Before anything below can start a query engine; see the function's docstring.
+restore_default_sigint()
 
 _BACKEND_ROOT = Path(__file__).resolve().parent.parent
 
@@ -50,10 +61,8 @@ os.environ.pop("FAKE_LLM", None)
 os.environ["META_TOKEN_ENCRYPTION_KEY"] = Fernet.generate_key().decode()
 
 import pytest
-import pytest_asyncio
 from app.main import app
 from fastapi.testclient import TestClient
-from prisma import Prisma
 
 # Every Prisma model, lowercased (matches the generated client's action
 # names). Deletion order doesn't matter — see _clean_database, which
@@ -66,6 +75,7 @@ _ALL_TABLES = (
     "metric",
     "optimizationrecommendation",
     "creativecard",
+    "testevaluation",
     "brandprofile",
     "buyeravatar",
     "brandrules",
@@ -87,6 +97,24 @@ _ALL_TABLES = (
 )
 
 
+# Held for the whole run; the operating system releases it when we exit.
+_database_lock: IO[bytes] | None = None
+
+
+def pytest_configure(config: pytest.Config) -> None:
+    """Refuse to start if another run is using test.db (see process_guards).
+
+    Runs before the session fixture below resets the database, so a second run
+    stops with a message instead of wiping the first one's data.
+    """
+    global _database_lock
+    lock_path = database_path_for_tests().with_name("test.db.lock")
+    try:
+        _database_lock = acquire_database_lock(lock_path)
+    except DatabaseBusyError as exc:
+        pytest.exit(str(exc), returncode=3)
+
+
 @pytest.fixture(scope="session", autouse=True)
 def _test_database() -> None:
     """Create a fresh, empty test database once per test session.
@@ -104,17 +132,14 @@ def _test_database() -> None:
     )
 
 
-@pytest_asyncio.fixture(autouse=True)
-async def _clean_database() -> AsyncIterator[None]:
-    """Empty every table before each test, for isolation between tests."""
-    cleaner = Prisma()
-    await cleaner.connect()
-    await cleaner.execute_raw("PRAGMA foreign_keys = OFF")
-    for table in _ALL_TABLES:
-        await getattr(cleaner, table).delete_many()
-    await cleaner.execute_raw("PRAGMA foreign_keys = ON")
-    await cleaner.disconnect()
-    yield
+@pytest.fixture(autouse=True)
+def _clean_database() -> None:
+    """Empty every table before each test, for isolation between tests.
+
+    A plain sqlite3 connection, not a Prisma client: connecting one spawns a
+    query-engine process, which cost about 0.25s per test (tests/db_cleanup.py).
+    """
+    clean_all_tables(database_path_for_tests(), _ALL_TABLES)
 
 
 @pytest.fixture(autouse=True)
