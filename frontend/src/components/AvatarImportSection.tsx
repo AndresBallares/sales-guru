@@ -4,6 +4,7 @@ import {
   bulkCreateAvatars,
   importAvatars,
   type BuyerAvatarDraft,
+  type PurchaseFor,
 } from '../lib/api'
 
 type ListField =
@@ -33,6 +34,7 @@ interface EditableDraft {
   keep: boolean
   name: string
   who: string
+  purchaseFor: PurchaseFor
   lists: Record<ListField, string>
 }
 
@@ -43,7 +45,15 @@ function message(error: unknown, fallback: string): string {
 function toEditable(draft: BuyerAvatarDraft, id: number): EditableDraft {
   const lists = {} as Record<ListField, string>
   for (const { key } of LIST_FIELDS) lists[key] = draft[key].join('\n')
-  return { id, label: draft.name, keep: true, name: draft.name, who: draft.who, lists }
+  return {
+    id,
+    label: draft.name,
+    keep: true,
+    name: draft.name,
+    who: draft.who,
+    purchaseFor: draft.purchaseFor,
+    lists,
+  }
 }
 
 function toDraft(editable: EditableDraft): BuyerAvatarDraft {
@@ -55,6 +65,7 @@ function toDraft(editable: EditableDraft): BuyerAvatarDraft {
   return {
     name: editable.name.trim(),
     who: editable.who.trim(),
+    purchaseFor: editable.purchaseFor,
     primaryProblems: lines(editable.lists.primaryProblems),
     unknownProblems: lines(editable.lists.unknownProblems),
     mechanisms: lines(editable.lists.mechanisms),
@@ -191,6 +202,19 @@ export function AvatarImportSection({ businessId }: { businessId: string }) {
                 value={draft.who}
                 onChange={(event) => update(draft.id, { who: event.target.value })}
               />
+            </div>
+            <div className="field">
+              <label htmlFor={`${base}-purchase-for`}>Buys for</label>
+              <select
+                id={`${base}-purchase-for`}
+                value={draft.purchaseFor}
+                onChange={(event) =>
+                  update(draft.id, { purchaseFor: event.target.value as PurchaseFor })
+                }
+              >
+                <option value="self">Themselves</option>
+                <option value="gift">Someone else (a gift)</option>
+              </select>
             </div>
             {LIST_FIELDS.map(({ key, label }) => (
               <div className="field" key={key}>
