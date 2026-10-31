@@ -101,6 +101,24 @@ async def test_a_document_becomes_drafts(
 
 
 @pytest.mark.asyncio
+async def test_the_instructions_say_how_to_resolve_numbered_references(
+    real_key: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Both models mis-mapped "Primary problems: 4, 5, 13" to the wrong list items
+    on a real document (2026-10-31): the rule is to copy the numbered item's text,
+    and to leave the entry out with a warning rather than guess."""
+    create = _client(monkeypatch, _response(_tool_use([_avatar()])))
+
+    await generate_avatar_drafts(_DOC)
+
+    system = str(_sent(create)["system"]).lower()
+    assert "numbered" in system
+    assert "exact text" in system
+    assert "ambiguous or out of range" in system
+    assert "never guess" in system
+
+
+@pytest.mark.asyncio
 async def test_an_answer_without_warnings_needs_no_retry(
     real_key: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
