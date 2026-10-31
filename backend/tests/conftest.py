@@ -22,6 +22,11 @@ from pathlib import Path
 from cryptography.fernet import Fernet
 from dotenv import load_dotenv
 
+from tests.process_guards import restore_default_sigint
+
+# Before anything below can start a query engine; see the function's docstring.
+restore_default_sigint()
+
 _BACKEND_ROOT = Path(__file__).resolve().parent.parent
 
 # override=True: a developer's shell may already have DATABASE_URL set
