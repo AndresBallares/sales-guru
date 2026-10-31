@@ -25,6 +25,7 @@ function makeDraft(name: string, overrides: Partial<api.BuyerAvatarDraft> = {}):
     objections: [],
     hooks: ['Still time.'],
     creativeAngles: [],
+    purchaseFor: 'self',
     isActive: true,
     sortOrder: null,
     ...overrides,
@@ -92,6 +93,26 @@ describe('AvatarImportSection', () => {
     expect(avatars[0].hooks).toEqual(['Still time.'])
     expect(await screen.findByRole('status')).toHaveTextContent('Saved 1 avatar')
     expect(screen.queryByRole('article')).not.toBeInTheDocument()
+  })
+
+  it('shows who each avatar buys for, and saves the choice made in review', async () => {
+    mockedApi.importAvatars.mockResolvedValue({
+      drafts: [makeDraft('Deadline Gift-Giver', { purchaseFor: 'gift' }), makeDraft('Collector')],
+      warnings: [],
+    })
+    mockedApi.bulkCreateAvatars.mockResolvedValue([])
+    render(<AvatarImportSection businessId="biz-1" />)
+    await openAndImport()
+    const giver = await screen.findByRole('article', { name: 'Deadline Gift-Giver' })
+    const collector = screen.getByRole('article', { name: 'Collector' })
+
+    expect(within(giver).getByLabelText('Buys for')).toHaveValue('gift')
+    expect(within(collector).getByLabelText('Buys for')).toHaveValue('self')
+    await userEvent.selectOptions(within(collector).getByLabelText('Buys for'), 'gift')
+    await userEvent.click(screen.getByRole('button', { name: 'Save 2 selected' }))
+
+    const avatars = mockedApi.bulkCreateAvatars.mock.calls[0][1]
+    expect(avatars.map((avatar) => avatar.purchaseFor)).toEqual(['gift', 'gift'])
   })
 
   it('cannot save with nothing checked', async () => {

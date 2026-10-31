@@ -65,6 +65,8 @@ name, and do not split one customer into near-duplicates.
 that number into the field, checking each number against the list. If a number \
 is ambiguous or out of range, or the list is not numbered, leave that entry out \
 and say so in warnings. Never guess which item a number means.
+- Set purchase_for on every avatar: gift when the document describes this customer \
+buying for someone else (a partner, a relative, an occasion), otherwise self.
 - Write in the document's language.
 - Keep every entry short and specific: one idea per entry, under 200 characters.
 - Put anything worth telling the owner (for example "no objections were given") \
@@ -95,6 +97,7 @@ _FAKE_AVATAR_DRAFTS = GeneratedAvatarDrafts.model_validate(
         "avatars": [
             {
                 "name": "Deadline Gift-Giver",
+                "purchase_for": "gift",
                 "who": "Has a birthday or anniversary days away and wants a gift "
                 "that looks chosen, not rushed.",
                 "primary_problems": [
@@ -113,6 +116,7 @@ _FAKE_AVATAR_DRAFTS = GeneratedAvatarDrafts.model_validate(
             },
             {
                 "name": "Self-Purchaser Collector",
+                "purchase_for": "self",
                 "who": "Buys pieces for themself and wears them daily; cares that "
                 "the color and finish hold up.",
                 "primary_problems": ["Color fades or chips within months"],
@@ -209,6 +213,13 @@ def _coerce(raw: dict[str, object]) -> AvatarImportResult:
             )
             continue
         shortened = shortened or name_cut or who_cut
+        purchase_for = item.get("purchase_for")
+        if purchase_for not in ("self", "gift"):
+            purchase_for = "self"
+            warnings.append(
+                f"{name}: it was not clear who this avatar buys for, so it is set "
+                "to self; change it if they buy gifts"
+            )
         fields: dict[str, list[str]] = {}
         for field, cap in MAX_ITEMS.items():
             values = item.get(field)
@@ -226,7 +237,7 @@ def _coerce(raw: dict[str, object]) -> AvatarImportResult:
             fields[field] = [text for text, _ in cut][:cap]
         drafts.append(
             BuyerAvatarCreateRequest.model_validate(
-                {"name": name, "who": who, **fields}
+                {"name": name, "who": who, "purchase_for": purchase_for, **fields}
             )
         )
     if len(drafts) > MAX_BUYER_AVATARS_PER_BUSINESS:

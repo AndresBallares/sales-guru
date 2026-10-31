@@ -232,6 +232,9 @@ model BuyerAvatar {
   deletedAt       DateTime?
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
+  // Who the avatar buys for: "self" or "gift". The Strategist derives an angle's
+  // fixed avatar (self_purchaser or gift_buyer) from it, so the two never disagree.
+  purchaseFor     String   @default("self")
 
   @@index([businessId, sortOrder])
 }
@@ -619,6 +622,10 @@ model Creative {
   // The ad's main persuasion lever, set with avatar and concept for a
   // CREATIVE_TEST_PLAN's ads: offer | mechanism | education | emotion.
   pillar                    String?
+  // The library avatar (BuyerAvatar.id) this ad was written for, when the angle
+  // had one. A plain string, not a relation: a deleted avatar keeps labeling the
+  // ads and results it was used for.
+  buyerAvatarId             String?
   imagePrompt               String?
   videoPrompt               String?
   imageUrl                  String?

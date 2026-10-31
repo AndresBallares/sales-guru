@@ -12,7 +12,7 @@ fixed buyers (self_purchaser, gift_buyer) that feed ad names and UTM parameters.
 """
 
 from datetime import datetime
-from typing import Annotated
+from typing import Annotated, Literal
 
 from pydantic import Field, StringConstraints, ValidationInfo, field_validator
 
@@ -33,6 +33,10 @@ MAX_ITEMS: dict[str, int] = {
     "hooks": 8,
     "creative_angles": 10,
 }
+
+# Who the avatar buys for. The Strategist derives an angle's fixed avatar
+# (self_purchaser or gift_buyer) from this, so the two never disagree.
+PurchaseFor = Literal["self", "gift"]
 
 _Name = Annotated[
     str,
@@ -86,6 +90,7 @@ class BuyerAvatarCreateRequest(CamelCaseModel):
     objections: list[str] = Field(default_factory=list)
     hooks: list[str] = Field(default_factory=list)
     creative_angles: list[str] = Field(default_factory=list)
+    purchase_for: PurchaseFor = "self"
     is_active: bool = True
     # None puts the avatar after the business's others.
     sort_order: int | None = None
@@ -113,6 +118,7 @@ class BuyerAvatarUpdateRequest(CamelCaseModel):
     objections: list[str] | None = None
     hooks: list[str] | None = None
     creative_angles: list[str] | None = None
+    purchase_for: PurchaseFor | None = None
     is_active: bool | None = None
     sort_order: int | None = None
 
@@ -136,6 +142,7 @@ class BuyerAvatarResponse(CamelCaseModel):
     objections: list[str]
     hooks: list[str]
     creative_angles: list[str]
+    purchase_for: PurchaseFor
     is_active: bool
     sort_order: int
     # Set once the avatar is deleted; old angles and results still resolve it.

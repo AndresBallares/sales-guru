@@ -26,6 +26,7 @@ def _avatar(**overrides: Any) -> dict[str, Any]:  # noqa: ANN401
         "objections": ["Is it worth the price?"],
         "hooks": ["Still time for the anniversary."],
         "creative_angles": ["last-minute rescue"],
+        "purchase_for": "gift",
     }
     avatar.update(overrides)
     return avatar
