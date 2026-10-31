@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test'
-import AxeBuilder from '@axe-core/playwright'
+import { analyzeWhenReady } from './support/axe'
 
 // Regression coverage for a real bug found during manual mobile QA: the
 // theme toggle used to be `position: fixed`, so on a small viewport it sat
@@ -83,7 +83,7 @@ test.describe('mobile viewport', () => {
     await page.getByRole('button', { name: 'Sign up' }).click()
     await expect(page.getByText(`Signed in as ${email}`)).toBeVisible()
 
-    const results = await new AxeBuilder({ page }).analyze()
+    const results = await analyzeWhenReady(page)
     expect(results.violations).toEqual([])
   })
 })

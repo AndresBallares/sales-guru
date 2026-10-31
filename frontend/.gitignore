@@ -30,3 +30,4 @@ blob-report
 *.njsproj
 *.sln
 *.sw?
+dist-e2e

@@ -1,5 +1,6 @@
 import { test, expect } from '@playwright/test'
-import AxeBuilder from '@axe-core/playwright'
+import { analyzeWhenReady } from './support/axe'
+import { E2E_API_URL } from './support/ports'
 
 function uniqueEmail(): string {
   return `e2e-${Date.now()}-${Math.random().toString(36).slice(2)}@example.com`
@@ -12,7 +13,7 @@ test('an unauthenticated visitor is redirected to /login', async ({ page }) => {
 
 test('login page has no detectable accessibility violations', async ({ page }) => {
   await page.goto('/login')
-  const results = await new AxeBuilder({ page }).analyze()
+  const results = await analyzeWhenReady(page)
   expect(results.violations).toEqual([])
 })
 
@@ -69,7 +70,7 @@ test('sign up, create a business, log out, log back in', async ({ page }) => {
   await expect(page.getByLabel(/Brand overview/)).toBeFocused()
   await expect(page.getByLabel('Business', { exact: true })).toHaveCount(0)
 
-  const brandFormResults = await new AxeBuilder({ page }).analyze()
+  const brandFormResults = await analyzeWhenReady(page)
   expect(brandFormResults.violations).toEqual([])
 
   await page.getByLabel(/Brand overview/).fill('Family-run studio since 1985.')
@@ -91,13 +92,13 @@ test('sign up, create a business, log out, log back in', async ({ page }) => {
   await expect(page.getByRole('button', { name: 'Connect Meta Ads' })).toBeVisible()
   await expect(page.getByRole('heading', { name: 'Create a campaign' })).not.toBeVisible()
 
-  const metaStepResults = await new AxeBuilder({ page }).analyze()
+  const metaStepResults = await analyzeWhenReady(page)
   expect(metaStepResults.violations).toEqual([])
 
   // Fake-connect stands in for the OAuth round trip.
   const businessId = page.url().match(/businesses\/([^/?]+)/)?.[1]
   const fakeConnect = await page.request.post(
-    `http://localhost:8000/businesses/${businessId}/meta/fake-connect`,
+    `${E2E_API_URL}/businesses/${businessId}/meta/fake-connect`,
   )
   expect(fakeConnect.ok()).toBe(true)
   await page.reload()
@@ -112,7 +113,7 @@ test('sign up, create a business, log out, log back in', async ({ page }) => {
 
   await expect(page.getByText('No campaigns yet')).toBeVisible()
 
-  const businessDetailResults = await new AxeBuilder({ page }).analyze()
+  const businessDetailResults = await analyzeWhenReady(page)
   expect(businessDetailResults.violations).toEqual([])
 
   await page.getByLabel('Objective').selectOption({ label: 'Sales' })
@@ -147,7 +148,7 @@ test('sign up, create a business, log out, log back in', async ({ page }) => {
   await expect(page.getByRole('link', { name: 'Acme Widgets' })).toBeVisible()
   await expect(page.getByText('Fashion / Jewelry · CDMX')).toBeVisible()
 
-  const dashboardResults = await new AxeBuilder({ page }).analyze()
+  const dashboardResults = await analyzeWhenReady(page)
   expect(dashboardResults.violations).toEqual([])
 
   await page.getByRole('button', { name: 'Log out' }).click()
@@ -258,7 +259,7 @@ test('a business without a brand profile cannot start a campaign until it has on
   await expect(page.getByRole('heading', { name: 'Meta Ads' })).not.toBeVisible()
   await expect(page.getByRole('heading', { name: 'Create a campaign' })).not.toBeVisible()
 
-  const gateResults = await new AxeBuilder({ page }).analyze()
+  const gateResults = await analyzeWhenReady(page)
   expect(gateResults.violations).toEqual([])
 
   // The link goes back to that business's Brand form, ready to complete.

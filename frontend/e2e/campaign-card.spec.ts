@@ -1,6 +1,6 @@
-import AxeBuilder from '@axe-core/playwright'
 import { test, expect, type Page } from '@playwright/test'
 import { createBusinessWithBrand } from './support/fakeMetaFlow'
+import { analyzeWhenReady, WCAG_TAGS } from './support/axe'
 
 // A business with one finished campaign, plus a second one left as a draft (the guided flow
 // creates it on "Next"), so the page shows a draft card that still needs a product and audience.
@@ -62,9 +62,7 @@ test('a draft card shows its setup progress and continues the missing step', asy
 })
 
 async function expectNoAxeViolations(page: Page) {
-  const axe = await new AxeBuilder({ page })
-    .withTags(['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa'])
-    .analyze()
+  const axe = await analyzeWhenReady(page, WCAG_TAGS)
   expect(axe.violations).toEqual([])
 }
 

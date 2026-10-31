@@ -1,6 +1,7 @@
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { type Page, expect } from '@playwright/test'
+import { E2E_API_URL } from './ports'
 
 // select_creative now 428s a product with zero uploaded photos (confirmed
 // 2026-09-09) — every flow here needs one on file before it can reach
@@ -96,7 +97,7 @@ export async function connectFakeMeta(
   // as the same logged-in user hitting the API directly — exactly what a real
   // "Connect Meta Ads" click would do, minus Meta's own login/consent screens.
   const fakeConnectResponse = await page.request.post(
-    `http://localhost:8000/businesses/${businessId}/meta/fake-connect`,
+    `${E2E_API_URL}/businesses/${businessId}/meta/fake-connect`,
   )
   expect(fakeConnectResponse.ok()).toBe(true)
   await page.reload()

@@ -1,5 +1,6 @@
 import { test, expect } from '@playwright/test'
 import { createBusinessWithBrand } from './support/fakeMetaFlow'
+import { E2E_API_URL } from './support/ports'
 
 // Pasting research gives avatar drafts to review; only the ones kept are saved.
 // FAKE_LLM (see playwright.config.ts) answers with two canned avatars, so no real
@@ -8,7 +9,7 @@ test('pasted research becomes drafts, and only the kept ones are saved', async (
   await createBusinessWithBrand(page)
   const businessId = page.url().match(/businesses\/([^/?]+)/)?.[1]
   expect(businessId).toBeTruthy()
-  const avatarsUrl = `http://localhost:8000/businesses/${businessId}/avatars`
+  const avatarsUrl = `${E2E_API_URL}/businesses/${businessId}/avatars`
 
   await page.getByText('Import buyer avatars from research').click()
   await page.getByLabel('Research document').fill('Gift buyers panic two days before an anniversary.')

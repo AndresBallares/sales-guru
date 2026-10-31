@@ -1,5 +1,6 @@
 import { test, expect } from '@playwright/test'
 import { createBusinessWithBrand, openFirstCampaign, reachMetaPixelStep } from './support/fakeMetaFlow'
+import { E2E_API_URL } from './support/ports'
 
 // Regression coverage for a real bug: "Skip for now" (the optional Meta
 // Pixel step) used to only set local React state, forgotten on every
@@ -32,11 +33,11 @@ test('disconnecting and reconnecting resets a skipped Pixel choice', async ({ pa
   // The API is used directly to disconnect and reconnect, the same way
   // fake-connect already does for the step nothing in the UI can drive.
   const disconnectResponse = await page.request.delete(
-    `http://localhost:8000/businesses/${businessId}/meta`,
+    `${E2E_API_URL}/businesses/${businessId}/meta`,
   )
   expect(disconnectResponse.ok()).toBe(true)
   const fakeConnectResponse = await page.request.post(
-    `http://localhost:8000/businesses/${businessId}/meta/fake-connect`,
+    `${E2E_API_URL}/businesses/${businessId}/meta/fake-connect`,
   )
   expect(fakeConnectResponse.ok()).toBe(true)
   await page.reload()
