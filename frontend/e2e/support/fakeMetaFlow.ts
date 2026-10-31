@@ -162,6 +162,10 @@ export async function finishOnboarding(
   await page.getByRole('button', { name: 'Add audience' }).click()
 
   await expect(page.getByRole('heading', { name: 'Campaigns' })).toBeVisible()
+  // Adding the audience completes the campaign's setup: the server moves it from Draft to
+  // Ready and the card is redrawn without its setup progress bar, which moves its button.
+  // Carry on once that has happened.
+  await expect(page.locator('.campaign-tile-progress')).toHaveCount(0)
   // The campaigns page is a card per campaign; carry on in the one just created.
   await openFirstCampaign(page)
 }
@@ -170,8 +174,16 @@ export async function finishOnboarding(
 // primary action (its label depends on the campaign's status), where strategy, ad choices
 // and publishing live.
 export async function openFirstCampaign(page: Page): Promise<void> {
-  await page.locator('.campaign-tile-primary').first().click()
-  await expect(page.getByRole('button', { name: /back to campaigns/i })).toBeVisible()
+  const tile = page.locator('.campaign-tile-primary').first()
+  const back = page.getByRole('button', { name: /back to campaigns/i })
+  // A card is redrawn when its campaign changes under it, and its button moves with it. A
+  // click split across that move is dropped by the browser with no error and no navigation
+  // (about 1 run in 100). So click and check as one unit, and try the pair again; if the
+  // detail view is already open, do not click a card that is no longer there.
+  await expect(async () => {
+    if (!(await back.isVisible())) await tile.click({ timeout: 2_000 })
+    await expect(back).toBeVisible({ timeout: 2_000 })
+  }).toPass({ timeout: 15_000 })
 }
 
 // "Continue to campaigns", then create the first campaign (AWARENESS needs no

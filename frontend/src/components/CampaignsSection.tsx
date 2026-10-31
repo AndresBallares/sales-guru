@@ -1,4 +1,12 @@
-import { useCallback, useEffect, useRef, useState, type ChangeEvent, type FormEvent } from 'react'
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type ChangeEvent,
+  type FormEvent,
+  type SetStateAction,
+} from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { ADS_LOCKED_NOTE, isPublished as isPublishedCampaign } from '../lib/publishedCampaign'
 import { CampaignSetup, type SetupStep } from './CampaignSetup'
@@ -216,7 +224,15 @@ export function CampaignsSection({
     string | null
   >(null)
 
-  const [creatives, setCreatives] = useState<Record<string, Creative[]>>({})
+  const [creatives, setCreativesState] = useState<Record<string, Creative[]>>({})
+  // Counts the changes made to the creatives by what the user did (generate, edit, select...),
+  // so a list requested earlier, which may be older or partial, cannot overwrite them
+  // when it finally arrives (see refresh).
+  const creativeWrites = useRef(0)
+  const setCreatives = useCallback((update: SetStateAction<Record<string, Creative[]>>) => {
+    creativeWrites.current += 1
+    setCreativesState(update)
+  }, [])
   // Campaigns whose creatives could not be fetched, so a card says so instead of "none".
   const [creativeLoadFailed, setCreativeLoadFailed] = useState<Record<string, boolean>>({})
   const [generatingCreativesId, setGeneratingCreativesId] = useState<string | null>(null)
@@ -360,6 +376,7 @@ export function CampaignsSection({
       // Same reasoning as strategies above — creatives aren't included on
       // the campaign list, so a page reload needs its own fetch to show a
       // previously generated batch.
+      const writesBeforeRequest = creativeWrites.current
       const fetchedCreatives = await Promise.all(
         generated.map((c) =>
           listCreatives(businessId, c.id)
@@ -367,10 +384,15 @@ export function CampaignsSection({
             .catch(() => [c.id, null] as const),
         ),
       )
-      setCreatives((prev) => {
+      // If the user changed any creatives while these requests were out, what they changed is
+      // newer than what came back: only fill in campaigns that have nothing yet.
+      const changedMeanwhile = creativeWrites.current !== writesBeforeRequest
+      setCreativesState((prev) => {
         const next = { ...prev }
         for (const [id, list] of fetchedCreatives) {
-          if (list && list.length > 0) next[id] = list
+          if (list && list.length > 0 && (!changedMeanwhile || next[id] === undefined)) {
+            next[id] = list
+          }
         }
         return next
       })
