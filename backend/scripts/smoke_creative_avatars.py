@@ -210,6 +210,22 @@ def _ad_text(variant: Any) -> str:  # noqa: ANN401
     )
 
 
+_ENTRY_PREFIXES = {
+    "problem": "Problem to speak to: ",
+    "mechanism": "Mechanism to show: ",
+    "teach": "They do not know this yet; teach it: ",
+    "objection": "Objection to answer: ",
+}
+
+
+def _entry(block: str, kind: str) -> str:
+    """The avatar entry of one kind that the block carried, or an empty string."""
+    prefix = _ENTRY_PREFIXES[kind]
+    return next(
+        (ln[len(prefix) :] for ln in block.splitlines() if ln.startswith(prefix)), ""
+    )
+
+
 def _check_ad(
     variant: Any,  # noqa: ANN401
     block: str,
@@ -217,29 +233,55 @@ def _check_ad(
     proof_points: list[str],
     offer: str | None,
     banned: list[str],
+    pillar: str | None = None,
+    angle_description: str = "",
 ) -> dict[str, Any]:
     text = _ad_text(variant)
     lowered = text.lower()
     allowed = " ".join([*proof_points, offer or ""]).lower()
     promises = [w for w in _PROMISE_WORDS if w in lowered]
     unsupported = [w for w in promises if w not in allowed]
-    given_hooks = json.loads(avatar.hooks)
-    copied = [hook for hook in given_hooks if _longest_shared_run(hook, text) >= 5]
-    entry_lines = [ln.split(": ", 1)[1] for ln in block.splitlines() if ": " in ln][1:4]
-    overlap = sorted(_words(text) & _words(" ".join(entry_lines)))
-    return {
+    hooks = json.loads(avatar.hooks)
+    # What the ad takes from each entry it was given: the content words it shares.
+    pillar_kind = {
+        "mechanism": "mechanism",
+        "education": "teach",
+        "offer": "objection",
+    }.get(pillar or "")
+    shared = {
+        kind: sorted(_words(text) & _words(_entry(block, kind)))
+        for kind in ("problem", *([pillar_kind] if pillar_kind else []))
+    }
+    checks: dict[str, Any] = {
         "banned_phrase_hits": ad_quality.business_phrases_in(text, banned)
         + ad_quality.banned_phrases_in(text),
         "promise_words_in_ad": promises,
         "promise_words_not_in_stored_proof": unsupported,
-        "hooks_with_a_5_word_run_copied": copied,
-        "words_shared_with_the_fields_given": overlap,
+        "hooks_copied_5_word_run_in_ad": [
+            h for h in hooks if _longest_shared_run(h, text) >= 5
+        ],
+        "hooks_copied_5_word_run_in_angle_description": [
+            h for h in hooks if _longest_shared_run(h, angle_description) >= 5
+        ],
+        "words_shared_with_the_entries_given": shared,
+        "uses_assigned_problem": len(shared["problem"]) >= 2,
         "lengths": {
             "headline": len(variant.headline),
             "body_text": len(variant.body_text),
             "description": len(variant.description or ""),
         },
     }
+    if pillar_kind:
+        checks["uses_assigned_pillar_entry"] = len(shared[pillar_kind]) >= 2
+    if pillar == "offer":
+        checks["offer_uses_the_refund"] = bool(
+            re.search(r"refund|7[- ]day|seven[- ]day", lowered)
+        )
+        if "shipping" in lowered:
+            checks["shipping_keeps_its_qualifier"] = bool(
+                re.search(r"us orders|u\.s\.|orders over|\$5,000", lowered)
+            )
+    return checks
 
 
 def _print_ad(title: str, variant: Any, meta: dict[str, Any], block: str) -> None:  # noqa: ANN401
