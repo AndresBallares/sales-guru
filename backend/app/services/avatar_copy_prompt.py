@@ -30,8 +30,12 @@ _BUYS_FOR = {
 }
 
 OFFER_RULE = (
-    "Answer this objection only with the standing promotion or the proof points "
-    "listed above; never invent an offer, guarantee, discount or perk."
+    "Answer this objection with the single most relevant proof point listed above, "
+    "or the standing promotion if the business has one, worded with its qualifiers "
+    "(keep 'on US orders' if that is how it is stored). Pick the point that answers "
+    "the worry itself: a worry about not liking the piece is answered by a return or "
+    "refund point, not by shipping or packaging. Never invent an offer, guarantee, "
+    "discount or perk."
 )
 
 
@@ -121,7 +125,9 @@ def assigned_block(
 
 GUIDANCE = (
     "Each avatar block above is the customer that variant is written to: speak to "
-    "their problem in their own terms and build the angle on the field its block "
-    "names. Hooks are inspiration for tone only; never copy one, and never say "
-    "anything about the product that the business details above do not support."
+    "their problem in their own terms and build the ad on the field its block names. "
+    "If an angle's description and its avatar block differ on the problem, the "
+    "mechanism or what to teach, the avatar block wins. Hooks are inspiration for "
+    "tone only; never copy one, and never say anything about the product that the "
+    "business details above do not support."
 )

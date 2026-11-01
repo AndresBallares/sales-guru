@@ -979,9 +979,11 @@ def _build_creative_test_plan_prompt(
             + " Each angle also has a concept (a short lowercase slug of one to "
             "three words joined by hyphens, such as everyday-wear, craftsmanship, "
             "the-perfect-gift or social-proof), a description of what the ad shows "
-            "and promises, and "
-            + pillar_text
-            + " Draw on the avatar's own problems and hooks. Never repeat an "
+            "and promises, and " + pillar_text + " Draw on the avatar's own problems. "
+            "Each description says what the ad shows and promises (the avatar, the "
+            "problem it speaks to, the mechanism or offer it rests on) and is never "
+            "a headline: write no ad copy in it, and never quote or paraphrase any "
+            "avatar hook. Never repeat an "
             "avatar and concept pair, and no two angles may have the same buyer "
             "type, concept and pillar." + _personalization_instruction(product)
         )
@@ -1102,7 +1104,10 @@ def _build_round_angles_prompt(
             "(set buyer_avatar_id to that avatar's id, copied exactly), with a "
             "concept (a short lowercase slug of one to three words joined by "
             "hyphens), a pillar (offer, mechanism, education or emotion) and a "
-            "description of what the ad shows and promises. Never repeat an "
+            "description of what the ad shows and promises (the avatar, the problem "
+            "it speaks to, the mechanism or offer it rests on), never a headline: "
+            "write no ad copy in it, and never quote or paraphrase any avatar hook. "
+            "Never repeat an "
             "avatar and concept pair from the angles already used, listed "
             "below; the same concept for another avatar is allowed when the ad "
             "says or shows something different. Never repeat a pair within "

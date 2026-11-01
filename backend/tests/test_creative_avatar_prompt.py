@@ -179,7 +179,7 @@ def test_an_offer_angle_answers_an_objection_with_real_proof_only() -> None:
     block = tail.split("Avatar for variant C")[1].split("Avatar for variant D")[0]
 
     assert "Objection to answer: g1 objection 1" in block
-    assert "only with the standing promotion or the proof points" in block
+    assert "single most relevant proof point" in block
     assert "never invent" in block.lower()
 
 
