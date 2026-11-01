@@ -41,6 +41,8 @@ def _avatar(id_: str, purchase_for: str = "self") -> BuyerAvatar:
             purchaseFor=purchase_for,
             primaryProblems=json.dumps([f"{id_} problem"]),
             hooks=json.dumps([f"{id_} hook"]),
+            unknownProblems=json.dumps([f"{id_} unknown"]),
+            mechanisms=json.dumps([f"{id_} mechanism"]),
         ),
     )
 
