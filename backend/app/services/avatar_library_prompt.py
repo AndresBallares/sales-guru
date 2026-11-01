@@ -42,10 +42,18 @@ def _some(stored: str) -> str:
     return "; ".join(_cut(item, _ITEM_CHARS) for item in items[:_ITEMS_SHOWN])
 
 
+def _first(stored: str) -> str:
+    """The first non-blank entry of a stored JSON list, cut short; empty if none."""
+    items = [str(item) for item in json.loads(stored) if str(item).strip()]
+    return _cut(items[0], _ITEM_CHARS) if items else ""
+
+
 def library_block(avatars: Sequence[BuyerAvatar]) -> str:
     """The avatar library as a quarantined block for the request details.
 
-    The text comes from the owner's research document, so it is wrapped as data.
+    The text comes from the owner's research document, so it is wrapped as data. Each
+    avatar's line carries who they are, up to two problems, the first thing they do
+    not know yet and the first mechanism that matters to them.
     """
     lines: list[str] = []
     for avatar in avatars:
@@ -55,11 +63,17 @@ def library_block(avatars: Sequence[BuyerAvatar]) -> str:
             f"who: {_cut(avatar.who, _WHO_CHARS)}"
         )
         problems = _some(avatar.primaryProblems)
-        hooks = _some(avatar.hooks)
+        unknown = _first(avatar.unknownProblems)
+        mechanism = _first(avatar.mechanisms)
         if problems:
             line += f" | problems: {problems}"
-        if hooks:
-            line += f" | hooks: {hooks}"
+        # What an education angle teaches and what a mechanism angle rests on. Hooks
+        # are left out on purpose: the Strategist wrote them into angle descriptions,
+        # so only the Creative Agent, which uses them for tone, sees them.
+        if unknown:
+            line += f" | doesn't know yet: {unknown}"
+        if mechanism:
+            line += f" | mechanism: {mechanism}"
         lines.append(line)
     return quarantine("Buyer avatar library", "\n".join(lines))
 

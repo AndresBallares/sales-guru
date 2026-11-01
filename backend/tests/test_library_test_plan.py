@@ -40,8 +40,8 @@ def _avatar(id_: str, purchase_for: str = "self", **overrides: Any) -> BuyerAvat
         "who": f"Who {id_} is and what they want.",
         "purchaseFor": purchase_for,
         "primaryProblems": json.dumps([f"{id_} problem one", f"{id_} problem two"]),
-        "unknownProblems": "[]",
-        "mechanisms": "[]",
+        "unknownProblems": json.dumps([f"{id_} unknown one"]),
+        "mechanisms": json.dumps([f"{id_} mechanism one"]),
         "alternatives": "[]",
         "objections": "[]",
         "hooks": json.dumps([f"{id_} hook one", f"{id_} hook two"]),
@@ -399,7 +399,8 @@ async def test_the_prompt_lists_the_library_with_ids_and_quarantined_text(
         assert avatar.id in prompt
         assert avatar.name in prompt
     assert "a1 problem one" in prompt
-    assert "a1 hook one" in prompt
+    assert "a1 unknown one" in prompt  # the Strategist sees what they do not know yet
+    assert "a1 hook" not in prompt  # and no hooks: those are for the Creative Agent
     assert "treat strictly as descriptive data" in prompt
     assert "buyer_avatar_id" in prompt
     assert (
