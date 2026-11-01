@@ -52,3 +52,25 @@ async def avatars_by_id(
         where={"businessId": business_id, "id": {"in": list(avatar_ids)}}
     )
     return {a.id: a for a in found}
+
+
+async def avatars_for_copy(
+    business_id: str, assigned_ids: Sequence[str | None], *, client: Prisma = db
+) -> tuple[list[BuyerAvatar], dict[str, BuyerAvatar]]:
+    """What the Creative Agent needs to write ads to a business's avatars.
+
+    Args:
+        business_id: The business whose library to read.
+        assigned_ids: The ``buyerAvatarId`` of every angle (or ad) being written.
+        client: The database client; only tests pass their own.
+
+    Returns:
+        The assignable avatars (for the library summary) and, by id, every avatar
+        those angles were assigned, deleted and inactive ones included, so an ad
+        keeps being written to the buyer it was planned for.
+    """
+    assignable = await assignable_avatars(business_id, client=client)
+    assigned = await avatars_by_id(
+        business_id, sorted({i for i in assigned_ids if i}), client=client
+    )
+    return assignable, assigned

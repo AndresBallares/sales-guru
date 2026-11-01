@@ -65,6 +65,7 @@ creative_angle stay shared across a variant's own cards, same as before.
 import copy
 import json
 import logging
+from collections.abc import Mapping, Sequence
 from typing import Any, Literal, NamedTuple, cast
 
 import anthropic
@@ -75,7 +76,14 @@ from anthropic.types import (
     TextBlockParam,
 )
 from anthropic.types.cache_control_ephemeral_param import CacheControlEphemeralParam
-from prisma.models import BrandProfile, Business, Campaign, Creative, Product
+from prisma.models import (
+    BrandProfile,
+    Business,
+    BuyerAvatar,
+    Campaign,
+    Creative,
+    Product,
+)
 from prisma.models import ProductImage as PrismaProductImage
 from pydantic import ValidationError
 
@@ -105,7 +113,7 @@ from app.schemas.strategy import (
     primary_audience,
     required_test_ads,
 )
-from app.services import ad_quality
+from app.services import ad_quality, avatar_copy_prompt
 from app.services.brand_voice import brand_voice_lines
 from app.services.creative_naming import angle_label
 from app.services.llm_call import ToolSpec, call_with_tool
@@ -284,10 +292,16 @@ class SingleVariantTarget(NamedTuple):
         plan_angle_index: For a creative test, the position of that angle in
             the plan's creative_angles (see find_plan_angle_index), so the
             variant keeps its avatar, concept and pillar. None otherwise.
+        buyer_avatar_id: The library avatar stored on the existing creative. Used
+            when its angle is not in the campaign's plan (an ad from a follow-up
+            round), so the rewrite stays written to the same buyer.
+        pillar: The creative's stored pillar, for the same case.
     """
 
     creative_angle: str
     plan_angle_index: int | None = None
+    buyer_avatar_id: str | None = None
+    pillar: str | None = None
 
 
 def find_plan_angle_index(strategy: StrategyContent, creative_angle: str) -> int | None:
@@ -352,7 +366,7 @@ _MIN_TRIMMED_BODY_LENGTH = 60
 _CLOSERS = "\"'”’)]»"
 
 
-def copy_problems(creative: Creative) -> list[str]:
+def copy_problems(creative: Creative, banned_phrases: Sequence[str] = ()) -> list[str]:
     """Why this creative's copy shouldn't go live, or an empty list if it's fine.
 
     The last gate before publish, independent of how the copy was generated:
@@ -366,6 +380,8 @@ def copy_problems(creative: Creative) -> list[str]:
 
     Args:
         creative: The creative about to be published.
+        banned_phrases: The business's own banned phrases (BrandRules), checked in
+            every slot as well as the built-in list; a hit names the exact phrase.
 
     Returns:
         One human-readable problem per issue found, in the order checked.
@@ -395,16 +411,20 @@ def copy_problems(creative: Creative) -> list[str]:
             f"description is {len(description)} characters "
             f"(max {MAX_DESCRIPTION_LENGTH})"
         )
-    problems += ad_quality.copy_field_problems("primary text", body)
+    problems += ad_quality.copy_field_problems("primary text", body, banned_phrases)
     problems += ad_quality.praise_opener_problems("primary text", body)
-    problems += ad_quality.copy_field_problems("headline", creative.headline)
-    problems += ad_quality.copy_field_problems("description", description)
+    problems += ad_quality.copy_field_problems(
+        "headline", creative.headline, banned_phrases
+    )
+    problems += ad_quality.copy_field_problems(
+        "description", description, banned_phrases
+    )
     for position, card in enumerate(creative.cards or [], start=1):
         problems += ad_quality.copy_field_problems(
-            f"card {position} headline", card.headline
+            f"card {position} headline", card.headline, banned_phrases
         )
         problems += ad_quality.copy_field_problems(
-            f"card {position} description", card.description
+            f"card {position} description", card.description, banned_phrases
         )
         if len(card.headline) > MAX_HEADLINE_LENGTH:
             problems.append(
@@ -669,6 +689,9 @@ def _build_prompt_parts(
     video_seconds: float | None = None,
     single_variant: SingleVariantTarget | None = None,
     batch_size: int = _VARIANT_COUNT,
+    banned_phrases: Sequence[str] = (),
+    buyer_avatars: Sequence[BuyerAvatar] = (),
+    assigned_avatars: Mapping[str, BuyerAvatar] | None = None,
 ) -> tuple[str, str]:
     """Build the per-request prompt as (campaign context, per-call tail).
 
@@ -729,6 +752,14 @@ def _build_prompt_parts(
         batch_size: How many variants a full batch asks for (four, or three
             for a follow-up round on a product without a fourth photo or
             video). Ignored when single_variant is set.
+        banned_phrases: The business's own banned phrases (BrandRules). Listed in the
+            campaign context so the model avoids them; they are the same for a batch
+            and for a regenerate, so they do not break the cache.
+        buyer_avatars: The business's assignable library avatars, summarized in the
+            campaign context of a creative test (the same for a batch and a
+            regenerate, so the cache still holds).
+        assigned_avatars: Every avatar the test's angles were assigned, by id (also
+            deleted or inactive ones), for the per-call blocks in the tail.
 
     Returns:
         ``(context, tail)``.
@@ -781,6 +812,14 @@ def _build_prompt_parts(
     brand_voice = brand_voice_lines(brand_profile)
     if brand_voice:
         lines += [""] + brand_voice
+    if banned_phrases:
+        lines.append(
+            quarantine(
+                "Never use these phrases (an ad containing one is blocked from "
+                "publishing)",
+                "; ".join(banned_phrases),
+            )
+        )
     if proof_points:
         lines.append(
             "Proof points/trust lines on file — use one for the "
@@ -856,6 +895,8 @@ def _build_prompt_parts(
                 f"{persona.name} — {persona.description}",
             )
         )
+    if strategy.plan_type == "CREATIVE_TEST_PLAN" and buyer_avatars:
+        lines.append(avatar_copy_prompt.library_summary(buyer_avatars))
     audience = primary_audience(strategy)
     if audience.problem:
         lines.append(f"Target audience problem: {audience.problem}")
@@ -885,6 +926,8 @@ def _build_prompt_parts(
     ]
 
     tail: list[str] = []
+    assigned = assigned_avatars or {}
+    wrote_avatar_block = False
     if strategy.plan_type == "CREATIVE_TEST_PLAN":
         listed = list(enumerate(strategy.creative_angles))
         if single_variant is None:
@@ -905,6 +948,35 @@ def _build_prompt_parts(
                 f"- Variant {chr(ord('A') + position)}: {name}{pillar} — "
                 f"{angle.description}"
             )
+            avatar = assigned.get(angle.buyer_avatar_id or "")
+            if avatar is not None:
+                shared_before = sum(
+                    1
+                    for earlier in strategy.creative_angles[:position]
+                    if earlier.buyer_avatar_id == angle.buyer_avatar_id
+                )
+                tail.append(
+                    avatar_copy_prompt.assigned_block(
+                        avatar,
+                        f"variant {chr(ord('A') + position)}",
+                        angle.pillar,
+                        shared_before,
+                    )
+                )
+                wrote_avatar_block = True
+        if single_variant is not None and single_variant.plan_angle_index is None:
+            # An ad from a follow-up round: its angle is not in the plan, but the ad
+            # itself remembers the avatar it was written to.
+            stored = assigned.get(single_variant.buyer_avatar_id or "")
+            if stored is not None:
+                tail.append(
+                    avatar_copy_prompt.assigned_block(
+                        stored, "this variant", single_variant.pillar, 0
+                    )
+                )
+                wrote_avatar_block = True
+        if wrote_avatar_block:
+            tail.append(avatar_copy_prompt.GUIDANCE)
         if any(a.concept == PERSONALIZATION_CONCEPT for _, a in listed):
             tail.append(_personalization_rules(product))
         if single_variant is not None:
@@ -1340,6 +1412,9 @@ async def generate_creatives(
     other_texts: list[tuple[str, str]] | None = None,
     check_fields: tuple[str, ...] = ("headline", "bodyText"),
     batch_size: int = _VARIANT_COUNT,
+    banned_phrases: Sequence[str] = (),
+    buyer_avatars: Sequence[BuyerAvatar] = (),
+    assigned_avatars: Mapping[str, BuyerAvatar] | None = None,
 ) -> list[GeneratedCreativeVariant]:
     """Call the Creative Agent and return a batch of ad creative variants.
 
@@ -1393,6 +1468,13 @@ async def generate_creatives(
         batch_size: How many variants a full batch holds: four, or three for a
             follow-up round on a product without a fourth photo or video.
             Ignored when single_variant is set.
+        banned_phrases: The business's own banned phrases (BrandRules), checked on
+            the first attempt and the retry. A batch that still has one after the
+            retry is kept, and the publish gate blocks it, naming the phrase.
+        buyer_avatars: The business's assignable library avatars (summarized in the
+            cached campaign context of a creative test).
+        assigned_avatars: Every avatar the test's angles were assigned, by id; each
+            variant is written to its own (per-call tail).
 
     Returns:
         Exactly batch_size generated creative variants (four, Creative A-D,
@@ -1440,6 +1522,9 @@ async def generate_creatives(
         video_seconds=video.duration_seconds if is_video and video else None,
         single_variant=single_variant,
         batch_size=batch_size,
+        banned_phrases=banned_phrases,
+        buyer_avatars=buyer_avatars,
+        assigned_avatars=assigned_avatars,
     )
 
     image_blocks: list[ImageBlockParam] = []
@@ -1573,6 +1658,10 @@ async def generate_creatives(
         # A single-ad regenerate is compared with the campaign's other ads.
         "other_texts": other_texts or [],
         "check_fields": check_fields,
+        # Checked on the first attempt and the retry; the last-resort coercion
+        # re-checks without context, so a batch that still has one is kept and
+        # the publish gate blocks it, naming the phrase.
+        "banned_phrases": tuple(banned_phrases),
     }
     expected_card_count = len(card_images) if is_carousel and card_images else None
 

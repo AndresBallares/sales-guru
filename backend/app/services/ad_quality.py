@@ -14,6 +14,8 @@ praise opener check.
 """
 
 import re
+from collections.abc import Sequence
+from functools import lru_cache
 
 # Engagement bait and withholding patterns Meta's ranking penalizes. Matched
 # case-insensitively on whole words, so "tag a" catches "Tag a friend" but not
@@ -60,6 +62,40 @@ def banned_phrases_in(text: str | None) -> list[str]:
         return []
     normalized = text.translate(_APOSTROPHES)
     return [phrase for phrase, pattern in _PATTERNS if pattern.search(normalized)]
+
+
+@lru_cache(maxsize=512)
+def _business_pattern(phrase: str) -> re.Pattern[str]:
+    """A whole-word, case-insensitive pattern for one of a business's phrases.
+
+    Lookarounds instead of a word boundary, so a phrase may start or end with a
+    symbol ("#1"); whitespace inside it matches any run of whitespace.
+    """
+    words = phrase.translate(_APOSTROPHES).split()
+    return re.compile(
+        r"(?<!\w)" + r"\s+".join(re.escape(word) for word in words) + r"(?!\w)",
+        re.IGNORECASE,
+    )
+
+
+def business_phrases_in(text: str | None, phrases: Sequence[str]) -> list[str]:
+    """The phrases from a business's own banned list that a piece of copy contains.
+
+    Args:
+        text: One copy field; None or empty has none.
+        phrases: The business's banned phrases (BrandRules.bannedPhrases).
+
+    Returns:
+        Each phrase found, once, as the business wrote it, in list order.
+    """
+    if not text:
+        return []
+    normalized = text.translate(_APOSTROPHES)
+    return [
+        phrase
+        for phrase in phrases
+        if phrase.strip() and _business_pattern(phrase.strip()).search(normalized)
+    ]
 
 
 # Extra wording for rule 4, per industry — same extension pattern as the
@@ -126,21 +162,30 @@ def rule_lines(industry: str | None) -> list[str]:
     ]
 
 
-def copy_field_problems(label: str, text: str | None) -> list[str]:
+def copy_field_problems(
+    label: str, text: str | None, business_phrases: Sequence[str] = ()
+) -> list[str]:
     """One problem per banned phrase in a copy field, worded for a person.
 
     Args:
         label: The field's name as the reader sees it ("primary text").
         text: The field's copy.
+        business_phrases: The business's own banned phrases, checked as well as
+            the built-in engagement-bait list.
 
     Returns:
         Empty when the copy is clean.
     """
-    return [
+    problems = [
         f"{label} contains '{phrase}', engagement bait or withheld information "
         "that Meta's ad ranking penalizes"
         for phrase in banned_phrases_in(text)
     ]
+    problems += [
+        f"{label} contains '{phrase}', which this business's brand rules ban"
+        for phrase in business_phrases_in(text, business_phrases)
+    ]
+    return problems
 
 
 def structure_lines() -> list[str]:
