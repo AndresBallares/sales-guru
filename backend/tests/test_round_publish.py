@@ -529,6 +529,35 @@ async def test_the_first_publish_guards_apply_to_a_round(
 
 
 @pytest.mark.asyncio
+async def test_a_round_ad_with_a_business_banned_phrase_is_refused_by_name(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    mock_services: dict[str, AsyncMock],  # noqa: F811
+) -> None:
+    business_id, campaign_id = _live_campaign(client, monkeypatch)
+    round_ = _round_with(client, business_id, campaign_id, select=1)
+    db = Prisma()
+    await db.connect()
+    try:
+        await db.brandrules.create(
+            data={"businessId": business_id, "bannedPhrases": '["Elevate your style"]'}
+        )
+        await db.creative.update_many(
+            where={"roundId": round_["id"]},
+            data={"bodyText": "Elevate your style with 18K gold and ceramic."},
+        )
+    finally:
+        await db.disconnect()
+    mock_services["create_ad_set"].reset_mock()
+
+    response = _publish_round(client, business_id, campaign_id, round_["id"])
+
+    assert response.status_code == 400, response.text
+    assert "'Elevate your style'" in response.json()["detail"]
+    assert mock_services["create_ad_set"].await_count == 0
+
+
+@pytest.mark.asyncio
 async def test_a_round_needs_a_destination_url(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -35,6 +35,8 @@ from app.schemas.strategy import (
     CreativeTestPlanContent,
     StrategyContentAdapter,
 )
+from app.services.brand_rules import banned_phrases_for
+from app.services.buyer_avatars import avatars_for_copy
 from app.services.campaign_readiness import is_ready
 from app.services.creative import (
     CreativeAgentError,
@@ -463,6 +465,9 @@ async def generate_batch(
         if feed_photo is not None and story_photo is not None:
             photo_pair = (feed_photo, story_photo, square_photo)
 
+    library, assigned_avatars = await avatars_for_copy(
+        business.id, [getattr(a, "buyer_avatar_id", None) for a in plan.creative_angles]
+    )
     try:
         variants = await generate_creatives(
             business=business,
@@ -475,6 +480,9 @@ async def generate_batch(
             video=video_input,
             campaign_id=campaign.id,
             batch_size=batch_size,
+            banned_phrases=await banned_phrases_for(business.id),
+            buyer_avatars=library,
+            assigned_avatars=assigned_avatars,
         )
     except CreativeAgentError as exc:
         raise HTTPException(
@@ -1183,6 +1191,13 @@ async def regenerate_creative_copy(
 
     plan = StrategyContentAdapter.validate_json(strategy.content)
     current_angle = creative.creativeAngle or ""
+    library, assigned_avatars = await avatars_for_copy(
+        business.id,
+        [
+            *(getattr(a, "buyer_avatar_id", None) for a in plan.creative_angles),
+            creative.buyerAvatarId,
+        ],
+    )
     try:
         variants = await generate_creatives(
             business=business,
@@ -1193,13 +1208,19 @@ async def regenerate_creative_copy(
             format=cast(CreativeFormat, creative.format),
             video=video_input,
             single_variant=SingleVariantTarget(
-                current_angle, find_plan_angle_index(plan, current_angle)
+                current_angle,
+                find_plan_angle_index(plan, current_angle),
+                creative.buyerAvatarId,
+                creative.pillar,
             ),
             campaign_id=campaign.id,
             other_texts=await _other_ads_text(campaign, creative),
             check_fields=tuple(
                 f for f in ("headline", "bodyText") if f in payload.fields
             ),
+            banned_phrases=await banned_phrases_for(business.id),
+            buyer_avatars=library,
+            assigned_avatars=assigned_avatars,
         )
     except CreativeAgentError as exc:
         raise HTTPException(

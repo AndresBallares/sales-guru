@@ -208,7 +208,7 @@ class GeneratedCreativeVariant(CamelCaseModel):
         return self
 
     @model_validator(mode="after")
-    def _check_no_engagement_bait(self) -> Self:
+    def _check_no_engagement_bait(self, info: ValidationInfo) -> Self:
         """No engagement bait or withheld-information phrasing in any copy slot.
 
         Unconditional, like the length limits: it is a fact about the copy
@@ -216,17 +216,26 @@ class GeneratedCreativeVariant(CamelCaseModel):
         and a batch that still has it after the retry fails rather than being
         stored. The message names the phrases so the retry prompt can say
         exactly what to remove.
+
+        A business's own banned phrases are different: they come in as
+        context["banned_phrases"], so the first attempt is checked against them
+        and gets its one retry, but the last-resort coercion (which re-checks
+        with no context) keeps the copy. The publish gate then blocks it,
+        naming the phrase (app.services.creative.copy_problems).
         """
+        banned = tuple((info.context or {}).get("banned_phrases", ()))
         problems = [
-            *copy_field_problems("headline", self.headline),
-            *copy_field_problems("primary text", self.body_text),
+            *copy_field_problems("headline", self.headline, banned),
+            *copy_field_problems("primary text", self.body_text, banned),
             *praise_opener_problems("primary text", self.body_text),
-            *copy_field_problems("description", self.description),
+            *copy_field_problems("description", self.description, banned),
         ]
         for position, card in enumerate(self.cards or [], start=1):
-            problems += copy_field_problems(f"card {position} headline", card.headline)
             problems += copy_field_problems(
-                f"card {position} description", card.description
+                f"card {position} headline", card.headline, banned
+            )
+            problems += copy_field_problems(
+                f"card {position} description", card.description, banned
             )
         if problems:
             raise ValueError("; ".join(problems))

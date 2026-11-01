@@ -44,6 +44,7 @@ from app.schemas.strategy import (
     min_creative_test_daily_budget,
 )
 from app.services import publish_jobs
+from app.services.brand_rules import banned_phrases_for
 from app.services.buyer_avatars import assignable_avatars
 from app.services.creative import (
     copy_problems,
@@ -440,10 +441,11 @@ async def publish_round(
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST, detail=_CREATIVE_STALE
         )
+    banned_phrases = await banned_phrases_for(business.id)
     copy_failures = [
         f"Ad '{c.headline}' — {'; '.join(problems)}"
         for c in creatives
-        if (problems := copy_problems(c))
+        if (problems := copy_problems(c, banned_phrases))
     ]
     media_failures = [
         f"Ad '{c.headline}' — {'; '.join(problems)}"

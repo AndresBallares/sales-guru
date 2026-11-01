@@ -34,6 +34,7 @@ from app.schemas.strategy import (
     min_creative_test_daily_budget,
 )
 from app.services import campaign_lifecycle, publish_jobs
+from app.services.brand_rules import banned_phrases_for
 from app.services.campaign_readiness import advance_to_ready_if_complete, is_ready
 from app.services.creative import (
     copy_problems,
@@ -736,10 +737,11 @@ async def publish_campaign(
         )
     # Last gate before anything goes live: no cut-off or over-length copy,
     # whatever produced it. Names every ad that fails.
+    banned_phrases = await banned_phrases_for(business.id)
     copy_failures = [
         f"Ad '{c.headline}' — {'; '.join(problems)}"
         for c in creatives
-        if (problems := copy_problems(c))
+        if (problems := copy_problems(c, banned_phrases))
     ]
     media_failures = [
         f"Ad '{c.headline}' — {'; '.join(problems)}"
