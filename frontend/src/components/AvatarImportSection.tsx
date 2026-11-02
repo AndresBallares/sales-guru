@@ -6,25 +6,10 @@ import {
   type BuyerAvatarDraft,
   type PurchaseFor,
 } from '../lib/api'
+import { AVATAR_LIST_FIELDS, linesOf, type AvatarListField } from '../lib/avatarFields'
 
-type ListField =
-  | 'primaryProblems'
-  | 'unknownProblems'
-  | 'mechanisms'
-  | 'alternatives'
-  | 'objections'
-  | 'hooks'
-  | 'creativeAngles'
-
-const LIST_FIELDS: { key: ListField; label: string }[] = [
-  { key: 'primaryProblems', label: 'Primary problems' },
-  { key: 'unknownProblems', label: 'Unknown problems' },
-  { key: 'mechanisms', label: 'Mechanisms' },
-  { key: 'alternatives', label: 'Current alternatives' },
-  { key: 'objections', label: 'Objections' },
-  { key: 'hooks', label: 'Hooks' },
-  { key: 'creativeAngles', label: 'Creative angles' },
-]
+type ListField = AvatarListField
+const LIST_FIELDS = AVATAR_LIST_FIELDS
 
 // A draft while it is being reviewed: lists are one entry per line of text,
 // split back into entries when saved (same tradeoff as the proof points field).
@@ -57,11 +42,7 @@ function toEditable(draft: BuyerAvatarDraft, id: number): EditableDraft {
 }
 
 function toDraft(editable: EditableDraft): BuyerAvatarDraft {
-  const lines = (text: string) =>
-    text
-      .split('\n')
-      .map((line) => line.trim())
-      .filter((line) => line !== '')
+  const lines = linesOf
   return {
     name: editable.name.trim(),
     who: editable.who.trim(),
@@ -77,9 +58,15 @@ function toDraft(editable: EditableDraft): BuyerAvatarDraft {
 }
 
 // Paste research, review the avatars the AI read out of it, keep the ones you
-// want. Nothing is saved until "Save selected"; the full avatar library tab comes
-// later.
-export function AvatarImportSection({ businessId }: { businessId: string }) {
+// want. Nothing is saved until "Save selected".
+export function AvatarImportSection({
+  businessId,
+  onSaved,
+}: {
+  businessId: string
+  // Called after the kept drafts are saved, so a list of avatars can reload.
+  onSaved?: () => void
+}) {
   const [document, setDocument] = useState('')
   const [drafts, setDrafts] = useState<EditableDraft[] | null>(null)
   const [warnings, setWarnings] = useState<string[]>([])
@@ -113,6 +100,7 @@ export function AvatarImportSection({ businessId }: { businessId: string }) {
       setWarnings([])
       setDocument('')
       setSaved(chosen.length)
+      onSaved?.()
     } catch (e) {
       setError(message(e, 'Could not save the avatars'))
     } finally {

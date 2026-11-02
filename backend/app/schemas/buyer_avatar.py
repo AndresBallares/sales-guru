@@ -128,6 +128,19 @@ class BuyerAvatarUpdateRequest(CamelCaseModel):
         return _clean_items(value, info)
 
 
+class BuyerAvatarReorderRequest(CamelCaseModel):
+    """The business's avatars (active and inactive, not deleted) in their new order."""
+
+    ids: list[str] = Field(max_length=MAX_BUYER_AVATARS_PER_BUSINESS)
+
+    @field_validator("ids")
+    @classmethod
+    def _no_duplicates(cls, value: list[str]) -> list[str]:
+        if len(set(value)) != len(value):
+            raise ValueError("Each avatar may be listed only once")
+        return value
+
+
 class BuyerAvatarResponse(CamelCaseModel):
     """Public-facing representation of a BuyerAvatar."""
 

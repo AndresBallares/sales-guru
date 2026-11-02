@@ -8,11 +8,49 @@ after an avatar is removed.
 """
 
 from collections.abc import Sequence
+from typing import Literal, NamedTuple
 
 from prisma import Prisma
 from prisma.models import BuyerAvatar
 
 from app.core.db import db
+
+AvatarState = Literal["active", "inactive", "archived"]
+
+
+class AvatarRef(NamedTuple):
+    """An avatar as an ad, creative or result names it."""
+
+    id: str
+    name: str
+    state: AvatarState
+
+
+def avatar_state(avatar: BuyerAvatar) -> AvatarState:
+    """Archived once deleted, inactive once deactivated, else active."""
+    if avatar.deletedAt is not None:
+        return "archived"
+    return "active" if avatar.isActive else "inactive"
+
+
+async def avatar_refs(
+    business_id: str, avatar_ids: Sequence[str | None], *, client: Prisma = db
+) -> dict[str, AvatarRef]:
+    """Name and state of the avatars some ads or creatives were written for.
+
+    Args:
+        business_id: The business the ids belong to; others are not resolved.
+        avatar_ids: ``buyerAvatarId`` values; None entries are ignored.
+        client: The database client; only tests pass their own.
+
+    Returns:
+        By id, deleted and inactive avatars included (their state says so); an
+        unknown id is simply absent.
+    """
+    found = await avatars_by_id(
+        business_id, sorted({i for i in avatar_ids if i}), client=client
+    )
+    return {a.id: AvatarRef(a.id, a.name, avatar_state(a)) for a in found.values()}
 
 
 async def assignable_avatars(

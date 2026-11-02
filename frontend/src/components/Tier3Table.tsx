@@ -1,4 +1,5 @@
 import type { DashboardAdRow, DashboardAdStatus, DashboardTier3 } from '../lib/api'
+import { adAvatarLine, avatarMarker } from '../lib/avatarLabel'
 import { formatInteger, formatMoney, formatPercent } from '../lib/dashboardFormat'
 
 // Plain words for each ad's status.
@@ -20,12 +21,26 @@ function Heading({ label, term }: { label: string; term?: string }) {
   )
 }
 
+// The buyer an ad was written for, with a marker when its avatar was deactivated or deleted.
+function AvatarLine({ ad, className }: { ad: DashboardAdRow; className?: string }) {
+  const line = adAvatarLine(ad)
+  if (!line) return null
+  const marker = avatarMarker(ad.avatarState)
+  return (
+    <span className={className}>
+      {line}
+      {marker && <span className="avatar-marker"> ({marker})</span>}
+    </span>
+  )
+}
+
 function Row({ ad }: { ad: DashboardAdRow }) {
   return (
     <tr className={ad.isLeader ? 'dash-leader-row' : undefined}>
       <th scope="row">
         {ad.name}
         {ad.isLeader && <span className="dash-leader-tag">Leading</span>}
+        <AvatarLine ad={ad} className="dash-ad-avatar" />
       </th>
       <td>
         <span className={`dash-status dash-status-${ad.status}`}>{STATUS_LABELS[ad.status]}</span>
@@ -44,6 +59,7 @@ function Row({ ad }: { ad: DashboardAdRow }) {
 // named only when the data supports it (the backend's strict rule: every ad has
 // 10+ purchases, or else every ad has 5+ add-to-carts); otherwise it says so.
 export function Tier3Table({ tier3 }: { tier3: DashboardTier3 }) {
+  const leaderAd = tier3.leader ? tier3.ads.find((ad) => ad.adId === tier3.leader?.adId) : undefined
   return (
     <section className="dash-tier3" aria-labelledby="dash-tier3-heading">
       <h3 id="dash-tier3-heading" className="dash-section-heading">
@@ -52,6 +68,14 @@ export function Tier3Table({ tier3 }: { tier3: DashboardTier3 }) {
       <p className={tier3.leader ? 'dash-leader-line dash-leader-line-yes' : 'dash-leader-line'}>
         {tier3.leaderMessage}
       </p>
+      {leaderAd && adAvatarLine(leaderAd) && (
+        <p className="dash-leader-avatar">
+          {`Leading buyer: ${adAvatarLine(leaderAd)}`}
+          {avatarMarker(leaderAd.avatarState) && (
+            <span className="avatar-marker"> ({avatarMarker(leaderAd.avatarState)})</span>
+          )}
+        </p>
+      )}
       <p className="dash-note">
         An ad is only named the leader once every ad has enough results to compare fairly: at
         least 10 sales each, or else at least 5 add-to-carts each.

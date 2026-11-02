@@ -6,7 +6,16 @@ parameters are derived from that pair, so the same ad reads the same in
 Ads Manager, in this app's logs and in the store's analytics.
 """
 
+import re
+import unicodedata
+from collections.abc import Callable
 from urllib.parse import quote
+
+# Meta's limit on an ad's name. A name here is far shorter (a buyer type, a 24
+# character slug, a 30 character concept and a pillar), so this is a ceiling the
+# tests check, not a truncation the code applies.
+META_AD_NAME_LIMIT = 400
+MAX_SLUG_LENGTH = 24
 
 AVATAR_LABELS = {"self_purchaser": "Self-purchaser", "gift_buyer": "Gift buyer"}
 PILLAR_LABELS = {
@@ -22,16 +31,62 @@ def concept_label(concept: str) -> str:
     return concept.replace("-", " ").capitalize()
 
 
-def angle_label(avatar: str, concept: str, pillar: str | None = None) -> str:
-    """The ad's name: "<Avatar> – <Concept>", or "<Avatar> – <Concept> – <Pillar>".
-
-    En dashes. The pillar goes last, so an ad's name still starts with its
-    avatar and concept, and an older ad without a pillar keeps its name.
-    """
-    label = f"{AVATAR_LABELS.get(avatar, avatar)} – {concept_label(concept)}"
+def _label(avatar: str, concept: str, pillar: str | None, slug: str | None) -> str:
+    buyer = AVATAR_LABELS.get(avatar, avatar)
+    if slug:
+        buyer += f" ({slug})"
+    label = f"{buyer} – {concept_label(concept)}"
     if pillar:
         label += f" – {PILLAR_LABELS.get(pillar, pillar)}"
     return label
+
+
+def angle_label(avatar: str, concept: str, pillar: str | None = None) -> str:
+    """The angle's label: "<Avatar> – <Concept>", or with " – <Pillar>" after it.
+
+    En dashes. The pillar goes last, so an ad's name still starts with its
+    avatar and concept, and an older ad without a pillar keeps its name. This
+    string is also the key the Creative Agent's variants are matched back to the
+    plan's angles by, so it never carries a library avatar's slug.
+    """
+    return _label(avatar, concept, pillar, None)
+
+
+def avatar_slug(name: str) -> str:
+    """A library avatar's name as a short slug for ad names.
+
+    Lowercase ASCII words joined by hyphens, a leading "The" dropped, at most
+    MAX_SLUG_LENGTH characters cut at a word boundary ("The Promotion Ring
+    Buyer" -> "promotion-ring-buyer"). A name with nothing usable gives "avatar".
+    """
+    folded = unicodedata.normalize("NFKD", name).encode("ascii", "ignore").decode()
+    words = re.findall(r"[a-z0-9]+", folded.lower())
+    if len(words) > 1 and words[0] == "the":
+        words = words[1:]
+    slug = ""
+    for word in words:
+        candidate = f"{slug}-{word}" if slug else word
+        if len(candidate) > MAX_SLUG_LENGTH:
+            if not slug:
+                slug = word[:MAX_SLUG_LENGTH]
+            break
+        slug = candidate
+    return slug or "avatar"
+
+
+def free_slug(slug: str, is_taken: Callable[[str], bool]) -> str:
+    """The slug, or the first "<slug>-2", "<slug>-3"... that is not taken.
+
+    Args:
+        slug: The slug wanted.
+        is_taken: Whether a candidate slug would clash with an existing name.
+    """
+    candidate = slug
+    number = 2
+    while is_taken(candidate):
+        candidate = f"{slug}-{number}"
+        number += 1
+    return candidate
 
 
 def ad_name(
@@ -39,10 +94,15 @@ def ad_name(
     concept: str | None,
     fallback: str,
     pillar: str | None = None,
+    slug: str | None = None,
 ) -> str:
-    """The ad's name on Meta: its angle label, or the fallback for an older ad."""
+    """The ad's name on Meta: its angle label, or the fallback for an older ad.
+
+    With a slug (an ad written for a library avatar) the buyer type is followed by
+    it in parentheses: "Self-purchaser (promotion-ring-buyer) – Ceramic inlay".
+    """
     if avatar and concept:
-        return angle_label(avatar, concept, pillar)
+        return _label(avatar, concept, pillar, slug)
     return fallback
 
 

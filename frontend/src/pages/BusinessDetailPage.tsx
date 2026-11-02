@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { useParams, useSearchParams } from 'react-router-dom'
+import { useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { BackButton } from '../components/BackButton'
-import { AvatarImportSection } from '../components/AvatarImportSection'
+import { AvatarsSection } from '../components/AvatarsSection'
+import { BusinessTabs } from '../components/BusinessTabs'
 import { AudiencesSection } from '../components/AudiencesSection'
 import { BrandRequiredNotice } from '../components/BrandRequiredNotice'
 import { ArrowRightIcon } from '../components/icons'
@@ -26,9 +27,27 @@ import {
   type Product,
 } from '../lib/api'
 
+// The business page's tabs. The selected one lives in the URL hash (#avatars) so a refresh
+// or a shared link opens the same tab; the first tab has no hash.
+const AVATARS_TAB = 'avatars'
+const RESULTS_TAB = 'results'
+
 export function BusinessDetailPage() {
   const { businessId } = useParams<{ businessId: string }>()
   const [searchParams, setSearchParams] = useSearchParams()
+  const location = useLocation()
+  const navigate = useNavigate()
+  const selectedTab = location.hash === `#${AVATARS_TAB}` ? AVATARS_TAB : RESULTS_TAB
+  function selectTab(id: string) {
+    navigate(
+      {
+        pathname: location.pathname,
+        search: location.search,
+        hash: id === AVATARS_TAB ? `#${id}` : '',
+      },
+      { replace: true },
+    )
+  }
   // "Skip for now" on the Meta step: on to the campaigns without connecting Meta yet.
   const metaSkipped = searchParams.get('skipMeta') === '1'
   // "Skip for now" on the Meta step shown after the audience is saved: on to generating
@@ -204,70 +223,98 @@ export function BusinessDetailPage() {
         <BrandRequiredNotice businessId={businessId} businessName={business?.name} />
       )}
 
-      {businessId &&
-        gate.state === 'ready' &&
-        gate.hasBrand &&
-        gate.metaStep &&
-        !metaContinued &&
-        !metaSkipped && (
-          <MetaConnectionSection
-            businessId={businessId}
-            onSetupComplete={setMetaSetupComplete}
-            onContinue={() => setMetaContinued(true)}
-            skipTo={`/businesses/${businessId}?skipMeta=1`}
-          />
-        )}
-
-      {businessId &&
-        gate.state === 'ready' &&
-        gate.hasBrand &&
-        (!gate.metaStep || metaContinued || metaSkipped) && (
-          <>
-            {campaigns === null || campaigns.length === 0 ? (
-              <CampaignsSection businessId={businessId} onCampaignsChange={setCampaigns} />
-            ) : products === null || products.length === 0 ? (
-              <ProductsSection businessId={businessId} onProductsChange={setProducts} />
-            ) : audiences === null || audiences.length === 0 ? (
-              <AudiencesSection businessId={businessId} onAudiencesChange={setAudiences} />
-            ) : !metaSetupComplete && !metaLater ? (
-              <MetaConnectionSection
-                businessId={businessId}
-                onSetupComplete={setMetaSetupComplete}
-                onSkip={() => setMetaLater(true)}
-              />
-            ) : (
-              <>
-                {/* Results first, then the campaign list: once onboarding is
-                    done this page is where you check how the ads are doing. */}
-                {!metaSetupComplete && (
-                  <div className="flow-callout">
-                    <p>
-                      <strong>Meta isn't connected yet.</strong> You can generate and select ads
-                      now; connect Meta before publishing.
-                    </p>
-                    <button
-                      type="button"
-                      className="btn-outline btn-gold"
-                      onClick={() => setMetaLater(false)}
-                    >
-                      Connect Meta
-                      <ArrowRightIcon />
-                    </button>
-                  </div>
-                )}
-                <DashboardSection businessId={businessId} refreshKey={resultsRevision} />
-                <CampaignsSection
-                  businessId={businessId}
-                  onCampaignsChange={handleCampaignsChanged}
-                />
-                <MetaSettingsSection businessId={businessId} outcome={metaOutcome} />
-              </>
-            )}
-          </>
-        )}
-
       {businessId && gate.state === 'ready' && gate.hasBrand && (
-        <AvatarImportSection businessId={businessId} />
+        <BusinessTabs
+          selected={selectedTab}
+          onSelect={selectTab}
+          tabs={[
+            {
+              id: RESULTS_TAB,
+              label: 'Results and campaigns',
+              // Stays mounted when you look at the avatars, so a publish or an edit in progress is kept.
+              keepMounted: true,
+              content: (
+                <>
+                  {businessId &&
+                    gate.state === 'ready' &&
+                    gate.hasBrand &&
+                    gate.metaStep &&
+                    !metaContinued &&
+                    !metaSkipped && (
+                      <MetaConnectionSection
+                        businessId={businessId}
+                        onSetupComplete={setMetaSetupComplete}
+                        onContinue={() => setMetaContinued(true)}
+                        skipTo={`/businesses/${businessId}?skipMeta=1`}
+                      />
+                    )}
+
+                  {businessId &&
+                    gate.state === 'ready' &&
+                    gate.hasBrand &&
+                    (!gate.metaStep || metaContinued || metaSkipped) && (
+                      <>
+                        {campaigns === null || campaigns.length === 0 ? (
+                          <CampaignsSection
+                            businessId={businessId}
+                            onCampaignsChange={setCampaigns}
+                          />
+                        ) : products === null || products.length === 0 ? (
+                          <ProductsSection businessId={businessId} onProductsChange={setProducts} />
+                        ) : audiences === null || audiences.length === 0 ? (
+                          <AudiencesSection
+                            businessId={businessId}
+                            onAudiencesChange={setAudiences}
+                          />
+                        ) : !metaSetupComplete && !metaLater ? (
+                          <MetaConnectionSection
+                            businessId={businessId}
+                            onSetupComplete={setMetaSetupComplete}
+                            onSkip={() => setMetaLater(true)}
+                          />
+                        ) : (
+                          <>
+                            {/* Results first, then the campaign list: once onboarding is
+                        done this page is where you check how the ads are doing. */}
+                            {!metaSetupComplete && (
+                              <div className="flow-callout">
+                                <p>
+                                  <strong>Meta isn't connected yet.</strong> You can generate and
+                                  select ads now; connect Meta before publishing.
+                                </p>
+                                <button
+                                  type="button"
+                                  className="btn-outline btn-gold"
+                                  onClick={() => setMetaLater(false)}
+                                >
+                                  Connect Meta
+                                  <ArrowRightIcon />
+                                </button>
+                              </div>
+                            )}
+                            <DashboardSection
+                              businessId={businessId}
+                              refreshKey={resultsRevision}
+                            />
+                            <CampaignsSection
+                              businessId={businessId}
+                              onCampaignsChange={handleCampaignsChanged}
+                            />
+                            <MetaSettingsSection businessId={businessId} outcome={metaOutcome} />
+                          </>
+                        )}
+                      </>
+                    )}
+                </>
+              ),
+            },
+            {
+              id: AVATARS_TAB,
+              label: 'Avatars',
+              content: <AvatarsSection businessId={businessId} />,
+            },
+          ]}
+        />
       )}
     </main>
   )

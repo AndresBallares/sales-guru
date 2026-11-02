@@ -30,6 +30,7 @@ from app.schemas.buyer_avatar import (
     MAX_BUYER_AVATARS_PER_BUSINESS,
     MAX_ITEMS,
     BuyerAvatarCreateRequest,
+    BuyerAvatarReorderRequest,
     BuyerAvatarResponse,
     BuyerAvatarUpdateRequest,
     PurchaseFor,
@@ -243,6 +244,44 @@ async def bulk_create_avatars(
     created = await db.buyeravatar.find_many(where={"id": {"in": ids}})
     by_id = {a.id: a for a in created}
     return [_to_response(by_id[avatar_id]) for avatar_id in ids]
+
+
+@router.post("/reorder", response_model=list[BuyerAvatarResponse])
+async def reorder_avatars(
+    payload: BuyerAvatarReorderRequest,
+    business: Business = Depends(get_owned_business),
+) -> list[BuyerAvatarResponse]:
+    """Put the business's avatars in the order given (their sort order is renumbered).
+
+    Args:
+        payload: Every avatar of the business that is not deleted, active or
+            inactive, each exactly once, in the new order.
+        business: The business, resolved and ownership-checked.
+
+    Returns:
+        The avatars in the new order.
+
+    Raises:
+        HTTPException: 409 if the list does not match the business's current
+            avatars (one was added, deleted or is missing): reload and try again.
+    """
+    current = await db.buyeravatar.find_many(
+        where={"businessId": business.id, "deletedAt": None}
+    )
+    if {a.id for a in current} != set(payload.ids):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="The avatar list has changed; reload it and try again",
+        )
+    # One batch: all the new positions are written together or not at all.
+    async with db.batch_() as batcher:
+        for position, avatar_id in enumerate(payload.ids):
+            batcher.buyeravatar.update(
+                where={"id": avatar_id}, data={"sortOrder": position}
+            )
+    reordered = await db.buyeravatar.find_many(where={"id": {"in": payload.ids}})
+    by_id = {a.id: a for a in reordered}
+    return [_to_response(by_id[avatar_id]) for avatar_id in payload.ids]
 
 
 @router.get("", response_model=list[BuyerAvatarResponse])

@@ -1019,6 +1019,14 @@ export interface Creative {
   description: string
   cta: Cta
   creativeAngle: string | null
+  // The structured angle behind creativeAngle, and the library avatar the ad was
+  // written for (buyerAvatar is null when it has none or it no longer resolves).
+  // Absent on responses from before these fields existed.
+  avatar?: 'self_purchaser' | 'gift_buyer' | null
+  concept?: string | null
+  pillar?: CreativePillar | null
+  buyerAvatarId?: string | null
+  buyerAvatar?: BuyerAvatarRef | null
   imagePrompt: string | null
   videoPrompt: string | null
   imageUrl: string | null
@@ -1664,6 +1672,16 @@ export interface DashboardTier2 {
 
 export type DashboardAdStatus = 'live' | 'paused' | 'paused_by_optimizer' | 'proposed_pause'
 
+export type AvatarState = 'active' | 'inactive' | 'archived'
+
+// A library avatar as an ad or creative names it: archived = deleted, inactive =
+// deactivated; both still name the buyer the ad was written for.
+export interface BuyerAvatarRef {
+  id: string
+  name: string
+  state: AvatarState
+}
+
 export interface DashboardAdRow {
   adId: string
   name: string
@@ -1675,6 +1693,12 @@ export interface DashboardAdRow {
   purchases: number | null
   cac: number | null
   isLeader: boolean
+  // The library avatar the ad was written for; display only (the leader is chosen
+  // without it). Null for an older ad.
+  avatarName?: string | null
+  avatarState?: AvatarState | null
+  concept?: string | null
+  pillar?: CreativePillar | null
 }
 
 export interface DashboardTier3 {
@@ -1802,5 +1826,33 @@ export function bulkCreateAvatars(
   return request<BuyerAvatar[]>(`/businesses/${businessId}/avatars/bulk`, {
     method: 'POST',
     body: JSON.stringify({ avatars }),
+  })
+}
+
+export function listAvatars(businessId: string): Promise<BuyerAvatar[]> {
+  return request<BuyerAvatar[]>(`/businesses/${businessId}/avatars`)
+}
+
+export function updateAvatar(
+  businessId: string,
+  avatarId: string,
+  changes: Partial<BuyerAvatarDraft>,
+): Promise<BuyerAvatar> {
+  return request<BuyerAvatar>(`/businesses/${businessId}/avatars/${avatarId}`, {
+    method: 'PATCH',
+    body: JSON.stringify(changes),
+  })
+}
+
+// A soft delete: the avatar leaves the lists, but ads and results that used it keep its name.
+export function deleteAvatar(businessId: string, avatarId: string): Promise<void> {
+  return request<void>(`/businesses/${businessId}/avatars/${avatarId}`, { method: 'DELETE' })
+}
+
+// The business's avatars (not deleted, active or inactive) in their new order.
+export function reorderAvatars(businessId: string, ids: string[]): Promise<BuyerAvatar[]> {
+  return request<BuyerAvatar[]>(`/businesses/${businessId}/avatars/reorder`, {
+    method: 'POST',
+    body: JSON.stringify({ ids }),
   })
 }

@@ -122,3 +122,129 @@ def test_url_tags_without_a_pillar_have_no_utm_term() -> None:
     )
 
     assert "utm_term" not in tags
+
+
+# ── Avatar slugs in ad names (Phase 6) ───────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    ("name", "slug"),
+    [
+        ("The Promotion Ring Buyer", "promotion-ring-buyer"),
+        ("The Deadline Gift-Giver", "deadline-gift-giver"),
+        ("Quiet-Luxury Collector", "quiet-luxury-collector"),
+        ("  Café   Owner!  ", "cafe-owner"),
+        ("The", "the"),
+        ("★★★", "avatar"),
+        ("", "avatar"),
+    ],
+)
+def test_an_avatars_name_becomes_a_short_lowercase_slug(name: str, slug: str) -> None:
+    assert creative_naming.avatar_slug(name) == slug
+
+
+def test_a_slug_is_cut_at_a_word_boundary_within_24_characters() -> None:
+    slug = creative_naming.avatar_slug(
+        "The Heirloom Commissioner Who Redesigns Inherited Stones"
+    )
+
+    assert slug == "heirloom-commissioner"
+    assert len(slug) <= creative_naming.MAX_SLUG_LENGTH == 24
+
+
+def test_one_very_long_word_is_cut_hard() -> None:
+    slug = creative_naming.avatar_slug("Supercalifragilisticexpialidocious" * 2)
+
+    assert len(slug) == creative_naming.MAX_SLUG_LENGTH
+    assert not slug.endswith("-")
+
+
+def test_an_ad_with_an_avatar_slug_is_named_with_the_slug_in_parentheses() -> None:
+    assert (
+        creative_naming.ad_name(
+            "self_purchaser",
+            "ceramic-inlay",
+            "Headline",
+            "mechanism",
+            slug="promotion-ring-buyer",
+        )
+        == "Self-purchaser (promotion-ring-buyer) – Ceramic inlay – Mechanism"
+    )
+    assert (
+        creative_naming.ad_name(
+            "gift_buyer", "founder-led-gift", "Headline", slug="deadline-gift-giver"
+        )
+        == "Gift buyer (deadline-gift-giver) – Founder led gift"
+    )
+
+
+def test_no_slug_keeps_todays_name_byte_for_byte() -> None:
+    assert (
+        creative_naming.ad_name("self_purchaser", "ceramic-inlay", "H", "mechanism")
+        == "Self-purchaser – Ceramic inlay – Mechanism"
+    )
+    assert (
+        creative_naming.ad_name(
+            "self_purchaser", "ceramic-inlay", "H", "mechanism", slug=None
+        )
+        == "Self-purchaser – Ceramic inlay – Mechanism"
+    )
+
+
+def test_a_slug_without_a_structured_angle_changes_nothing() -> None:
+    assert creative_naming.ad_name(None, None, "Headline", slug="x") == "Headline"
+    assert (
+        creative_naming.ad_name("gift_buyer", None, "Headline", slug="x") == "Headline"
+    )
+
+
+def test_angle_label_the_matching_key_is_unchanged_by_slugs() -> None:
+    """angle_label joins the model's variants to the plan; it must stay as it was."""
+    assert (
+        creative_naming.angle_label("self_purchaser", "ceramic-inlay", "mechanism")
+        == "Self-purchaser – Ceramic inlay – Mechanism"
+    )
+
+
+def test_utm_medium_is_unchanged_and_the_slug_travels_in_utm_content() -> None:
+    name = creative_naming.ad_name(
+        "self_purchaser", "ceramic-inlay", "H", "mechanism", slug="promotion-ring-buyer"
+    )
+    tags = creative_naming.url_tags(
+        campaign_name="Snake-Ring",
+        avatar="self_purchaser",
+        concept="ceramic-inlay",
+        name=name,
+        pillar="mechanism",
+    )
+
+    parsed = {key: values[0] for key, values in parse_qs(tags).items()}
+    assert parsed["utm_medium"] == "self-purchaser-ceramic-inlay"
+    assert parsed["utm_content"] == (
+        "Self-purchaser (promotion-ring-buyer) – Ceramic inlay – Mechanism"
+    )
+    assert parsed["utm_term"] == "mechanism"
+
+
+def test_the_longest_possible_name_is_far_inside_metas_limit() -> None:
+    slug = creative_naming.avatar_slug("W" * 60)
+    name = creative_naming.ad_name(
+        "self_purchaser", "c" * 30, "H", "mechanism", slug=slug + "-99"
+    )
+
+    assert len(name) < 150 < creative_naming.META_AD_NAME_LIMIT == 400
+
+
+def test_a_slug_nobody_else_uses_is_kept() -> None:
+    assert creative_naming.free_slug("promotion-ring", lambda s: False) == (
+        "promotion-ring"
+    )
+
+
+def test_a_taken_slug_gets_the_next_free_number() -> None:
+    taken = {"promotion-ring", "promotion-ring-2"}
+
+    assert (
+        creative_naming.free_slug("promotion-ring", lambda s: s in taken)
+        == "promotion-ring-3"
+    )

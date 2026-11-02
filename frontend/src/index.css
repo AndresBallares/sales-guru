@@ -5917,3 +5917,134 @@ main > section.campaigns-overview {
   gap: 8px;
   margin-top: 14px;
 }
+
+/* Business page tabs: same look as the preview's platform tabs. */
+.business-tabs {
+  margin-top: 1rem;
+}
+
+.business-tablist {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.business-tab {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  padding: 0 1rem;
+  border: none;
+  border-bottom: 3px solid transparent;
+  border-radius: 10px 10px 0 0;
+  background: transparent;
+  color: var(--text-secondary);
+  box-shadow: none;
+  font-weight: 600;
+}
+
+.business-tab:hover:not(:disabled) {
+  background: var(--surface-hover);
+  color: var(--text);
+  box-shadow: none;
+}
+
+/* The active tab is marked by its underline and weight, not by colour alone. */
+.business-tab[aria-selected='true'] {
+  border-bottom-color: var(--create-bg);
+  background: transparent;
+  color: var(--text);
+  font-weight: 700;
+}
+
+.business-tabpanel {
+  padding-top: 1rem;
+}
+
+.business-tabpanel[hidden] {
+  display: none;
+}
+
+/* The buyer an ad was written for, on creative cards and dashboard rows. */
+.avatar-marker {
+  color: var(--text-secondary);
+  font-style: italic;
+  font-weight: 400;
+}
+
+.dash-ad-avatar {
+  display: block;
+  color: var(--text-secondary);
+  font-size: 0.85rem;
+  font-weight: 400;
+}
+
+.dash-leader-avatar {
+  margin: 0.25rem 0 0;
+  color: var(--text-secondary);
+}
+
+/* The Avatars tab. */
+.avatar-list {
+  display: grid;
+  gap: 1rem;
+  margin: 1rem 0;
+  padding: 0;
+  list-style: none;
+}
+
+.avatar-item {
+  padding: 1rem;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+}
+
+.avatar-item-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.avatar-item-head h3 {
+  margin: 0;
+  font-size: 1.05rem;
+}
+
+.avatar-badge {
+  padding: 0.1rem 0.55rem;
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  font-size: 0.8rem;
+}
+
+.avatar-badge-off {
+  font-style: italic;
+}
+
+.avatar-who {
+  margin: 0.5rem 0;
+  color: var(--text-secondary);
+}
+
+.avatar-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-top: 0.5rem;
+}
+
+.avatar-edit {
+  display: grid;
+  gap: 0.75rem;
+  margin-top: 0.75rem;
+}
+
+.avatar-confirm {
+  min-inline-size: 0;
+  margin-top: 0.75rem;
+  padding: 0.75rem;
+  border: 1px solid var(--border-strong);
+  border-radius: 10px;
+}

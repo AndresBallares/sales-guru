@@ -1,6 +1,6 @@
 import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { MemoryRouter, Route, Routes } from 'react-router-dom'
+import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { BusinessDetailPage } from './BusinessDetailPage'
 import { AuthProvider } from '../context/AuthContext'
@@ -28,6 +28,7 @@ vi.mock('../lib/api', async (importOriginal) => {
     getStrategy: vi.fn<typeof actual.getStrategy>(),
     getBrandProfile: vi.fn<typeof actual.getBrandProfile>(),
     getBusinessDashboard: vi.fn<typeof actual.getBusinessDashboard>(),
+    listAvatars: vi.fn<typeof actual.listAvatars>(),
     getCampaignDashboard: vi.fn<typeof actual.getCampaignDashboard>(),
   }
 })
@@ -167,6 +168,7 @@ beforeEach(() => {
     new api.ApiError(404, 'Meta connection not found'),
   )
   mockedApi.getBrandProfile.mockResolvedValue(brandProfile)
+  mockedApi.listAvatars.mockResolvedValue([])
   mockedApi.getBusinessDashboard.mockResolvedValue({
     activeCampaigns: 0,
     totalSpend: 0,
@@ -781,5 +783,84 @@ describe('BusinessDetailPage', () => {
     renderPage()
 
     expect(await screen.findByRole('alert')).toHaveTextContent('Business not found')
+  })
+})
+
+describe('BusinessDetailPage tabs', () => {
+  function LocationProbe() {
+    const location = useLocation()
+    return <p data-testid="location">{`${location.pathname}${location.search}${location.hash}`}</p>
+  }
+
+  function renderWithLocation(entry: string) {
+    render(
+      <MemoryRouter initialEntries={[entry]}>
+        <AuthProvider>
+          <LocationProbe />
+          <Routes>
+            <Route path="/businesses/:businessId" element={<BusinessDetailPage />} />
+          </Routes>
+        </AuthProvider>
+      </MemoryRouter>,
+    )
+  }
+
+  it('opens on the results tab and keeps the avatars tab out of the page', async () => {
+    renderWithLocation('/businesses/biz-1')
+
+    const resultsTab = await screen.findByRole('tab', { name: 'Results and campaigns' })
+    expect(resultsTab).toHaveAttribute('aria-selected', 'true')
+    expect(screen.getByRole('tab', { name: 'Avatars' })).toHaveAttribute('aria-selected', 'false')
+    expect(screen.queryByRole('heading', { name: 'Buyer avatars' })).not.toBeInTheDocument()
+    expect(mockedApi.listAvatars).not.toHaveBeenCalled()
+  })
+
+  it('opens the avatars tab straight from #avatars (a refresh or a shared link)', async () => {
+    renderWithLocation('/businesses/biz-1#avatars')
+
+    expect(await screen.findByRole('heading', { name: 'Buyer avatars', level: 2 })).toBeInTheDocument()
+    expect(screen.getByRole('tab', { name: 'Avatars' })).toHaveAttribute('aria-selected', 'true')
+    expect(screen.getByText('Import buyer avatars from research')).toBeInTheDocument()
+    expect(mockedApi.listAvatars).toHaveBeenCalledWith('biz-1')
+  })
+
+  it('writes the selected tab into the URL hash, and removes it for the first tab', async () => {
+    renderWithLocation('/businesses/biz-1')
+
+    await userEvent.click(await screen.findByRole('tab', { name: 'Avatars' }))
+    expect(screen.getByTestId('location')).toHaveTextContent('/businesses/biz-1#avatars')
+    expect(await screen.findByRole('heading', { name: 'Buyer avatars', level: 2 })).toBeInTheDocument()
+
+    await userEvent.click(screen.getByRole('tab', { name: 'Results and campaigns' }))
+    expect(screen.getByTestId('location').textContent).toBe('/businesses/biz-1')
+    expect(screen.queryByRole('heading', { name: 'Buyer avatars' })).not.toBeInTheDocument()
+  })
+
+  it('keeps the query string when it changes tab', async () => {
+    renderWithLocation('/businesses/biz-1?skipMeta=1#avatars')
+    await screen.findByRole('heading', { name: 'Buyer avatars', level: 2 })
+
+    await userEvent.click(screen.getByRole('tab', { name: 'Results and campaigns' }))
+
+    expect(screen.getByTestId('location').textContent).toBe('/businesses/biz-1?skipMeta=1')
+  })
+
+  it('treats an unknown hash as the first tab', async () => {
+    renderWithLocation('/businesses/biz-1#nonsense')
+
+    expect(await screen.findByRole('tab', { name: 'Results and campaigns' })).toHaveAttribute(
+      'aria-selected',
+      'true',
+    )
+  })
+
+  it('shows no tabs, and no avatars, until the business has a brand', async () => {
+    mockedApi.getBrandProfile.mockRejectedValue(new api.ApiError(404, 'Brand profile not found'))
+    renderWithLocation('/businesses/biz-1#avatars')
+
+    await waitFor(() => expect(mockedApi.getBrandProfile).toHaveBeenCalled())
+    await screen.findAllByText(/brand/i)
+    expect(screen.queryByRole('tablist')).not.toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: 'Buyer avatars' })).not.toBeInTheDocument()
   })
 })

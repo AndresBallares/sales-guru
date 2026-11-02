@@ -1,5 +1,6 @@
 """Creative Agent endpoints (PRD.md build step 6)."""
 
+from collections.abc import Mapping, Sequence
 from typing import cast
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -36,7 +37,7 @@ from app.schemas.strategy import (
     StrategyContentAdapter,
 )
 from app.services.brand_rules import banned_phrases_for
-from app.services.buyer_avatars import avatars_for_copy
+from app.services.buyer_avatars import AvatarRef, avatar_refs, avatars_for_copy
 from app.services.campaign_readiness import is_ready
 from app.services.creative import (
     CreativeAgentError,
@@ -128,7 +129,11 @@ _MIN_CARDS_REQUIRED = (
 
 
 def _to_response(
-    creative: Creative, campaign: Campaign, product: Product | None, business: Business
+    creative: Creative,
+    campaign: Campaign,
+    product: Product | None,
+    business: Business,
+    avatars: Mapping[str, AvatarRef],
 ) -> CreativeResponse:
     """Map a Prisma Creative record to its public response shape.
 
@@ -144,10 +149,13 @@ def _to_response(
             Must be the product identified by campaign.productId when one
             is set.
         business: The campaign's business, for its description snapshot.
+        avatars: The business's avatars by id (``avatar_refs``), to name the
+            creative's buyer avatar.
 
     Returns:
         The public-facing representation.
     """
+    ref = avatars.get(creative.buyerAvatarId or "")
     cards = [
         {
             "id": card.id,
@@ -201,6 +209,11 @@ def _to_response(
             "description": creative.description,
             "cta": creative.cta,
             "creativeAngle": creative.creativeAngle,
+            "avatar": creative.avatar,
+            "concept": creative.concept,
+            "pillar": creative.pillar,
+            "buyerAvatarId": creative.buyerAvatarId,
+            "buyerAvatar": None if ref is None else ref._asdict(),
             "imagePrompt": creative.imagePrompt,
             "videoPrompt": creative.videoPrompt,
             "imageUrl": creative.imageUrl,
@@ -211,6 +224,13 @@ def _to_response(
             "isStale": is_creative_stale(creative, campaign, product, business),
         }
     )
+
+
+async def _avatars_for(
+    business_id: str, creatives: Sequence[Creative]
+) -> dict[str, AvatarRef]:
+    """The avatars these creatives were written for, to name them in responses."""
+    return await avatar_refs(business_id, [c.buyerAvatarId for c in creatives])
 
 
 async def _current_product(campaign: Campaign) -> Product | None:
@@ -236,7 +256,8 @@ async def _list_creatives(campaign: Campaign) -> list[CreativeResponse]:
     )
     product = await _current_product(campaign)
     business = await _current_business(campaign)
-    return [_to_response(c, campaign, product, business) for c in creatives]
+    avatars = await _avatars_for(business.id, creatives)
+    return [_to_response(c, campaign, product, business, avatars) for c in creatives]
 
 
 async def _pick_assets(
@@ -814,7 +835,13 @@ async def select_creative(
 
     product = await _current_product(campaign)
     business = await _current_business(campaign)
-    return _to_response(updated, campaign, product, business)
+    return _to_response(
+        updated,
+        campaign,
+        product,
+        business,
+        await _avatars_for(business.id, [updated]),
+    )
 
 
 @router.post("/{creative_id}/deselect", response_model=CreativeResponse)
@@ -864,7 +891,13 @@ async def deselect_creative(
 
     product = await _current_product(campaign)
     business = await _current_business(campaign)
-    return _to_response(updated, campaign, product, business)
+    return _to_response(
+        updated,
+        campaign,
+        product,
+        business,
+        await _avatars_for(business.id, [updated]),
+    )
 
 
 async def _reopen_approval_if_selected(campaign: Campaign, creative: Creative) -> None:
@@ -955,7 +988,13 @@ async def set_creative_image(
 
     product = await _current_product(campaign)
     business = await _current_business(campaign)
-    return _to_response(updated, campaign, product, business)
+    return _to_response(
+        updated,
+        campaign,
+        product,
+        business,
+        await _avatars_for(business.id, [updated]),
+    )
 
 
 @router.put("/{creative_id}/story-asset", response_model=CreativeResponse)
@@ -1042,7 +1081,13 @@ async def set_creative_story_asset(
 
     product = await _current_product(campaign)
     business = await _current_business(campaign)
-    return _to_response(updated, campaign, product, business)
+    return _to_response(
+        updated,
+        campaign,
+        product,
+        business,
+        await _avatars_for(business.id, [updated]),
+    )
 
 
 @router.put("/{creative_id}/square-asset", response_model=CreativeResponse)
@@ -1133,7 +1178,13 @@ async def set_creative_square_asset(
 
     product = await _current_product(campaign)
     business = await _current_business(campaign)
-    return _to_response(updated, campaign, product, business)
+    return _to_response(
+        updated,
+        campaign,
+        product,
+        business,
+        await _avatars_for(business.id, [updated]),
+    )
 
 
 @router.post("/{creative_id}/regenerate", response_model=CreativeResponse)
@@ -1244,7 +1295,13 @@ async def regenerate_creative_copy(
     assert updated is not None  # just fetched above, can't vanish mid-request
     await _reopen_approval_if_selected(campaign, updated)
 
-    return _to_response(updated, campaign, product, business)
+    return _to_response(
+        updated,
+        campaign,
+        product,
+        business,
+        await _avatars_for(business.id, [updated]),
+    )
 
 
 async def _other_ads_text(
@@ -1344,7 +1401,13 @@ async def reorder_creative_cards(
     assert updated is not None  # just fetched above, can't vanish mid-request
     product = await _current_product(campaign)
     business = await _current_business(campaign)
-    return _to_response(updated, campaign, product, business)
+    return _to_response(
+        updated,
+        campaign,
+        product,
+        business,
+        await _avatars_for(business.id, [updated]),
+    )
 
 
 @router.delete("/{creative_id}/cards/{card_id}", response_model=CreativeResponse)
@@ -1395,4 +1458,10 @@ async def remove_creative_card(
     assert updated is not None  # just fetched above, can't vanish mid-request
     product = await _current_product(campaign)
     business = await _current_business(campaign)
-    return _to_response(updated, campaign, product, business)
+    return _to_response(
+        updated,
+        campaign,
+        product,
+        business,
+        await _avatars_for(business.id, [updated]),
+    )
