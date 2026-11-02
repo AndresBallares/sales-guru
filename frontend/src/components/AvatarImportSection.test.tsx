@@ -191,4 +191,20 @@ describe('AvatarImportSection', () => {
 
     expect(await screen.findByRole('status')).toHaveTextContent('Saved 2 avatars')
   })
+
+  it('tells its parent once the kept avatars are saved, and not when saving fails', async () => {
+    const onSaved = vi.fn<() => void>()
+    mockedApi.importAvatars.mockResolvedValue({ drafts: [makeDraft('Collector')], warnings: [] })
+    mockedApi.bulkCreateAvatars.mockRejectedValueOnce(new api.ApiError(409, 'Too many avatars'))
+    render(<AvatarImportSection businessId="biz-1" onSaved={onSaved} />)
+    await openAndImport()
+
+    await userEvent.click(await screen.findByRole('button', { name: 'Save 1 selected' }))
+    await screen.findByRole('alert')
+    expect(onSaved).not.toHaveBeenCalled()
+
+    mockedApi.bulkCreateAvatars.mockResolvedValue([])
+    await userEvent.click(screen.getByRole('button', { name: 'Save 1 selected' }))
+    await waitFor(() => expect(onSaved).toHaveBeenCalledTimes(1))
+  })
 })

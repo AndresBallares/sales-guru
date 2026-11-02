@@ -134,4 +134,76 @@ describe('Tier3Table', () => {
     expect(region).toHaveAttribute('tabindex', '0')
     expect(within(region).getByRole('table')).toBeInTheDocument()
   })
+
+  describe('buyer avatars', () => {
+    const rows = [
+      makeAdRow({
+        adId: 'a1',
+        name: 'Gift buyer – Founder led gift – Emotion',
+        avatarName: 'The Deadline Gift-Giver',
+        avatarState: 'active',
+        pillar: 'emotion',
+        isLeader: true,
+      }),
+      makeAdRow({
+        adId: 'a2',
+        name: 'Self-purchaser – Ceramic inlay – Mechanism',
+        avatarName: 'The Promotion Ring Buyer',
+        avatarState: 'archived',
+        pillar: 'mechanism',
+      }),
+      makeAdRow({ adId: 'a3', name: 'Older ad without an avatar' }),
+    ]
+    const tier3 = makeTier3({
+      ads: rows,
+      leader: { adId: 'a1', basis: 'cost_per_add_to_cart' },
+      leaderMessage: 'Leading on cost per add-to-cart',
+    })
+
+    it('shows each ad’s avatar and pillar next to its name', () => {
+      render(<Tier3Table tier3={tier3} />)
+
+      const first = rowFor('Gift buyer – Founder led gift – Emotion')
+      expect(first.getByText('The Deadline Gift-Giver – Emotion')).toBeInTheDocument()
+      expect(rowFor('Self-purchaser – Ceramic inlay – Mechanism').getByText(/The Promotion Ring Buyer – Mechanism/)).toBeInTheDocument()
+    })
+
+    it('marks an archived or inactive avatar in the row', () => {
+      render(<Tier3Table tier3={tier3} />)
+
+      expect(
+        rowFor('Self-purchaser – Ceramic inlay – Mechanism').getByText(/archived/),
+      ).toBeInTheDocument()
+    })
+
+    it('says which buyer is leading, under the verdict', () => {
+      render(<Tier3Table tier3={tier3} />)
+
+      expect(screen.getByText('Leading on cost per add-to-cart')).toBeInTheDocument()
+      expect(screen.getByText('Leading buyer: The Deadline Gift-Giver – Emotion')).toBeInTheDocument()
+    })
+
+    it('says nothing about a buyer when there is no leader or the leader has no avatar', () => {
+      const noLeader = makeTier3({ ads: rows, leader: null, leaderMessage: 'No clear leader yet' })
+      const { rerender } = render(<Tier3Table tier3={noLeader} />)
+      expect(screen.queryByText(/Leading buyer/)).not.toBeInTheDocument()
+
+      rerender(
+        <Tier3Table
+          tier3={makeTier3({
+            ads: [makeAdRow({ adId: 'a3', name: 'Older ad', isLeader: true }), rows[1]],
+            leader: { adId: 'a3', basis: 'cac' },
+            leaderMessage: 'Leading on cost per purchase',
+          })}
+        />,
+      )
+      expect(screen.queryByText(/Leading buyer/)).not.toBeInTheDocument()
+    })
+
+    it('shows an ad with no avatar exactly as before', () => {
+      render(<Tier3Table tier3={tier3} />)
+
+      expect(rowFor('Older ad without an avatar').queryByText(/ – /)).not.toBeInTheDocument()
+    })
+  })
 })

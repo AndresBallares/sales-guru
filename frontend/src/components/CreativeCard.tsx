@@ -1,6 +1,7 @@
 import { useId, useState, type ReactNode } from 'react'
 import { CheckIcon, ChevronDownIcon } from './icons'
 import type { Creative, CreativeStatus } from '../lib/api'
+import { avatarMarker, creativeAngleText } from '../lib/avatarLabel'
 
 const STATUS_LABELS: Record<CreativeStatus, string> = {
   GENERATED: 'Generated',
@@ -53,6 +54,8 @@ export function CreativeCard({
   const headlineId = useId()
   const hasDetails = Boolean(creative.imagePrompt || creative.videoPrompt)
   const selected = creative.status === 'SELECTED'
+  const angleText = creativeAngleText(creative)
+  const marker = avatarMarker(creative.buyerAvatar?.state)
 
   return (
     <article
@@ -70,7 +73,12 @@ export function CreativeCard({
             <span className="media-badge media-badge-video">Video ad</span>
           )}
         </div>
-        {creative.creativeAngle && <p className="creative-card-angle">{creative.creativeAngle}</p>}
+        {angleText && (
+          <p className="creative-card-angle">
+            {angleText}
+            {marker && <span className="avatar-marker"> ({marker})</span>}
+          </p>
+        )}
       </header>
 
       {creative.imageUrl && (

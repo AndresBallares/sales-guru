@@ -155,6 +155,12 @@ class AdRow(CamelCaseModel):
     purchases: int | None
     cac: float | None
     is_leader: bool
+    # The library avatar the ad was written for (null for an older ad). Display
+    # only: nothing here takes part in choosing the leader.
+    avatar_name: str | None = None
+    avatar_state: Literal["active", "inactive", "archived"] | None = None
+    concept: str | None = None
+    pillar: str | None = None
 
 
 class Leader(CamelCaseModel):

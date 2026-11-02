@@ -47,6 +47,7 @@ from app.schemas.strategy import (
     primary_audience,
 )
 from app.services import creative_naming, geo, locales, meta
+from app.services.ad_naming import plan_ad_names
 from app.services.event_venues import EVENT_VENUES
 from app.services.interests import INTERESTS
 from app.services.meta import CustomLocation, MetaConnectionError, ResolvedGeoLocation
@@ -1229,10 +1230,13 @@ async def _create_creative_test_ads(
     ad_account_id = connection.adAccountId
     access_token = connection.accessToken
     refused_features: list[str] = []
+    ad_names = await plan_ad_names(
+        business_id=campaign.businessId,
+        campaign_id=campaign.id,
+        creatives=creatives,
+    )
     for creative in creatives:
-        ad_name = creative_naming.ad_name(
-            creative.avatar, creative.concept, creative.headline, creative.pillar
-        )
+        ad_name = ad_names[creative.id]
         url_tags = creative_naming.url_tags(
             campaign_name=object_name,
             avatar=creative.avatar,

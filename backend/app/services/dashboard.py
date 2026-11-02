@@ -57,6 +57,7 @@ from app.services.benchmarks import (
     LINK_CTR_WEAK_BELOW_PCT,
     classify_performance_zone,
 )
+from app.services.buyer_avatars import AvatarState
 from app.services.creative_test_rules import (
     MIN_ADD_TO_CARTS_TO_COMPARE,
     MIN_PURCHASES_FOR_CAC,
@@ -107,6 +108,11 @@ class AdInfo(NamedTuple):
     id: str
     name: str
     status: str
+    # The library avatar the ad was written for, and its angle, when it has them.
+    avatar_name: str | None = None
+    avatar_state: AvatarState | None = None
+    concept: str | None = None
+    pillar: str | None = None
 
 
 class PauseRecommendation(NamedTuple):
@@ -456,6 +462,10 @@ def build_tier3(
                 purchases=None if totals is None else totals.purchases,
                 cac=None if totals is None else _ratio(totals.spend, totals.purchases),
                 is_leader=leader is not None and leader.ad_id == ad.id,
+                avatar_name=ad.avatar_name,
+                avatar_state=ad.avatar_state,
+                concept=ad.concept,
+                pillar=ad.pillar,
             )
         )
     return Tier3(

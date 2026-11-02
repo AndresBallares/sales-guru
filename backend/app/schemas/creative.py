@@ -657,6 +657,15 @@ class CreativeCardResponse(CamelCaseModel):
     link_url: str
 
 
+class BuyerAvatarRefResponse(CamelCaseModel):
+    """The library avatar an ad was written for, as it is named right now."""
+
+    id: str
+    name: str
+    # archived = deleted, inactive = deactivated; both still name the ad's buyer.
+    state: Literal["active", "inactive", "archived"]
+
+
 class CreativeResponse(CamelCaseModel):
     """Public-facing representation of a stored Creative."""
 
@@ -670,6 +679,14 @@ class CreativeResponse(CamelCaseModel):
     description: str | None
     cta: CtaType
     creative_angle: str | None
+    # The structured angle behind creative_angle (null on older creatives) and the
+    # library avatar it was written for. buyer_avatar is null when the creative has
+    # no buyer_avatar_id or the avatar no longer resolves.
+    avatar: str | None = None
+    concept: str | None = None
+    pillar: str | None = None
+    buyer_avatar_id: str | None = None
+    buyer_avatar: BuyerAvatarRefResponse | None = None
     image_prompt: str | None
     video_prompt: str | None
     image_url: str | None

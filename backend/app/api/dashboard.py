@@ -1,7 +1,9 @@
 """Campaign dashboard endpoints: read-only, computed from stored Metric rows."""
 
+from collections.abc import Sequence
+
 from fastapi import APIRouter, Depends, HTTPException, status
-from prisma.models import Business, Campaign
+from prisma.models import Ad, Business, Campaign
 
 from app.core.authz import get_owned_business, get_owned_campaign
 from app.core.config import get_settings
@@ -9,6 +11,7 @@ from app.core.db import db
 from app.schemas.dashboard import BusinessDashboardSummary, CampaignDashboardResponse
 from app.schemas.strategy import CAMPAIGN_BUDGET_LEVEL, StrategyContentAdapter
 from app.services import dashboard as dash
+from app.services.buyer_avatars import avatar_refs
 from app.services.dashboard_sample import sample_business, sample_campaign
 
 router = APIRouter(prefix="/businesses/{business_id}", tags=["dashboard"])
@@ -40,6 +43,36 @@ async def _campaign_snapshots(campaign: Campaign) -> list[dash.Snapshot]:
     if campaign.budgetLevel == CAMPAIGN_BUDGET_LEVEL:
         metrics = [m for m in metrics if m.adSetId is None or m.adId is not None]
     return [dash.snapshot_from_metric(m) for m in metrics]
+
+
+async def _ad_infos(business_id: str, ads: Sequence[Ad]) -> list[dash.AdInfo]:
+    """The campaign's ads with the library avatar each was written for, if any.
+
+    Read through ad -> creative -> buyerAvatarId. Deleted and inactive avatars
+    resolve too (with their state), so history keeps its label. Nothing here is
+    written back: an ad's stored name is never touched.
+    """
+    creatives = await db.creative.find_many(
+        where={"adId": {"in": [a.id for a in ads]}} if ads else {"id": "none"}
+    )
+    by_ad = {c.adId: c for c in creatives if c.adId}
+    refs = await avatar_refs(business_id, [c.buyerAvatarId for c in creatives])
+    infos: list[dash.AdInfo] = []
+    for ad in ads:
+        creative = by_ad.get(ad.id)
+        ref = refs.get(creative.buyerAvatarId or "") if creative else None
+        infos.append(
+            dash.AdInfo(
+                ad.id,
+                ad.name,
+                ad.status,
+                avatar_name=ref.name if ref else None,
+                avatar_state=ref.state if ref else None,
+                concept=creative.concept if creative else None,
+                pillar=creative.pillar if creative else None,
+            )
+        )
+    return infos
 
 
 @router.get(
@@ -104,7 +137,7 @@ async def campaign_dashboard(
         status=campaign.status,
         snapshots=await _campaign_snapshots(campaign),
         targets=targets,
-        ads=[dash.AdInfo(a.id, a.name, a.status) for a in ads],
+        ads=await _ad_infos(campaign.businessId, ads),
         recommendations=[
             dash.RecommendationInfo(
                 id=r.id,

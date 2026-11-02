@@ -10,6 +10,7 @@ import {
   createCreatives,
   createProduct,
   createRecommendation,
+  deleteAvatar,
   deleteProductImage,
   disconnectMeta,
   finalizeMetaConnection,
@@ -18,6 +19,7 @@ import {
   getMetaConnection,
   getOptions,
   listAudiences,
+  listAvatars,
   listBusinesses,
   listCampaigns,
   listMetaAdAccounts,
@@ -34,10 +36,12 @@ import {
   refreshMetrics,
   rejectRecommendation,
   removeCreativeCard,
+  reorderAvatars,
   reorderCreativeCards,
   selectCreative,
   signup,
   toLabelMap,
+  updateAvatar,
 } from './api'
 
 function jsonResponse(body: unknown, status = 200): Response {
@@ -916,5 +920,69 @@ describe('removeCreativeCard', () => {
     const [url, options] = fetchMock.mock.calls[0]
     expect(url).toContain('/creatives/creative-1/cards/card-1')
     expect(options?.method).toBe('DELETE')
+  })
+})
+
+describe('buyer avatar library calls', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  const avatar = { id: 'a1', businessId: 'biz-1', name: 'The Collector' }
+
+  it('lists a business’s avatars', async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(jsonResponse([avatar]))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const result = await listAvatars('biz-1')
+
+    expect(result).toEqual([avatar])
+    const [url, options] = fetchMock.mock.calls[0]
+    expect(url).toMatch(/\/businesses\/biz-1\/avatars$/)
+    expect(options?.method).toBeUndefined()
+  })
+
+  it('patches only the fields given', async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(jsonResponse(avatar))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await updateAvatar('biz-1', 'a1', { isActive: false })
+
+    const [url, options] = fetchMock.mock.calls[0]
+    expect(url).toMatch(/\/businesses\/biz-1\/avatars\/a1$/)
+    expect(options?.method).toBe('PATCH')
+    expect(JSON.parse(options?.body as string)).toEqual({ isActive: false })
+  })
+
+  it('deletes an avatar and returns nothing', async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(new Response(null, { status: 204 }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(deleteAvatar('biz-1', 'a1')).resolves.toBeUndefined()
+
+    const [url, options] = fetchMock.mock.calls[0]
+    expect(url).toMatch(/\/businesses\/biz-1\/avatars\/a1$/)
+    expect(options?.method).toBe('DELETE')
+  })
+
+  it('sends the new order of avatar ids', async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(jsonResponse([avatar]))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await reorderAvatars('biz-1', ['a2', 'a1'])
+
+    const [url, options] = fetchMock.mock.calls[0]
+    expect(url).toMatch(/\/businesses\/biz-1\/avatars\/reorder$/)
+    expect(options?.method).toBe('POST')
+    expect(JSON.parse(options?.body as string)).toEqual({ ids: ['a2', 'a1'] })
+  })
+
+  it('surfaces a conflict from reorder as an ApiError', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn<typeof fetch>().mockResolvedValue(jsonResponse({ detail: 'The avatar list has changed' }, 409)),
+    )
+
+    await expect(reorderAvatars('biz-1', ['a1'])).rejects.toMatchObject({ status: 409 })
   })
 })

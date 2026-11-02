@@ -45,7 +45,7 @@ from app.schemas.strategy import (
 )
 from app.services import publish_jobs
 from app.services.brand_rules import banned_phrases_for
-from app.services.buyer_avatars import assignable_avatars
+from app.services.buyer_avatars import assignable_avatars, avatar_refs
 from app.services.creative import (
     copy_problems,
     is_creative_stale,
@@ -101,6 +101,7 @@ async def _round_response(
     )
     product = await _current_product(campaign)
     business = await _current_business(campaign)
+    avatars = await avatar_refs(business.id, [c.buyerAvatarId for c in creatives])
     return CreativeRoundResponse(
         id=round_.id,
         campaign_id=round_.campaignId,
@@ -111,7 +112,9 @@ async def _round_response(
         angles=[
             GeneratedCreativeAngle.model_validate(a) for a in json.loads(round_.angles)
         ],
-        creatives=[_to_response(c, campaign, product, business) for c in creatives],
+        creatives=[
+            _to_response(c, campaign, product, business, avatars) for c in creatives
+        ],
         created_at=round_.createdAt,
     )
 
