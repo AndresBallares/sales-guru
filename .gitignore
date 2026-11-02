@@ -5,3 +5,7 @@
 .vscode/*
 !.vscode/extensions.json
 *.swp
+
+# VENZI rollout working files: production row snapshots (include a logo) and generated SQL
+backend/scripts/venzi_rollout/snapshot/
+backend/scripts/venzi_rollout/out/
