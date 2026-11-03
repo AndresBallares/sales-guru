@@ -522,15 +522,21 @@ class _Run:
 
     async def account(self, turn: Turn) -> None:
         self.totals.add(turn.usage, self.row.model)
+        # The conversation grows by what each request wrote: fresh input, cache
+        # writes and output. Cache *reads* are summed over every server-side
+        # iteration (300k+ in the first paid run), so they say nothing about the
+        # size of the conversation and must not be counted. The first request's
+        # real numbers replace the size estimated from the template.
         usage = turn.usage
-        self.context_tokens = sum(
+        added = sum(
             int(getattr(usage, name, 0) or 0)
             for name in (
                 "input_tokens",
                 "cache_creation_input_tokens",
-                "cache_read_input_tokens",
+                "output_tokens",
             )
         )
+        self.context_tokens = (self.context_tokens if self.step > 2 else 0) + added
         for obs in turn.observations:
             self.observe(obs)
         await self.save(
@@ -788,10 +794,12 @@ async def _verify(state: _Run, *, canceled: bool) -> dict[str, Any]:
 async def _finish(state: _Run, stop: _Stop | None, failed: bool) -> None:
     """Write the final row: findings, evidence, coverage note, status."""
     canceled = stop is not None and stop.reason == "canceled"
-    if stop is not None and stop.reason != "no_submit" and stop.reason != "canceled":
+    if stop is not None:
         state.stop_reason = stop.reason
-    if canceled:
-        state.stop_reason = "canceled"
+    if failed:
+        # An unexpected error (a bug): the system's side, stored so it is clear
+        # which kind of failure this was (it does not count against the limit).
+        state.stop_reason = "system_error"
     reading = assess_evidence(state.row.depth, state.reached)
     if reading.level == "LOW" and reading.reason:
         state.warnings.append(reading.reason)
@@ -870,6 +878,7 @@ async def execute_run(run_id: str) -> None:
             where={"id": run_id},
             data={
                 "status": "FAILED",
+                "stopReason": "system_error",
                 "error": _GENERIC_FAILURE,
                 "finishedAt": _now(),
             },
@@ -900,7 +909,12 @@ async def execute_run(run_id: str) -> None:
         logger.exception("Could not write the final state of run %s", run_id)
         await db.researchrun.update(
             where={"id": run_id},
-            data={"status": "FAILED", "error": _GENERIC_FAILURE, "finishedAt": _now()},
+            data={
+                "status": "FAILED",
+                "stopReason": "system_error",
+                "error": _GENERIC_FAILURE,
+                "finishedAt": _now(),
+            },
         )
 
 

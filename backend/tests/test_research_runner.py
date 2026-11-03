@@ -512,6 +512,7 @@ def test_a_persistent_provider_429_fails_the_run_without_crashing(rig: Rig) -> N
     rig.play([limit] * (research_runner.API_RETRY_ATTEMPTS + 1))
     run = rig.run()
     assert run["status"] == "FAILED"
+    assert run["stopReason"] == "provider"
     assert run["error"]
     assert "rate" in run["error"].lower()
 
@@ -520,6 +521,7 @@ def test_an_unexpected_error_fails_the_run_with_a_generic_message(rig: Rig) -> N
     rig.play([RuntimeError("secret internal detail")])
     run = rig.run()
     assert run["status"] == "FAILED"
+    assert run["stopReason"] == "system_error"
     assert "secret internal detail" not in run["error"]
 
 
@@ -807,6 +809,7 @@ def test_a_text_only_answer_is_nudged_once_then_the_run_fails(rig: Rig) -> None:
     scripted = rig.play([brand_turn(), voice_turn(), text_only, text_only])
     run = rig.run()
     assert run["status"] == "FAILED"
+    assert run["stopReason"] == "no_submit"
     assert "submit_findings" in run["error"]
     assert len(scripted.calls) == 4
 
@@ -862,6 +865,7 @@ def test_a_run_that_cannot_be_prepared_fails_cleanly(rig: Rig) -> None:
     rig.play([])
     run = rig.run()
     assert run["status"] == "FAILED"
+    assert run["stopReason"] == "system_error"
     assert run["finishedAt"] is not None
     assert "secret detail" not in run["error"]
 
@@ -886,6 +890,7 @@ def test_an_unexpected_error_after_findings_keeps_them(rig: Rig) -> None:
     )
     run = rig.run()
     assert run["status"] == "FAILED"
+    assert run["stopReason"] == "system_error"
     assert len(run["findings"]["problems"]) == 20
 
 
@@ -909,3 +914,27 @@ def test_the_brand_message_has_no_override_note_or_dead_tool_name() -> None:
     assert "override" not in text
     assert "submit_research" not in text
     assert "submit_findings" in text
+
+
+def test_iteration_summed_cache_reads_do_not_look_like_a_huge_context(rig: Rig) -> None:
+    """Usage sums every server-side iteration, so cache reads can be 300k+ while the
+    conversation itself is small (found in the first paid run, 2026-11-03)."""
+    brand = brand_turn()
+    brand.usage = fake_usage(
+        fresh=28, cache_write=42_000, cache_read=300_000, output=4_700
+    )
+    voice = voice_turn()
+    voice.usage = fake_usage(
+        fresh=30, cache_write=30_000, cache_read=500_000, output=3_000
+    )
+    scripted = rig.play([brand, voice, findings_turn(), avatars_turn()])
+    run = rig.run(maxCostUsd=3.0)
+    assert run["status"] == "NEEDS_REVIEW"
+    assert run["stopReason"] is None
+    assert [c.phase for c in scripted.calls] == [
+        "brand",
+        "voice",
+        "findings",
+        "avatars",
+    ]
+    assert len(run["findings"]["avatars"]) == 5

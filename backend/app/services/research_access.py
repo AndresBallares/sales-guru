@@ -92,8 +92,14 @@ async def runs_used_this_month(
 ) -> int:
     """Runs this calendar month that count against the limit.
 
-    A run that was canceled or failed without spending anything does not count:
-    the business got nothing and lost nothing.
+    What counts (decided 2026-11-03): a run in progress, a completed run
+    (NEEDS_REVIEW, partial results included), and a run the owner canceled after
+    it spent money. A FAILED run never counts, even if it spent money: it
+    delivered nothing, and every way a run fails (a bug, a provider error, a
+    restart, our own cap guard stopping early) is the system's side. Its kind is
+    stored in ``ResearchRun.stopReason`` (``system_error``, ``provider``,
+    ``stale``, ``cap``, ``time``, ``no_submit``). A run canceled before it spent
+    anything does not count either.
 
     Args:
         business_id: The business.
@@ -108,7 +114,10 @@ async def runs_used_this_month(
         where={"businessId": business_id, "createdAt": {"gte": month_start(now)}}
     )
     return sum(
-        1 for r in runs if not (r.status in ("FAILED", "CANCELED") and r.costUsd <= 0)
+        1
+        for r in runs
+        if r.status in ("QUEUED", "RUNNING", "NEEDS_REVIEW")
+        or (r.status == "CANCELED" and r.costUsd > 0)
     )
 
 

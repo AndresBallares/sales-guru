@@ -340,8 +340,14 @@ Branch `7b`. Backend only: the review screen and every other UI is 7c. Nothing h
   no API route that writes them; the app owner sets them with `backend/scripts/research_access.py --business-id ID
   [--models a,b] [--runs-per-month N] [--show]`, which prints the target database first. Admin-only by construction;
   billing can later write the same columns. A test asserts no HTTP route changes them.
-- **What counts toward the monthly limit:** every run created this calendar month (UTC) except a canceled or failed run
-  that spent nothing. A failed run that spent money counts.
+- **What counts toward the monthly limit (revised 2026-11-03):** a run in progress, a completed run
+  (`NEEDS_REVIEW`, partial results included) and a run the owner canceled after it spent money. A `FAILED` run **never**
+  counts, even if it spent money: it delivered nothing, and every way a run fails is the system's side (a bug, a provider
+  error, a restart, our own cap guard stopping early). The kind is stored in `ResearchRun.stopReason` for every failed
+  run: `system_error` (an unexpected error or a run that could not be prepared), `provider` (rate limits or outages that
+  did not clear), `stale` (the process died), `cap`, `time`, `no_submit` (the model never called the submit tool). A run
+  canceled before it spent anything does not count either. (The first rule counted failed runs that spent money; the
+  first paid run's cap-guard bug made that unfair.)
 - **Template v3 (decided 2026-11-03).** v2's last line asked for one `submit_research` call, which conflicts with the
   two-submit design. `backend/app/prompts/avatar_research_v3.md` is v2 with only that last line changed, to "submit
   using the tools as instructed in the phase messages" (sha256 `ca80805b01f17256f5bd29b12d1dc1288309ae9ee5be68c950887a3c8ee9ff82`). v1 and v2 stay as files, pinned by hash in
@@ -398,3 +404,23 @@ of a page was skipping the runner's fetch.
 `20261103120000_add_research_access_and_evidence` for SQLite (checked with `prisma migrate diff`, no drift) and for
 Postgres (applied from scratch on the throwaway `sg_research_throwaway`, no drift, then dropped). **`dev.db` has not been
 migrated**; that is a database write and waits for the user (after `make backup-dev`).
+
+## First paid 7b run (2026-11-03, VENZI on dev, `claude-opus-5-5`, standard, template v3, cap $3.00)
+
+Run `cmw0um9su0001b15d4dj0joqf`, saved in full at `~/Documents/AI-NATIVE/research-runs/venzi-standard-opus-<run id>.json`.
+**Result: FAILED at $0.957 with no findings**, stopped by the runner's own cap guard before `submit_findings`. A bug in
+the guard, not in the research:
+
+- **Cause.** The guard sized the next request from the previous response's `usage`, summing input, cache write and cache
+  *read* tokens. Usage is summed over every server-side iteration (the brand step reported 296,738 cache-read tokens, the
+  customer-voice step 652,343), so the guard believed the conversation was about 700k tokens and that re-writing it
+  would cost more than the remaining cap. The real conversation was roughly 90k tokens.
+- **Fix** (`research_runner._Run.account`): the context size is now the sum of what each request wrote (fresh, cache
+  write and output); cache reads are ignored. Test `test_iteration_summed_cache_reads_do_not_look_like_a_huge_context`
+  fails without it. Not yet re-run live.
+- **What the research steps showed** (real numbers): brand step 94 s, $0.425, 6 of 6 searches, 10 of 10 fetches, 65
+  results; customer-voice step 111 s, $0.532, 9 of 9 searches, 9 of 10 fetches, 92 results; **25 customer-voice pages
+  reached against a minimum of 6**; no 429 or `unavailable` errors, so no backoff sleeps; one non-transient
+  `url_not_allowed` fetch error. Research alone cost $0.957 for 15 searches and 19 fetches.
+- Under the first counting rule that failed run would have used the business's monthly limit; the rule was changed
+  (see "What counts toward the monthly limit") so a failed run never counts.

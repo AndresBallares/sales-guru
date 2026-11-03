@@ -14,6 +14,7 @@ from fastapi.testclient import TestClient
 
 from tests.research_helpers import (
     Scripted,
+    brand_turn,
     healthy_script,
     pcall,
     run_to_end,
@@ -238,9 +239,51 @@ def test_runs_that_spent_nothing_do_not_use_up_the_month(
     assert start(client, on).status_code == 202
 
 
-def test_a_failed_run_that_spent_money_counts(client: TestClient, on: str) -> None:
-    _seed(client, on, status="FAILED", costUsd=0.4, error="stopped")
+def test_a_failed_run_never_counts_even_if_it_spent_money(
+    client: TestClient, on: str
+) -> None:
+    # A FAILED run delivered nothing: a bug, a provider error or a cap-guard
+    # misfire is the system's fault, not the business's (decided 2026-11-03).
+    _seed(client, on, status="FAILED", costUsd=0.96, stopReason="cap", error="x")
+    assert start(client, on).status_code == 202
+
+
+def test_a_completed_run_counts(client: TestClient, on: str) -> None:
+    _seed(client, on, status="NEEDS_REVIEW", costUsd=0.5)
     assert start(client, on).status_code == 429
+
+
+def test_a_run_canceled_after_spending_counts(client: TestClient, on: str) -> None:
+    _seed(client, on, status="CANCELED", costUsd=0.3, stopReason="canceled")
+    assert start(client, on).status_code == 429
+
+
+def test_a_run_in_progress_counts(client: TestClient, on: str) -> None:
+    _seed(client, on, status="RUNNING", heartbeatAt=datetime.now(UTC))
+    assert start(client, on).status_code == 409  # one at a time, before the limit
+
+
+def test_the_estimate_does_not_count_failed_runs(client: TestClient, on: str) -> None:
+    _seed(client, on, status="FAILED", costUsd=0.96, stopReason="cap", error="x")
+    body = client.post(
+        f"/businesses/{on}/research-runs/estimate",
+        json={"depth": "light", "model": "claude-opus-5-5"},
+    ).json()
+    assert (body["runsUsed"], body["runsRemaining"]) == (0, 1)
+
+
+def test_after_a_system_failure_that_spent_money_the_business_can_run_again(
+    client: TestClient, on: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    scripted = Scripted([brand_turn(), RuntimeError("bug"), *healthy_script()])
+    monkeypatch.setattr(research_runner, "client_factory", lambda: scripted)
+    failed = run_to_end(client, on)
+    assert failed["status"] == "FAILED"
+    assert failed["costUsd"] > 0
+    assert failed["stopReason"] == "system_error"
+    second = run_to_end(client, on)
+    assert second["status"] == "NEEDS_REVIEW"
+    assert start(client, on).status_code == 429  # the completed run now uses the month
 
 
 def test_last_months_runs_do_not_count(client: TestClient, on: str) -> None:
