@@ -1,17 +1,22 @@
-"""Cost estimate for an Avatar Research run (Phase 7a). Makes no API call.
+"""Cost estimate for an Avatar Research run (7a, recalibrated in 7b). No API call.
 
 The model of a run: one request carries the filled template and the tool
-definitions; every search or fetch adds a result to the context, and each later
-request in the server-side loop re-reads the context so far from the prompt
-cache. Output is some thinking per tool call plus one large ``submit_research``.
+definitions; every search or fetch adds a (dynamically filtered) result to the
+context, and each server-side iteration re-reads the context so far from the
+prompt cache and writes what it added. Output is a little code and notes per tool
+call plus the two submits, ``submit_findings`` and ``submit_avatars``.
 
 Prices come from ``app.services.llm_call`` (pricing page
 platform.claude.com/docs/en/about-claude/pricing, read 2026-10-30; $10 per 1,000
-web searches, fetches free). Inputs marked ``measured`` come from the Phase 1.5
-smoke test on claude-fable-5-1 (docs/phase-7.md); every other input is an
-estimate and is labeled so in the endpoint's response.
+billed web searches, fetches free, and code execution free when used with the
+web tools, checked 2026-11-03 in docs/phase-7.md). The per-unit inputs are fitted
+to **smoke run 2** (claude-opus-5-5, light caps all used, $1.0028: 52 fresh,
+54,856 cache write, 684,355 cache read, 26,571 output tokens); only the totals of
+a run were measured, so every per-unit split is labeled an estimate in the
+endpoint's response, and a test holds the model to run 2's totals.
 """
 
+import math
 from dataclasses import dataclass
 
 from app.schemas.research import Depth
@@ -36,6 +41,29 @@ DEPTH_CAPS: dict[str, DepthCaps] = {
 }
 
 
+# How much of a depth's caps the customer-voice step keeps for itself, so the
+# brand and competitor step cannot spend them (a product choice, docs/phase-7.md).
+CUSTOMER_VOICE_SEARCH_SHARE = 0.6
+CUSTOMER_VOICE_FETCH_SHARE = 0.5
+
+
+def brand_step_budget(depth: str) -> tuple[int, int]:
+    """Searches and fetches the brand and competitor step may use.
+
+    Args:
+        depth: light, standard or deep.
+
+    Returns:
+        (searches, fetches): the depth's caps minus the share reserved for the
+        customer-voice step, which also gets whatever this step leaves unused.
+    """
+    caps = DEPTH_CAPS[depth]
+    return (
+        caps.max_searches - math.ceil(caps.max_searches * CUSTOMER_VOICE_SEARCH_SHARE),
+        caps.max_fetches - math.ceil(caps.max_fetches * CUSTOMER_VOICE_FETCH_SHARE),
+    )
+
+
 @dataclass(frozen=True)
 class Input:
     """One input of the estimate."""
@@ -49,47 +77,59 @@ class Input:
 
 INPUTS: tuple[Input, ...] = (
     Input(
-        "search_result_tokens",
-        6_500,
-        "tokens",
-        True,
-        "Phase 1.5 smoke test: one search result added about 6-7k tokens of context",
+        "search_fee_usd", SEARCH_FEE_USD, "usd", True, "$10 per 1,000 billed searches"
     ),
-    Input("search_fee_usd", SEARCH_FEE_USD, "usd", True, "$10 per 1,000 searches"),
     Input(
-        "fetched_page_tokens",
-        8_000,
+        "search_result_tokens",
+        2_000,
         "tokens",
         False,
-        "Estimate: the smoke test fetched a ~200-token page; real pages are larger",
+        "Fitted to smoke run 2's cache-write total; dynamic filtering keeps only the "
+        "relevant part of a result (run 1, unfiltered, was about 16k per search)",
+    ),
+    Input(
+        "fetched_page_tokens",
+        2_000,
+        "tokens",
+        False,
+        "Fitted to smoke run 2's cache-write total (run 1, unfiltered: about 4k)",
     ),
     Input(
         "iterations_per_tool_call",
-        1.0,
+        1.8,
         "requests",
         False,
-        "Estimate: one more request in the server-side loop per search or fetch",
+        "Fitted to smoke run 2's cache-read total: server-side iterations per search "
+        "or fetch, code-execution steps included",
     ),
     Input(
-        "thinking_tokens_per_phase",
-        1_500,
+        "output_tokens_per_tool_call",
+        500,
         "tokens",
         False,
-        "Estimate: thinking plus text per request (smoke test: 219-474, tiny task)",
+        "Fitted to smoke run 2's output total: the code and notes the model writes per "
+        "search or fetch",
     ),
     Input(
-        "submit_output_tokens",
-        14_000,
+        "findings_output_tokens",
+        13_400,
         "tokens",
         False,
-        "Estimate: 20 problems, 20 solutions and 5 full avatars as JSON",
+        "Fitted to smoke run 2: 20 problems, 20 solutions and gaps as JSON",
+    ),
+    Input(
+        "avatars_output_tokens",
+        6_200,
+        "tokens",
+        True,
+        "Smoke run 2: the submit_avatars request wrote 6,195 output tokens",
     ),
     Input(
         "tool_definition_tokens",
-        1_500,
+        2_000,
         "tokens",
         False,
-        "Estimate: system block, web tools and the submit_research schema",
+        "Estimate: system block, web tools and both submit schemas",
     ),
     Input(
         "typical_share_of_caps",
@@ -117,6 +157,16 @@ class CostEstimate:
     suggested_max_cost_usd: float
     prompt_tokens: int
     assumptions: tuple[Input, ...]
+
+
+@dataclass(frozen=True)
+class TokenMix:
+    """Tokens of a run by billing type (the same split the API reports)."""
+
+    fresh: int
+    cache_write: int
+    cache_read: int
+    output: int
 
 
 def price_tokens(
@@ -170,36 +220,64 @@ class _Server:
         self.web_fetch_requests = 0
 
 
+def estimate_tokens(*, prompt_tokens: int, searches: int, fetches: int) -> TokenMix:
+    """The token mix of a run that does this many searches and fetches, then submits.
+
+    Args:
+        prompt_tokens: Approximate size of the rendered template.
+        searches: Searches the run makes.
+        fetches: Page fetches the run makes.
+
+    Returns:
+        Fresh, cache-write, cache-read and output tokens.
+    """
+    base = prompt_tokens + _BY_NAME["tool_definition_tokens"]
+    per_call_out = _BY_NAME["output_tokens_per_tool_call"]
+    per_call = _BY_NAME["iterations_per_tool_call"]
+    results = [_BY_NAME["search_result_tokens"]] * searches + [
+        _BY_NAME["fetched_page_tokens"]
+    ] * fetches
+    # The first request writes the prompt to the cache; every server-side iteration
+    # re-reads the context so far, and what the model and the tools add is written
+    # to the cache for the next one.
+    write = base
+    read = 0.0
+    output = 0.0
+    context = base
+    for tokens in results:
+        read += context * per_call
+        output += per_call_out
+        write += tokens + per_call_out
+        context += tokens + per_call_out
+    # submit_findings reads the context and writes its output into it;
+    # submit_avatars then reads that.
+    findings = _BY_NAME["findings_output_tokens"]
+    read += context
+    output += findings
+    write += findings
+    context += findings
+    read += context
+    output += _BY_NAME["avatars_output_tokens"]
+    requests = len(results) * per_call + 2
+    return TokenMix(
+        fresh=int(requests * 4),
+        cache_write=int(write),
+        cache_read=int(read),
+        output=int(output),
+    )
+
+
 def _run_cost(model: str, prompt_tokens: int, searches: int, fetches: int) -> float:
     """Cost of a run that does this many searches and fetches, then submits."""
-    base = prompt_tokens + int(_BY_NAME["tool_definition_tokens"])
-    thinking = int(_BY_NAME["thinking_tokens_per_phase"])
-    per_call = _BY_NAME["iterations_per_tool_call"]
-    results = [int(_BY_NAME["search_result_tokens"])] * searches + [
-        int(_BY_NAME["fetched_page_tokens"])
-    ] * fetches
-    # The first request writes the prompt to the cache; each later request reads
-    # everything before it and writes the result it just received.
-    write = base
-    read = 0
-    output = 0
-    context = base
-    requests = 0.0
-    for tokens in results:
-        requests += per_call
-        for _ in range(int(per_call)):
-            read += context
-            output += thinking
-        write += tokens
-        context += tokens
-    read += context  # the final request, which submits
-    output += thinking + int(_BY_NAME["submit_output_tokens"])
+    mix = estimate_tokens(
+        prompt_tokens=prompt_tokens, searches=searches, fetches=fetches
+    )
     return price_tokens(
         model,
-        fresh=int(requests) * 8,
-        cache_write=write,
-        cache_read=read,
-        output=output,
+        fresh=mix.fresh,
+        cache_write=mix.cache_write,
+        cache_read=mix.cache_read,
+        output=mix.output,
         searches=searches,
     )
 

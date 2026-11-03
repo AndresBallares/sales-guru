@@ -1,14 +1,18 @@
-"""Tests for the Avatar Research endpoints (Phase 7a): estimate and read only."""
+"""Tests for the Avatar Research endpoints: estimate and read (7a); start is in
+test_research_start_api.py (7b)."""
 
 from collections.abc import Iterator
 
 import httpx2
 import pytest
 from app.core.config import get_settings
+from app.services import research_access
 from app.services.research_template import TEMPLATE_PATH
 from fastapi.testclient import TestClient
 from prisma import Prisma
 from prisma.types import ResearchRunCreateInput
+
+from tests.research_helpers import pcall
 
 
 def _run_data(
@@ -113,13 +117,13 @@ def test_estimate_returns_cost_and_the_rendered_prompt_and_creates_nothing(
     assert body["model"] == "claude-opus-5-5"
     assert 0 < body["expectedUsd"] < body["maxUsd"] <= body["suggestedMaxCostUsd"]
     assert body["maxSearches"] > 0 and body["maxFetches"] > 0
-    assert body["promptVersion"] == "avatar_research_v2"
+    assert body["promptVersion"] == "avatar_research_v3"
     assert len(body["promptHash"]) == 64
     assert "Acme" in body["promptPreview"]
     assert "{{" not in body["promptPreview"]
-    assert {a["name"]: a["measured"] for a in body["assumptions"]}[
-        "search_result_tokens"
-    ] is True
+    measured = {a["name"]: a["measured"] for a in body["assumptions"]}
+    assert measured["search_fee_usd"] is True
+    assert measured["search_result_tokens"] is False  # fitted to smoke run 2
     assert client.get(f"/businesses/{business_id}/research-runs").json() == []
 
 
@@ -167,6 +171,13 @@ def test_estimate_supports_both_models_and_all_depths(
     client: TestClient, research_on: None
 ) -> None:
     business_id = _setup(client)
+    # Fable is a premium extra the app owner enables by hand (7b).
+    pcall(
+        client,
+        research_access.set_access,
+        business_id=business_id,
+        models=["claude-opus-5-5", "claude-fable-5-1"],
+    )
     for model in ("claude-opus-5-5", "claude-fable-5-1"):
         for depth in ("light", "standard", "deep"):
             assert (
@@ -209,14 +220,14 @@ def test_reading_an_unknown_or_foreign_run_is_a_404(
     )
 
 
-def test_no_route_starts_a_run(client: TestClient, research_on: None) -> None:
+def test_starting_needs_a_configured_client_and_a_run_cannot_be_deleted(
+    client: TestClient, research_on: None
+) -> None:
     business_id = _setup(client)
     base = f"/businesses/{business_id}/research-runs"
-    assert (
-        client.post(
-            base, json={"depth": "light", "model": "claude-opus-5-5"}
-        ).status_code
-        == 405
-    )
+    # 7b: POST starts a run; with no API key and no fake it is a clear 503.
+    response = client.post(base, json={"depth": "light", "model": "claude-opus-5-5"})
+    assert response.status_code == 503
+    assert client.get(base).json() == []
     assert client.delete(f"{base}/x").status_code == 405
     assert TEMPLATE_PATH.is_file()

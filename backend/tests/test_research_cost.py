@@ -7,6 +7,7 @@ from app.services.research_cost import (
     DEPTH_CAPS,
     INPUTS,
     estimate_cost,
+    estimate_tokens,
     price_tokens,
 )
 
@@ -30,18 +31,55 @@ def test_the_phase_1_5_smoke_test_is_reproduced_by_the_pricing_function() -> Non
     assert phase_b == pytest.approx(0.0144, abs=0.0005)
 
 
+# Smoke run 2 (docs/phase-7.md): claude-opus-5-5, light caps all used (6 searches,
+# 8 fetches), two requests, template v2, VENZI dev data. A prompt of about 4,500
+# tokens is assumed (the run's exact size was not recorded).
+RUN2 = {"fresh": 52, "write": 54_856, "read": 684_355, "output": 26_571}
+RUN2_COST = 1.0028
+RUN2_PROMPT_TOKENS = 4_500
+
+
+def test_smoke_run_2_is_reproduced_by_the_pricing_function() -> None:
+    cost = price_tokens(
+        "claude-opus-5-5",
+        fresh=RUN2["fresh"],
+        cache_write=RUN2["write"],
+        cache_read=RUN2["read"],
+        output=RUN2["output"],
+        searches=6,
+    )
+    assert cost == pytest.approx(RUN2_COST, abs=0.0005)
+
+
+def test_a_full_light_run_is_estimated_within_15_percent_of_smoke_run_2() -> None:
+    estimate = estimate_cost(
+        "light", "claude-opus-5-5", prompt_tokens=RUN2_PROMPT_TOKENS
+    )
+    assert estimate.max_usd == pytest.approx(RUN2_COST, rel=0.15)
+    mix = estimate_tokens(
+        prompt_tokens=RUN2_PROMPT_TOKENS,
+        searches=DEPTH_CAPS["light"].max_searches,
+        fetches=DEPTH_CAPS["light"].max_fetches,
+    )
+    assert mix.cache_write == pytest.approx(RUN2["write"], rel=0.15)
+    assert mix.cache_read == pytest.approx(RUN2["read"], rel=0.15)
+    assert mix.output == pytest.approx(RUN2["output"], rel=0.15)
+
+
 def test_each_input_says_whether_it_was_measured_or_is_an_estimate() -> None:
-    measured = {i.name for i in INPUTS if i.measured}
-    estimated = {i.name for i in INPUTS if not i.measured}
-    assert {"search_result_tokens", "search_fee_usd"} <= measured
-    assert {
+    by_name = {i.name: i for i in INPUTS}
+    assert by_name["search_fee_usd"].measured is True
+    assert by_name["search_fee_usd"].value == SEARCH_FEE_USD
+    assert by_name["avatars_output_tokens"].measured is True
+    for name in (
+        "search_result_tokens",
         "fetched_page_tokens",
         "iterations_per_tool_call",
-        "thinking_tokens_per_phase",
-        "submit_output_tokens",
-    } <= estimated
-    assert next(i for i in INPUTS if i.name == "search_result_tokens").value == 6_500
-    assert next(i for i in INPUTS if i.name == "search_fee_usd").value == SEARCH_FEE_USD
+        "output_tokens_per_tool_call",
+        "findings_output_tokens",
+    ):
+        assert by_name[name].measured is False
+        assert "run 2" in by_name[name].note.lower()
 
 
 @pytest.mark.parametrize("model", MODELS)
@@ -84,7 +122,7 @@ def test_a_longer_prompt_costs_more() -> None:
 def test_the_estimate_lists_its_inputs_with_the_measured_flag() -> None:
     estimate = estimate_cost("light", "claude-opus-5-5", prompt_tokens=4_000)
     by_name = {a.name: a for a in estimate.assumptions}
-    assert by_name["search_result_tokens"].measured is True
+    assert by_name["search_fee_usd"].measured is True
     assert by_name["fetched_page_tokens"].measured is False
 
 
