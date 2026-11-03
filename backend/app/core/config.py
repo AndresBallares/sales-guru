@@ -136,6 +136,10 @@ class Settings(BaseSettings):
     # on under FAKE_LLM, which costs nothing.
     avatar_import_enabled: bool = False
     avatar_import_model: str = "claude-sonnet-5"
+    # Avatar Research Agent (Phase 7, docs/phase-7.md): off until someone sets
+    # AVATAR_RESEARCH_ENABLED. Unlike avatar import it is NOT opened by FAKE_LLM:
+    # the routes stay 404 until the flag is set explicitly.
+    avatar_research_enabled: bool = False
     frontend_url: str = "http://localhost:5173"
     backend_url: str = "http://localhost:8000"
     meta_app_id: str | None = None

@@ -1793,6 +1793,24 @@ export function getBusinessDashboard(
 // Who an avatar buys for. The Strategist derives an angle's buyer type from it.
 export type PurchaseFor = 'self' | 'gift'
 
+export type ConceptPillar = 'offer' | 'mechanism' | 'education' | 'emotion'
+
+// A concept as it is sent: a name (the slug is derived from it on the server) or the slug
+// it already has.
+export interface AvatarConceptInput {
+  name?: string
+  slug?: string
+  pillar: ConceptPillar
+  description: string
+}
+
+// A concept as it is stored.
+export interface AvatarConcept {
+  slug: string
+  pillar: ConceptPillar
+  description: string
+}
+
 export interface BuyerAvatarDraft {
   name: string
   who: string
@@ -1804,6 +1822,7 @@ export interface BuyerAvatarDraft {
   objections: string[]
   hooks: string[]
   creativeAngles: string[]
+  concepts?: AvatarConceptInput[]
   isActive?: boolean
   sortOrder?: number | null
 }
@@ -1811,6 +1830,7 @@ export interface BuyerAvatarDraft {
 export interface BuyerAvatar extends BuyerAvatarDraft {
   id: string
   businessId: string
+  concepts: AvatarConcept[]
   isActive: boolean
   sortOrder: number
   deletedAt: string | null

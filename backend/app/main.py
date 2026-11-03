@@ -25,6 +25,7 @@ from app.api.options import router as options_router
 from app.api.product import router as product_router
 from app.api.product_image import router as product_image_router
 from app.api.product_image import serve_router as product_image_serve_router
+from app.api.research_run import router as research_run_router
 from app.api.strategy import router as strategy_router
 from app.api.test_evaluation import router as test_evaluation_router
 from app.core.config import get_settings
@@ -70,6 +71,7 @@ app.include_router(business_logo_serve_router)
 app.include_router(brand_profile_router)
 app.include_router(brand_rules_router)
 app.include_router(buyer_avatar_router)
+app.include_router(research_run_router)
 app.include_router(product_router)
 app.include_router(product_image_router)
 app.include_router(product_image_serve_router)

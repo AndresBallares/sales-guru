@@ -36,6 +36,7 @@ function makeAvatar(
     objections: ['Never heard of Venzi'],
     hooks: ['Still time.'],
     creativeAngles: ['A day in the life'],
+    concepts: [],
     isActive: true,
     sortOrder: 0,
     deletedAt: null,
@@ -377,5 +378,78 @@ describe('AvatarsSection', () => {
       expect(names()).toEqual(['The Deadline Gift-Giver', 'The Promotion Ring Buyer']),
     )
     expect(screen.getByRole('heading', { name: 'Buyer avatars', level: 2 })).toHaveFocus()
+  })
+  describe('concepts', () => {
+    const withConcepts = makeAvatar('a1', 'The Promotion Ring Buyer', {
+      concepts: [
+        { slug: 'last-minute-rescue', pillar: 'offer', description: 'Still time to gift' },
+      ],
+    })
+
+    async function openEdit(avatar: api.BuyerAvatar) {
+      mockedApi.listAvatars.mockResolvedValue([avatar])
+      render(<AvatarsSection businessId="biz-1" />)
+      await userEvent.click(
+        await screen.findByRole('button', { name: `Edit ${avatar.name}` }),
+      )
+      return screen.getByRole('form', { name: `Edit ${avatar.name}` })
+    }
+
+    it('shows each concept with its name, pillar and description', async () => {
+      const form = await openEdit(withConcepts)
+
+      expect(within(form).getByLabelText('Concept 1 name')).toHaveValue('last minute rescue')
+      expect(within(form).getByLabelText('Concept 1 pillar')).toHaveValue('offer')
+      expect(within(form).getByLabelText('Concept 1 description')).toHaveValue(
+        'Still time to gift',
+      )
+    })
+
+    it('adds, edits and removes concepts and saves them by name', async () => {
+      const form = await openEdit(withConcepts)
+      mockedApi.updateAvatar.mockResolvedValue({ ...withConcepts })
+
+      await userEvent.click(within(form).getByRole('button', { name: 'Add concept' }))
+      await userEvent.type(within(form).getByLabelText('Concept 2 name'), 'Solid gold')
+      await userEvent.selectOptions(within(form).getByLabelText('Concept 2 pillar'), 'mechanism')
+      await userEvent.type(within(form).getByLabelText('Concept 2 description'), 'Gold all through')
+      await userEvent.click(within(form).getByRole('button', { name: 'Remove concept 1' }))
+      await userEvent.click(within(form).getByRole('button', { name: 'Save changes' }))
+
+      await waitFor(() => expect(mockedApi.updateAvatar).toHaveBeenCalled())
+      expect(mockedApi.updateAvatar).toHaveBeenCalledWith(
+        'biz-1',
+        'a1',
+        expect.objectContaining({
+          concepts: [{ name: 'Solid gold', pillar: 'mechanism', description: 'Gold all through' }],
+        }),
+      )
+    })
+
+    it('stops adding at five concepts', async () => {
+      const form = await openEdit(makeAvatar('a1', 'The Promotion Ring Buyer'))
+
+      for (let n = 0; n < 5; n += 1) {
+        await userEvent.click(within(form).getByRole('button', { name: 'Add concept' }))
+      }
+
+      expect(within(form).getByRole('button', { name: 'Add concept' })).toBeDisabled()
+      expect(within(form).getByLabelText('Concept 5 name')).toBeInTheDocument()
+    })
+
+    it('leaves out concepts that have no name or description', async () => {
+      const form = await openEdit(makeAvatar('a1', 'The Promotion Ring Buyer'))
+      mockedApi.updateAvatar.mockResolvedValue(promo)
+
+      await userEvent.click(within(form).getByRole('button', { name: 'Add concept' }))
+      await userEvent.click(within(form).getByRole('button', { name: 'Save changes' }))
+
+      await waitFor(() => expect(mockedApi.updateAvatar).toHaveBeenCalled())
+      expect(mockedApi.updateAvatar).toHaveBeenCalledWith(
+        'biz-1',
+        'a1',
+        expect.objectContaining({ concepts: [] }),
+      )
+    })
   })
 })

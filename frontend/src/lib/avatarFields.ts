@@ -29,3 +29,17 @@ export function linesOf(text: string): string[] {
 
 // The most avatars one business can hold (the backend's limit).
 export const MAX_BUYER_AVATARS = 12
+
+// Ad concepts per avatar: a name, a pillar and a one-line description (the backend's limits).
+export const MAX_CONCEPTS = 5
+export const CONCEPT_PILLARS: { value: 'offer' | 'mechanism' | 'education' | 'emotion'; label: string }[] = [
+  { value: 'offer', label: 'Offer' },
+  { value: 'mechanism', label: 'Mechanism' },
+  { value: 'education', label: 'Education' },
+  { value: 'emotion', label: 'Emotion' },
+]
+
+// A stored slug as readable text for the name field: "last-minute-rescue" -> "last minute rescue".
+export function conceptNameOf(slug: string): string {
+  return slug.replace(/-/g, ' ')
+}
