@@ -11,6 +11,7 @@ import { DashboardSection } from '../components/DashboardSection'
 import { MetaConnectionSection } from '../components/MetaConnectionSection'
 import { MetaSettingsSection } from '../components/MetaSettingsSection'
 import { ProductsSection } from '../components/ProductsSection'
+import { ProductsTab } from '../components/ProductsTab'
 import {
   ApiError,
   getBrandProfile,
@@ -30,6 +31,7 @@ import {
 // The business page's tabs. The selected one lives in the URL hash (#avatars) so a refresh
 // or a shared link opens the same tab; the first tab has no hash.
 const AVATARS_TAB = 'avatars'
+const PRODUCTS_TAB = 'products'
 const RESULTS_TAB = 'results'
 
 export function BusinessDetailPage() {
@@ -37,13 +39,14 @@ export function BusinessDetailPage() {
   const [searchParams, setSearchParams] = useSearchParams()
   const location = useLocation()
   const navigate = useNavigate()
-  const selectedTab = location.hash === `#${AVATARS_TAB}` ? AVATARS_TAB : RESULTS_TAB
+  const selectedTab =
+    [AVATARS_TAB, PRODUCTS_TAB].find((id) => location.hash === `#${id}`) ?? RESULTS_TAB
   function selectTab(id: string) {
     navigate(
       {
         pathname: location.pathname,
         search: location.search,
-        hash: id === AVATARS_TAB ? `#${id}` : '',
+        hash: id === RESULTS_TAB ? '' : `#${id}`,
       },
       { replace: true },
     )
@@ -312,6 +315,13 @@ export function BusinessDetailPage() {
               id: AVATARS_TAB,
               label: 'Avatars',
               content: <AvatarsSection businessId={businessId} />,
+            },
+            {
+              id: PRODUCTS_TAB,
+              label: 'Products',
+              // Also tells the page when the list changes, so the onboarding steps in the
+              // first tab see a product added here.
+              content: <ProductsTab businessId={businessId} onProductsChange={setProducts} />,
             },
           ]}
         />

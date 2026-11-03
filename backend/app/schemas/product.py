@@ -11,7 +11,7 @@ from app.services.url_validation import validate_destination_url
 # can't balloon the prompt, same reasoning as Business.description's cap.
 _MAX_DESCRIPTION_LENGTH = 1000
 # The mechanism is a sentence or two, pasted into the same prompts.
-_MAX_MECHANISM_LENGTH = 300
+_MAX_MECHANISM_LENGTH = 600
 # A label the owner types; screens fall back to the description while it is empty.
 _MAX_NAME_LENGTH = 80
 # The personalization options are one short line, e.g. "6 ceramic colors".
@@ -123,6 +123,29 @@ class ProductResponse(CamelCaseModel):
     # photo, if any — lets a campaign list show a thumbnail without a
     # separate per-product images fetch (app/components/CampaignsSection).
     primary_image_url: str | None = None
+
+
+class CampaignEditImpact(CamelCaseModel):
+    """What a proposed product edit would do to one campaign's creatives."""
+
+    id: str
+    name: str | None
+    status: str
+    # Published = already on Meta (has a Meta campaign id): its ads are locked, so
+    # creatives that turn stale there cannot be regenerated.
+    is_published: bool
+    creatives_total: int
+    # Creatives that are fine now and would read as stale after the edit.
+    creatives_would_be_stale: int
+    creatives_already_stale: int
+
+
+class EditImpactResponse(CamelCaseModel):
+    """The answer of POST .../products/{id}/edit-impact. Nothing is changed."""
+
+    will_affect_creatives: bool
+    affects_published_campaign: bool
+    campaigns: list[CampaignEditImpact]
 
 
 class CheckUrlResponse(CamelCaseModel):

@@ -10,6 +10,7 @@ vi.mock('../lib/api', async (importOriginal) => {
     ...actual,
     createProduct: vi.fn<typeof actual.createProduct>(),
     updateProduct: vi.fn<typeof actual.updateProduct>(),
+    getProductEditImpact: vi.fn<typeof actual.getProductEditImpact>(),
     listProducts: vi.fn<typeof actual.listProducts>(),
     listProductImages: vi.fn<typeof actual.listProductImages>(),
     uploadProductImage: vi.fn<typeof actual.uploadProductImage>(),
@@ -423,6 +424,12 @@ describe('ProductsSection', () => {
     const updated = { ...original, description: 'Handmade leather wallets' }
     mockedApi.listProducts.mockResolvedValueOnce([original]).mockResolvedValueOnce([updated])
     mockedApi.updateProduct.mockResolvedValue(updated)
+    // Changing the description is checked before saving (no ad is affected here).
+    mockedApi.getProductEditImpact.mockResolvedValue({
+      willAffectCreatives: false,
+      affectsPublishedCampaign: false,
+      campaigns: [],
+    })
     const user = userEvent.setup()
 
     render(<ProductsSection businessId="biz-1" />)

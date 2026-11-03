@@ -836,6 +836,46 @@ describe('BusinessDetailPage tabs', () => {
     expect(screen.queryByRole('heading', { name: 'Buyer avatars' })).not.toBeInTheDocument()
   })
 
+  it('has a Products tab, closed until it is chosen', async () => {
+    renderWithLocation('/businesses/biz-1')
+
+    const tab = await screen.findByRole('tab', { name: 'Products' })
+    expect(tab).toHaveAttribute('aria-selected', 'false')
+    expect(screen.queryByRole('heading', { name: 'Add a product' })).not.toBeInTheDocument()
+  })
+
+  it('opens the products tab straight from #products and lists the products', async () => {
+    mockedApi.listProducts.mockResolvedValue([
+      {
+        id: 'prod-9',
+        description: 'Ceramic ring',
+        name: 'Emerald Coil',
+        price: null,
+        margin: null,
+        features: null,
+        benefits: null,
+        mechanism: null,
+        url: null,
+        primaryImageUrl: null,
+      },
+    ])
+    renderWithLocation('/businesses/biz-1#products')
+
+    expect(await screen.findByRole('tab', { name: 'Products' })).toHaveAttribute(
+      'aria-selected',
+      'true',
+    )
+    expect(await screen.findByRole('button', { name: 'Edit Emerald Coil' })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Add a product' })).toBeInTheDocument()
+  })
+
+  it('writes #products into the URL when the tab is chosen', async () => {
+    renderWithLocation('/businesses/biz-1')
+
+    await userEvent.click(await screen.findByRole('tab', { name: 'Products' }))
+    expect(screen.getByTestId('location')).toHaveTextContent('/businesses/biz-1#products')
+  })
+
   it('keeps the query string when it changes tab', async () => {
     renderWithLocation('/businesses/biz-1?skipMeta=1#avatars')
     await screen.findByRole('heading', { name: 'Buyer avatars', level: 2 })

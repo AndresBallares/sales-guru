@@ -551,6 +551,37 @@ export function updateProduct(
   })
 }
 
+// What a proposed product edit would do to the ads that use the product (a read-only
+// check; nothing is saved). Only a new description, a new URL or, until the ad is on Meta,
+// new personalization makes an ad out of date.
+export interface CampaignEditImpact {
+  id: string
+  name: string | null
+  status: string
+  // Already on Meta: its ads are locked, so ads that go out of date there cannot be regenerated.
+  isPublished: boolean
+  creativesTotal: number
+  creativesWouldBeStale: number
+  creativesAlreadyStale: number
+}
+
+export interface ProductEditImpact {
+  willAffectCreatives: boolean
+  affectsPublishedCampaign: boolean
+  campaigns: CampaignEditImpact[]
+}
+
+export function getProductEditImpact(
+  businessId: string,
+  productId: string,
+  changes: ProductUpdateInput,
+): Promise<ProductEditImpact> {
+  return request<ProductEditImpact>(
+    `/businesses/${businessId}/products/${productId}/edit-impact`,
+    { method: 'POST', body: JSON.stringify(changes) },
+  )
+}
+
 export function uploadProductImage(
   businessId: string,
   productId: string,
