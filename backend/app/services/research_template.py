@@ -29,6 +29,7 @@ from app.core.db import db as default_db
 from app.schemas.brand_profile import PRICE_POSITIONING_LABELS
 from app.schemas.business import INDUSTRY_LABELS
 from app.services.prompt_safety import quarantine
+from app.services.text_cut import cut_at_word
 from app.services.url_validation import validate_destination_url
 
 TEMPLATE_PATH = (
@@ -42,7 +43,7 @@ MAX_EXTRA_COMPETITORS = 5
 MAX_COMPETITORS = 10
 _DESCRIPTION_CAP = 500
 _BENEFITS_CAP = 400
-_MECHANISM_CAP = 300
+_MECHANISM_CAP = 600
 _WHO_CAP = 300
 
 # Each placeholder in the template file and where its value comes from.
@@ -122,8 +123,7 @@ def _clean(value: str | None) -> str:
 
 
 def _cap(value: str | None, limit: int) -> str:
-    text = _clean(value)
-    return text if len(text) <= limit else text[: limit - 1].rstrip() + "…"
+    return cut_at_word(_clean(value), limit)
 
 
 def _wrap(label: str, text: str) -> str:
