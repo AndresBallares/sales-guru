@@ -5,9 +5,10 @@ The next round's Strategist is told. "Winning" is exactly the dashboard's leader
 is the one the owner sees highlighted. This module only maps that ad back to its
 angle and library avatar.
 
-Known limit: the numbers are lifetime totals, so an older ad has had longer to
-collect results than a newer one. Comparing ads over a common window in which all
-of them were live is on the backlog.
+The numbers are for the window in which all of the ads were running
+(``ad_window.compare_ads``), so an ad that went live earlier gets no credit for
+its extra days. With too little shared time there is no winner, and the reason is
+passed on.
 """
 
 from collections.abc import Mapping
@@ -15,8 +16,10 @@ from typing import NamedTuple
 
 from prisma import Prisma
 
+from app.core.config import get_settings
 from app.core.db import db
 from app.services import dashboard as dash
+from app.services.ad_window import compare_ads
 from app.services.creative_naming import angle_label
 
 
@@ -51,6 +54,11 @@ class RoundResults(NamedTuple):
     leader: AdResult | None
     weakest: AdResult | None
     ads_compared: int
+    # What the numbers cover ("Compared over the last 4 days, while all ads ran"),
+    # and, when there is no leader because the ads have not run side by side long
+    # enough, why.
+    window_label: str | None = None
+    no_leader_reason: str | None = None
 
 
 def _result_of(totals: dash.Totals, basis: str) -> int:
@@ -59,14 +67,17 @@ def _result_of(totals: dash.Totals, basis: str) -> int:
 
 
 def build_round_results(
-    per_ad: Mapping[str, dash.Totals], angles: Mapping[str, AdAngle]
+    per_ad: Mapping[str, dash.Totals],
+    angles: Mapping[str, AdAngle],
+    window_label: str | None = None,
 ) -> RoundResults | None:
     """Pick the leader among the ads' numbers and say which angle it was.
 
     Args:
-        per_ad: Each ad's lifetime numbers, keyed by ad id.
+        per_ad: Each ad's numbers in the shared window, keyed by ad id.
         angles: The angle each ad was written for, keyed by ad id; an ad missing
             here is labeled by its id.
+        window_label: What the numbers cover, passed on to the Strategist.
 
     Returns:
         None when there are no numbers at all, else the comparison.
@@ -75,7 +86,7 @@ def build_round_results(
         return None
     leader = dash.choose_leader(list(per_ad.items()))
     if leader is None:
-        return RoundResults(None, None, None, len(per_ad))
+        return RoundResults(None, None, None, len(per_ad), window_label)
 
     def result(ad_id: str) -> AdResult:
         totals = per_ad[ad_id]
@@ -97,6 +108,7 @@ def build_round_results(
         leader=result(leader.ad_id),
         weakest=None if weakest.ad_id == leader.ad_id else weakest,
         ads_compared=len(per_ad),
+        window_label=window_label,
     )
 
 
@@ -104,6 +116,9 @@ async def load_round_results(
     campaign_id: str, *, client: Prisma = db
 ) -> RoundResults | None:
     """The campaign's current comparison, read from its ad-level metrics.
+
+    Ads are compared over the window in which all of them were running, the same
+    window the dashboard uses, so the winner is the ad the owner sees highlighted.
 
     Args:
         campaign_id: The creative test campaign.
@@ -115,10 +130,21 @@ async def load_round_results(
     metrics = await client.metric.find_many(
         where={"campaignId": campaign_id, "NOT": [{"adId": None}]}
     )
-    per_ad = dash.ad_totals(dash.snapshot_from_metric(m) for m in metrics)
-    if not per_ad:
+    snapshots = [dash.snapshot_from_metric(m) for m in metrics]
+    lifetime = dash.ad_totals(snapshots)
+    if not lifetime:
         return None
-    ad_ids = list(per_ad)
+    window = compare_ads(snapshots, min_hours=get_settings().common_window_min_hours)
+    if window.status != "ok":
+        return RoundResults(
+            None,
+            None,
+            None,
+            len(lifetime),
+            window.label,
+            window.too_short_reason,
+        )
+    ad_ids = list(window.per_ad)
     names = {
         ad.id: ad.name for ad in await client.ad.find_many(where={"id": {"in": ad_ids}})
     }
@@ -140,4 +166,4 @@ async def load_round_results(
         )
     for ad_id, name in names.items():
         angles.setdefault(ad_id, AdAngle(name, None, None, None, None))
-    return build_round_results(per_ad, angles)
+    return build_round_results(window.per_ad, angles, window.label)

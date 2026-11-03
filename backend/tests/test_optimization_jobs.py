@@ -2704,7 +2704,8 @@ async def _seed_ad_metric(
                 "campaignId": campaign_id,
                 "adSetId": ad.adSetId,
                 "adId": ad_id,
-                "impressions": 1000,
+                # Cumulative like Meta's: more spend means more impressions.
+                "impressions": 1000 + int(spend * 10),
                 "clicks": 50,
                 "spend": spend,
                 "conversions": 0,
@@ -4818,3 +4819,109 @@ async def test_ad_set_budget_totals_still_add_each_ad_sets_latest_row(
     spend = _run(client, optimization_jobs._latest_total_spend, campaign_id)
 
     assert spend == 140.0
+
+
+# ── Ads are compared over the period they all ran together ───
+
+
+async def _old_ad_that_faded_and_two_newer_ones(
+    client: TestClient, *, newer_started_hours_ago: float
+) -> tuple[str, list[str]]:
+    """Ad 0 started 160h ago: $2.00 per add-to-cart at first (lifetime $8.00 in all),
+    then $20.00 once the newer ads (each $6.00) started."""
+    campaign_id, ads = await _atc_test_with_ads(client, ad_count=3)
+    old, *newer = ads
+    await _seed_ad_metric(campaign_id, old, spend=0.0, hours_ago=160.0)
+    await _seed_ad_metric(
+        campaign_id, old, spend=20.0, add_to_cart=10, hours_ago=newer_started_hours_ago
+    )
+    await _seed_ad_metric(campaign_id, old, spend=120.0, add_to_cart=15)
+    for ad_id, atc in zip(newer, (5, 6), strict=True):
+        await _seed_ad_metric(
+            campaign_id, ad_id, spend=0.0, hours_ago=newer_started_hours_ago
+        )
+        await _seed_ad_metric(campaign_id, ad_id, spend=6.0 * atc, add_to_cart=atc)
+    return campaign_id, ads
+
+
+@pytest.mark.asyncio
+async def test_the_worse_than_best_rule_judges_ads_over_the_shared_period(
+    client: TestClient,
+    mock_services: dict[str, AsyncMock],
+    pause_ad_mock: AsyncMock,
+) -> None:
+    campaign_id, ads = await _old_ad_that_faded_and_two_newer_ones(
+        client, newer_started_hours_ago=100.0
+    )
+
+    await _run_rules(client, campaign_id)
+
+    pause_ad_mock.assert_awaited_once()
+    assert pause_ad_mock.await_args is not None
+    assert pause_ad_mock.await_args.kwargs["meta_ad_id"] == "meta_ad_0"
+    [rec] = await _recommendations(campaign_id)
+    assert (rec.actionType, rec.targetAdId) == ("PAUSE_AD", ads[0])
+    assert "shared period" in rec.reasoning
+    assert "$20.00" in rec.reasoning  # its cost in the shared period, not $8.00
+
+
+@pytest.mark.asyncio
+async def test_ads_are_not_compared_until_they_have_run_side_by_side_long_enough(
+    client: TestClient,
+    mock_services: dict[str, AsyncMock],
+    pause_ad_mock: AsyncMock,
+) -> None:
+    campaign_id, _ = await _old_ad_that_faded_and_two_newer_ones(
+        client, newer_started_hours_ago=30.0
+    )
+
+    await _run_rules(client, campaign_id)
+
+    pause_ad_mock.assert_not_awaited()
+    assert await _recommendations(campaign_id) == []
+
+
+@pytest.mark.asyncio
+async def test_the_pause_prompt_lists_the_ads_over_the_shared_period(
+    client: TestClient, mock_services: dict[str, AsyncMock]
+) -> None:
+    campaign_id, ads = await _old_ad_that_faded_and_two_newer_ones(
+        client, newer_started_hours_ago=100.0
+    )
+    seeder = Prisma()
+    await seeder.connect()
+    try:
+        ad_set = await seeder.adset.find_first(where={"campaignId": campaign_id})
+    finally:
+        await seeder.disconnect()
+    assert ad_set is not None
+
+    performances = _run(client, optimization_jobs._ads_for_pause_choice, ad_set)
+
+    assert performances is not None
+    old = {p.ad_id: p for p in performances}[ads[0]]
+    assert old.period == "the last 4 days, while all ads ran"
+    assert (old.spend, old.add_to_cart, old.cost_per_add_to_cart) == (100.0, 5, 20.0)
+
+
+@pytest.mark.asyncio
+async def test_the_pause_prompt_falls_back_to_labeled_lifetime_numbers(
+    client: TestClient, mock_services: dict[str, AsyncMock]
+) -> None:
+    campaign_id, ads = await _old_ad_that_faded_and_two_newer_ones(
+        client, newer_started_hours_ago=30.0
+    )
+    seeder = Prisma()
+    await seeder.connect()
+    try:
+        ad_set = await seeder.adset.find_first(where={"campaignId": campaign_id})
+    finally:
+        await seeder.disconnect()
+    assert ad_set is not None
+
+    performances = _run(client, optimization_jobs._ads_for_pause_choice, ad_set)
+
+    assert performances is not None
+    old = {p.ad_id: p for p in performances}[ads[0]]
+    assert old.period == "lifetime"
+    assert old.spend == 120.0

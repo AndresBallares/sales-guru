@@ -1693,6 +1693,10 @@ export interface DashboardAdRow {
   purchases: number | null
   cac: number | null
   isLeader: boolean
+  // False for an ad left out of the comparison: it stopped before the other ads
+  // started, so it has no numbers in the shared period. Spend and click-through
+  // are lifetime; the add-to-cart and sales columns are for the shared period.
+  compared?: boolean
   // The library avatar the ad was written for; display only (the leader is chosen
   // without it). Null for an older ad.
   avatarName?: string | null
@@ -1705,6 +1709,12 @@ export interface DashboardTier3 {
   ads: DashboardAdRow[]
   leader: { adId: string; basis: 'cac' | 'cost_per_add_to_cart' } | null
   leaderMessage: string
+  // What the comparison covers, e.g. "Compared over the last 4 days, while all ads
+  // ran"; null when fewer than two ads ran together.
+  windowStatus?: 'ok' | 'too_short' | 'too_few_ads'
+  windowLabel?: string | null
+  windowStart?: string | null
+  windowEnd?: string | null
 }
 
 export interface DashboardProposal {

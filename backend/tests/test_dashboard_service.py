@@ -5,6 +5,17 @@ from typing import Any
 
 from app.schemas.dashboard import Tier1
 from app.services import dashboard as d
+from app.services.ad_window import CommonWindow, compare_ads
+
+from tests.test_ad_window import (
+    MIN_HOURS,
+    fading_old_ad,
+    steady,
+    steady_new_ad,
+)
+from tests.test_ad_window import (
+    T0 as WINDOW_T0,
+)
 
 T0 = datetime(2026, 10, 10, 12, 0, tzinfo=UTC)
 
@@ -44,6 +55,19 @@ def totals(**kwargs: Any) -> d.Totals:
     result = d.combine([snap(**kwargs)])
     assert result is not None
     return result
+
+
+def ok_window(per_ad: dict[str, d.Totals]) -> CommonWindow:
+    """A window that is long enough, holding these totals as its per-ad numbers."""
+    return CommonWindow(
+        start=T0,
+        end=T0 + timedelta(hours=100),
+        hours=100.0,
+        per_ad=per_ad,
+        excluded=(),
+        status="ok",
+        min_hours=72.0,
+    )
 
 
 def tier1(t: d.Totals, **kwargs: Any) -> Tier1:
@@ -570,7 +594,7 @@ def test_tier3_marks_the_leader_and_computes_per_ad_numbers() -> None:
         "b": totals(spend=60.0, impressions=1000, link_clicks=20, add_to_cart=6),
     }
 
-    result = d.build_tier3(ads, per_ad, [])
+    result = d.build_tier3(ads, per_ad, ok_window(per_ad), [])
 
     assert result is not None
     assert result.leader is not None and result.leader.ad_id == "b"
@@ -591,7 +615,7 @@ def test_tier3_says_no_clear_leader_yet_when_there_is_none() -> None:
         "b": totals(spend=10.0, add_to_cart=2),
     }
 
-    result = d.build_tier3(ads, per_ad, [])
+    result = d.build_tier3(ads, per_ad, ok_window(per_ad), [])
 
     assert result is not None
     assert result.leader is None
@@ -600,13 +624,15 @@ def test_tier3_says_no_clear_leader_yet_when_there_is_none() -> None:
 
 
 def test_tier3_is_absent_without_any_ad_level_numbers() -> None:
-    assert d.build_tier3([d.AdInfo("a", "Ad A", "LIVE")], {}, []) is None
+    assert d.build_tier3([d.AdInfo("a", "Ad A", "LIVE")], {}, ok_window({}), []) is None
 
 
 def test_tier3_lists_an_ad_with_no_numbers_yet() -> None:
     ads = [d.AdInfo("a", "Ad A", "LIVE"), d.AdInfo("b", "Ad B", "LIVE")]
 
-    result = d.build_tier3(ads, {"a": totals(spend=10.0)}, [])
+    result = d.build_tier3(
+        ads, {"a": totals(spend=10.0)}, ok_window({"a": totals(spend=10.0)}), []
+    )
 
     assert result is not None
     row = {r.ad_id: r for r in result.ads}["b"]
@@ -628,7 +654,7 @@ def test_ad_status_labels() -> None:
         d.PauseRecommendation("live", "REJECTED"),
     ]
 
-    result = d.build_tier3(ads, per_ad, recs)
+    result = d.build_tier3(ads, per_ad, ok_window(per_ad), recs)
 
     assert result is not None
     status = {r.ad_id: r.status for r in result.ads}
@@ -638,3 +664,112 @@ def test_ad_status_labels() -> None:
         "auto": "paused_by_optimizer",
         "prop": "proposed_pause",
     }
+
+
+# --- tier 3 over the common window ---------------------------------------------
+
+
+def _old_and_new() -> list[d.Snapshot]:
+    # a started 100 hours before b and is cheaper over its life, dearer in the window.
+    return fading_old_ad() + steady_new_ad()
+
+
+def _two_ads() -> list[d.AdInfo]:
+    return [d.AdInfo("a", "Ad A", "LIVE"), d.AdInfo("b", "Ad B", "LIVE")]
+
+
+def test_tier3_cost_columns_use_the_window_and_spend_stays_lifetime() -> None:
+    rows = _old_and_new()
+
+    result = d.build_tier3(
+        _two_ads(), d.ad_totals(rows), compare_ads(rows, min_hours=MIN_HOURS), []
+    )
+
+    assert result is not None
+    by_id = {r.ad_id: r for r in result.ads}
+    assert by_id["a"].spend == 300.0  # "Spent so far": lifetime
+    assert by_id["a"].add_to_cart == 100  # window, not the lifetime 300
+    assert by_id["a"].cost_per_add_to_cart == 2.0
+    assert by_id["b"].add_to_cart == 300
+    assert by_id["a"].compared is True
+
+
+def test_tier3_names_the_leader_from_the_window_not_from_lifetime() -> None:
+    rows = _old_and_new()
+
+    result = d.build_tier3(
+        _two_ads(), d.ad_totals(rows), compare_ads(rows, min_hours=MIN_HOURS), []
+    )
+
+    assert result is not None
+    assert result.leader is not None and result.leader.ad_id == "b"
+    # On lifetime numbers the older ad would have won.
+    lifetime_leader = d.choose_leader(list(d.ad_totals(rows).items()))
+    assert lifetime_leader is not None and lifetime_leader.ad_id == "a"
+
+
+def test_tier3_says_what_the_comparison_covers() -> None:
+    rows = _old_and_new()
+
+    result = d.build_tier3(
+        _two_ads(), d.ad_totals(rows), compare_ads(rows, min_hours=MIN_HOURS), []
+    )
+
+    assert result is not None
+    assert result.window_status == "ok"
+    assert result.window_label == "Compared over the last 4 days, while all ads ran"
+    assert result.window_start == WINDOW_T0 + timedelta(hours=100)
+    assert result.window_end == WINDOW_T0 + timedelta(hours=200)
+
+
+def test_tier3_has_no_leader_when_the_ads_have_not_run_side_by_side_long_enough() -> (
+    None
+):
+    rows = steady("a", start=0, end=100, atc_per_hour=2) + steady(
+        "b", start=70, end=100, atc_per_hour=3
+    )
+
+    result = d.build_tier3(
+        _two_ads(), d.ad_totals(rows), compare_ads(rows, min_hours=MIN_HOURS), []
+    )
+
+    assert result is not None
+    assert result.leader is None
+    assert result.window_status == "too_short"
+    assert result.leader_message == (
+        "Not enough shared time yet: these ads have only run side by side for "
+        "30 hours (72 needed)"
+    )
+
+
+def test_tier3_lists_an_ad_that_stopped_before_the_window_without_ranking_it() -> None:
+    rows = steady("a", start=0, end=200) + steady("b", start=100, end=200)
+    rows += steady("p", start=0, end=30)
+    ads = _two_ads() + [d.AdInfo("p", "Ad P", "PAUSED")]
+
+    result = d.build_tier3(
+        ads, d.ad_totals(rows), compare_ads(rows, min_hours=MIN_HOURS), []
+    )
+
+    assert result is not None
+    p = {r.ad_id: r for r in result.ads}["p"]
+    assert p.compared is False
+    assert p.spend == 60.0  # still shows what it spent
+    assert p.add_to_cart is None and p.cost_per_add_to_cart is None and p.cac is None
+    assert p.is_leader is False
+
+
+def test_tier3_with_one_ad_in_the_window_is_no_clear_leader_and_no_label() -> None:
+    rows = steady("a", start=0, end=100)
+
+    result = d.build_tier3(
+        [d.AdInfo("a", "Ad A", "LIVE")],
+        d.ad_totals(rows),
+        compare_ads(rows, min_hours=MIN_HOURS),
+        [],
+    )
+
+    assert result is not None
+    assert result.leader_message == "No clear leader yet"
+    assert result.window_label is None
+    assert result.window_status == "too_few_ads"

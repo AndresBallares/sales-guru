@@ -55,7 +55,16 @@ def _ad(
     purchases: int | None = None,
     cac: float | None = None,
     live: bool = True,
+    window: tuple[float, int] | None | str = "same",
 ) -> rules.AdSnapshot:
+    """An ad; its shared-period numbers equal its lifetime ones unless `window` says.
+
+    `window` is (spend, add-to-carts) in the shared period, or None when the ad
+    has no shared-period numbers (the ads have not run side by side long enough).
+    """
+    if window == "same":
+        window = (spend, add_to_cart or 0) if add_to_cart is not None else None
+    window_spend, window_atc = window if isinstance(window, tuple) else (None, None)
     return rules.AdSnapshot(
         ad_id=ad_id,
         name=f"Ad {ad_id}",
@@ -65,6 +74,13 @@ def _ad(
         cost_per_add_to_cart=(spend / add_to_cart) if add_to_cart else None,
         purchases=purchases,
         cac=cac,
+        window_spend=window_spend,
+        window_add_to_cart=window_atc,
+        window_cost_per_add_to_cart=(
+            window_spend / window_atc
+            if window_spend is not None and window_atc
+            else None
+        ),
     )
 
 
@@ -320,3 +336,108 @@ def test_the_reasoning_states_the_numbers() -> None:
     assert "2.0x" in reasoning
     assert "0 add-to-carts" in reasoning
     assert "60" in reasoning  # hours running
+
+
+# ── The comparisons use the shared period; absolute rules stay lifetime ──
+
+
+def test_rule_two_compares_cost_per_add_to_cart_in_the_shared_period() -> None:
+    ads = [
+        # On lifetime this looks like the best ad ($5.00); in the shared period, $25.
+        _ad("old", spend=50.0, add_to_cart=10, window=(125.0, 5)),
+        _ad("new", spend=50.0, add_to_cart=5, window=(50.0, 5)),  # $10.00
+        _ad("ok", spend=60.0, add_to_cart=5, window=(60.0, 5)),  # $12.00
+    ]
+
+    candidates = _evaluate(ads)
+
+    assert [c.ad_id for c in candidates] == ["old"]
+    assert candidates[0].rule == "WORSE_THAN_BEST"
+    assert "$25.00" in candidates[0].reasoning
+    assert "shared period" in candidates[0].reasoning
+
+
+def test_rule_two_does_not_fire_without_shared_period_numbers() -> None:
+    ads = [
+        _ad("best", spend=50.0, add_to_cart=5, window=None),
+        _ad("loser", spend=125.0, add_to_cart=5, window=None),  # 2.5x on lifetime
+        _ad("ok", spend=60.0, add_to_cart=5, window=None),
+    ]
+
+    assert _evaluate(ads) == []
+
+
+def test_an_ad_outside_the_shared_period_is_not_a_comparison_candidate() -> None:
+    ads = [
+        _ad("best", spend=50.0, add_to_cart=5),
+        _ad("stopped", spend=125.0, add_to_cart=5, window=None),
+        _ad("ok", spend=60.0, add_to_cart=5),
+    ]
+
+    assert _evaluate(ads) == []
+
+
+def test_rule_one_still_uses_lifetime_spend_even_without_shared_period_numbers() -> (
+    None
+):
+    target = rules.target_for_plan(_plan())
+    ads = [
+        _ad("burner", spend=target * 2, add_to_cart=None, window=None),
+        _ad("a", spend=5.0, add_to_cart=1, window=None),
+        _ad("b", spend=5.0, add_to_cart=1, window=None),
+    ]
+
+    candidates = _evaluate(ads)
+
+    assert [(c.ad_id, c.rule) for c in candidates] == [("burner", "NO_RESULT")]
+
+
+def test_rule_three_still_uses_lifetime_cac() -> None:
+    target_cac = rules.target_cac_for_plan(_plan())
+    ads = [
+        _ad(
+            "dear",
+            spend=500.0,
+            add_to_cart=20,
+            purchases=10,
+            cac=target_cac * 2,
+            window=None,
+        ),
+        _ad("a", spend=5.0, add_to_cart=1, window=None),
+        _ad("b", spend=5.0, add_to_cart=1, window=None),
+    ]
+
+    candidates = _evaluate(ads)
+
+    assert [(c.ad_id, c.rule) for c in candidates] == [("dear", "CAC_TOO_HIGH")]
+
+
+def test_the_carousel_winner_has_most_add_to_carts_in_the_shared_period() -> None:
+    ads = [
+        _ad("old", spend=200.0, add_to_cart=40, window=(40.0, 6)),
+        _ad("new", spend=60.0, add_to_cart=10, window=(60.0, 9)),
+    ]
+
+    winner = rules.carousel_winner(ads)
+
+    assert winner is not None and winner.ad_id == "new"
+
+
+def test_no_carousel_winner_without_shared_period_numbers() -> None:
+    ads = [
+        _ad("old", spend=200.0, add_to_cart=40, window=None),
+        _ad("new", spend=60.0, add_to_cart=10, window=None),
+    ]
+
+    assert rules.carousel_winner(ads) is None
+
+
+def test_the_carousel_reasoning_quotes_the_shared_period_numbers() -> None:
+    winner = _ad("new", spend=500.0, add_to_cart=40, window=(60.0, 9))
+
+    text = rules.carousel_proposal_reasoning(
+        winner, 4, "Compared over the last 4 days, while all ads ran"
+    )
+
+    assert "9 add-to-carts" in text and "$60.00" in text
+    assert "Compared over the last 4 days, while all ads ran" in text

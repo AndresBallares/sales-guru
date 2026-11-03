@@ -309,6 +309,19 @@ def _snake_ring(client: TestClient) -> tuple[str, str, list[str]]:
             ),
         )
         _run(client, lambda c=creative_id, a=ad_id: _link(c, a))
+        # All three ads started 100 hours ago, so they share a long enough window.
+        _run(
+            client,
+            lambda a=ad_id: _seed_metric(
+                campaign_id,
+                ad_id=a,
+                ad_set_id=ad_set_id,
+                hours_ago=100,
+                impressions=0,
+                spend=0.0,
+                add_to_cart=0,
+            ),
+        )
         _run(
             client,
             lambda a=ad_id, s=spend, t=atc: _seed_metric(

@@ -93,11 +93,13 @@ from app.schemas.strategy import (
 from app.schemas.test_evaluation import StopReason
 from app.services import (
     creative_test_rules,
+    dashboard,
     optimizer,
     retargeting,
     saturation,
     switch_to_purchase,
 )
+from app.services.ad_window import CommonWindow, compare_ads
 from app.services.campaign_status_sync import sync_campaign_statuses
 from app.services.meta import (
     CampaignInsights,
@@ -951,39 +953,73 @@ async def _check_add_to_cart_delivery(campaign: Campaign) -> None:
         )
 
 
-async def _creative_test_ads(
-    campaign: Campaign,
-) -> tuple[list[creative_test_rules.AdSnapshot], datetime | None]:
-    """Every ad of a creative test with its latest ad-level numbers.
+async def _ad_level_window(campaign_id: str) -> tuple[list[Metric], CommonWindow]:
+    """The campaign's ad-level rows (oldest first) and the window all its ads ran.
 
-    Returns:
-        (snapshots, first_collected_at): one snapshot per ad (zeros when it has
-        no ad-level row yet) and when the first ad-level snapshot was
-        collected, or None if none has been yet.
+    The comparisons between ads use that window, so an ad that went live earlier
+    gets no credit for its extra days (app/services/ad_window.py).
     """
-    first = await db.metric.find_first(
-        where={"campaignId": campaign.id, "NOT": [{"adId": None}]},
+    metrics = await db.metric.find_many(
+        where={"campaignId": campaign_id, "NOT": [{"adId": None}]},
         order={"fetchedAt": "asc"},
     )
+    window = compare_ads(
+        (dashboard.snapshot_from_metric(m) for m in metrics),
+        min_hours=get_settings().common_window_min_hours,
+    )
+    return metrics, window
+
+
+def _latest_by_ad(metrics: list[Metric]) -> dict[str, Metric]:
+    """Each ad's newest row from rows sorted oldest first."""
+    return {m.adId: m for m in metrics if m.adId is not None}
+
+
+async def _creative_test_ads(
+    campaign: Campaign,
+) -> tuple[list[creative_test_rules.AdSnapshot], datetime | None, str | None]:
+    """Every ad of a creative test with its lifetime and shared-period numbers.
+
+    Lifetime numbers (the ad's latest ad-level row) feed the absolute rules. The
+    shared-period numbers, over the window in which all the ads ran, feed the
+    comparisons between ads, and are left out while that window is shorter than
+    the minimum (or for an ad that did not run in it).
+
+    Returns:
+        (snapshots, first_collected_at, window_label): one snapshot per ad (zeros
+        when it has no ad-level row yet), when the first ad-level snapshot was
+        collected (None if none has been yet), and what the shared period is
+        called (None while there is none).
+    """
+    metrics, window = await _ad_level_window(campaign.id)
+    latest = _latest_by_ad(metrics)
+    shared = window.per_ad if window.status == "ok" else {}
     snapshots: list[creative_test_rules.AdSnapshot] = []
     for ad_set in await db.adset.find_many(where={"campaignId": campaign.id}):
         for ad in await db.ad.find_many(where={"adSetId": ad_set.id}):
-            latest = await db.metric.find_first(
-                where={"adId": ad.id}, order={"fetchedAt": "desc"}
-            )
+            row = latest.get(ad.id)
+            totals = shared.get(ad.id)
             snapshots.append(
                 creative_test_rules.AdSnapshot(
                     ad_id=ad.id,
                     name=ad.name,
                     live=ad.status == "LIVE",
-                    spend=latest.spend if latest else 0.0,
-                    add_to_cart=latest.addToCart if latest else None,
-                    cost_per_add_to_cart=latest.costPerAddToCart if latest else None,
-                    purchases=latest.purchases if latest else None,
-                    cac=latest.cac if latest else None,
+                    spend=row.spend if row else 0.0,
+                    add_to_cart=row.addToCart if row else None,
+                    cost_per_add_to_cart=row.costPerAddToCart if row else None,
+                    purchases=row.purchases if row else None,
+                    cac=row.cac if row else None,
+                    window_spend=None if totals is None else totals.spend,
+                    window_add_to_cart=None if totals is None else totals.add_to_cart,
+                    window_cost_per_add_to_cart=(
+                        totals.spend / totals.add_to_cart
+                        if totals is not None and totals.add_to_cart
+                        else None
+                    ),
                 )
             )
-    return snapshots, first.fetchedAt if first else None
+    first = metrics[0].fetchedAt if metrics else None
+    return snapshots, first, window.label if shared else None
 
 
 async def _record_ad_pause(
@@ -1075,6 +1111,7 @@ async def _propose_carousel_experiment(
     campaign: Campaign,
     snapshots: list[creative_test_rules.AdSnapshot],
     hours_running: float,
+    window_label: str | None = None,
 ) -> None:
     """Propose a carousel as the next experiment once Test #1 has a winner.
 
@@ -1102,7 +1139,7 @@ async def _propose_carousel_experiment(
             "campaignId": campaign.id,
             "actionType": "TEST_CAROUSEL",
             "reasoning": creative_test_rules.carousel_proposal_reasoning(
-                winner, photo_count
+                winner, photo_count, window_label
             ),
             "confidence": 1.0,
             "risk": "LOW",
@@ -1144,11 +1181,11 @@ async def _enforce_creative_test_rules(
     await _sync_cost_cap_proposal(campaign, content)
     await _propose_switch_to_purchase(campaign, content)
 
-    snapshots, first_collected_at = await _creative_test_ads(campaign)
+    snapshots, first_collected_at, window_label = await _creative_test_ads(campaign)
     if first_collected_at is None:
         return
     hours_running = (datetime.now(UTC) - first_collected_at).total_seconds() / 3600
-    await _propose_carousel_experiment(campaign, snapshots, hours_running)
+    await _propose_carousel_experiment(campaign, snapshots, hours_running, window_label)
     candidates = creative_test_rules.evaluate_creative_test(
         content, snapshots, hours_running=hours_running
     )
@@ -1486,7 +1523,11 @@ async def apply_recommendation(
 async def _ads_for_pause_choice(
     ad_set: AdSet,
 ) -> list[optimizer.AdPerformance] | None:
-    """This ad set's ads with their own latest numbers, if it holds several.
+    """This ad set's ads with their own numbers, if it holds several.
+
+    The numbers are over the period all the ads ran together when that is long
+    enough to compare; otherwise they are lifetime numbers, labeled as such so the
+    model does not weigh one ad against another on them.
 
     Only the Optimizer's working ad set is considered, so a TEST_PLAN (whose
     first ad set holds one ad) is unchanged. Returns None for a single ad —
@@ -1502,21 +1543,48 @@ async def _ads_for_pause_choice(
     ads = await db.ad.find_many(where={"adSetId": ad_set.id})
     if len(ads) < 2:
         return None
+    metrics, window = await _ad_level_window(ad_set.campaignId)
+    latest = _latest_by_ad(metrics)
+    shared = window.per_ad if window.status == "ok" else {}
+    period = (
+        window.label.removeprefix("Compared over ")
+        if window.label and shared
+        else "lifetime"
+    )
     performances: list[optimizer.AdPerformance] = []
     for ad in ads:
-        latest = await db.metric.find_first(
-            where={"adId": ad.id}, order={"fetchedAt": "desc"}
-        )
+        totals = shared.get(ad.id)
+        row = latest.get(ad.id)
+        if shared:
+            # Over the shared period; an ad that did not run in it has no numbers.
+            spend = totals.spend if totals else 0.0
+            clicks = (totals.link_clicks or 0) if totals else 0
+            add_to_cart = totals.add_to_cart if totals else None
+            purchases = totals.purchases if totals else None
+            performances.append(
+                optimizer.AdPerformance(
+                    ad_id=ad.id,
+                    name=ad.name,
+                    spend=spend,
+                    clicks=clicks,
+                    add_to_cart=add_to_cart,
+                    cost_per_add_to_cart=spend / add_to_cart if add_to_cart else None,
+                    purchases=purchases,
+                    cac=spend / purchases if purchases else None,
+                    period=period,
+                )
+            )
+            continue
         performances.append(
             optimizer.AdPerformance(
                 ad_id=ad.id,
                 name=ad.name,
-                spend=latest.spend if latest else 0.0,
-                clicks=latest.clicks if latest else 0,
-                add_to_cart=latest.addToCart if latest else None,
-                cost_per_add_to_cart=latest.costPerAddToCart if latest else None,
-                purchases=latest.purchases if latest else None,
-                cac=latest.cac if latest else None,
+                spend=row.spend if row else 0.0,
+                clicks=row.clicks if row else 0,
+                add_to_cart=row.addToCart if row else None,
+                cost_per_add_to_cart=row.costPerAddToCart if row else None,
+                purchases=row.purchases if row else None,
+                cac=row.cac if row else None,
             )
         )
     return performances

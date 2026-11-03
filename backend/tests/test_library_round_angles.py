@@ -450,3 +450,37 @@ async def test_fake_mode_gives_the_round_valid_library_angles_led_by_the_winner(
     assert len(angles) == count
     assert all(a.buyer_avatar_id for a in angles)
     assert sum(a.buyer_avatar_id == "g1" for a in angles) >= -(-count // 2)
+
+
+@pytest.mark.asyncio
+async def test_the_prompt_says_the_winner_was_chosen_over_the_shared_period(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    results = _winner()._replace(
+        window_label="Compared over the last 4 days, while all ads ran"
+    )
+
+    _, agent = await _generate(monkeypatch, _reply(STEERED), results=results)
+
+    assert "Compared over the last 4 days, while all ads ran" in _sent(agent)["prompt"]
+
+
+@pytest.mark.asyncio
+async def test_with_no_leader_for_lack_of_shared_time_the_prompt_gives_the_reason(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    undecided = RoundResults(
+        None,
+        None,
+        None,
+        4,
+        no_leader_reason=(
+            "these ads have only run side by side for 30 hours (72 needed)"
+        ),
+    )
+
+    _, agent = await _generate(monkeypatch, _reply(STEERED), results=undecided)
+
+    prompt = _sent(agent)["prompt"]
+    assert "only run side by side for 30 hours" in prompt
+    assert "at least half" not in prompt

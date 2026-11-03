@@ -1434,6 +1434,26 @@ def test_build_prompt_lists_each_ad_with_its_id_and_numbers() -> None:
     assert "Cost per add-to-cart: n/a" in prompt
 
 
+def test_build_prompt_says_which_period_the_ad_numbers_cover() -> None:
+    ads = [ad._replace(period="the last 4 days, while all ads ran") for ad in _ads()]
+
+    prompt = optimizer._build_prompt(
+        _fake_business(), _fake_campaign(), _fake_ad_set(), [], ads=ads
+    )
+
+    assert "numbers over the last 4 days, while all ads ran" in prompt
+    assert "lifetime" not in prompt.split("compete with each other")[1]
+
+
+def test_build_prompt_warns_when_ads_cannot_yet_be_compared() -> None:
+    prompt = optimizer._build_prompt(
+        _fake_business(), _fake_campaign(), _fake_ad_set(), [], ads=_ads()
+    )
+
+    assert "lifetime numbers" in prompt
+    assert "have not run side by side long enough" in prompt
+
+
 def test_build_prompt_has_no_ad_list_for_a_single_ad() -> None:
     prompt = optimizer._build_prompt(
         _fake_business(), _fake_campaign(), _fake_ad_set(), [], ads=_ads()[:1]

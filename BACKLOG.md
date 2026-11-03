@@ -5,15 +5,20 @@ item to the pull request that does it, and delete it here when that merges.
 
 ## Open
 
-### Compare ads over a common window, not lifetime totals
-The dashboard's leader (`choose_leader` in `backend/app/services/dashboard.py`, fed by
-`ad_totals`) ranks each ad on its lifetime numbers, so an ad that has been live longer
-has had more time to collect add-to-carts and is favored. Compare ads over a date window
-in which all of them were live instead.
+### E2E seeding hook for per-ad metric history
+The common-window comparison (`docs/common-window.md`) shows a period label, a "Not compared"
+row and a window note on the dashboard, but the production build the e2e suite runs has no way
+to create per-ad `Metric` history, so only vitest and the API tests cover them. Add a
+test-only way to seed ad-level rows (for example an endpoint that exists only under
+FAKE_META, like the sample data) and a Playwright spec with an axe check on a table that has
+a window label, a leader and a not-compared ad.
 
-The creative rounds use the same leader as their "winner"
-(`backend/app/services/round_results.py`), so change the input in one place and the
-dashboard and the Strategist stay identical.
+### Per-day ad metrics from Meta (`time_increment=1`)
+The common-window comparison (`docs/common-window.md`) works from differences of the
+15-minute cumulative snapshots. Meta can return a real daily breakdown per ad, which would
+avoid the difference arithmetic and show conversions on the day they were attributed. It
+needs a schema change (both Prisma schemas, both migrations, a throwaway-Postgres check)
+and a backfill, so it was left out on purpose.
 
 ### Dashboard test: focus assertion is timing-sensitive
 `DashboardPage.test.tsx` › "selects the new business in the Brand picker when others

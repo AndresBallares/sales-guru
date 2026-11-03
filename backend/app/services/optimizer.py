@@ -350,11 +350,12 @@ def _format_window(window: TrendWindow) -> str:
 
 
 class AdPerformance(NamedTuple):
-    """One ad's own lifetime numbers, for choosing which ad to pause.
+    """One ad's own numbers, for choosing which ad to pause.
 
-    Built from the ad's latest ad-level Metric row (all zeros/None when none
-    has been collected yet). cost_per_add_to_cart and cac are None when there
-    is nothing to divide by — unavailable, never zero.
+    Built from the ad's ad-level Metric rows (all zeros/None when none has been
+    collected yet): over the period all the ads ran together when it is long
+    enough to compare, else the latest lifetime numbers. cost_per_add_to_cart and
+    cac are None when there is nothing to divide by — unavailable, never zero.
     """
 
     ad_id: str
@@ -365,6 +366,9 @@ class AdPerformance(NamedTuple):
     cost_per_add_to_cart: float | None
     purchases: int | None
     cac: float | None
+    # What the numbers cover: "lifetime", or the period all the ads ran together
+    # ("the last 4 days, while all ads ran").
+    period: str = "lifetime"
 
 
 def _format_ad(ad: AdPerformance) -> str:
@@ -422,10 +426,18 @@ def _build_prompt(
     ]
     lines += [_format_window(w) for w in windows]
     if ads is not None and len(ads) > 1:
+        period = ads[0].period
+        intro = (
+            "Each ad's own lifetime numbers (these ads have not run side by "
+            "side long enough to compare fairly, so an older ad has had longer "
+            "to collect results: do not pause one only because another has "
+            "more):"
+            if period == "lifetime"
+            else f"Each ad's own numbers over {period}:"
+        )
         lines += [
             "",
-            "This ad set runs several ads that compete with each other. Each "
-            "ad's own lifetime numbers:",
+            f"This ad set runs several ads that compete with each other. {intro}",
             *[_format_ad(ad) for ad in ads],
             "If you recommend pausing an ad, set target_ad_id to exactly one "
             "of these ad ids — the one that is clearly worst on cost per "

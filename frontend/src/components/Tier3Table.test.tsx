@@ -135,6 +135,75 @@ describe('Tier3Table', () => {
     expect(within(region).getByRole('table')).toBeInTheDocument()
   })
 
+  describe('the shared comparison period', () => {
+    const label = 'Compared over the last 4 days, while all ads ran'
+
+    it('says what period the comparison covers', () => {
+      render(<Tier3Table tier3={makeTier3({ windowStatus: 'ok', windowLabel: label })} />)
+
+      expect(screen.getByText(label)).toBeInTheDocument()
+    })
+
+    it('explains which columns are for the shared period and which are lifetime', () => {
+      render(<Tier3Table tier3={makeTier3({ windowStatus: 'ok', windowLabel: label })} />)
+
+      expect(screen.getByText(/Added to cart, cost per add to cart, sales and cost per sale/)).toHaveTextContent(
+        'Spent so far and Clicked the ad cover each ad’s whole run',
+      )
+    })
+
+    it('adds nothing about a period when there is none', () => {
+      render(<Tier3Table tier3={makeTier3()} />)
+
+      expect(screen.queryByText(/Compared over/)).not.toBeInTheDocument()
+      expect(screen.queryByText(/shared period/)).not.toBeInTheDocument()
+    })
+
+    it('says why there is no leader when the ads have not run side by side long enough', () => {
+      render(
+        <Tier3Table
+          tier3={makeTier3({
+            windowStatus: 'too_short',
+            windowLabel: 'Compared over the last 30 hours, while all ads ran',
+            leaderMessage:
+              'Not enough shared time yet: these ads have only run side by side for 30 hours (72 needed)',
+          })}
+        />,
+      )
+
+      expect(screen.getByText(/Not enough shared time yet/)).toBeInTheDocument()
+      expect(screen.queryByText('Leading')).not.toBeInTheDocument()
+    })
+
+    it('lists an ad left out of the comparison without ranking it', () => {
+      render(
+        <Tier3Table
+          tier3={makeTier3({
+            windowStatus: 'ok',
+            windowLabel: label,
+            ads: [
+              makeAdRow({ adId: 'ad-1', name: 'Ad A' }),
+              makeAdRow({
+                adId: 'ad-2',
+                name: 'Ad B',
+                status: 'paused',
+                compared: false,
+                addToCart: null,
+                costPerAddToCart: null,
+                purchases: null,
+                cac: null,
+              }),
+            ],
+          })}
+        />,
+      )
+
+      const row = rowFor('Ad B')
+      expect(row.getByText('Not compared: stopped before the other ads started')).toBeInTheDocument()
+      expect(row.getByText('$52.00')).toBeInTheDocument() // what it spent in all
+    })
+  })
+
   describe('buyer avatars', () => {
     const rows = [
       makeAdRow({
@@ -181,6 +250,24 @@ describe('Tier3Table', () => {
 
       expect(screen.getByText('Leading on cost per add-to-cart')).toBeInTheDocument()
       expect(screen.getByText('Leading buyer: The Deadline Gift-Giver – Emotion')).toBeInTheDocument()
+    })
+
+    it('says which period the leading buyer was chosen over', () => {
+      render(
+        <Tier3Table
+          tier3={{
+            ...tier3,
+            windowStatus: 'ok',
+            windowLabel: 'Compared over the last 4 days, while all ads ran',
+          }}
+        />,
+      )
+
+      expect(
+        screen.getByText(
+          'Leading buyer: The Deadline Gift-Giver – Emotion (compared over the last 4 days, while all ads ran)',
+        ),
+      ).toBeInTheDocument()
     })
 
     it('says nothing about a buyer when there is no leader or the leader has no avatar', () => {

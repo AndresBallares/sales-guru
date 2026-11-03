@@ -137,12 +137,20 @@ async def test_the_leader_is_traced_from_its_ad_to_the_creative_and_its_avatar(
     business_id = _create_business(client)
     campaign_id = await _seed_campaign(business_id)
     (ad1, ad_set), (ad2, _) = await _seed_ads(campaign_id, ["Ad one", "Ad two"])
-    await _seed_metric(
-        campaign_id, ad_id=ad1, ad_set_id=ad_set, spend=100, add_to_cart=10
-    )
-    await _seed_metric(
-        campaign_id, ad_id=ad2, ad_set_id=ad_set, spend=100, add_to_cart=5
-    )
+    for ad, atc in ((ad1, 10), (ad2, 5)):
+        # Both ads started 100 hours ago, so the shared window is long enough.
+        await _seed_metric(
+            campaign_id,
+            ad_id=ad,
+            ad_set_id=ad_set,
+            hours_ago=100,
+            impressions=0,
+            spend=0,
+            add_to_cart=0,
+        )
+        await _seed_metric(
+            campaign_id, ad_id=ad, ad_set_id=ad_set, spend=100, add_to_cart=atc
+        )
     db = Prisma()
     await db.connect()
     try:
@@ -196,3 +204,132 @@ async def test_a_campaign_with_no_ad_numbers_yet_has_no_results(
         assert await load_round_results(campaign_id, client=reader) is None
     finally:
         await reader.disconnect()
+
+
+# --- the comparison is over the window all ads ran ----------------------------
+
+
+def test_the_window_label_travels_with_the_results() -> None:
+    per_ad = {"ad1": _totals(100, add_to_cart=10), "ad2": _totals(100, add_to_cart=5)}
+
+    results = build_round_results(
+        per_ad, {}, window_label="Compared over the last 4 days, while all ads ran"
+    )
+
+    assert results is not None
+    assert results.window_label == "Compared over the last 4 days, while all ads ran"
+
+
+async def _seed_fading_old_and_steady_new(campaign_id: str) -> tuple[str, str]:
+    """ad1: $0.50 per add-to-cart for 100h then $2.00 (lifetime $1.00); ad2: $1.33."""
+    (ad1, ad_set), (ad2, _) = await _seed_ads(campaign_id, ["Old ad", "New ad"])
+    for hours_ago, impressions, spend, atc in (
+        (200, 0, 0, 0),
+        (100, 1000, 100, 200),
+        (0, 2000, 300, 300),
+    ):
+        await _seed_metric(
+            campaign_id,
+            ad_id=ad1,
+            ad_set_id=ad_set,
+            hours_ago=hours_ago,
+            impressions=impressions,
+            spend=spend,
+            add_to_cart=atc,
+        )
+    for hours_ago, impressions, spend, atc in ((100, 0, 0, 0), (0, 1500, 200, 150)):
+        await _seed_metric(
+            campaign_id,
+            ad_id=ad2,
+            ad_set_id=ad_set,
+            hours_ago=hours_ago,
+            impressions=impressions,
+            spend=spend,
+            add_to_cart=atc,
+        )
+    return ad1, ad2
+
+
+@pytest.mark.asyncio
+async def test_the_winner_is_chosen_over_the_window_not_over_lifetime(
+    client: TestClient,
+) -> None:
+    _signed_up_client(client)
+    business_id = _create_business(client)
+    campaign_id = await _seed_campaign(business_id)
+    _, ad2 = await _seed_fading_old_and_steady_new(campaign_id)
+
+    reader = Prisma()
+    await reader.connect()
+    try:
+        results = await load_round_results(campaign_id, client=reader)
+    finally:
+        await reader.disconnect()
+
+    assert results is not None
+    assert results.leader is not None and results.leader.ad_id == ad2  # lifetime: ad1
+    assert results.leader.results == 150
+    assert results.window_label == "Compared over the last 4 days, while all ads ran"
+
+
+@pytest.mark.asyncio
+async def test_the_dashboard_and_the_next_round_name_the_same_leader(
+    client: TestClient,
+) -> None:
+    _signed_up_client(client)
+    business_id = _create_business(client)
+    campaign_id = await _seed_campaign(business_id)
+    await _seed_fading_old_and_steady_new(campaign_id)
+    await _seed_metric(campaign_id, spend=500, add_to_cart=450)  # campaign level
+
+    body = client.get(
+        f"/businesses/{business_id}/campaigns/{campaign_id}/dashboard"
+    ).json()
+    reader = Prisma()
+    await reader.connect()
+    try:
+        results = await load_round_results(campaign_id, client=reader)
+    finally:
+        await reader.disconnect()
+
+    assert results is not None and results.leader is not None
+    assert body["tier3"]["leader"]["adId"] == results.leader.ad_id
+    assert body["tier3"]["windowLabel"] == results.window_label
+
+
+@pytest.mark.asyncio
+async def test_too_little_shared_time_means_no_winner_and_says_why(
+    client: TestClient,
+) -> None:
+    _signed_up_client(client)
+    business_id = _create_business(client)
+    campaign_id = await _seed_campaign(business_id)
+    (ad1, ad_set), (ad2, _) = await _seed_ads(campaign_id, ["Old ad", "New ad"])
+    for ad, rows in (
+        (ad1, ((200, 0, 0, 0), (0, 2000, 300, 300))),
+        (ad2, ((30, 0, 0, 0), (0, 1500, 200, 150))),
+    ):
+        for hours_ago, impressions, spend, atc in rows:
+            await _seed_metric(
+                campaign_id,
+                ad_id=ad,
+                ad_set_id=ad_set,
+                hours_ago=hours_ago,
+                impressions=impressions,
+                spend=spend,
+                add_to_cart=atc,
+            )
+
+    reader = Prisma()
+    await reader.connect()
+    try:
+        results = await load_round_results(campaign_id, client=reader)
+    finally:
+        await reader.disconnect()
+
+    assert results is not None
+    assert results.leader is None
+    assert results.ads_compared == 2
+    assert results.no_leader_reason == (
+        "these ads have only run side by side for 30 hours (72 needed)"
+    )

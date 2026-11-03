@@ -663,6 +663,19 @@ def test_full_dashboard_for_a_creative_test(client: TestClient) -> None:
         ),
     )
     finals = [(52.0, 7, 2), (48.0, 5, 1), (42.5, 2, 0)]
+    for ad_id, ad_set_id in ads:  # all three started 100 hours ago
+        _run(
+            client,
+            lambda a=ad_id, s=ad_set_id: _seed_metric(
+                campaign_id,
+                ad_id=a,
+                ad_set_id=s,
+                hours_ago=100,
+                impressions=0,
+                spend=0.0,
+                add_to_cart=0,
+            ),
+        )
     for (ad_id, ad_set_id), (spend, atc, purchases) in zip(ads, finals, strict=True):
         _run(
             client,

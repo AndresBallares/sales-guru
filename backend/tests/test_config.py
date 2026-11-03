@@ -204,3 +204,20 @@ def test_each_model_can_be_overridden_from_the_environment(
     assert settings.optimizer_test_eval_model == "claude-haiku-5-5"
     assert settings.strategist_model == "model-a"
     assert settings.creative_model == "model-b"
+
+
+def test_common_window_minimum_defaults_to_72_hours(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Ads are only compared once they have run side by side this long."""
+    monkeypatch.delenv("COMMON_WINDOW_MIN_HOURS", raising=False)
+
+    assert Settings(_env_file=None).common_window_min_hours == 72.0
+
+
+def test_common_window_minimum_can_be_set_from_the_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("COMMON_WINDOW_MIN_HOURS", "24")
+
+    assert Settings(_env_file=None).common_window_min_hours == 24.0

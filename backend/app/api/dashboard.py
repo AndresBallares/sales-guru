@@ -159,6 +159,7 @@ async def campaign_dashboard(
         is_sample=False,
         paused_at=campaign.pausedAt,
         paused_reason=campaign.pausedReason,
+        min_window_hours=get_settings().common_window_min_hours,
     )
 
 

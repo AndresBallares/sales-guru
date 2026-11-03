@@ -49,7 +49,15 @@ COST_CAP_CEILING_MULTIPLE = 2.0
 
 
 class AdSnapshot(NamedTuple):
-    """One ad's lifetime numbers, from its latest ad-level Metric row."""
+    """One ad's numbers: lifetime, and for the period all the ads ran together.
+
+    The lifetime fields (from the ad's latest ad-level Metric row) feed the
+    absolute rules: one ad against the target. The ``window_*`` fields are the
+    ad's numbers over the window in which every compared ad was running
+    (app/services/ad_window.py) and feed the comparisons between ads; they are
+    None when the ads have not yet run side by side long enough, or when this ad
+    did not run in the window, and then no comparison involves it.
+    """
 
     ad_id: str
     name: str
@@ -59,6 +67,9 @@ class AdSnapshot(NamedTuple):
     cost_per_add_to_cart: float | None
     purchases: int | None
     cac: float | None
+    window_spend: float | None = None
+    window_add_to_cart: int | None = None
+    window_cost_per_add_to_cart: float | None = None
 
 
 class PauseCandidate(NamedTuple):
@@ -137,18 +148,20 @@ def evaluate_creative_test(
                 ),
             )
 
-    # Rule 2: cost per add-to-cart materially worse than the best ad's.
+    # Rule 2: cost per add-to-cart materially worse than the best ad's, both
+    # measured over the period all the ads ran together (an older ad's extra days
+    # must not make it look better).
     comparable = [
         ad
         for ad in live
-        if (ad.add_to_cart or 0) >= MIN_ADD_TO_CARTS_TO_COMPARE
-        and ad.cost_per_add_to_cart is not None
+        if (ad.window_add_to_cart or 0) >= MIN_ADD_TO_CARTS_TO_COMPARE
+        and ad.window_cost_per_add_to_cart is not None
     ]
     if len(comparable) >= 2:
-        best = min(comparable, key=lambda a: a.cost_per_add_to_cart or 0.0)
-        best_cost = best.cost_per_add_to_cart or 0.0
+        best = min(comparable, key=lambda a: a.window_cost_per_add_to_cart or 0.0)
+        best_cost = best.window_cost_per_add_to_cart or 0.0
         for ad in comparable:
-            cost = ad.cost_per_add_to_cart or 0.0
+            cost = ad.window_cost_per_add_to_cart or 0.0
             protected = (
                 (ad.purchases or 0) >= MIN_PURCHASES_FOR_CAC
                 and ad.cac is not None
@@ -167,9 +180,10 @@ def evaluate_creative_test(
                         ad.name,
                         "WORSE_THAN_BEST",
                         f"Ad '{ad.name}' costs {_money(cost)} per add-to-cart "
-                        f"({ad.add_to_cart} add-to-carts), {cost / best_cost:.1f}x "
-                        f"the best ad's {_money(best_cost)} "
-                        f"({best.add_to_cart} add-to-carts), after {hours}.",
+                        f"({ad.window_add_to_cart} add-to-carts) in the shared "
+                        f"period, {cost / best_cost:.1f}x the best ad's "
+                        f"{_money(best_cost)} ({best.window_add_to_cart} "
+                        f"add-to-carts), after {hours}.",
                     ),
                 )
 
@@ -200,30 +214,36 @@ def evaluate_creative_test(
 
 
 def carousel_winner(snapshots: list[AdSnapshot]) -> AdSnapshot | None:
-    """The ad with the most add-to-carts, if it has enough to count as a winner.
+    """The ad with the most add-to-carts in the shared period, if enough to count.
+
+    Counted over the period all the ads ran together, so an ad that went live
+    earlier does not win on its extra days.
 
     Args:
-        snapshots: Every ad of the test with its latest numbers.
+        snapshots: Every ad of the test with its numbers.
 
     Returns:
-        The best ad by add-to-carts, or None when none reached
-        MIN_ADD_TO_CARTS_TO_COMPARE.
+        The best ad by add-to-carts in the shared period, or None when none
+        reached MIN_ADD_TO_CARTS_TO_COMPARE (or the ads have no shared period yet).
     """
-    best = max(snapshots, key=lambda s: s.add_to_cart or 0, default=None)
-    if best is None or (best.add_to_cart or 0) < MIN_ADD_TO_CARTS_TO_COMPARE:
+    best = max(snapshots, key=lambda s: s.window_add_to_cart or 0, default=None)
+    if best is None or (best.window_add_to_cart or 0) < MIN_ADD_TO_CARTS_TO_COMPARE:
         return None
     return best
 
 
-def carousel_proposal_reasoning(winner: AdSnapshot, photo_count: int) -> str:
+def carousel_proposal_reasoning(
+    winner: AdSnapshot, photo_count: int, window_label: str | None = None
+) -> str:
     """Why a carousel is the next experiment, with the winning ad's numbers."""
+    basis = f" ({window_label})" if window_label else ""
     return (
         f"Test #1 compared single-image ads, and {winner.name} won with "
-        f"{winner.add_to_cart} add-to-carts after $"
-        f"{winner.spend:,.2f} spend. The next experiment is the same product "
-        f"as a carousel ({photo_count} product photos). Approving creates a "
-        "draft carousel campaign for you to generate, review and publish; "
-        "nothing goes live on Meta until you do. It runs as its own "
+        f"{winner.window_add_to_cart} add-to-carts after $"
+        f"{winner.window_spend or 0.0:,.2f} spend{basis}. The next experiment is the "
+        f"same product as a carousel ({photo_count} product photos). Approving "
+        "creates a draft carousel campaign for you to generate, review and "
+        "publish; nothing goes live on Meta until you do. It runs as its own "
         "campaign so format is the only thing that changes, not a mix of "
         "single-image and carousel ads in one test."
     )

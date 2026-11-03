@@ -116,7 +116,11 @@ def _scaled(
 
 
 def sample_campaign(now: datetime | None = None) -> SampleCampaign:
-    """A 12-hour history of lifetime snapshots plus per-ad rows and a proposal."""
+    """Lifetime snapshots (12 hours of campaign rows, 4 days of ad rows) and a proposal.
+
+    The ads all started 4 days ago, so the dashboard compares them over a window
+    long enough to rank on, like a real test that has run a while.
+    """
     now = now or datetime.now(UTC)
     campaign_rows: list[Snapshot] = []
     for step, fraction in enumerate((0.2, 0.4, 0.6, 0.8, 1.0)):
@@ -140,7 +144,7 @@ def sample_campaign(now: datetime | None = None) -> SampleCampaign:
     ad_rows = [
         _scaled(a, fraction, now - timedelta(hours=hours), ad_level=True)
         for a in _ADS
-        for fraction, hours in ((0.5, 6), (1.0, 0))
+        for fraction, hours in ((0.0, 96), (0.5, 48), (1.0, 0))
     ]
     return SampleCampaign(
         snapshots=campaign_rows + ad_rows,
