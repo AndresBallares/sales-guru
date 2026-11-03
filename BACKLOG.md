@@ -32,6 +32,11 @@ a run that reaches its dollar cap.
 - **Cache re-write at the brand-to-customer-voice boundary.** The tools array changes there (`max_uses`), so the prompt
   cache restarts. Measure the cost in the paid run; if it is large, hold the reserve another way (for example one
   phase with an in-prompt budget and a per-request check).
+- **Competitor-term filtering.** The terms kept out of hooks, angles and concepts (`research_filters`) are the competitor
+  domains' names plus the model's `competitor_terms` list. The list is long (50 entries in the second paid run) and can
+  hold single common English words ("Spur"), which would remove a legitimate hook. Ignore single common English words,
+  and keep brand names and multi-word names (for example "Harwell Godfrey", "Bulgari Serpenti"). Also let the owner view
+  and edit the list on the 7c review screen, so a wrong term can be removed and a missing one added.
 - **Customer-voice classifier.** `research_evidence.classify_source` recognizes Reddit, a fixed list of review and Q&A
   hosts, and forum-looking hosts and paths. Review it against the sources a real run reaches.
 

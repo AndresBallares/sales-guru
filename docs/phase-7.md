@@ -424,3 +424,35 @@ the guard, not in the research:
   `url_not_allowed` fetch error. Research alone cost $0.957 for 15 searches and 19 fetches.
 - Under the first counting rule that failed run would have used the business's monthly limit; the rule was changed
   (see "What counts toward the monthly limit") so a failed run never counts.
+
+## Second paid 7b run (2026-11-03, VENZI on dev, `claude-opus-5-5`, standard, template v3, cap $3.00)
+
+Run `cmw0vqcmj0001qqsu142cr0nh`, after the cap-guard fix. Full record (findings, per-request usage) in
+`~/Documents/AI-NATIVE/research-runs/venzi-standard-opus-cmw0vqcmj0001qqsu142cr0nh.json`. Nothing was saved to the avatar
+library.
+
+- **Result:** `NEEDS_REVIEW`, no stop reason. **$1.494** (estimate for standard on Opus: $1.32 expected, $2.09 max, $2.61
+  suggested cap), **360 s**. Brand step $0.421 (78 s), customer voice $0.578 (92 s), findings $0.278 (97 s), avatars
+  $0.216 (84 s). 15 of 15 searches, 18 of 20 fetches. Tokens: 72 fresh, 87,043 cache write, 1,418,152 cache read, 31,220
+  output.
+- **Cache boundary:** not isolated (per-iteration logging was skipped on purpose). Evidence: the findings and avatars
+  requests, which reuse the customer-voice tools, wrote only 6.6k and 6.9k tokens, so the cache survives when the tools
+  do not change. The customer-voice request wrote 31.7k tokens, less than the brand step's 41.8k despite more tool calls,
+  so there is no sign of a full re-write at the boundary. Upper bound if the whole brand context (~47k tokens) had been
+  re-written: about $0.22, under 15% of the run.
+- **Evidence:** 11 customer-voice pages reached against a minimum of 6, level OK. No Reddit page was reached: the search
+  returned no Reddit URLs even with `site:reddit.com`. No Venzi customer reviews were found.
+- **Rate limits:** none, no backoff, no tool errors.
+- **Counts:** 20 problems, 20 solutions, 9 gaps, 5 avatars with 5 hooks, 3 angles and 3 concepts each, 30 sources, no
+  count warnings. 2 of 20 problems and all 5 avatars are marked inferred.
+- **Quotes:** 14 verified, 4 unverified (Trustpilot 403 twice, Goop, a university paper), 2 dropped (not found on the
+  page). Of the 18 kept, 4 are from pages the classifier calls customer voice (3 review pages, 1 forum thread); 14 are from
+  other pages: brand and competitor sites (4), Substack posts and comments (5), 1stDibs Q&A, AOL, a Harvard page, Goop,
+  an Arizona paper. Some of those are real customer voice the classifier does not recognize.
+- **Banned phrases and competitor names:** none removed and no regeneration was needed. An independent re-check of every
+  hook, angle and concept against the 31 banned phrases and 50 competitor terms found nothing.
+- **Observation:** the model's `competitor_terms` list is long (50 entries, including single words such as `Spur` and
+  product names such as `Feelings` and `Spectrum` after a brand prefix); a generic word on that list could remove a
+  legitimate hook. Worth watching on the next runs.
+- **Driver script:** it hung on exit after saving (Prisma disconnect under a background shell, the SIGINT note in
+  CLAUDE.md), which delayed this report; the saved file was complete.
