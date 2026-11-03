@@ -67,6 +67,7 @@ vi.mock('../lib/api', async (importOriginal) => {
     listProducts: vi.fn<typeof actual.listProducts>(),
     createProduct: vi.fn<typeof actual.createProduct>(),
     updateProduct: vi.fn<typeof actual.updateProduct>(),
+    getProductEditImpact: vi.fn<typeof actual.getProductEditImpact>(),
     listAudiences: vi.fn<typeof actual.listAudiences>(),
     createAudience: vi.fn<typeof actual.createAudience>(),
     uploadProductImage: vi.fn<typeof actual.uploadProductImage>(),
@@ -1619,6 +1620,12 @@ describe('CampaignsSection', () => {
     mockedApi.updateProduct.mockResolvedValue({
       ...urllessProduct,
       url: 'https://acme.example/wallets',
+    })
+    // A new URL is checked before saving (no ad is affected here).
+    mockedApi.getProductEditImpact.mockResolvedValue({
+      willAffectCreatives: false,
+      affectsPublishedCampaign: false,
+      campaigns: [],
     })
     const user = userEvent.setup()
 

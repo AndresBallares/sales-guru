@@ -198,7 +198,7 @@ def test_product_block_order_and_field_caps() -> None:
         price=129.5,
         description="d" * 700,
         benefits="b" * 600,
-        mechanism="m" * 500,
+        mechanism="m" * 700,
     )
     text = render_template(_full(products=[product])).text
     block = text.split(PRODUCTS_LINE)[1].split("Key brand messages:")[0]
@@ -210,7 +210,7 @@ def test_product_block_order_and_field_caps() -> None:
     # Capped at the limit in total, the last character being an ellipsis.
     assert "d" * 499 + "…" in block and "d" * 500 not in block
     assert "b" * 399 + "…" in block and "b" * 400 not in block
-    assert "m" * 299 + "…" in block and "m" * 300 not in block
+    assert "m" * 599 + "…" in block and "m" * 600 not in block
 
 
 def test_a_product_without_a_name_starts_with_its_url() -> None:
@@ -318,3 +318,14 @@ def test_v3_differs_from_v2_only_in_the_last_line() -> None:
         "including a coverage note listing which sources you reached and which "
         "you couldn't."
     )
+
+
+def test_long_text_is_cut_at_a_whole_word_not_mid_word() -> None:
+    mechanism = "solid gold " * 80  # 880 characters of whole words
+    product = ProductInput(name="Ring", description="D", mechanism=mechanism)
+    block = render_template(_full(products=[product])).text.split(PRODUCTS_LINE)[1]
+    line = next(x for x in block.splitlines() if "solid gold" in x)
+    cut = line.split("Mechanism: ")[1]
+    assert len(cut) <= 600
+    assert cut.endswith("…")
+    assert cut[:-1].split()[-1] in {"solid", "gold"}  # a whole word, never "gol"

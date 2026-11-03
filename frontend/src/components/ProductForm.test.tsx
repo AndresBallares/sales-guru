@@ -16,6 +16,7 @@ vi.mock('../lib/api', async (importOriginal) => {
     uploadProductImage: vi.fn<typeof actual.uploadProductImage>(),
     deleteProductImage: vi.fn<typeof actual.deleteProductImage>(),
     reorderProductImages: vi.fn<typeof actual.reorderProductImages>(),
+    getProductEditImpact: vi.fn<typeof actual.getProductEditImpact>(),
   }
 })
 const mockedApi = vi.mocked(api)
@@ -773,7 +774,8 @@ describe('ProductForm — mechanism', () => {
     const field = screen.getByLabelText(/Mechanism/)
     expect(field).toBeInTheDocument()
     expect(field).not.toBeRequired()
-    expect(field).toHaveAttribute('maxlength', '300')
+    // No maxlength: a cap that silently drops pasted text cut a real mechanism mid-word.
+    expect(field).not.toHaveAttribute('maxlength')
     expect(screen.getByText(/makes it deliver its benefit/)).toBeInTheDocument()
     expect(field).toHaveAccessibleDescription(/why the promise is believable/)
   })
@@ -869,6 +871,12 @@ describe('ProductForm — personalization', () => {
 
   it('saves the flag and the options on edit', async () => {
     mockedApi.updateProduct.mockResolvedValue(product)
+    // A personalization change is checked before saving (nothing is affected here).
+    mockedApi.getProductEditImpact.mockResolvedValue({
+      willAffectCreatives: false,
+      affectsPublishedCampaign: false,
+      campaigns: [],
+    })
     const user = userEvent.setup()
     render(
       <ProductForm
@@ -896,6 +904,12 @@ describe('ProductForm — personalization', () => {
 
   it('clears the options when Personalizable is switched off', async () => {
     mockedApi.updateProduct.mockResolvedValue(product)
+    // A personalization change is checked before saving (nothing is affected here).
+    mockedApi.getProductEditImpact.mockResolvedValue({
+      willAffectCreatives: false,
+      affectsPublishedCampaign: false,
+      campaigns: [],
+    })
     const user = userEvent.setup()
     render(
       <ProductForm
@@ -971,5 +985,259 @@ describe('ProductForm — product name', () => {
     render(<ProductForm businessId="biz-1" onSaved={vi.fn<(product: api.Product) => void>()} />)
 
     expect(screen.getByLabelText(/Product name/)).toHaveAttribute('maxlength', '80')
+  })
+})
+
+describe('ProductForm — mechanism length', () => {
+  const LIMIT = 600
+
+  function mechanismField() {
+    return screen.getByLabelText(/Mechanism/)
+  }
+
+  it('shows a live character counter tied to the field', async () => {
+    const user = userEvent.setup()
+    render(<ProductForm businessId="biz-1" onSaved={vi.fn<(product: api.Product) => void>()} />)
+
+    expect(screen.getByText(`0 / ${LIMIT}`)).toBeInTheDocument()
+    expect(mechanismField()).toHaveAccessibleDescription(new RegExp(`0 / ${LIMIT}`))
+    await user.type(mechanismField(), 'Solid gold')
+    expect(screen.getByText(`10 / ${LIMIT}`)).toBeInTheDocument()
+  })
+
+  it('keeps pasted text past 600 instead of cutting it, and says how much to remove', () => {
+    render(<ProductForm businessId="biz-1" onSaved={vi.fn<(product: api.Product) => void>()} />)
+
+    fireEvent.change(mechanismField(), { target: { value: 'x'.repeat(700) } })
+
+    expect(mechanismField()).toHaveValue('x'.repeat(700))
+    expect(screen.getByText(`700 / ${LIMIT}`)).toBeInTheDocument()
+    const error = screen.getByRole('alert')
+    expect(error).toHaveTextContent('100 characters too many')
+    expect(mechanismField()).toBeInvalid()
+    expect(mechanismField()).toHaveAccessibleDescription(/100 characters too many/)
+  })
+
+  it('does not save while the mechanism is over the limit', async () => {
+    const user = userEvent.setup()
+    render(<ProductForm businessId="biz-1" onSaved={vi.fn<(product: api.Product) => void>()} />)
+
+    await user.type(screen.getByLabelText('What do you sell?'), 'Ceramic ring')
+    fireEvent.change(mechanismField(), { target: { value: 'x'.repeat(601) } })
+    await user.click(screen.getByRole('button', { name: 'Add product' }))
+
+    expect(mockedApi.createProduct).not.toHaveBeenCalled()
+    expect(screen.getByRole('alert')).toHaveTextContent('1 character too many')
+  })
+
+  it('saves a mechanism of exactly 600 characters and clears the error once shortened', async () => {
+    mockedApi.createProduct.mockResolvedValue(product)
+    const user = userEvent.setup()
+    render(<ProductForm businessId="biz-1" onSaved={vi.fn<(product: api.Product) => void>()} />)
+
+    await user.type(screen.getByLabelText('What do you sell?'), 'Ceramic ring')
+    fireEvent.change(mechanismField(), { target: { value: 'x'.repeat(601) } })
+    expect(screen.getByRole('alert')).toBeInTheDocument()
+    fireEvent.change(mechanismField(), { target: { value: 'x'.repeat(600) } })
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Add product' }))
+
+    await waitFor(() =>
+      expect(mockedApi.createProduct).toHaveBeenCalledWith(
+        'biz-1',
+        expect.objectContaining({ mechanism: 'x'.repeat(600) }),
+      ),
+    )
+  })
+
+  it('counts characters, not UTF-16 units (an emoji is one)', () => {
+    render(<ProductForm businessId="biz-1" onSaved={vi.fn<(product: api.Product) => void>()} />)
+    fireEvent.change(mechanismField(), { target: { value: '\u{1F48D}'.repeat(10) } })
+    expect(screen.getByText(`10 / ${LIMIT}`)).toBeInTheDocument()
+  })
+})
+
+describe('ProductForm — what an edit does to ads', () => {
+  const noImpact: api.ProductEditImpact = {
+    willAffectCreatives: false,
+    affectsPublishedCampaign: false,
+    campaigns: [],
+  }
+  const unpublished: api.CampaignEditImpact = {
+    id: 'camp-1',
+    name: 'Spring ring',
+    status: 'ADS_GENERATED',
+    isPublished: false,
+    creativesTotal: 4,
+    creativesWouldBeStale: 4,
+    creativesAlreadyStale: 0,
+  }
+  const warning: api.ProductEditImpact = {
+    willAffectCreatives: true,
+    affectsPublishedCampaign: false,
+    campaigns: [unpublished],
+  }
+
+  function renderEdit(over: Partial<api.Product> = {}) {
+    const onSaved = vi.fn<(product: api.Product) => void>()
+    render(
+      <ProductForm businessId="biz-1" product={{ ...product, ...over }} onSaved={onSaved} />,
+    )
+    return onSaved
+  }
+
+  async function changeDescription(user: ReturnType<typeof userEvent.setup>) {
+    const field = screen.getByLabelText('What do you sell?')
+    await user.clear(field)
+    await user.type(field, 'Leather wallets')
+  }
+
+  it('saves a name-only edit straight away and notes that it applies to the next ads', async () => {
+    mockedApi.updateProduct.mockResolvedValue(product)
+    const user = userEvent.setup()
+    renderEdit()
+
+    expect(screen.getByText(/apply the next time ads are generated/)).toBeInTheDocument()
+    await user.type(screen.getByLabelText(/Product name/), 'Emerald Coil')
+    await user.click(screen.getByRole('button', { name: 'Save' }))
+
+    await waitFor(() => expect(mockedApi.updateProduct).toHaveBeenCalled())
+    expect(mockedApi.getProductEditImpact).not.toHaveBeenCalled()
+  })
+
+  it('does not show that note, or check anything, when creating', async () => {
+    mockedApi.createProduct.mockResolvedValue(product)
+    const user = userEvent.setup()
+    render(<ProductForm businessId="biz-1" onSaved={vi.fn<(product: api.Product) => void>()} />)
+
+    expect(screen.queryByText(/apply the next time ads are generated/)).not.toBeInTheDocument()
+    await user.type(screen.getByLabelText('What do you sell?'), 'Ring')
+    await user.click(screen.getByRole('button', { name: 'Add product' }))
+    await waitFor(() => expect(mockedApi.createProduct).toHaveBeenCalled())
+    expect(mockedApi.getProductEditImpact).not.toHaveBeenCalled()
+  })
+
+  it('checks the impact of a new description and saves when no ad is affected', async () => {
+    mockedApi.getProductEditImpact.mockResolvedValue(noImpact)
+    mockedApi.updateProduct.mockResolvedValue(product)
+    const user = userEvent.setup()
+    renderEdit()
+
+    await changeDescription(user)
+    await user.click(screen.getByRole('button', { name: 'Save' }))
+
+    await waitFor(() => expect(mockedApi.updateProduct).toHaveBeenCalled())
+    expect(mockedApi.getProductEditImpact).toHaveBeenCalledWith('biz-1', 'prod-1', {
+      description: 'Leather wallets',
+      url: null,
+      personalizable: false,
+      personalizationOptions: null,
+    })
+    expect(screen.queryByText(/out of date/)).not.toBeInTheDocument()
+  })
+
+  it('warns before saving a change that would make ads out of date, and waits', async () => {
+    mockedApi.getProductEditImpact.mockResolvedValue(warning)
+    const user = userEvent.setup()
+    renderEdit()
+
+    await changeDescription(user)
+    await user.click(screen.getByRole('button', { name: 'Save' }))
+
+    const panel = await screen.findByRole('alert')
+    expect(panel).toHaveTextContent('This change will mark ads as out of date')
+    expect(panel).toHaveTextContent('Spring ring')
+    expect(panel).toHaveTextContent('4 ads')
+    expect(panel).toHaveTextContent('Regenerate')
+    expect(panel).not.toHaveTextContent('already published')
+    expect(mockedApi.updateProduct).not.toHaveBeenCalled()
+  })
+
+  it('saves anyway when the owner confirms', async () => {
+    mockedApi.getProductEditImpact.mockResolvedValue(warning)
+    mockedApi.updateProduct.mockResolvedValue({ ...product, description: 'Leather wallets' })
+    const user = userEvent.setup()
+    const onSaved = renderEdit()
+
+    await changeDescription(user)
+    await user.click(screen.getByRole('button', { name: 'Save' }))
+    await user.click(await screen.findByRole('button', { name: 'Save anyway' }))
+
+    await waitFor(() =>
+      expect(mockedApi.updateProduct).toHaveBeenCalledWith(
+        'biz-1',
+        'prod-1',
+        expect.objectContaining({ description: 'Leather wallets' }),
+      ),
+    )
+    expect(onSaved).toHaveBeenCalled()
+    expect(screen.queryByText(/out of date/)).not.toBeInTheDocument()
+  })
+
+  it("goes back without saving, keeping the owner's changes in the form", async () => {
+    mockedApi.getProductEditImpact.mockResolvedValue(warning)
+    const user = userEvent.setup()
+    renderEdit()
+
+    await changeDescription(user)
+    await user.click(screen.getByRole('button', { name: 'Save' }))
+    await user.click(await screen.findByRole('button', { name: 'Go back' }))
+
+    expect(screen.queryByText(/out of date/)).not.toBeInTheDocument()
+    expect(mockedApi.updateProduct).not.toHaveBeenCalled()
+    expect(screen.getByLabelText('What do you sell?')).toHaveValue('Leather wallets')
+  })
+
+  it('says a published campaign is locked and its ads cannot be regenerated', async () => {
+    mockedApi.getProductEditImpact.mockResolvedValue({
+      willAffectCreatives: true,
+      affectsPublishedCampaign: true,
+      campaigns: [
+        { ...unpublished, name: null, status: 'LIVE', isPublished: true, creativesWouldBeStale: 1 },
+      ],
+    })
+    const user = userEvent.setup()
+    renderEdit()
+
+    await changeDescription(user)
+    await user.click(screen.getByRole('button', { name: 'Save' }))
+
+    const panel = await screen.findByRole('alert')
+    expect(panel).toHaveTextContent('Untitled campaign')
+    expect(panel).toHaveTextContent('1 ad ')
+    expect(panel).toHaveTextContent('already published')
+    expect(panel).toHaveTextContent("can't be regenerated")
+    expect(panel).toHaveTextContent('Create a new campaign')
+  })
+
+  it.each([
+    ['a new URL', async (user: ReturnType<typeof userEvent.setup>) => {
+      await user.type(screen.getByLabelText(/Product URL|URL/), 'https://acme.example/new')
+    }],
+    ['a personalization change', async (user: ReturnType<typeof userEvent.setup>) => {
+      await user.click(screen.getByLabelText('Personalizable'))
+    }],
+  ])('checks the impact for %s', async (_label, change) => {
+    mockedApi.getProductEditImpact.mockResolvedValue(noImpact)
+    mockedApi.updateProduct.mockResolvedValue(product)
+    const user = userEvent.setup()
+    renderEdit()
+
+    await change(user)
+    await user.click(screen.getByRole('button', { name: 'Save' }))
+
+    await waitFor(() => expect(mockedApi.getProductEditImpact).toHaveBeenCalled())
+  })
+
+  it('does not save when the impact check itself fails, and says so', async () => {
+    mockedApi.getProductEditImpact.mockRejectedValue(new Error('network'))
+    const user = userEvent.setup()
+    renderEdit()
+
+    await changeDescription(user)
+    await user.click(screen.getByRole('button', { name: 'Save' }))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(/Could not check/)
+    expect(mockedApi.updateProduct).not.toHaveBeenCalled()
   })
 })

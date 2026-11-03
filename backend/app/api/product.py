@@ -11,12 +11,15 @@ from app.core.authz import get_owned_business, get_owned_product
 from app.core.config import get_settings
 from app.core.db import db
 from app.schemas.product import (
+    CampaignEditImpact,
     CheckUrlResponse,
+    EditImpactResponse,
     ProductCreateRequest,
     ProductResponse,
     ProductUpdateRequest,
 )
 from app.services.campaign_readiness import auto_attach_product
+from app.services.creative import is_creative_stale
 from app.services.url_reachability import check_url_reachable
 from app.services.url_validation import requires_destination_url
 
@@ -190,6 +193,75 @@ async def update_product(
     updated = await db.product.update(where={"id": product.id}, data=update_data)
     assert updated is not None  # just fetched above, can't vanish mid-request
     return await _to_response(updated)
+
+
+def _proposed_changes(payload: ProductUpdateRequest) -> dict[str, object]:
+    """The payload as Product attribute changes (shaped like update_product does)."""
+    changes: dict[str, object] = payload.model_dump(exclude_unset=True)
+    if "personalization_options" in changes:
+        changes["personalizationOptions"] = changes.pop("personalization_options")
+    if changes.get("personalizable", True) is None:
+        del changes["personalizable"]
+    return changes
+
+
+@router.post("/{product_id}/edit-impact", response_model=EditImpactResponse)
+async def edit_impact(
+    payload: ProductUpdateRequest,
+    product: Product = Depends(get_owned_product),
+    business: Business = Depends(get_owned_business),
+) -> EditImpactResponse:
+    """Say what saving these changes would do to the creatives that use the product.
+
+    A read-only pre-flight for the Products tab's warning: it writes nothing. It
+    runs ``is_creative_stale`` (the rule the app applies after a real edit)
+    against a copy of the product with the proposed changes, so the answer can
+    never disagree with what saving does. Only a new description or URL (or, until
+    the ad is on Meta, new personalization) makes a creative stale; name, price,
+    margin, features, benefits and mechanism never do.
+
+    Args:
+        payload: The proposed changes, shaped like a PATCH body.
+        product: The product, resolved and ownership-checked.
+        business: The business, resolved and ownership-checked.
+
+    Returns:
+        The campaigns that use the product with how many of their creatives would
+        turn stale, plus whether any would, and whether one of them is published.
+
+    Raises:
+        HTTPException: 404 for an unknown product or business, 422 for an invalid
+            URL (as a real edit would).
+    """
+    proposed = product.model_copy(update=_proposed_changes(payload))
+    campaigns = await db.campaign.find_many(
+        where={"businessId": business.id, "productId": product.id},
+        order={"createdAt": "asc"},
+    )
+    impacts: list[CampaignEditImpact] = []
+    for campaign in campaigns:
+        creatives = await db.creative.find_many(where={"campaignId": campaign.id})
+        now = [is_creative_stale(c, campaign, product, business) for c in creatives]
+        after = [is_creative_stale(c, campaign, proposed, business) for c in creatives]
+        impacts.append(
+            CampaignEditImpact(
+                id=campaign.id,
+                name=campaign.name,
+                status=campaign.status,
+                is_published=campaign.metaCampaignId is not None,
+                creatives_total=len(creatives),
+                creatives_would_be_stale=sum(
+                    1 for was, will in zip(now, after, strict=True) if will and not was
+                ),
+                creatives_already_stale=sum(now),
+            )
+        )
+    affected = [i for i in impacts if i.creatives_would_be_stale > 0]
+    return EditImpactResponse(
+        will_affect_creatives=bool(affected),
+        affects_published_campaign=any(i.is_published for i in affected),
+        campaigns=impacts,
+    )
 
 
 @router.post("/{product_id}/check-url", response_model=CheckUrlResponse)

@@ -59,7 +59,7 @@ drafts problems, solutions, avatars and concepts for the owner to review and sav
 - **7b (scope changed 2026-11-03, see "Plan change"):** background runner (see "Runner" below), phase messages, web
   search / fetch, `submit_research`, caps, cancel, heartbeat, `POST` to start a run, **quote verification**,
   per-business model access and monthly run limit, actual cost stored per run, readiness data in the estimate.
-- **Product edit screen (new, before 7c; not built yet):** see "Product edit screen" below. The 7c readiness check
+- **Product edit screen (built on branch `product-edit`, PR pending):** see "Product edit screen" below. The 7c readiness check
   links to it.
 - **7c:** review screen: owner edits and saves problems, solutions, avatars, concepts into the library.
 - **7d:** hardening: retry on bad counts, cost reconciliation against real usage, e2e, rollout notes.
@@ -216,6 +216,34 @@ only the next time ads are generated.
    the new cap. Open question for the user: whether pasting over the cap should trim at a word boundary with a visible
    notice or just refuse to save (the proposal is to refuse and show the counter).
 
+### Built (2026-11-03, branch `product-edit`)
+
+Decisions confirmed by the user: mechanism cap **600**; the Products tab also gets an **"Add a product"** button
+(reusing `ProductForm`; a product added there is not attached to any campaign); the plan otherwise as above.
+
+- **Backend.** `_MAX_MECHANISM_LENGTH` is 600 (create and update). `app/services/text_cut.py` `cut_at_word` cuts at the last
+  whole word and adds an ellipsis (a single unbroken run is cut hard); the research template's description, benefits and
+  mechanism caps use it, and its mechanism cap is 600. `POST /businesses/{id}/products/{product_id}/edit-impact` takes a
+  PATCH-shaped body and returns, per campaign using the product, `creativesTotal`, `creativesWouldBeStale`,
+  `creativesAlreadyStale` and `isPublished`, plus `willAffectCreatives` and `affectsPublishedCampaign`. It runs
+  `is_creative_stale` against a copy of the product with the proposed changes and writes nothing.
+- **Frontend.** A third tab, **Products** (`#products`), with `ProductsTab`: every product with its photo, name (or
+  description), a link to its URL and an Edit button (opens `ProductForm` in edit mode), then the add form (remounted after
+  a save so every field starts empty). In `ProductForm` the mechanism field has no `maxlength`; it shows `n / 600`, an error
+  and a blocked save when over, counted in characters. In edit mode, a changed description, URL or personalization is
+  checked first: if any ad would go out of date, an inline panel (focused, `role="alert"`) lists the campaigns and counts,
+  says a published campaign's ads are locked and cannot be regenerated, and offers **Save anyway** or **Go back**; if the
+  check itself fails nothing is saved. Other edits save straight away with a note that they apply the next time ads are
+  generated.
+- **Tests.** Backend: the cap, `cut_at_word`, the template cap and the pre-flight (name-only and the other fields never
+  stale, description, URL, personalization before and after Meta, published flag, other products' campaigns left out,
+  already-stale counted separately, nothing written, 422 / 404 / 401). Frontend: the counter and over-cap block, both
+  warning paths, the failed check, `ProductsTab`, and the tab in the page. E2E with axe: the tab, the over-cap counter and
+  error, the edit form and the warning panel.
+- **Not changed:** `PATCH` still has no published-campaign guard (editing a product used by a live campaign is allowed,
+  with the warning); there is still no delete-product route; production's cut-off "Serpenti" mechanism is not repaired
+  automatically (the owner re-pastes it in the Products tab).
+
 ## Production rename of "Serpenti" (prepared, run by the user)
 
 `backend/scripts/venzi_rename_product/`: `apply.sql` and `rollback.sql` (guarded: exactly one product named
@@ -257,7 +285,7 @@ can see what was removed. Also checked in code: at most 14 words, no username, a
   "Emerald Serpent Ring" (Serpenti is Bulgari's trademarked line) once the product edit screen exists. The guarded
   scripts in `backend/scripts/venzi_rename_product/` are kept in case the user prefers to run them instead; the user
   decided on 2026-11-03 not to run them for now. Production still reads "Serpenti" (checked read-only 2026-11-03).
-- [ ] Product edit screen built and merged (the small PR before 7c).
+- [ ] Product edit screen built and merged (the small PR before 7c; built on `product-edit`, 2026-11-03).
 - [ ] 7b settings in place: per-business model access, monthly run limit, dollar cap.
 
 ## Smoke run 2 (2026-11-03, `claude-opus-5-5`, light, template v2, VENZI dev data, cap $3.00)

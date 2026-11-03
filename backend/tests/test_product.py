@@ -656,21 +656,34 @@ def test_a_products_mechanism_can_be_set_changed_and_cleared(
     assert client.patch(url, json={"mechanism": None}).json()["mechanism"] is None
 
 
-def test_a_mechanism_over_300_characters_is_rejected(client: TestClient) -> None:
+def test_a_mechanism_over_600_characters_is_rejected(client: TestClient) -> None:
     _signed_up_client(client)
     business_id = _create_business(client)
 
     created = client.post(
         f"/businesses/{business_id}/products",
-        json={"description": "Ring", "mechanism": "x" * 301},
+        json={"description": "Ring", "mechanism": "x" * 601},
     )
     assert created.status_code == 422
+    at_limit = client.post(
+        f"/businesses/{business_id}/products",
+        json={"description": "Ring", "mechanism": "x" * 600},
+    )
+    assert at_limit.status_code == 201
+    assert len(at_limit.json()["mechanism"]) == 600
 
     product_id = client.post(
         f"/businesses/{business_id}/products", json={"description": "Ring"}
     ).json()["id"]
     patched = client.patch(
         f"/businesses/{business_id}/products/{product_id}",
-        json={"mechanism": "x" * 301},
+        json={"mechanism": "x" * 601},
     )
     assert patched.status_code == 422
+    assert (
+        client.patch(
+            f"/businesses/{business_id}/products/{product_id}",
+            json={"mechanism": "x" * 600},
+        ).status_code
+        == 200
+    )

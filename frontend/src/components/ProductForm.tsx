@@ -12,12 +12,15 @@ import {
   ApiError,
   createProduct,
   deleteProductImage,
+  getProductEditImpact,
   listProductImages,
   reorderProductImages,
   updateProduct,
   uploadProductImage,
   type Product,
+  type ProductEditImpact,
   type ProductImage,
+  type ProductUpdateInput,
 } from '../lib/api'
 import { BlackFrameFallback } from './BlackFrameFallback'
 import { useMediaIntake, type StagedMedia } from '../lib/useMediaIntake'
@@ -29,6 +32,10 @@ import {
 
 // Mirrors backend/app/schemas/product.py's _MAX_NAME_LENGTH (the backend's cap is authoritative).
 const MAX_NAME_LENGTH = 80
+// Mirrors backend/app/schemas/product.py's _MAX_MECHANISM_LENGTH (the backend's cap is
+// authoritative). It is not a maxlength on the field: that silently drops pasted text, which is
+// how a real mechanism was once cut mid-word. The form shows a counter and an error instead.
+const MAX_MECHANISM_LENGTH = 600
 
 // Shared by ProductsSection's "Add a product" / "Edit" rows and
 // CampaignsSection's "Change product" picker (Part 1 + Part 2) — one
@@ -73,6 +80,12 @@ export function ProductForm({
   const [urlFieldError, setUrlFieldError] = useState<string | null>(null)
   const [formError, setFormError] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
+  // Edit mode: what saving would do to ads, shown before the save when it would mark any out of date.
+  const [impactWarning, setImpactWarning] = useState<ProductEditImpact | null>(null)
+  const warningRef = useRef<HTMLDivElement>(null)
+  // Characters, not UTF-16 units: the backend counts characters (an emoji is one).
+  const mechanismLength = [...mechanism].length
+  const mechanismOver = Math.max(0, mechanismLength - MAX_MECHANISM_LENGTH)
 
   // Edit mode: the product's already-uploaded photos, fetched on mount
   // and kept in sync with every upload/remove/reorder below. Create
@@ -227,6 +240,10 @@ export function ProductForm({
         warned: Boolean(photo.warning),
       }))
 
+  useEffect(() => {
+    if (impactWarning) warningRef.current?.focus()
+  }, [impactWarning])
+
   function handleUrlBlur() {
     if (!url) {
       setUrlFieldError(null)
@@ -237,15 +254,55 @@ export function ProductForm({
     setUrlFieldError(isValidDestinationUrl(normalized) ? null : DESTINATION_URL_ERROR_MESSAGE)
   }
 
-  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
+  function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
+    void submitProduct(false)
+  }
+
+  // Only a new description, a new URL or new personalization can make an ad out of date
+  // (backend/app/services/creative.py's is_creative_stale); every other field applies the next
+  // time ads are generated, so those edits are never checked.
+  function proposedAdChanges(): ProductUpdateInput | null {
+    if (!isEditing) return null
+    const proposed: ProductUpdateInput = {
+      description,
+      url: url ? normalizeDestinationUrl(url) : null,
+      personalizable,
+      personalizationOptions: personalizable ? personalizationOptions.trim() || null : null,
+    }
+    const changed =
+      proposed.description !== product.description ||
+      proposed.url !== (product.url ?? null) ||
+      proposed.personalizable !== (product.personalizable ?? false) ||
+      proposed.personalizationOptions !== (product.personalizationOptions ?? null)
+    return changed ? proposed : null
+  }
+
+  async function submitProduct(impactConfirmed: boolean) {
     setFormError(null)
+    setImpactWarning(null)
     if (url && !isValidDestinationUrl(url)) {
       setUrlFieldError(DESTINATION_URL_ERROR_MESSAGE)
       return
     }
+    // The error under the field already says what to shorten.
+    if (mechanismOver > 0) return
     setSubmitting(true)
     try {
+      const proposed = impactConfirmed ? null : proposedAdChanges()
+      if (isEditing && proposed) {
+        let impact: ProductEditImpact
+        try {
+          impact = await getProductEditImpact(businessId, product.id, proposed)
+        } catch {
+          setFormError('Could not check what this change would do to your ads. Please try again.')
+          return
+        }
+        if (impact.willAffectCreatives) {
+          setImpactWarning(impact)
+          return
+        }
+      }
       const saved = isEditing
         ? await updateProduct(businessId, product.id, {
             description,
@@ -523,8 +580,10 @@ export function ProductForm({
         </label>
         <textarea
           id={`mechanism-${idSuffix}`}
-          maxLength={300}
-          aria-describedby={`mechanism-help-${idSuffix}`}
+          aria-describedby={`mechanism-help-${idSuffix} mechanism-count-${idSuffix}${
+            mechanismOver > 0 ? ` mechanism-error-${idSuffix}` : ''
+          }`}
+          aria-invalid={mechanismOver > 0}
           value={mechanism}
           onChange={(event) => setMechanism(event.target.value)}
         />
@@ -532,6 +591,20 @@ export function ProductForm({
           The specific design, material or method that makes it deliver its benefit — why the
           promise is believable.
         </span>
+        <span
+          className={`char-counter${
+            mechanismLength >= MAX_MECHANISM_LENGTH * 0.9 ? ' char-counter-near-limit' : ''
+          }`}
+          id={`mechanism-count-${idSuffix}`}
+        >
+          {mechanismLength} / {MAX_MECHANISM_LENGTH}
+        </span>
+        {mechanismOver > 0 && (
+          <p className="form-error" role="alert" id={`mechanism-error-${idSuffix}`}>
+            {mechanismOver} {mechanismOver === 1 ? 'character' : 'characters'} too many: shorten the
+            mechanism to {MAX_MECHANISM_LENGTH} characters or fewer.
+          </p>
+        )}
       </div>
       <div className="field">
         <label className="checkbox-label" htmlFor={`personalizable-${idSuffix}`}>
@@ -570,6 +643,49 @@ export function ProductForm({
       {formError && (
         <p className="form-error" role="alert">
           {formError}
+        </p>
+      )}
+      {impactWarning && (
+        <div className="impact-warning" role="alert" tabIndex={-1} ref={warningRef}>
+          <h3>This change will mark ads as out of date</h3>
+          <ul>
+            {impactWarning.campaigns
+              .filter((campaign) => campaign.creativesWouldBeStale > 0)
+              .map((campaign) => (
+                <li key={campaign.id}>
+                  <strong>{campaign.name ?? 'Untitled campaign'}</strong>:{' '}
+                  {campaign.creativesWouldBeStale}{' '}
+                  {campaign.creativesWouldBeStale === 1 ? 'ad' : 'ads'} will be marked out of date.{' '}
+                  {campaign.isPublished
+                    ? "This campaign is already published, so its ads are locked and out-of-date ads there can't be regenerated. Create a new campaign to use the new text."
+                    : 'Regenerate its ads after saving.'}
+                </li>
+              ))}
+          </ul>
+          <div className="button-row">
+            <button
+              type="button"
+              className="btn-outline btn-gold"
+              onClick={() => void submitProduct(true)}
+              disabled={submitting}
+            >
+              Save anyway
+            </button>
+            <button
+              type="button"
+              className="cancel-link"
+              onClick={() => setImpactWarning(null)}
+              disabled={submitting}
+            >
+              Go back
+            </button>
+          </div>
+        </div>
+      )}
+      {isEditing && !impactWarning && (
+        <p className="field-hint">
+          Changes to the name, price, margin, features, benefits and mechanism apply the next time
+          ads are generated.
         </p>
       )}
       <div className="button-row">
