@@ -113,7 +113,7 @@ def test_estimate_returns_cost_and_the_rendered_prompt_and_creates_nothing(
     assert body["model"] == "claude-opus-5-5"
     assert 0 < body["expectedUsd"] < body["maxUsd"] <= body["suggestedMaxCostUsd"]
     assert body["maxSearches"] > 0 and body["maxFetches"] > 0
-    assert body["promptVersion"] == "avatar_research_v1"
+    assert body["promptVersion"] == "avatar_research_v2"
     assert len(body["promptHash"]) == 64
     assert "Acme" in body["promptPreview"]
     assert "{{" not in body["promptPreview"]

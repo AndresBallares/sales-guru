@@ -1,8 +1,9 @@
 """Renders the Avatar Research prompt template for one business (Phase 7a).
 
 The owner's direct-response strategist prompt lives in a versioned file
-(``app/prompts/avatar_research_v1.md``) with ``{{placeholder}}`` slots. This
-module loads it at run time and fills each slot from the business's saved data:
+(``app/prompts/avatar_research_v2.md``; v1 is kept unchanged) with
+``{{placeholder}}`` slots. This module loads it at run time and fills each slot
+from the business's saved data:
 
 - ``load_template_inputs`` reads the database into a ``TemplateInputs``;
 - ``render_template`` is pure: it fills the file from those inputs.
@@ -29,9 +30,9 @@ from app.services.prompt_safety import quarantine
 from app.services.url_validation import validate_destination_url
 
 TEMPLATE_PATH = (
-    Path(__file__).resolve().parent.parent / "prompts" / "avatar_research_v1.md"
+    Path(__file__).resolve().parent.parent / "prompts" / "avatar_research_v2.md"
 )
-TEMPLATE_VERSION = "avatar_research_v1"
+TEMPLATE_VERSION = "avatar_research_v2"
 
 NONE_PROVIDED = "none provided"
 MAX_PRODUCTS = 3
