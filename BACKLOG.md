@@ -5,6 +5,14 @@ item to the pull request that does it, and delete it here when that merges.
 
 ## Open
 
+### Product edit screen (a small PR before 7c)
+Owners cannot edit a product once onboarding is over: the standalone `ProductsSection` only shows while a
+business has campaigns but no products, and a published campaign hides "Change product". The agreed plan
+(`docs/phase-7.md`, "Product edit screen"): an always-visible Products tab, editing allowed for every product
+with a confirmation when the edit would mark a live campaign's creatives stale (only description and URL do),
+and the mechanism cap raised above 300 characters with a counter instead of silent mid-word cuts. It comes
+before the research review screen (7c), whose readiness check links to it.
+
 ### Billing and plans for the Avatar Research Agent
 Billing does not exist yet (PRD.md §3 and the post-MVP "Billing" step). When it is built, plans must hook
 into the two per-business settings the research agent adds in 7b (`docs/phase-7.md`, "Plan change"): the

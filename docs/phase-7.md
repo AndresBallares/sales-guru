@@ -58,6 +58,8 @@ drafts problems, solutions, avatars and concepts for the owner to review and sav
 - **7b (scope changed 2026-11-03, see "Plan change"):** background runner (see "Runner" below), phase messages, web
   search / fetch, `submit_research`, caps, cancel, heartbeat, `POST` to start a run, **quote verification**,
   per-business model access and monthly run limit, actual cost stored per run, readiness data in the estimate.
+- **Product edit screen (new, before 7c; not built yet):** see "Product edit screen" below. The 7c readiness check
+  links to it.
 - **7c:** review screen: owner edits and saves problems, solutions, avatars, concepts into the library.
 - **7d:** hardening: retry on bad counts, cost reconciliation against real usage, e2e, rollout notes.
 
@@ -153,3 +155,97 @@ Throwaway script, `claude-opus-5-5`, light depth, VENZI's data, nothing in the a
   on the dev data.
 - Report: real tokens and cost against the estimates; whether it hit 20/20/5; how many quotes were verbatim in the
   fetched text or the search `cited_text`; and the full raw output.
+
+## Product edit screen (planned before 7c; findings from a read-only survey, 2026-11-03)
+
+**Why.** Owners cannot fix product info after onboarding, and the research agent's prompt depends on it (name,
+description, benefits, mechanism, price, URL). The 7c readiness check ("which inputs are empty") needs somewhere to
+link to.
+
+**What exists today.**
+- **Endpoints** (`backend/app/api/product.py`, `product_image.py`): `POST /businesses/{id}/products` (create),
+  `GET .../products` (list), `PATCH .../products/{id}` (update; accepts description, name, price, margin, features,
+  benefits, mechanism, personalizable, personalizationOptions, url; `exclude_unset`, so null clears a name), `POST
+  .../products/{id}/check-url`, and photo routes (upload, list, delete, `PUT .../order`). There is **no delete-product
+  route and no get-one route**. `PATCH` has no published-campaign guard: the lock lives in the UI only.
+- **Form** (`frontend/src/components/ProductForm.tsx`, create and edit modes): "What do you sell?" (description,
+  required), product name (up to 80), price, margin, features, benefits, mechanism (capped at 300 characters, which is
+  why production's "Serpenti" mechanism is cut off mid-word), personalizable + options, URL, photos and videos
+  (upload, remove, reorder in edit mode).
+- **Where the form is reachable:** (1) `ProductsSection`, rendered by `BusinessDetailPage` **only during onboarding,
+  while the business has campaigns but no products** (it is one branch of the campaigns / products / audiences
+  gate chain); (2) the new-campaign flow (create); (3) a campaign card's "Change product" picker, which edits the
+  campaign's current product, shown only when `!isPublished`; (4) an "Edit product" button inside the "needs a
+  destination link" error on a card.
+- **Cause of "I cannot edit the product":** a business that is past onboarding has no standalone Products list. The
+  production product named "Serpenti" (`cmvzqszw20004kpk1mk5slpnn`) belongs to the **LIVE** campaign "Snake-Ring", and a
+  published campaign hides "Change product". Phase 6 only added the Avatars tab (commit `135734e`); it did not change
+  where products live. The name was typed in the create form: the row's `createdAt` and `updatedAt` are the same
+  instant (2026-11-02 21:00:01 UTC), so it was created with the name, not edited in later.
+
+**What editing a product marks stale** (`is_creative_stale`, `backend/app/services/creative.py`): a creative is stale
+when the **product description** or **product URL** differs from the snapshot taken at generation, when the business
+description differs, or when the campaign's product changes; before the campaign is on Meta, a change to the
+personalization settings also marks it stale. **Name, price, margin, features, benefits and mechanism do not mark
+anything stale**, although benefits, features and mechanism are read by the Creative prompt, so an edit takes effect
+only the next time ads are generated.
+
+**Plan: a small product-edit PR before 7c (decided 2026-11-03; read-only plan, not built).**
+
+1. **Products tab, always visible after setup.** A third tab on the business page (next to "Results and campaigns" and
+   "Avatars"), listing every product (name or description, URL, primary photo). Each row opens `ProductForm` in edit
+   mode. The onboarding-only `ProductsSection` gate in `BusinessDetailPage` stays as it is.
+2. **Edit every product,** including one used by a LIVE campaign. The backend `PATCH` already allows it; this is a UI
+   change. No delete-product in this PR.
+3. **Warn when an edit would mark creatives stale.** Only a change to the product `description` or `url` (or, before the
+   campaign is on Meta, the personalization settings) does (`is_creative_stale`). Plan: a read-only pre-flight
+   `POST .../products/{id}/edit-impact` with the proposed changes, returning the campaigns that use the product, their
+   status, and how many of their creatives would turn stale; the form shows a confirmation when any affected campaign is
+   LIVE or published (those ads are locked, so stale creatives there cannot be regenerated). Edits to name, benefits,
+   features, mechanism and price show no warning, but the form notes that they apply the next time ads are generated.
+4. **Raise the mechanism cap above 300 and stop cutting mid-word.** The 300 comes from `_MAX_MECHANISM_LENGTH`
+   (`backend/app/schemas/product.py`, create and update) and from `maxLength={300}` on two textareas in
+   `ProductForm.tsx`; the browser silently drops pasted text past 300, which cut production's mechanism mid-word
+   ("...gold and ston"). Proposal: cap 600 (the mechanism reaches the Creative prompt, so a few hundred more
+   characters per product is the cost); no `maxLength` on the textarea, a live character counter instead, and a
+   clear 422/inline error rather than silent cutting; and where text must be shortened for a prompt (the research
+   template's 500/400/300 caps), cut at the last word boundary before the limit and add the ellipsis. The research
+   template's mechanism cap rises with it.
+5. **Tests first,** vitest + e2e (axe) for the tab, the warning and the counter; backend tests for the pre-flight and
+   the new cap. Open question for the user: whether pasting over the cap should trim at a word boundary with a visible
+   notice or just refuse to save (the proposal is to refuse and show the counter).
+
+## Production rename of "Serpenti" (prepared, run by the user)
+
+`backend/scripts/venzi_rename_product/`: `apply.sql` and `rollback.sql` (guarded: exactly one product named
+"Serpenti" in the VENZI business, none already named "Emerald Serpent Ring", exactly one row updated; only `name` and
+`updatedAt` change), `dry_run.sql` (SELECT only) and `rehearse.sh` (scratch Postgres, 9 checks including refusal of a
+re-apply and of a second "Serpenti"). Not run against production by Claude.
+
+## Smoke run 1 (2026-11-03, `claude-opus-5-5`, light, template v2, VENZI dev data, cap $2.00)
+
+One request, no pauses; **$1.1375**; 6 searches, 8 fetches (all succeeded); fresh input 14, cache write 131,748, cache
+read 362,260, output 17,314 (hit `max_tokens` at 16,000 per sampling step); 187 seconds. The model researched,
+then began `submit_research` and wrote 20 problems, 20 solutions and 10 gaps before being cut off: no avatars, no
+coverage note, no sources. Estimate was $1.04 expected / $1.49 max. Fetched pages were about 31k tokens in total
+(estimated 64k); each search added about 16k tokens (measured earlier: 6-7k); the six thinking blocks were empty, so
+thinking tokens cannot be separated from output. Findings carried into 7b: raise `max_tokens` and handle a
+`max_tokens` stop; split the final answer into two submits; check how to shrink search results.
+
+## Quote verification (decided 2026-11-03, built in 7b)
+
+First smoke run (2026-11-03): 16 of 20 quotes came from search results, which the API returns encrypted, and the model
+wrote no cited text, so checking only against fetched text and `cited_text` would have rejected them. Direct fetches
+of those pages found 12 of the 16 on the page (0 absent, 4 unreachable: 3 Trustpilot 403, 1 AOL 404). Decision: **the
+runner fetches each quoted URL itself, with the SSRF guard** (`validate_destination_url` plus the post-DNS check in
+`url_reachability`, a size and time limit, no redirects to private addresses), and compares:
+
+| Result of the runner's fetch | What happens to the quote |
+| --- | --- |
+| Quote found word for word (whitespace, curly quotes and case normalized) | **verified** |
+| Page fetched, quote not found | **dropped**; the item (problem) is marked `inferred` |
+| Page could not be fetched (403, 404, timeout, blocked) | **kept**, labeled `unverified` for the owner's review |
+
+Quotes already found in text the model fetched during the run are verified without a second fetch. Each stored
+quote carries its status (`verified` | `unverified`); a dropped quote is recorded in the run's findings so the owner
+can see what was removed. Also checked in code: at most 14 words, no username, a source URL present.
