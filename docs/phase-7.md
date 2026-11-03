@@ -219,7 +219,7 @@ only the next time ads are generated.
 ## Production rename of "Serpenti" (prepared, run by the user)
 
 `backend/scripts/venzi_rename_product/`: `apply.sql` and `rollback.sql` (guarded: exactly one product named
-"Serpenti" in the VENZI business, none already named "Emerald Serpent Ring", exactly one row updated; only `name` and
+"Serpenti" in the VENZI business, none already named "Emerald Coil", exactly one row updated; only `name` and
 `updatedAt` change), `dry_run.sql` (SELECT only) and `rehearse.sh` (scratch Postgres, 9 checks including refusal of a
 re-apply and of a second "Serpenti"). Not run against production by Claude.
 
@@ -253,8 +253,17 @@ can see what was removed. Also checked in code: at most 14 words, no username, a
 
 ## Launch checklist (before enabling research in production)
 
-- [ ] **Rename the Serpenti product before enabling research in production.** The user will rename "Serpenti" to
-  "Emerald Serpent Ring" (Serpenti is Bulgari's trademarked line) once the product edit screen exists. The guarded
+- [ ] **Rename the Serpenti product before enabling research in production.** The final name is **"Emerald Coil"**
+  (decided 2026-11-03; Serpenti is Bulgari's trademarked line). The user will rename "Serpenti" to "Emerald Coil" once the
+  product edit screen exists. The dev product `cmvv83tim0006rb6n931w80o4` was renamed from "Emerald Serpent Ring" to "Emerald
+  Coil" on 2026-11-03 (after `make backup-dev`).
+  The user checked the live product page in a browser on 2026-11-03: it loads and shows "Emerald Coil" as the product
+  name; the URL slug is unchanged (`https://venzijewelry.com/products/serpent-emerald-diamonds-ceramic`), so the URL stored
+  on the product (dev and production) stays valid and needs no change.
+  **Decided 2026-11-03: the user will rename the production product to "Emerald Coil" themselves, in the app, once the
+  Products tab (the product edit PR) is live, and will re-paste its full mechanism there. The guarded scripts in
+  `backend/scripts/venzi_rename_product/` are therefore not needed; they are kept (updated to "Emerald Coil" and
+  rehearsed) in case that changes.** The guarded
   scripts in `backend/scripts/venzi_rename_product/` are kept in case the user prefers to run them instead; the user
   decided on 2026-11-03 not to run them for now. Production still reads "Serpenti" (checked read-only 2026-11-03).
 - [ ] Product edit screen built and merged (the small PR before 7c).
@@ -456,3 +465,7 @@ library.
   legitimate hook. Worth watching on the next runs.
 - **Driver script:** it hung on exit after saving (Prisma disconnect under a background shell, the SIGINT note in
   CLAUDE.md), which delayed this report; the saved file was complete.
+- **Name note:** the second paid run's prompt used the product's earlier dev name, "Emerald Serpent Ring", so its avatars
+  (and the copy that mentions the ring) predate "Emerald Coil". The three avatars the user plans to add through the 7c
+  review screen (Plain-Gold Loyalist, Next-Chapter Right-Hand Buyer, Mother Passing It Forward) stay in the saved findings
+  file, which is kept; nothing was saved to the avatar library.

@@ -26,7 +26,7 @@ INSERT INTO \"Product\" (id, \"businessId\", name, description, \"updatedAt\") V
 check "before apply" "$(row)" "Serpenti|2026-11-02 21:00:01.586"
 expect_refused "rollback before apply" psql -X -q -v ON_ERROR_STOP=1 -d $DB -f rollback.sql
 $P -f apply.sql 2>&1 | grep -i notice
-n=$(row); check "after apply name" "${n%%|*}" "Emerald Serpent Ring"
+n=$(row); check "after apply name" "${n%%|*}" "Emerald Coil"
 check "other product untouched" "$($P -Atc "select coalesce(name,'NULL')||'|'||\"updatedAt\"::text from \"Product\" where id='other'")" "NULL|2026-11-02 17:20:25.544"
 expect_refused "re-apply" psql -X -q -v ON_ERROR_STOP=1 -d $DB -f apply.sql
 $P -f rollback.sql
