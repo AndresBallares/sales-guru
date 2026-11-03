@@ -18,12 +18,14 @@ import os
 import subprocess
 from collections.abc import Iterator
 from pathlib import Path
-from typing import IO
+from typing import IO, NoReturn
 
 from cryptography.fernet import Fernet
 from dotenv import load_dotenv
 
 from tests.db_cleanup import clean_all_tables, database_path_for_tests
+from tests.network_guard import assert_no_attempts
+from tests.network_guard import install as install_network_guard
 from tests.process_guards import (
     DatabaseBusyError,
     acquire_database_lock,
@@ -32,6 +34,8 @@ from tests.process_guards import (
 
 # Before anything below can start a query engine; see the function's docstring.
 restore_default_sigint()
+# Refuse (and record) any connection to a real host; see tests/network_guard.py.
+install_network_guard()
 
 _BACKEND_ROOT = Path(__file__).resolve().parent.parent
 
@@ -131,6 +135,54 @@ def _test_database() -> None:
         check=True,
         cwd=_BACKEND_ROOT,
     )
+
+
+@pytest.fixture(autouse=True)
+def _no_real_network() -> Iterator[None]:
+    """Fail the test that tried to reach a real host (tests/network_guard.py).
+
+    Code under test may catch the refusal, so the record kept by the guard is
+    checked after every test; it names the host. Anything blocked before the test
+    started (collection, session setup) is dropped first.
+    """
+    from tests.network_guard import take_attempts
+
+    take_attempts()
+    yield
+    assert_no_attempts()
+
+
+@pytest.fixture(autouse=True)
+def _meta_offline(
+    request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Make Meta unreachable unless the test mocks it.
+
+    See tests/test_meta_offline_by_default.py.
+
+    The five functions that make a Graph API HTTP call fail with a
+    MetaConnectionError, which is what a test with a fake token got from the real
+    API anyway (and the app swallows), without reaching the network. A test that
+    mocks a Meta function, or a helper, overrides this; the tests of the helpers
+    themselves (test_meta_service.py) opt out with ``meta_helpers_under_test``.
+    """
+    if request.node.get_closest_marker("meta_helpers_under_test"):
+        return
+    from app.services import meta
+
+    async def offline(*_args: object, **_kwargs: object) -> NoReturn:
+        raise meta.MetaConnectionError(
+            "Meta API call failed: Meta is offline in tests (mock the call)"
+        )
+
+    for name in (
+        "_get_json",
+        "_post_json",
+        "_delete_json",
+        "upload_meta_ad_image",
+        "upload_meta_video",
+    ):
+        monkeypatch.setattr(meta, name, offline)
 
 
 @pytest.fixture(autouse=True)

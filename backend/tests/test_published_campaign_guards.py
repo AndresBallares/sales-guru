@@ -24,6 +24,7 @@ from prisma.models import Campaign
 from tests.test_creative_test_plan_publish import (
     _creative_plan_campaign,
     mock_locales,  # noqa: F401  (autouse fixture, must be in this namespace)
+    mock_purchasers_audience,  # noqa: F401  (autouse fixture, must be in this namespace)
 )
 from tests.test_publish import (
     _ready_campaign,

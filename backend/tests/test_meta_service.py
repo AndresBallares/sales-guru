@@ -6,7 +6,7 @@ call to Meta's Graph API.
 
 import asyncio
 import json
-from collections.abc import Iterator
+from collections.abc import Awaitable, Callable, Iterator
 from datetime import UTC, datetime
 from typing import Any
 
@@ -15,6 +15,8 @@ import pytest
 from app.core.config import get_settings
 from app.schemas.meta import MetaAdAccount, MetaPage, MetaPixel
 from app.services import meta
+
+pytestmark = pytest.mark.meta_helpers_under_test
 
 
 class _FakeResponse:
@@ -35,7 +37,9 @@ class _FakeAsyncClient:
     """Minimal stand-in for httpx.AsyncClient as an async context manager."""
 
     def __init__(
-        self, response: _FakeResponse | None = None, error: Exception | None = None
+        self,
+        response: "_FakeResponse | _NonJsonResponse | None" = None,
+        error: Exception | None = None,
     ) -> None:
         self._response = response
         self._error = error
@@ -52,7 +56,9 @@ class _FakeAsyncClient:
     async def __aexit__(self, *_args: object) -> bool:
         return False
 
-    async def get(self, url: str, params: dict[str, str]) -> _FakeResponse:
+    async def get(
+        self, url: str, params: dict[str, str]
+    ) -> "_FakeResponse | _NonJsonResponse":
         self.calls.append((url, params))
         if self._error is not None:
             raise self._error
@@ -64,7 +70,7 @@ class _FakeAsyncClient:
         url: str,
         data: dict[str, str],
         files: dict[str, Any] | None = None,
-    ) -> _FakeResponse:
+    ) -> "_FakeResponse | _NonJsonResponse":
         self.calls.append((url, data))
         self.post_files.append(files)
         if self._error is not None:
@@ -74,7 +80,7 @@ class _FakeAsyncClient:
 
 
 def _mock_client_returning(
-    monkeypatch: pytest.MonkeyPatch, response: _FakeResponse
+    monkeypatch: pytest.MonkeyPatch, response: "_FakeResponse | _NonJsonResponse"
 ) -> _FakeAsyncClient:
     """Patch httpx.AsyncClient to return a canned response, return the fake client."""
     fake_client = _FakeAsyncClient(response=response)
@@ -4720,3 +4726,132 @@ async def test_an_ad_set_has_no_minimum_spend_by_default(
     await _ad_set(None)
 
     assert "daily_min_spend_target" not in client.calls[0][1]
+
+
+class _NonJsonResponse:
+    """What a gateway or proxy sends instead of Graph API JSON: an HTML error page.
+
+    Seen on CI (2026-11-03): Meta answered a publish with an HTML "4xx Client
+    Error" page, and ``response.json()`` raised a JSONDecodeError that nothing
+    caught, so the publish ended as a 500 instead of a clean error.
+    """
+
+    def __init__(
+        self,
+        status_code: int = 403,
+        text: str = "<html><body><h1>4xx Client Error</h1></body></html>",
+        parsed: Any = None,  # noqa: ANN401
+    ) -> None:
+        self.status_code = status_code
+        self.text = text
+        self.is_error = status_code >= 400
+        self._parsed = parsed
+
+    def json(self) -> Any:  # noqa: ANN401
+        if self._parsed is not None:
+            return self._parsed
+        raise json.JSONDecodeError("Expecting value", self.text, 0)
+
+
+_AD_ACCOUNT = "act_1"
+_NON_JSON_CALLS: list[tuple[str, Callable[[], Awaitable[object]]]] = [
+    ("GET", lambda: meta.list_pages("token")),
+    (
+        "POST",
+        lambda: meta.create_purchasers_audience(
+            access_token="token",
+            ad_account_id=_AD_ACCOUNT,
+            pixel_id="pixel-1",
+            name="Purchasers",
+        ),
+    ),
+    (
+        "POST campaign",
+        lambda: meta.create_meta_campaign(
+            access_token="token",
+            ad_account_id=_AD_ACCOUNT,
+            name="Campaign",
+            objective="SALES",
+        ),
+    ),
+    (
+        "DELETE",
+        lambda: meta.delete_meta_object(
+            access_token="token", ad_account_id=_AD_ACCOUNT, meta_object_id="123"
+        ),
+    ),
+    (
+        "image upload",
+        lambda: meta.upload_meta_ad_image(
+            access_token="token",
+            ad_account_id=_AD_ACCOUNT,
+            image_data=b"jpeg-bytes",
+            content_type="image/jpeg",
+        ),
+    ),
+    (
+        "video upload",
+        lambda: meta.upload_meta_video(
+            access_token="token",
+            ad_account_id=_AD_ACCOUNT,
+            video_data=b"mp4-bytes",
+            content_type="video/mp4",
+            name="Video",
+        ),
+    ),
+]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("label", "call"), _NON_JSON_CALLS, ids=[c[0] for c in _NON_JSON_CALLS]
+)
+async def test_a_non_json_reply_is_a_clean_meta_connection_error(
+    monkeypatch: pytest.MonkeyPatch,
+    label: str,
+    call: Callable[[], Awaitable[object]],
+) -> None:
+    _mock_client_returning(monkeypatch, _NonJsonResponse(status_code=403))
+
+    with pytest.raises(meta.MetaConnectionError, match="non-JSON") as raised:
+        await call()
+
+    message = str(raised.value)
+    assert "HTTP 403" in message
+    assert "4xx Client Error" in message  # the start of what came back, to debug it
+
+
+@pytest.mark.asyncio
+async def test_a_successful_status_with_an_empty_body_is_also_non_json(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _mock_client_returning(monkeypatch, _NonJsonResponse(status_code=200, text=""))
+
+    with pytest.raises(meta.MetaConnectionError, match="non-JSON"):
+        await meta.list_pages("token")
+
+
+@pytest.mark.asyncio
+async def test_a_json_body_that_is_not_an_object_is_refused_the_same_way(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _mock_client_returning(
+        monkeypatch, _NonJsonResponse(status_code=200, text="[1]", parsed=[1])
+    )
+
+    with pytest.raises(meta.MetaConnectionError, match="non-JSON|not a JSON object"):
+        await meta.list_pages("token")
+
+
+@pytest.mark.asyncio
+async def test_a_long_html_page_is_cut_in_the_error_message(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _mock_client_returning(
+        monkeypatch, _NonJsonResponse(status_code=502, text="<html>" + "x" * 5000)
+    )
+
+    with pytest.raises(meta.MetaConnectionError) as raised:
+        await meta.list_pages("token")
+
+    assert len(str(raised.value)) < 600

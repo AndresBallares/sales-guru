@@ -135,6 +135,7 @@ def test_no_warning_when_the_pixel_looks_healthy_or_unused(
 
 
 @pytest.mark.asyncio
+@pytest.mark.meta_helpers_under_test
 async def test_fetch_pixel_event_counts_sums_every_hourly_bucket(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -174,6 +175,7 @@ async def test_fetch_pixel_event_counts_sums_every_hourly_bucket(
 
 
 @pytest.mark.asyncio
+@pytest.mark.meta_helpers_under_test
 async def test_fetch_pixel_event_counts_is_empty_with_no_data(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
