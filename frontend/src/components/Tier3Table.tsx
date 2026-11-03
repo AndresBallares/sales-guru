@@ -34,6 +34,11 @@ function AvatarLine({ ad, className }: { ad: DashboardAdRow; className?: string 
   )
 }
 
+// "Compared over the last 4 days, while all ads ran" -> "compared over the last 4 days, ..."
+function inSentence(label: string): string {
+  return label.charAt(0).toLowerCase() + label.slice(1)
+}
+
 function Row({ ad }: { ad: DashboardAdRow }) {
   return (
     <tr className={ad.isLeader ? 'dash-leader-row' : undefined}>
@@ -47,17 +52,24 @@ function Row({ ad }: { ad: DashboardAdRow }) {
       </td>
       <td>{formatMoney(ad.spend)}</td>
       <td>{formatPercent(ad.linkCtr)}</td>
-      <td>{formatInteger(ad.addToCart)}</td>
-      <td>{formatMoney(ad.costPerAddToCart)}</td>
-      <td>{formatInteger(ad.purchases)}</td>
-      <td>{formatMoney(ad.cac)}</td>
+      {ad.compared === false ? (
+        <td colSpan={4}>Not compared: stopped before the other ads started</td>
+      ) : (
+        <>
+          <td>{formatInteger(ad.addToCart)}</td>
+          <td>{formatMoney(ad.costPerAddToCart)}</td>
+          <td>{formatInteger(ad.purchases)}</td>
+          <td>{formatMoney(ad.cac)}</td>
+        </>
+      )}
     </tr>
   )
 }
 
 // Tier 3 — the per-ad comparison a creative test exists to answer. A leader is
 // named only when the data supports it (the backend's strict rule: every ad has
-// 10+ purchases, or else every ad has 5+ add-to-carts); otherwise it says so.
+// 10+ purchases, or else every ad has 5+ add-to-carts, counted over the period all
+// the ads ran together); otherwise it says so.
 export function Tier3Table({ tier3 }: { tier3: DashboardTier3 }) {
   const leaderAd = tier3.leader ? tier3.ads.find((ad) => ad.adId === tier3.leader?.adId) : undefined
   return (
@@ -68,18 +80,27 @@ export function Tier3Table({ tier3 }: { tier3: DashboardTier3 }) {
       <p className={tier3.leader ? 'dash-leader-line dash-leader-line-yes' : 'dash-leader-line'}>
         {tier3.leaderMessage}
       </p>
+      {tier3.windowLabel && <p className="dash-window-label">{tier3.windowLabel}</p>}
       {leaderAd && adAvatarLine(leaderAd) && (
         <p className="dash-leader-avatar">
           {`Leading buyer: ${adAvatarLine(leaderAd)}`}
           {avatarMarker(leaderAd.avatarState) && (
             <span className="avatar-marker"> ({avatarMarker(leaderAd.avatarState)})</span>
           )}
+          {tier3.windowLabel && ` (${inSentence(tier3.windowLabel)})`}
         </p>
       )}
       <p className="dash-note">
         An ad is only named the leader once every ad has enough results to compare fairly: at
         least 10 sales each, or else at least 5 add-to-carts each.
       </p>
+      {tier3.windowLabel && (
+        <p className="dash-note">
+          Added to cart, cost per add to cart, sales and cost per sale count only the period all
+          the ads ran together, so an ad that started earlier gets no head start. Spent so far and
+          Clicked the ad cover each ad’s whole run.
+        </p>
+      )}
       <div className="dash-table-wrap" role="region" aria-label="Ad comparison table" tabIndex={0}>
         <table className="dash-table">
           <caption className="visually-hidden">Results for each ad in this campaign</caption>

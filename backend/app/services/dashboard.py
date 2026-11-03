@@ -50,6 +50,7 @@ from app.schemas.strategy import (
     daily_budget,
     planned_total_budget,
 )
+from app.services.ad_window import CommonWindow, compare_ads
 from app.services.benchmarks import (
     JEWELRY_META_BENCHMARKS,
     LINK_CTR_TYPICAL_HIGH_PCT,
@@ -63,6 +64,11 @@ from app.services.creative_test_rules import (
     MIN_PURCHASES_FOR_CAC,
 )
 
+# Re-exported: the row shapes live in metric_rows so ad_window can use them
+# without importing this module, but callers still reach them as dashboard.X.
+from app.services.metric_rows import Snapshot as Snapshot
+from app.services.metric_rows import Totals as Totals
+
 # Below these, a number is shown with a "too early to judge" flag.
 MIN_PURCHASES_TO_JUDGE = MIN_PURCHASES_FOR_CAC
 MIN_IMPRESSIONS_TO_JUDGE = 1000
@@ -70,36 +76,9 @@ MIN_ADD_TO_CARTS_TO_JUDGE = MIN_ADD_TO_CARTS_TO_COMPARE
 MIN_CHECKOUTS_TO_JUDGE = 5
 
 NO_CLEAR_LEADER = "No clear leader yet"
-
-
-class Snapshot(NamedTuple):
-    """One stored Metric row, reduced to what the dashboard reads."""
-
-    ad_set_id: str | None
-    ad_id: str | None
-    impressions: int
-    spend: float
-    link_clicks: int | None
-    landing_page_views: int | None
-    add_to_cart: int | None
-    initiated_checkout: int | None
-    purchases: int | None
-    purchase_value: float | None
-    fetched_at: datetime
-
-
-class Totals(NamedTuple):
-    """Lifetime numbers for a campaign (or one ad) from its latest snapshot(s)."""
-
-    impressions: int
-    spend: float
-    link_clicks: int | None
-    landing_page_views: int | None
-    add_to_cart: int | None
-    initiated_checkout: int | None
-    purchases: int | None
-    purchase_value: float | None
-    as_of: datetime
+# The shortest shared window that can support a ranking (the app setting
+# COMMON_WINDOW_MIN_HOURS overrides it; this is for callers that pass none).
+DEFAULT_MIN_WINDOW_HOURS = 72.0
 
 
 class AdInfo(NamedTuple):
@@ -432,36 +411,63 @@ def _ad_status(
     return "live"
 
 
+def _leader_message(leader: Leader | None, window: CommonWindow) -> str:
+    if leader is not None:
+        return (
+            "Leading on cost per purchase"
+            if leader.basis == "cac"
+            else "Leading on cost per add-to-cart"
+        )
+    reason = window.too_short_reason
+    return (
+        NO_CLEAR_LEADER if reason is None else f"Not enough shared time yet: {reason}"
+    )
+
+
 def build_tier3(
     ads: Sequence[AdInfo],
-    per_ad: dict[str, Totals],
+    lifetime: dict[str, Totals],
+    window: CommonWindow,
     pause_recommendations: Sequence[PauseRecommendation],
 ) -> Tier3 | None:
-    """The per-ad table with the leader highlighted; None when no ad has numbers."""
-    if not per_ad:
+    """The per-ad table with the leader highlighted; None when no ad has numbers.
+
+    The leader is chosen over the window in which all compared ads were running,
+    so an ad that went live earlier gets no credit for its extra days. The cost
+    columns show those window numbers; spend and click-through stay lifetime.
+
+    Args:
+        ads: The campaign's ads.
+        lifetime: Each ad's latest lifetime numbers.
+        window: The shared window (app.services.ad_window.compare_ads).
+        pause_recommendations: PAUSE_AD recommendations, for each ad's status.
+    """
+    if not lifetime:
         return None
-    leader = choose_leader(list(per_ad.items()))
+    leader = (
+        choose_leader(list(window.per_ad.items())) if window.status == "ok" else None
+    )
     rows: list[AdRow] = []
     for ad in ads:
-        totals = per_ad.get(ad.id)
+        own = lifetime.get(ad.id)
+        shared = window.per_ad.get(ad.id)
         rows.append(
             AdRow(
                 ad_id=ad.id,
                 name=ad.name,
                 status=_ad_status(ad, pause_recommendations),
-                spend=None if totals is None else totals.spend,
+                spend=None if own is None else own.spend,
                 link_ctr=(
-                    None
-                    if totals is None
-                    else _pct(totals.link_clicks, totals.impressions)
+                    None if own is None else _pct(own.link_clicks, own.impressions)
                 ),
-                add_to_cart=None if totals is None else totals.add_to_cart,
+                add_to_cart=None if shared is None else shared.add_to_cart,
                 cost_per_add_to_cart=(
-                    None if totals is None else _ratio(totals.spend, totals.add_to_cart)
+                    None if shared is None else _ratio(shared.spend, shared.add_to_cart)
                 ),
-                purchases=None if totals is None else totals.purchases,
-                cac=None if totals is None else _ratio(totals.spend, totals.purchases),
+                purchases=None if shared is None else shared.purchases,
+                cac=None if shared is None else _ratio(shared.spend, shared.purchases),
                 is_leader=leader is not None and leader.ad_id == ad.id,
+                compared=shared is not None,
                 avatar_name=ad.avatar_name,
                 avatar_state=ad.avatar_state,
                 concept=ad.concept,
@@ -471,15 +477,11 @@ def build_tier3(
     return Tier3(
         ads=rows,
         leader=leader,
-        leader_message=(
-            NO_CLEAR_LEADER
-            if leader is None
-            else (
-                "Leading on cost per purchase"
-                if leader.basis == "cac"
-                else "Leading on cost per add-to-cart"
-            )
-        ),
+        leader_message=_leader_message(leader, window),
+        window_status=window.status,
+        window_label=window.label,
+        window_start=window.start,
+        window_end=window.end,
     )
 
 
@@ -575,6 +577,7 @@ def assemble_campaign(
     paused_at: datetime | None = None,
     paused_reason: str | None = None,
     saturation_warning: str | None = None,
+    min_window_hours: float = DEFAULT_MIN_WINDOW_HOURS,
 ) -> CampaignDashboardResponse:
     """Build the whole campaign dashboard from rows already loaded.
 
@@ -642,7 +645,12 @@ def assemble_campaign(
         tier2=build_tier2(
             totals, target_cost_per_add_to_cart=targets.target_cost_per_add_to_cart
         ),
-        tier3=build_tier3(ads, ad_totals(snapshots), pause_recommendations),
+        tier3=build_tier3(
+            ads,
+            ad_totals(snapshots),
+            compare_ads(snapshots, min_hours=min_window_hours),
+            pause_recommendations,
+        ),
     )
 
 

@@ -178,6 +178,12 @@ class Settings(BaseSettings):
     saturation_max_first_time_ratio: float = 0.25
     saturation_consecutive_evaluations: int = 2
     saturation_cooldown_days: int = 14
+    # Comparing ads (app/services/ad_window.py): ads are ranked only over the
+    # window in which all of them were running, and only once that window is at
+    # least this many hours long. Shorter than this the ads have not run side by
+    # side long enough to compare fairly: Meta's learning phase and its delay in
+    # attributing conversions would dominate the numbers.
+    common_window_min_hours: float = 72.0
     # What counts as "this business has run ads before" (Meta ad-account
     # history): lifetime spend AND clicks across the account at or above both.
     # Any spend used to count, which pushed an account off its first creative

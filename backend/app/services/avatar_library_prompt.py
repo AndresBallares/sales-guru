@@ -203,15 +203,18 @@ def results_lines(
             has another one).
     """
     if results.leader is None:
+        reason = f" ({results.no_leader_reason})" if results.no_leader_reason else ""
         return [
             f"Results so far: {results.ads_compared} ad(s) have numbers, but no ad is "
-            "clearly ahead yet, so do not assume a winner."
+            f"clearly ahead yet{reason}, so do not assume a winner."
         ]
     unit = "purchase" if results.basis == "cac" else "add-to-cart"
     basis = "cost per purchase" if results.basis == "cac" else "cost per add-to-cart"
     lines = [
         f"Results so far (the winner is the ad the owner's dashboard highlights, "
-        f"ranked on {basis}):",
+        f"ranked on {basis}"
+        + (f"; {results.window_label}" if results.window_label else "")
+        + "):",
         _ad_line("Winner", results.leader, unit),
     ]
     if results.weakest is not None:

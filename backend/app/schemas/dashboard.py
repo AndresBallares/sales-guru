@@ -143,7 +143,12 @@ AdStatus = Literal["live", "paused", "paused_by_optimizer", "proposed_pause"]
 
 
 class AdRow(CamelCaseModel):
-    """One ad of a creative test, from its own latest lifetime numbers."""
+    """One ad of a creative test.
+
+    ``spend`` and ``link_ctr`` are the ad's lifetime numbers. The add-to-cart and
+    purchase columns are for the window in which all compared ads were running
+    (see Tier3.window_label), and are null for an ad not compared.
+    """
 
     ad_id: str
     name: str
@@ -155,6 +160,9 @@ class AdRow(CamelCaseModel):
     purchases: int | None
     cac: float | None
     is_leader: bool
+    # False for an ad left out of the comparison (it stopped before the others
+    # started, so it has no numbers in the shared window).
+    compared: bool = True
     # The library avatar the ad was written for (null for an older ad). Display
     # only: nothing here takes part in choosing the leader.
     avatar_name: str | None = None
@@ -176,6 +184,12 @@ class Tier3(CamelCaseModel):
     ads: list[AdRow]
     leader: Leader | None
     leader_message: str
+    # What the comparison covers. The label reads "Compared over the last N days,
+    # while all ads ran"; it is null when fewer than two ads delivered together.
+    window_status: Literal["ok", "too_short", "too_few_ads"] = "too_few_ads"
+    window_label: str | None = None
+    window_start: datetime | None = None
+    window_end: datetime | None = None
 
 
 class Proposal(CamelCaseModel):
