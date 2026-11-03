@@ -17,6 +17,9 @@ from app.services.research_template import (
 )
 
 START, END = "<<<START>>>", "<<<END>>>"
+PRODUCTS_LINE = (
+    "Top products: (each: name, URL, price, description, benefits, mechanism)\n"
+)
 
 
 def _full(**overrides: Any) -> TemplateInputs:  # noqa: ANN401
@@ -62,7 +65,7 @@ def test_the_template_file_exists_where_the_loader_looks() -> None:
         Path(__file__).resolve().parent.parent
         / "app"
         / "prompts"
-        / "avatar_research_v1.md"
+        / "avatar_research_v2.md"
     ) == TEMPLATE_PATH
     assert TEMPLATE_PATH.is_file()
 
@@ -75,7 +78,7 @@ def test_every_placeholder_in_the_file_has_a_mapping_and_no_mapping_is_unused() 
 
 def test_version_and_hash_describe_the_file() -> None:
     rendered = render_template(_full())
-    assert rendered.version == TEMPLATE_VERSION == "avatar_research_v1"
+    assert rendered.version == TEMPLATE_VERSION == "avatar_research_v2"
     assert (
         rendered.content_hash == hashlib.sha256(TEMPLATE_PATH.read_bytes()).hexdigest()
     )
@@ -198,7 +201,7 @@ def test_product_block_order_and_field_caps() -> None:
         mechanism="m" * 500,
     )
     text = render_template(_full(products=[product])).text
-    block = text.split("Top products:\n")[1].split("Key brand messages:")[0]
+    block = text.split(PRODUCTS_LINE)[1].split("Key brand messages:")[0]
     assert (
         block.index("Ring")
         < block.index("https://brandmark.example/ring")
@@ -212,7 +215,7 @@ def test_product_block_order_and_field_caps() -> None:
 
 def test_a_product_without_a_name_starts_with_its_url() -> None:
     product = ProductInput(url="https://brandmark.example/ring", description="D")
-    block = render_template(_full(products=[product])).text.split("Top products:\n")[1]
+    block = render_template(_full(products=[product])).text.split(PRODUCTS_LINE)[1]
     assert "Name:" not in block.split("Key brand messages:")[0]
     assert "URL: https://brandmark.example/ring" in block
 
@@ -270,3 +273,24 @@ def test_the_header_block_skips_missing_parts_and_other_values_keep_wrappers() -
     assert "BRANDMARK" in header and " — " not in header.split(START)[1].split(END)[0]
     # Everything after the header is still one wrapper per value.
     assert text.count(START) == text.count(END) > 5
+
+
+def test_the_products_note_sits_on_the_top_products_line_above_the_placeholder() -> (
+    None
+):
+    raw = TEMPLATE_PATH.read_text("utf-8")
+
+    assert PRODUCTS_LINE + "{{products}}\n" in raw
+    assert raw.count("(each: name, URL, price, description, benefits, mechanism)") == 1
+    rendered = render_template(_full()).text
+    assert PRODUCTS_LINE in rendered
+    assert ")   (each" not in rendered and "<<<END>>>   (each" not in rendered
+
+
+def test_v1_is_kept_unchanged_so_stored_hashes_still_point_at_a_real_file() -> None:
+    v1 = TEMPLATE_PATH.with_name("avatar_research_v1.md")
+
+    assert hashlib.sha256(v1.read_bytes()).hexdigest() == (
+        "aa659692286071012ea8d0fc29b9465e105cb0b68ced2289e45d0914f8499d43"
+    )
+    assert v1.read_bytes() != TEMPLATE_PATH.read_bytes()
