@@ -249,3 +249,44 @@ runner fetches each quoted URL itself, with the SSRF guard** (`validate_destinat
 Quotes already found in text the model fetched during the run are verified without a second fetch. Each stored
 quote carries its status (`verified` | `unverified`); a dropped quote is recorded in the run's findings so the owner
 can see what was removed. Also checked in code: at most 14 words, no username, a source URL present.
+
+## Launch checklist (before enabling research in production)
+
+- [ ] **Rename the Serpenti product before enabling research in production.** The user will rename "Serpenti" to
+  "Emerald Serpent Ring" (Serpenti is Bulgari's trademarked line) once the product edit screen exists. The guarded
+  scripts in `backend/scripts/venzi_rename_product/` are kept in case the user prefers to run them instead; the user
+  decided on 2026-11-03 not to run them for now. Production still reads "Serpenti" (checked read-only 2026-11-03).
+- [ ] Product edit screen built and merged (the small PR before 7c).
+- [ ] 7b settings in place: per-business model access, monthly run limit, dollar cap.
+
+## Smoke run 2 (2026-11-03, `claude-opus-5-5`, light, template v2, VENZI dev data, cap $3.00)
+
+Changes from run 1: `web_search_20260209` / `web_fetch_20260209` (dynamic filtering), `max_tokens` 48,000 with
+streaming, and two submits (`submit_findings`, then `submit_avatars`). Two strict tools together were rejected by the
+API (`400: The compiled grammar is too large`), before anything was generated or billed; `submit_findings` stayed strict
+and `submit_avatars` was sent without `strict` and validated with Pydantic.
+
+| | Run 1 | Run 2 |
+| --- | --- | --- |
+| Result | cut off at `max_tokens` | complete: 20 problems, 20 solutions, 11 gaps, 5 avatars |
+| Cost | $1.1375 | **$1.0028** (estimate $1.04 expected, $1.49 max) |
+| Requests | 1 | 2 (findings, then avatars) |
+| Fresh input / cache write / cache read | 14 / 131,748 / 362,260 | 52 / 54,856 / 684,355 |
+| Output tokens | 17,314 | 26,571 (20,376 + 6,195) |
+| Searches / fetches | 6 / 8 | 6 / 8 |
+| Time | 187 s | 349 s |
+
+Dynamic filtering cut cache writes by 58% (fewer tokens per search/fetch result entering the context) and added
+cache reads and output (the model ran 23 code-execution steps). Cost counted here is tokens plus $0.01 per search; code
+execution is not priced in this tally, so check the Console usage page to confirm nothing else is billed.
+
+Content: all 5 avatars came through with 5 hooks, 3 creative angles and 3 concepts each (no count warnings). No hook,
+angle or concept contained a banned phrase or a competitor brand or product-line name. **Weakness:** the search tool
+returned two HTTP 429 results and the model stopped searching, so it reached no forum, Reddit or review pages; 13 of 20
+problems and all 5 avatars are marked inferred, and the 16 quotes come from competitor and retailer pages, not customers
+(one is about cookware, used as an analogy). The coverage note said so honestly. For 7b: plan for search rate limits
+(retry with backoff, report them in the coverage note), and consider requiring a minimum number of customer-voice
+sources before a run is marked complete.
+
+Quote check with the 7b rule (runner fetches the URL itself): 16 quotes: 6 verified in the model's own fetch, 9 verified
+by the runner's fetch, 0 dropped, 1 unverified (Saks, 403). None over 14 words.
