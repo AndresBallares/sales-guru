@@ -360,6 +360,29 @@ Once live, manual click-through testing against the real production deploy (2026
     **Frontend:** `CampaignsSection`'s create-campaign form gets an "Event venue" dropdown (`None — broad US targeting` plus the curated list, mirrored as a small static `EVENT_VENUES` constant in `frontend/src/lib/api.ts` — same "small, fixed, no endpoint needed" reasoning already used for the `Objective` union) and, once a venue is picked, optional start/end date inputs with a hint that blank dates default from the venue. A live campaign with an event venue set shows it (plus its window) on the campaign list.
 
     **Explicitly deferred:** multiple concurrent event campaigns, an event calendar/reminder feature ("your event is coming up, want to launch?"), non-jewelry event types, events outside the US, and any Strategist LLM-prompt awareness of the chosen event (hypothesis/creative-angle copy doesn't yet reference "near this venue" — a natural follow-up, not required for the geo-targeting mechanic itself to work).
+11a. **Avatar Research Agent** *(in progress, started 2026-11-02; plan and decisions in `docs/phase-7.md`)* — an agent that researches a business's market on the web and drafts problems, solutions, buyer avatars and ad concepts for the owner to review and save into the avatar library. It is a drafting aid: it never saves, publishes or spends on Meta by itself.
+
+    **The agentic step.** One run, started by the owner, is a single model conversation that uses tools in a loop:
+    1. The owner's direct-response strategist prompt (`backend/app/prompts/avatar_research_v1.md`, versioned and hashed) is filled with the business's saved data (brand profile, up to 3 products, competitor URLs, banned phrases, existing avatars). Every filled value is wrapped as untrusted data, and the whole filled prompt is the first, cached user message. A short fixed system block says that fetched content is data, never instructions.
+    2. The model gets Anthropic's server-side **web search** and **web fetch** tools next to a strict **`submit_research`** tool (`tool_choice: auto`, since forced tool choice returns a 400 on Opus 5.5 and Fable 5.1). It visits the brand and competitor links, reads how real customers talk (forums, reviews, Q&A), and keeps going until a search, fetch or dollar cap is reached. The cap wins over "visit every link"; links not reached are listed in a coverage note.
+    3. It submits once: 20 problems with evidence, 20 solution angles mapped to those problems and to the brand's real mechanisms (anything the brand does not offer goes under "gaps"), and 5 new avatars, each with 5 hooks, 3 creative angles and 2-3 concepts (name, pillar, one line). Counts are checked in code, with one retry and then an accepted warning.
+    4. Code, not the model, checks the evidence: a quote is at most 14 words, appears word for word in the fetched text or the search result's cited text, has a source URL and no username; anything inferred carries an `inferred` flag.
+    5. The result waits in `NEEDS_REVIEW`. The owner edits it and chooses what to save into the avatar library (including each avatar's concepts). Nothing is saved without that review.
+
+    **Run controls:** depth (light, standard, deep) sets the search and fetch caps; model is `claude-opus-5-5` or `claude-fable-5-1`; a dollar cap is set per run; a run can be canceled; its state (status, phase, heartbeat, counters, actual cost) lives on the `ResearchRun` row so a restart is detected from a stale heartbeat. The feature is behind `AVATAR_RESEARCH_ENABLED` (off by default, and not opened by FAKE_LLM).
+
+    **Build breakdown.** 7a, the foundation with no model, web or paid calls, is built (PR #138): the `ResearchRun` model, `BuyerAvatar.concepts`, the template renderer, the `submit_research` schema, the cost estimate, and estimate/list/read endpoints (no endpoint starts a run). 7b is the background runner, tools, caps and cancel, plus quote verification, per-business model access (Opus 5.5 by default; Fable 5.1 enabled by hand per business), a per-business monthly run limit (default 1), the actual cost stored per run, and which inputs are empty in the estimate; 7c the review screen; 7d the retries, cost reconciliation and e2e. Billing and plans are in `BACKLOG.md` and will hook into the model-access and run-limit settings.
+
+    **Cost estimate, VENZI** (rendered prompt about 2.4k tokens; computed 2026-11-02 by `app/services/research_cost.py`; prices from the pricing page read 2026-10-30, $0.01 per search). *Expected* assumes a run uses 60% of its caps; *max* assumes every cap is used.
+
+    | Depth (caps) | Opus 5.5 expected | Opus 5.5 max | Fable 5.1 expected | Fable 5.1 max |
+    | --- | --- | --- | --- | --- |
+    | Light (6 searches, 8 fetches) | $1.04 | $1.48 | $2.45 | $3.42 |
+    | Standard (15 searches, 20 fetches) | $2.16 | $3.73 | $4.85 | $7.96 |
+    | Deep (30 searches, 40 fetches) | $4.61 | $8.84 | $9.64 | $17.23 |
+
+    The suggested per-run dollar cap is the max plus 25% (for example $4.67 for standard on Opus 5.5). **Measured** inputs come from the Phase 1.5 smoke test on Fable 5.1 (search, fetch and strict submit, two phases, $0.2003 in total; one search result adds about 6-7k tokens of context; cache reads occurred inside the loop and across phases). **Estimated, not measured:** the depth caps (a product choice), fetched page size (8k tokens), one extra request per tool call, 1.5k thinking tokens per request, a 14k-token final submit, 1.5k tokens of tool definitions, and the 60% typical share. The table is a rough guide until 7b records real costs.
+
 12. **(Post-MVP) Billing** — Stripe plans, checkout, credit balance sync per §3
 13. **(Post-MVP) Google/TikTok Ads, agency tier, team seats**
 
