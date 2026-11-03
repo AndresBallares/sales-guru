@@ -55,10 +55,11 @@ drafts problems, solutions, avatars and concepts for the owner to review and sav
   (API + Avatars tab); template renderer; `submit_research` Pydantic schema (strict check); cost estimate function;
   flag-gated endpoints `POST /businesses/{id}/research-runs/estimate`, `GET .../research-runs`, `GET .../{runId}`.
   No endpoint starts a run.
-- **7b:** background runner (see "Runner" below), phase messages, web search / fetch, `submit_research`, caps,
-  cancel, heartbeat, `POST` to start a run.
+- **7b (scope changed 2026-11-03, see "Plan change"):** background runner (see "Runner" below), phase messages, web
+  search / fetch, `submit_research`, caps, cancel, heartbeat, `POST` to start a run, **quote verification**,
+  per-business model access and monthly run limit, actual cost stored per run, readiness data in the estimate.
 - **7c:** review screen: owner edits and saves problems, solutions, avatars, concepts into the library.
-- **7d:** hardening: quote verification, retry on bad counts, cost reconciliation, e2e, rollout notes.
+- **7d:** hardening: retry on bad counts, cost reconciliation against real usage, e2e, rollout notes.
 
 ## Survey findings (2026-11-02)
 
@@ -120,3 +121,35 @@ two phases):
   edited, the renderer falls back to per-value wrapping.
 - **Throwaway Postgres** `sg_research_throwaway` dropped after the migration check.
 - **Open for 7b:** `industry` renders as the stored key (`FASHION_JEWELRY`); consider a readable label.
+
+## Plan change (2026-11-03)
+
+Decided with the user after the 7a merge (PR #138). Do not start 7b until the smoke-run results have been reviewed
+together.
+
+1. **Quote verification moves from 7d into 7b**, whatever the smoke run shows.
+2. **Per-business model access.** The default is `claude-opus-5-5` only. `claude-fable-5-1` is a premium extra the
+   owner of the app (not the business user) enables per business by hand; the setting is admin-only. The estimate and
+   start endpoints refuse a model the business may not use.
+3. **Per-business monthly run limit.** Default 1 per calendar month, admin-only to change. The estimate response
+   reports runs used and remaining.
+4. **Actual cost stored per run** (the counters and `costUsd` on the row, filled from real usage).
+5. **Readiness data in the estimate endpoint:** which template inputs are empty (key messages, customer problems,
+   competitors, product names, proof points, offer, mechanisms), so the screen can say what to fill in first.
+6. **Billing does not exist yet.** `BACKLOG.md` has an item for billing and plans that hooks into settings 2 and 3.
+7. **Template v2.** The "(each: name, URL, price, description, benefits, mechanism)" note moves onto the
+   "Top products:" line, above `{{products}}`. It is a new version file (`avatar_research_v2.md`, new hash); v1 stays
+   in the repo unchanged so a stored `promptVersion` and hash still point at a real file.
+
+## Smoke run plan (not started)
+
+Approved by the user with a **$2.00 cap** (the light-depth Opus max estimate is $1.48, too close to use as the cap).
+Throwaway script, `claude-opus-5-5`, light depth, VENZI's data, nothing in the app changes.
+
+- **Wait for the user's confirmation** that VENZI's key messages, customer problems, competitors and product names
+  are filled in the live app.
+- Then: `make backup-dev`; read those fields for VENZI from production via Render, **read-only**; show the user the
+  before/after; copy them into `dev.db` (the user approved this write, scoped to those fields); run the smoke test
+  on the dev data.
+- Report: real tokens and cost against the estimates; whether it hit 20/20/5; how many quotes were verbatim in the
+  fetched text or the search `cited_text`; and the full raw output.
