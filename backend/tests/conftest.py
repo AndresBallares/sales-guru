@@ -79,6 +79,7 @@ _ALL_TABLES = (
     "brandprofile",
     "buyeravatar",
     "brandrules",
+    "researchrun",
     "creativeround",
     "creative",
     "ad",

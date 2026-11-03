@@ -136,3 +136,38 @@ test('the Avatars tab passes the axe checks with an edit form open, and with a d
   ).toBeVisible()
   expect((await analyzeWhenReady(page, WCAG_TAGS)).violations).toEqual([])
 })
+
+test('adds ad concepts to an avatar, saves them, and the edit form with concepts passes axe', async ({
+  page,
+}) => {
+  const { url } = await businessWithAvatars(page)
+  await page.getByRole('tab', { name: 'Avatars' }).click()
+  await expect.poll(() => shownNames(page)).toEqual(NAMES)
+
+  await page.getByRole('button', { name: 'Edit The Promotion Ring Buyer' }).click()
+  const form = page.getByRole('form', { name: 'Edit The Promotion Ring Buyer' })
+  await form.getByRole('button', { name: 'Add concept' }).click()
+  await form.getByLabel('Concept 1 name').fill('Last-minute rescue')
+  await form.getByLabel('Concept 1 pillar').selectOption('offer')
+  await form.getByLabel('Concept 1 description').fill('Still time to give a gift that looks chosen')
+  expect((await analyzeWhenReady(page, WCAG_TAGS)).violations).toEqual([])
+
+  await form.getByRole('button', { name: 'Save changes' }).click()
+  await expect(form).toHaveCount(0)
+
+  const stored = (await (await page.request.get(url)).json()) as {
+    name: string
+    concepts: { slug: string; pillar: string; description: string }[]
+  }[]
+  expect(stored.find((a) => a.name === 'The Promotion Ring Buyer')?.concepts).toEqual([
+    {
+      slug: 'last-minute-rescue',
+      pillar: 'offer',
+      description: 'Still time to give a gift that looks chosen',
+    },
+  ])
+
+  // Opening it again shows the concept, with the slug read back as a name.
+  await page.getByRole('button', { name: 'Edit The Promotion Ring Buyer' }).click()
+  await expect(page.getByLabel('Concept 1 name')).toHaveValue('last minute rescue')
+})

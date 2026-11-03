@@ -6047,6 +6047,27 @@ main > section.campaigns-overview {
   margin-top: 0.75rem;
 }
 
+.concept-list {
+  display: grid;
+  gap: 0.5rem;
+  min-inline-size: 0;
+  padding: 0.75rem;
+  border: 1px solid var(--border-strong);
+  border-radius: 10px;
+}
+
+.concept-row {
+  display: grid;
+  grid-template-columns: 1fr 9rem 2fr auto;
+  gap: 0.5rem;
+}
+
+@media (max-width: 640px) {
+  .concept-row {
+    grid-template-columns: 1fr;
+  }
+}
+
 .avatar-confirm {
   min-inline-size: 0;
   margin-top: 0.75rem;

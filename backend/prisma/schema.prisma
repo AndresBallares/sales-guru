@@ -131,6 +131,7 @@ model Business {
   brandProfile                  BrandProfile?
   brandRules                    BrandRules?
   buyerAvatars                  BuyerAvatar[]
+  researchRuns                  ResearchRun[]
   products                      Product[]
   audiences                     Audience[]
   metaConnection                MetaConnection?
@@ -228,8 +229,55 @@ model BuyerAvatar {
   // Who the avatar buys for: "self" or "gift". The Strategist derives an angle's
   // fixed avatar (self_purchaser or gift_buyer) from it, so the two never disagree.
   purchaseFor     String   @default("self")
+  // Ad concepts for this avatar: a JSON array of {slug, pillar, description},
+  // at most 5 (app/schemas/buyer_avatar.py). "[]" when it has none.
+  concepts        String   @default("[]")
 
   @@index([businessId, sortOrder])
+}
+
+// One run of the Avatar Research Agent (Phase 7, docs/phase-7.md): the owner's
+// direct-response prompt filled with the business's saved data, researched on
+// the web, and drafted into problems, solutions, avatars and concepts for the
+// owner to review. status: QUEUED | RUNNING | NEEDS_REVIEW | FAILED | CANCELED;
+// depth: light | standard | deep. The run's state lives on this row (not in
+// memory) so a restart can be detected from a stale heartbeat. productIds and
+// extraCompetitorUrls are JSON-array strings; findings is a JSON object string
+// ("{}" until a run finishes). The counters and costUsd stay zero until 7b.
+model ResearchRun {
+  id                  String    @id @default(cuid())
+  business            Business  @relation(fields: [businessId], references: [id])
+  businessId          String
+  status              String    @default("QUEUED")
+  phase               String?
+  depth               String
+  model               String
+  maxSearches         Int
+  maxFetches          Int
+  maxCostUsd          Float
+  searchesUsed        Int       @default(0)
+  fetchesUsed         Int       @default(0)
+  inputTokens         Int       @default(0)
+  cacheWriteTokens    Int       @default(0)
+  cacheReadTokens     Int       @default(0)
+  outputTokens        Int       @default(0)
+  costUsd             Float     @default(0)
+  // Which template file filled the prompt, and a hash of its exact content.
+  promptVersion       String
+  promptHash          String
+  productIds          String    @default("[]")
+  extraCompetitorUrls String    @default("[]")
+  findings            String    @default("{}")
+  coverageNote        String?
+  error               String?
+  cancelRequested     Boolean   @default(false)
+  heartbeatAt         DateTime?
+  startedAt           DateTime?
+  finishedAt          DateTime?
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+
+  @@index([businessId, createdAt])
 }
 
 // Per-business copy rules, at most one row. Both lists are JSON-array strings.
@@ -250,7 +298,10 @@ model Product {
   business    Business       @relation(fields: [businessId], references: [id])
   businessId  String
   // A short label the owner types (up to 80 characters). Null until they do;
-  // screens then keep showing the description. Never sent to a prompt.
+  // screens then keep showing the description. Used by the Avatar Research
+  // template (app/services/research_template.py) but never sent to the
+  // Strategist or Creative prompts, so renaming a product never marks
+  // creatives stale.
   name        String?
   description String
   price       Float?

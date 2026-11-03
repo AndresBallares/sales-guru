@@ -20,6 +20,19 @@ avoid the difference arithmetic and show conversions on the day they were attrib
 needs a schema change (both Prisma schemas, both migrations, a throwaway-Postgres check)
 and a backfill, so it was left out on purpose.
 
+### Known flaky tests
+
+Record the exact test name here whenever a vitest or e2e test fails and then passes on a rerun.
+
+- `frontend/e2e/split-card.spec.ts:6` "shows a two-column card on desktop with a gold Generate
+  strategy button". Failed once on the first attempt of a full `CI=true npm run test:e2e` run
+  (2026-11-02) at line 34: `top.y + top.height` was not `<= panel.y + 1`, a layout measurement taken
+  before the card settled. It passed on Playwright's retry. Fix: wait for layout to settle
+  (for example `expect.poll` the bounding boxes) before measuring.
+- vitest: one test failed on the first of three `npm run test:coverage` runs (2026-11-02) and the
+  two reruns were clean. The failing test's name was not captured (the output was piped to `tail`),
+  so it is unknown. Next time, save the whole output to a file, per "Keep the e2e logs" below.
+
 ### Dashboard test: focus assertion is timing-sensitive
 `DashboardPage.test.tsx` › "selects the new business in the Brand picker when others
 already exist" failed once in CI on `expect(...).toHaveFocus()`: focus was on `<body>`

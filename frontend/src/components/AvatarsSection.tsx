@@ -6,11 +6,16 @@ import {
   reorderAvatars,
   updateAvatar,
   type BuyerAvatar,
+  type BuyerAvatarDraft,
+  type ConceptPillar,
   type PurchaseFor,
 } from '../lib/api'
 import {
   AVATAR_LIST_FIELDS,
+  CONCEPT_PILLARS,
   MAX_BUYER_AVATARS,
+  MAX_CONCEPTS,
+  conceptNameOf,
   linesOf,
   type AvatarListField,
 } from '../lib/avatarFields'
@@ -20,11 +25,18 @@ function message(error: unknown, fallback: string): string {
   return error instanceof ApiError || error instanceof Error ? error.message : fallback
 }
 
+interface ConceptRow {
+  name: string
+  pillar: ConceptPillar
+  description: string
+}
+
 interface Form {
   name: string
   who: string
   purchaseFor: PurchaseFor
   lists: Record<AvatarListField, string>
+  concepts: ConceptRow[]
 }
 
 function toForm(avatar: BuyerAvatar): Form {
@@ -35,6 +47,11 @@ function toForm(avatar: BuyerAvatar): Form {
     who: avatar.who,
     purchaseFor: avatar.purchaseFor,
     lists,
+    concepts: avatar.concepts.map((c) => ({
+      name: conceptNameOf(c.slug),
+      pillar: c.pillar,
+      description: c.description,
+    })),
   }
 }
 
@@ -45,7 +62,7 @@ function AvatarEditForm({
   onCancel,
 }: {
   avatar: BuyerAvatar
-  onSave: (changes: Partial<BuyerAvatar>) => Promise<void>
+  onSave: (changes: Partial<BuyerAvatarDraft>) => Promise<void>
   onCancel: () => void
 }) {
   const [form, setForm] = useState<Form>(() => toForm(avatar))
@@ -65,6 +82,14 @@ function AvatarEditForm({
         who: form.who.trim(),
         purchaseFor: form.purchaseFor,
         ...lists,
+        // A row left without a name or description is not a concept; leave it out.
+        concepts: form.concepts
+          .filter((c) => c.name.trim() !== '' && c.description.trim() !== '')
+          .map((c) => ({
+            name: c.name.trim(),
+            pillar: c.pillar,
+            description: c.description.trim(),
+          })),
       })
     } catch (e) {
       setError(message(e, 'Could not save the avatar'))
@@ -127,6 +152,67 @@ function AvatarEditForm({
         </div>
       ))}
       <p className="field-hint">One entry per line.</p>
+      <fieldset className="concept-list">
+        <legend>Ad concepts</legend>
+        {form.concepts.map((concept, index) => {
+          const n = index + 1
+          const update = (changes: Partial<ConceptRow>) =>
+            setForm({
+              ...form,
+              concepts: form.concepts.map((c, i) => (i === index ? { ...c, ...changes } : c)),
+            })
+          return (
+            <div className="concept-row" key={index}>
+              <input
+                aria-label={`Concept ${n} name`}
+                maxLength={60}
+                value={concept.name}
+                onChange={(event) => update({ name: event.target.value })}
+              />
+              <select
+                aria-label={`Concept ${n} pillar`}
+                value={concept.pillar}
+                onChange={(event) => update({ pillar: event.target.value as ConceptPillar })}
+              >
+                {CONCEPT_PILLARS.map((p) => (
+                  <option key={p.value} value={p.value}>
+                    {p.label}
+                  </option>
+                ))}
+              </select>
+              <input
+                aria-label={`Concept ${n} description`}
+                maxLength={200}
+                value={concept.description}
+                onChange={(event) => update({ description: event.target.value })}
+              />
+              <button
+                type="button"
+                className="btn-outline"
+                aria-label={`Remove concept ${n}`}
+                onClick={() =>
+                  setForm({ ...form, concepts: form.concepts.filter((_, i) => i !== index) })
+                }
+              >
+                Remove
+              </button>
+            </div>
+          )
+        })}
+        <button
+          type="button"
+          className="btn-outline"
+          disabled={form.concepts.length >= MAX_CONCEPTS}
+          onClick={() =>
+            setForm({
+              ...form,
+              concepts: [...form.concepts, { name: '', pillar: 'offer', description: '' }],
+            })
+          }
+        >
+          Add concept
+        </button>
+      </fieldset>
       {error && (
         <p className="form-error" role="alert">
           {error}
@@ -199,7 +285,7 @@ export function AvatarsSection({ businessId }: { businessId: string }) {
     setAvatars((current) => current?.map((a) => (a.id === updated.id ? updated : a)) ?? null)
   }
 
-  async function save(avatar: BuyerAvatar, changes: Partial<BuyerAvatar>) {
+  async function save(avatar: BuyerAvatar, changes: Partial<BuyerAvatarDraft>) {
     const updated = await updateAvatar(businessId, avatar.id, changes)
     replace(updated)
     setEditingId(null)

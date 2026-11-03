@@ -34,6 +34,7 @@ from app.schemas.buyer_avatar import (
     BuyerAvatarResponse,
     BuyerAvatarUpdateRequest,
     PurchaseFor,
+    concepts_from,
 )
 from app.services.avatar_import import AvatarImportError, generate_avatar_drafts
 
@@ -68,6 +69,7 @@ def _to_response(avatar: BuyerAvatar) -> BuyerAvatarResponse:
         purchase_for=cast(PurchaseFor, avatar.purchaseFor),
         is_active=avatar.isActive,
         sort_order=avatar.sortOrder,
+        concepts=json.loads(avatar.concepts),
         deleted_at=avatar.deletedAt,
         **lists,
     )
@@ -144,7 +146,14 @@ def _create_data(
     }
     for field, column in _LIST_COLUMNS.items():
         data[column] = json.dumps(getattr(payload, field))
+    data["concepts"] = _concepts_json(payload.concepts)
     return cast(BuyerAvatarCreateInput, data)
+
+
+def _concepts_json(concepts: Any) -> str:  # noqa: ANN401 — a list of ConceptInput
+    """The stored JSON of submitted concepts, slugs derived in code."""
+    normalised = concepts_from(concepts) or []
+    return json.dumps([c.model_dump() for c in normalised])
 
 
 @router.post("/import", response_model=AvatarImportResponse)
@@ -358,6 +367,8 @@ async def update_avatar(
             continue
         if field in _LIST_COLUMNS:
             data[_LIST_COLUMNS[field]] = json.dumps(value)
+        elif field == "concepts":
+            data["concepts"] = _concepts_json(payload.concepts)
         elif field == "purchase_for":
             data["purchaseFor"] = value
         elif field == "is_active":

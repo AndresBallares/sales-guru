@@ -11,17 +11,27 @@ Named BuyerAvatar because ``app.schemas.strategy.Avatar`` already means the two
 fixed buyers (self_purchaser, gift_buyer) that feed ad names and UTM parameters.
 """
 
+from collections.abc import Iterable, Mapping
 from datetime import datetime
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal
 
-from pydantic import Field, StringConstraints, ValidationInfo, field_validator
+from pydantic import (
+    Field,
+    StringConstraints,
+    TypeAdapter,
+    ValidationInfo,
+    field_validator,
+)
 
 from app.schemas.base import CamelCaseModel
+from app.services.creative_naming import avatar_slug, free_slug
 
 MAX_NAME_LENGTH = 60
 MAX_WHO_LENGTH = 600
 MAX_ITEM_LENGTH = 200
 MAX_BUYER_AVATARS_PER_BUSINESS = 12
+MAX_CONCEPTS = 5
+MAX_CONCEPT_DESCRIPTION_LENGTH = 200
 
 # Most entries each list may hold, by field. Hooks are 5-8 approved lines.
 MAX_ITEMS: dict[str, int] = {
@@ -37,6 +47,94 @@ MAX_ITEMS: dict[str, int] = {
 # Who the avatar buys for. The Strategist derives an angle's fixed avatar
 # (self_purchaser or gift_buyer) from this, so the two never disagree.
 PurchaseFor = Literal["self", "gift"]
+
+ConceptPillar = Literal["offer", "mechanism", "education", "emotion"]
+
+
+class AvatarConcept(CamelCaseModel):
+    """One ad concept for an avatar, as stored: a slug, its pillar and a line."""
+
+    slug: Annotated[str, StringConstraints(min_length=1, max_length=40)]
+    pillar: ConceptPillar
+    description: Annotated[
+        str,
+        StringConstraints(
+            strip_whitespace=True,
+            min_length=1,
+            max_length=MAX_CONCEPT_DESCRIPTION_LENGTH,
+        ),
+    ]
+
+
+_CONCEPT_ADAPTER = TypeAdapter(AvatarConcept)
+
+
+def normalise_concepts(items: Iterable[Mapping[str, Any]]) -> list[AvatarConcept]:
+    """Turn submitted concepts into stored ones: slugs derived, duplicates suffixed.
+
+    Each item carries a ``name`` (the slug is derived from it in code) or an
+    existing ``slug`` (kept as it is, re-cleaned), a ``pillar`` and a one-line
+    ``description``. A slug already used by an earlier concept gets "-2", "-3"...
+
+    Args:
+        items: The concepts as sent (a name or a slug, pillar, description).
+
+    Returns:
+        The concepts in order.
+
+    Raises:
+        ValueError: If there are more than MAX_CONCEPTS, or an item has neither
+            a name nor a slug.
+        pydantic.ValidationError: If a pillar or description is invalid.
+    """
+    listed = list(items)
+    if len(listed) > MAX_CONCEPTS:
+        raise ValueError(f"At most {MAX_CONCEPTS} concepts (got {len(listed)})")
+    taken: set[str] = set()
+    concepts: list[AvatarConcept] = []
+    for item in listed:
+        source = item.get("slug") or item.get("name")
+        if not isinstance(source, str) or not source.strip():
+            raise ValueError("Each concept needs a name")
+        slug = free_slug(avatar_slug(source), lambda candidate: candidate in taken)
+        taken.add(slug)
+        concepts.append(
+            _CONCEPT_ADAPTER.validate_python(
+                {
+                    "slug": slug,
+                    "pillar": item.get("pillar"),
+                    "description": item.get("description"),
+                }
+            )
+        )
+    return concepts
+
+
+class ConceptInput(CamelCaseModel):
+    """A concept as the owner submits it: a name (or the slug it already has)."""
+
+    name: str | None = Field(default=None, max_length=MAX_NAME_LENGTH)
+    slug: str | None = Field(default=None, max_length=40)
+    pillar: ConceptPillar
+    description: str = Field(max_length=MAX_CONCEPT_DESCRIPTION_LENGTH)
+
+
+def concepts_from(value: list[ConceptInput] | None) -> list[AvatarConcept] | None:
+    """Normalise submitted concepts (None stays None) for the stored form.
+
+    Raises:
+        ValueError: If there are too many, or one has no name.
+    """
+    if value is None:
+        return None
+    return normalise_concepts(c.model_dump() for c in value)
+
+
+def _check_concepts(value: list[ConceptInput] | None) -> list[ConceptInput] | None:
+    """Reject bad concepts at request validation (a 422), keeping them as sent."""
+    concepts_from(value)
+    return value
+
 
 _Name = Annotated[
     str,
@@ -94,6 +192,12 @@ class BuyerAvatarCreateRequest(CamelCaseModel):
     is_active: bool = True
     # None puts the avatar after the business's others.
     sort_order: int | None = None
+    concepts: list[ConceptInput] = Field(default_factory=list)
+
+    @field_validator("concepts")
+    @classmethod
+    def _check_concepts_field(cls, value: list[ConceptInput]) -> list[ConceptInput]:
+        return _check_concepts(value) or []
 
     @field_validator(*_LIST_FIELDS)
     @classmethod
@@ -121,6 +225,14 @@ class BuyerAvatarUpdateRequest(CamelCaseModel):
     purchase_for: PurchaseFor | None = None
     is_active: bool | None = None
     sort_order: int | None = None
+    concepts: list[ConceptInput] | None = None
+
+    @field_validator("concepts")
+    @classmethod
+    def _check_concepts_field(
+        cls, value: list[ConceptInput] | None
+    ) -> list[ConceptInput] | None:
+        return _check_concepts(value)
 
     @field_validator(*_LIST_FIELDS)
     @classmethod
@@ -158,5 +270,6 @@ class BuyerAvatarResponse(CamelCaseModel):
     purchase_for: PurchaseFor
     is_active: bool
     sort_order: int
+    concepts: list[AvatarConcept] = Field(default_factory=list)
     # Set once the avatar is deleted; old angles and results still resolve it.
     deleted_at: datetime | None = None
