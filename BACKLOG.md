@@ -5,6 +5,14 @@ item to the pull request that does it, and delete it here when that merges.
 
 ## Open
 
+### Billing and plans for the Avatar Research Agent
+Billing does not exist yet (PRD.md §3 and the post-MVP "Billing" step). When it is built, plans must hook
+into the two per-business settings the research agent adds in 7b (`docs/phase-7.md`, "Plan change"): the
+**model access** list (default `claude-opus-5-5` only; `claude-fable-5-1` is a premium extra) and the
+**monthly run limit** (default 1). Until then both are admin-only and set by hand per business. The plan work
+should also decide what a run costs a customer against the actual cost stored on each run, and what happens to
+a run that reaches its dollar cap.
+
 ### E2E seeding hook for per-ad metric history
 The common-window comparison (`docs/common-window.md`) shows a period label, a "Not compared"
 row and a window note on the dashboard, but the production build the e2e suite runs has no way
