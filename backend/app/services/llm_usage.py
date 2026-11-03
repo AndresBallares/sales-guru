@@ -33,6 +33,7 @@ CallType = Literal[
     "optimizer_eval",
     "test_eval",
     "research_smoke",
+    "research",
     "avatar_import",
 ]
 
@@ -75,8 +76,46 @@ async def create_logged(
     """
     started = time.monotonic()
     response = cast(Message, await client.messages.create(**create_kwargs))
-    latency_ms = int((time.monotonic() - started) * 1000)
+    log_usage(
+        response,
+        agent=agent,
+        call_type=call_type,
+        campaign_id=campaign_id,
+        attempt=attempt,
+        step=step,
+        model=create_kwargs.get("model", "unknown"),
+        started=started,
+    )
+    return response
 
+
+def log_usage(
+    response: object,
+    *,
+    agent: Agent,
+    call_type: CallType,
+    campaign_id: str | None,
+    attempt: int,
+    step: int,
+    model: str,
+    started: float,
+) -> None:
+    """Write the one ``llm_usage`` log line for a finished request.
+
+    Split out of ``create_logged`` so a streamed request (the research runner)
+    logs the identical line.
+
+    Args:
+        response: The finished message.
+        agent: Which agent is calling.
+        call_type: What kind of call this is.
+        campaign_id: The campaign the call is for, when there is one.
+        attempt: 1 for a first try, 2+ for a retry.
+        step: 1 for the first request of an exchange, 2+ for continuations.
+        model: The model id.
+        started: ``time.monotonic()`` when the request began.
+    """
+    latency_ms = int((time.monotonic() - started) * 1000)
     usage = getattr(response, "usage", None)
     details = getattr(usage, "output_tokens_details", None)
     server_tools = getattr(usage, "server_tool_use", None)
@@ -91,7 +130,7 @@ async def create_logged(
         campaign_id or "none",
         attempt,
         str(attempt > 1).lower(),
-        create_kwargs.get("model", "unknown"),
+        model,
         _count(getattr(usage, "input_tokens", 0)),
         _count(getattr(usage, "output_tokens", 0)),
         _count(getattr(details, "thinking_tokens", 0)),
@@ -103,4 +142,3 @@ async def create_logged(
         _count(getattr(server_tools, "web_fetch_requests", 0)),
         step,
     )
-    return response

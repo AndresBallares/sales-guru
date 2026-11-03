@@ -1,5 +1,6 @@
 """FastAPI application entrypoint."""
 
+import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
@@ -32,7 +33,9 @@ from app.core.config import get_settings
 from app.core.db import db
 from app.core.log_config import configure_logging
 from app.core.scheduler import start_scheduler, stop_scheduler
+from app.services.research_runner import sweep_stale_runs
 
+logger = logging.getLogger(__name__)
 settings = get_settings()
 configure_logging(settings.log_level)
 
@@ -49,6 +52,11 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         Control to the running application.
     """
     await db.connect()
+    if settings.avatar_research_enabled:
+        try:
+            await sweep_stale_runs()
+        except Exception:
+            logger.exception("Could not sweep stale research runs")
     if settings.enable_scheduler:
         start_scheduler()
     yield

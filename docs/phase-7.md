@@ -2,7 +2,7 @@
 
 Branch: `research-agent` (from `main` at `b20aeea`). Phases 1-6 and the common-window comparison are merged.
 
-Last updated: 2026-11-02.
+Last updated: 2026-11-03.
 
 ## Status
 
@@ -10,7 +10,8 @@ Last updated: 2026-11-02.
 | --- | --- |
 | Step 1: read-only survey and this plan | Done, reported to the user |
 | Template file `backend/app/prompts/avatar_research_v1.md` | Saved exactly as pasted (2026-11-02), 15 placeholders |
-| Step 2 (7a build) | Built and verified (backend 2773, frontend 1343, e2e 96 + 1 flaky); PR open, waiting for merge approval |
+| Step 2 (7a build) | Built, verified and merged (PR #138) |
+| Step 3 (7b build) | Built on branch `7b`; backend gates green (see "7b build notes"); **no PR yet, no paid run yet** |
 
 Rules: tests red first; FAKE_LLM for e2e; no paid calls; database writes only to test databases (ask before
 writing `dev.db`, after `make backup-dev`); ask before any commit, push, merge or database write; stop and
@@ -290,3 +291,110 @@ sources before a run is marked complete.
 
 Quote check with the 7b rule (runner fetches the URL itself): 16 quotes: 6 verified in the model's own fetch, 9 verified
 by the runner's fetch, 0 dropped, 1 unverified (Saks, 403). None over 14 words.
+
+## 7b build notes (2026-11-03)
+
+Branch `7b`. Backend only: the review screen and every other UI is 7c. Nothing here made a paid call.
+
+### Docs checked (platform.claude.com/docs/en/agents-and-tools/tool-use/, read 2026-11-03)
+
+`web-search-tool`, `web-fetch-tool`, `code-execution-tool`.
+
+- **Pricing.** Search is $10 per 1,000 and "if an error occurs during web search, the web search will not be billed".
+  Fetch has "no additional charges beyond standard token costs", but "failed fetches count against the limit"
+  (`max_uses`). **Code execution is free** with `web_search_20260209` / `web_fetch_20260209` or later ("there are no
+  additional charges for code execution in that request beyond standard token costs"); it is billed by time ($0.05
+  per hour after 1,550 free hours per organization) only without those tools. The API provisions the code execution
+  for dynamic filtering itself; it is not added to `tools`. So `UsageTotals` (tokens plus $0.01 per billed search) is
+  the whole bill and nothing else is added to the cost accounting. Run 2's Console usage page is still worth a look
+  once, to confirm.
+- **Errors.** Search and fetch errors come back inside a 200 as a `*_tool_result_error` block (`too_many_requests`,
+  `unavailable`, `url_not_accessible`, `max_uses_exceeded`, ...). `max_uses` is per request. Fetch only reads URLs that
+  already appeared in the conversation, so competitor URLs must be in the template message (they are).
+- **Newer versions exist** (`web_search_20260318`, `web_fetch_20260318`, `web_fetch_20260309`). `response_inclusion:
+  "excluded"` drops the nested search and fetch result blocks from the response ("reducing output token costs").
+  7b uses `_20260209` as decided; the newer version is a BACKLOG item for 7d. It would also remove the fetched text the
+  runner reads to verify quotes, so it needs a design decision, not a flag flip.
+- **Prompt cache order is tools, then system, then messages**, so a change to the `tools` array invalidates the whole
+  cache.
+
+### What was built
+
+| Brief item | Where |
+| --- | --- |
+| 1. Start a run, refusals | `POST /businesses/{id}/research-runs` (202), `app/api/research_run.py`, `research_runner.create_and_start`. 503 not configured, 403 model not enabled, 409 run in progress, 429 monthly limit; each with a plain message. Also `POST .../{runId}/cancel` (not in the brief; cancel needs a trigger). |
+| 2. Access and limits | `Business.allowedResearchModels` (default `["claude-opus-5-5"]`), `Business.researchRunsPerMonth` (default 1); `app/services/research_access.py`; run cost and usage stored on the row. |
+| 3. Runner | `app/services/research_runner.py`: in-process asyncio task, state on the row, 15 s heartbeat, cancel flag read before every request, `sweep_stale_runs` at startup and on every read or start. |
+| 4. Phases | (a) brand and competitor pages, (b) customer voice, (c) `submit_findings`, (d) `submit_avatars`; reserved budget; explicit `cache_control`; dollar cap and cancel checked between requests. |
+| 5. Search rate limits | `too_many_requests` / `unavailable` results trigger up to 3 retries with 5, 15, 45 s backoff and a fixed "continue" message; the wait counts against the time budget; errored searches are not billed so they never count against the cap; persistent failures go in the coverage note. Provider 429 / connection / 5xx errors get the same backoff, then fail the run. |
+| 6. Evidence level | `research_evidence.py`: distinct customer-voice pages (Reddit, forum, review, Q&A) from the runner's own observations; minimum 3 / 6 / 10 for light / standard / deep; `customerVoiceSources`, `evidenceLevel` (`OK`/`LOW`), `evidenceReason` on the row; a low-evidence run still completes. |
+| 7. Quote verification | `research_quotes.py` + `research_pages.py` (SSRF-guarded fetch): verified, dropped (item marked `inferred` if no quote is left), or kept `unverified`. Full page text is never stored. |
+| 8. Counts and phrases | One corrective request per submit naming the miss (counts, banned phrase, competitor name), then accept with a warning or drop the offending item with a warning. |
+| 9. Readiness | `readiness` in the estimate response (`keyMessages`, `customerProblems`, `competitors`, `productNames`, `productDescriptions`), plus `allowedModels`, `runsPerMonth`, `runsUsed`, `runsRemaining`. |
+| 10. Industry label | `Fashion / Jewelry` instead of `FASHION_JEWELRY` (a legacy free-form value is shown as stored). |
+| 11. Cost | Recalibrated to run 2 (below). |
+
+### Decisions taken (flagged for review)
+
+- **Access mechanism (the "simplest" asked for):** there is no admin role in the app. The two settings are columns with
+  no API route that writes them; the app owner sets them with `backend/scripts/research_access.py --business-id ID
+  [--models a,b] [--runs-per-month N] [--show]`, which prints the target database first. Admin-only by construction;
+  billing can later write the same columns. A test asserts no HTTP route changes them.
+- **What counts toward the monthly limit:** every run created this calendar month (UTC) except a canceled or failed run
+  that spent nothing. A failed run that spent money counts.
+- **Template v3 (decided 2026-11-03).** v2's last line asked for one `submit_research` call, which conflicts with the
+  two-submit design. `backend/app/prompts/avatar_research_v3.md` is v2 with only that last line changed, to "submit
+  using the tools as instructed in the phase messages" (sha256 `ca80805b01f17256f5bd29b12d1dc1288309ae9ee5be68c950887a3c8ee9ff82`). v1 and v2 stay as files, pinned by hash in
+  `tests/test_research_template.py` (v2: `f6edf44c...1b91`), so a stored `promptVersion` and hash still point at a real
+  file. The phase messages are `phases_v2` (the "override the last line" note that `phases_v1` needed is gone).
+- **Cache and the tools array.** `max_uses` lives in the tools block, so holding the customer-voice reserve means the
+  tools change once, between steps (a) and (b), which costs one cache re-write of the brand step's context. Steps (c)
+  and (d) send step (b)'s tools unchanged, with the search and fetch tools still present (the phase message tells the
+  model not to use them). The cost of the re-write is not yet measured; the paid run reports it.
+- **Search and fetch caps are enforced per request** by `max_uses` set to what is left, and the dollar cap by limiting
+  `max_tokens` to what the cap can pay for (a request that cannot afford 3,000 output tokens stops the run). The
+  research steps also stop early to leave room for the two submits, so a tight cap gives partial research and complete
+  findings rather than no findings.
+- **Competitor names** kept out of hooks, angles and concepts come from the competitor URLs' domains (`bulgari.com` ->
+  `bulgari`) plus the `competitor_terms` the model lists in `submit_findings` (brand and product-line names it saw).
+  Product lines cannot be read from a URL, so that part depends on the model listing them.
+- **Stale runs.** The sweep is heartbeat-based (2 minutes), not "mark everything running at startup", so a deploy that
+  overlaps two instances never kills the other one's live run. A restart is noticed within about two minutes, at the
+  next read or start.
+- **Known limit:** the quote fetch resolves a host for the SSRF check and the HTTP client resolves it again (the same
+  window `url_reachability` has). Pinning the resolved address is a BACKLOG item.
+
+### Cost estimate, recalibrated to smoke run 2
+
+The pricing function reproduces run 2 exactly (`$1.0028`: 52 fresh, 54,856 cache write, 684,355 cache read, 26,571
+output, 6 searches). The per-unit inputs (search and fetch result size, iterations per call, output per call, findings
+output) are fitted to run 2's totals, because only totals were measured; they are labeled estimates in the endpoint, and
+`tests/test_research_cost.py` holds the model to within 15% of run 2's cost and token mix. A full light run on Opus now
+estimates $1.00 against $1.0028 measured (before: $1.49).
+
+| Depth | Opus 5.5 expected / max / suggested cap | Fable 5.1 expected / max / suggested cap |
+| --- | --- | --- |
+| light | $0.80 / $1.00 / $1.26 | $1.86 / $2.24 / $2.81 |
+| standard | $1.32 / $2.09 / $2.61 | $2.83 / $4.17 / $5.22 |
+| deep | $2.54 / $4.78 / $5.98 | $4.92 / $8.49 / $10.61 |
+
+(Prompt of about 4,500 tokens. Standard and deep extrapolate the fitted per-call costs to larger caps; no run has been
+measured at those depths, so they stay estimates until the paid run.)
+
+### Tests
+
+Written red first, one file per concern: `test_research_text.py`, `_evidence.py`, `_filters.py`, `_pages.py`,
+`_quotes.py`, `_submit_schemas.py`, `_template_7b.py`, `_client.py`, `_runner.py` (the end-to-end behaviors through the
+API with a scripted client), `_start_api.py`, `_access_script.py`, `_cost.py`. `FAKE_LLM` plays a whole canned run
+built from the real Pydantic models (`research_fakes.py`). The runner tests cover caps, cancel, stale sweep, concurrent
+refusal, model not allowed, monthly limit, 429 retry and give-up, low-evidence marking, injected instructions in a fetched
+page, quote verified / dropped / unverified, banned phrases removed, `max_tokens` stops, no full page text persisted,
+and flag off returning 404. A few were mutation-checked (reserve, cap guard, heartbeat) to confirm they fail when the
+behavior is broken. The injection test also caught a real bug during the build: a quote absent from the model's own copy
+of a page was skipping the runner's fetch.
+
+### Migrations
+
+`20261103120000_add_research_access_and_evidence` for SQLite (checked with `prisma migrate diff`, no drift) and for
+Postgres (applied from scratch on the throwaway `sg_research_throwaway`, no drift, then dropped). **`dev.db` has not been
+migrated**; that is a database write and waits for the user (after `make backup-dev`).

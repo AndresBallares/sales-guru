@@ -65,7 +65,7 @@ def test_the_template_file_exists_where_the_loader_looks() -> None:
         Path(__file__).resolve().parent.parent
         / "app"
         / "prompts"
-        / "avatar_research_v2.md"
+        / "avatar_research_v3.md"
     ) == TEMPLATE_PATH
     assert TEMPLATE_PATH.is_file()
 
@@ -78,7 +78,7 @@ def test_every_placeholder_in_the_file_has_a_mapping_and_no_mapping_is_unused() 
 
 def test_version_and_hash_describe_the_file() -> None:
     rendered = render_template(_full())
-    assert rendered.version == TEMPLATE_VERSION == "avatar_research_v2"
+    assert rendered.version == TEMPLATE_VERSION == "avatar_research_v3"
     assert (
         rendered.content_hash == hashlib.sha256(TEMPLATE_PATH.read_bytes()).hexdigest()
     )
@@ -294,3 +294,27 @@ def test_v1_is_kept_unchanged_so_stored_hashes_still_point_at_a_real_file() -> N
         "aa659692286071012ea8d0fc29b9465e105cb0b68ced2289e45d0914f8499d43"
     )
     assert v1.read_bytes() != TEMPLATE_PATH.read_bytes()
+
+
+def test_v2_is_kept_unchanged_so_stored_hashes_still_point_at_a_real_file() -> None:
+    v2 = TEMPLATE_PATH.with_name("avatar_research_v2.md")
+
+    assert hashlib.sha256(v2.read_bytes()).hexdigest() == (
+        "f6edf44c38f4108c38e900d2b4f27e3f3d0fb7d43a8851700e9286ad71691b91"
+    )
+    assert v2.read_bytes() != TEMPLATE_PATH.read_bytes()
+
+
+def test_v3_differs_from_v2_only_in_the_last_line() -> None:
+    v2 = TEMPLATE_PATH.with_name("avatar_research_v2.md").read_text("utf-8")
+    v3 = TEMPLATE_PATH.read_text("utf-8")
+    v2_lines, v3_lines = v2.rstrip("\n").split("\n"), v3.rstrip("\n").split("\n")
+
+    assert v2_lines[:-1] == v3_lines[:-1]
+    assert "submit_research" in v2_lines[-1]
+    assert "submit_research" not in v3_lines[-1]
+    assert "submit using the tools as instructed in the phase messages" in v3_lines[-1]
+    assert v3_lines[-1].endswith(
+        "including a coverage note listing which sources you reached and which "
+        "you couldn't."
+    )

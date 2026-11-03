@@ -32,6 +32,8 @@ CONCEPTS_PER_AVATAR = (2, 3)
 MAX_QUOTE_WORDS = 14
 MAX_EXTRA_COMPETITOR_URLS = 5
 MAX_PRODUCT_CHOICES = 3
+# A typo guard on the dollar cap a caller may set for one run.
+MAX_COST_CAP_USD = 25.0
 
 Depth = Literal["light", "standard", "deep"]
 RunStatus = Literal["QUEUED", "RUNNING", "NEEDS_REVIEW", "FAILED", "CANCELED"]
@@ -131,6 +133,83 @@ class SubmitResearch(BaseModel):
     sources: list[ResearchSource]
 
 
+class SubmitFindings(BaseModel):
+    """The input of the ``submit_findings`` tool: problems, solutions and gaps.
+
+    The first of the two submits of a run (docs/phase-7.md, smoke run 2). Strict,
+    like ``SubmitResearch``: every field required, empty lists allowed.
+    """
+
+    problems: list[ResearchProblem]
+    solutions: list[ResearchSolution]
+    gaps: list[ResearchGap]
+    # Brand and product-line names seen on competitor pages; the runner keeps
+    # them out of hooks, angles and concepts (with the domain names it knows).
+    competitor_terms: list[str]
+
+
+class SubmitAvatars(BaseModel):
+    """The input of the ``submit_avatars`` tool: avatars, coverage note and sources.
+
+    The second submit. Not sent as strict (the API rejects two strict tools of
+    this size together: "the compiled grammar is too large"), so the runner
+    validates it with Pydantic and the lenient parse in ``research_parse``.
+    """
+
+    avatars: list[ResearchAvatar]
+    coverage_note: str
+    sources: list[ResearchSource]
+
+
+def findings_count_warnings(result: SubmitFindings) -> list[str]:
+    """Where the findings miss the fixed counts (20 problems, 20 solutions).
+
+    Args:
+        result: A parsed ``submit_findings`` call.
+
+    Returns:
+        One readable line per miss, e.g. "Expected 20 problems, got 18".
+    """
+    warnings: list[str] = []
+    for label, wanted, got in (
+        ("problems", PROBLEM_COUNT, len(result.problems)),
+        ("solutions", SOLUTION_COUNT, len(result.solutions)),
+    ):
+        if got != wanted:
+            warnings.append(f"Expected {wanted} {label}, got {got}")
+    return warnings
+
+
+def avatar_count_warnings(result: SubmitAvatars) -> list[str]:
+    """Where the avatars miss the fixed counts (avatars, hooks, angles, concepts).
+
+    Args:
+        result: A parsed ``submit_avatars`` call.
+
+    Returns:
+        One readable line per miss.
+    """
+    warnings: list[str] = []
+    if len(result.avatars) != AVATAR_COUNT:
+        warnings.append(f"Expected {AVATAR_COUNT} avatars, got {len(result.avatars)}")
+    low, high = CONCEPTS_PER_AVATAR
+    for avatar in result.avatars:
+        for label, wanted, got in (
+            ("hooks", HOOKS_PER_AVATAR, len(avatar.hooks)),
+            ("creative angles", ANGLES_PER_AVATAR, len(avatar.creative_angles)),
+        ):
+            if got != wanted:
+                warnings.append(
+                    f'Avatar "{avatar.name}": expected {wanted} {label}, got {got}'
+                )
+        if not low <= len(avatar.concepts) <= high:
+            warnings.append(
+                f'Avatar "{avatar.name}": expected {low}-{high} concepts, '
+                f"got {len(avatar.concepts)}"
+            )
+    return warnings
+
+
 def count_warnings(result: SubmitResearch) -> list[str]:
     """Where the result misses the fixed counts. Empty when it hits them all.
 
@@ -184,6 +263,21 @@ class CostEstimateRequest(CamelCaseModel):
         return value
 
 
+class StartRunRequest(CostEstimateRequest):
+    """POST .../research-runs: what to run, and the most it may spend."""
+
+    # Left out, the cap is the estimate's suggested cap for the depth and model.
+    max_cost_usd: float | None = Field(default=None, gt=0, le=MAX_COST_CAP_USD)
+
+
+class ReadinessItemResponse(CamelCaseModel):
+    """One input the run depends on and whether it is still empty."""
+
+    field: str
+    label: str
+    empty: bool
+
+
 class CostAssumption(CamelCaseModel):
     """One input of the estimate, flagged as measured or as an estimate."""
 
@@ -209,6 +303,13 @@ class CostEstimateResponse(CamelCaseModel):
     prompt_hash: str
     prompt_preview: str
     assumptions: list[CostAssumption]
+    # The business's research settings (set by the app owner) and this month's use.
+    allowed_models: list[str]
+    runs_per_month: int
+    runs_used: int
+    runs_remaining: int
+    # Which inputs are still empty, so the screen can say what to fill in first.
+    readiness: list[ReadinessItemResponse]
 
 
 class ResearchRunResponse(CamelCaseModel):
@@ -237,6 +338,12 @@ class ResearchRunResponse(CamelCaseModel):
     findings: dict[str, Any]
     coverage_note: str | None
     error: str | None
+    # Why the run ended early (cap, max_tokens, time, canceled, stale), if it did.
+    stop_reason: str | None
+    # Customer-voice pages reached, and OK / LOW with the reason when low.
+    customer_voice_sources: int
+    evidence_level: str | None
+    evidence_reason: str | None
     cancel_requested: bool
     heartbeat_at: datetime | None
     started_at: datetime | None

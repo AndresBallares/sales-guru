@@ -1,7 +1,7 @@
 """Renders the Avatar Research prompt template for one business (Phase 7a).
 
 The owner's direct-response strategist prompt lives in a versioned file
-(``app/prompts/avatar_research_v2.md``; v1 is kept unchanged) with
+(``app/prompts/avatar_research_v3.md``; v1 and v2 are kept unchanged) with
 ``{{placeholder}}`` slots. This module loads it at run time and fills each slot
 from the business's saved data:
 
@@ -20,19 +20,21 @@ import json
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import cast
 
 from prisma import Prisma
 from prisma.models import BrandProfile, Business, Product
 
 from app.core.db import db as default_db
 from app.schemas.brand_profile import PRICE_POSITIONING_LABELS
+from app.schemas.business import INDUSTRY_LABELS
 from app.services.prompt_safety import quarantine
 from app.services.url_validation import validate_destination_url
 
 TEMPLATE_PATH = (
-    Path(__file__).resolve().parent.parent / "prompts" / "avatar_research_v2.md"
+    Path(__file__).resolve().parent.parent / "prompts" / "avatar_research_v3.md"
 )
-TEMPLATE_VERSION = "avatar_research_v2"
+TEMPLATE_VERSION = "avatar_research_v3"
 
 NONE_PROVIDED = "none provided"
 MAX_PRODUCTS = 3
@@ -198,6 +200,59 @@ def _mechanisms(inputs: TemplateInputs) -> list[str]:
     return fallback
 
 
+_INDUSTRY_LABELS = cast("dict[str, str]", INDUSTRY_LABELS)
+
+
+def _industry_label(industry: str | None) -> str:
+    """The readable name of a stored industry; a legacy freeform value is kept as is."""
+    value = _clean(industry)
+    return _INDUSTRY_LABELS.get(value, value)
+
+
+@dataclass(frozen=True)
+class ReadinessItem:
+    """One input the run depends on, and whether the owner has filled it in."""
+
+    field: str
+    label: str
+    empty: bool
+
+
+def readiness(inputs: TemplateInputs) -> list[ReadinessItem]:
+    """Which template inputs are empty, so the screen can say what to fill in first.
+
+    Args:
+        inputs: The saved values for one business (and the chosen products).
+
+    Returns:
+        Key messages, customer problems, competitors, product names and product
+        descriptions, each flagged empty or not. A product check is empty when
+        there are no products or any chosen product lacks that field.
+    """
+    products = inputs.products[:MAX_PRODUCTS]
+    return [
+        ReadinessItem("key_messages", "Key messages", not inputs.key_messages),
+        ReadinessItem(
+            "customer_problems", "Customer problems", not inputs.customer_problems
+        ),
+        ReadinessItem(
+            "competitors",
+            "Competitors",
+            not competitor_urls(inputs.competitors_text, inputs.extra_competitor_urls),
+        ),
+        ReadinessItem(
+            "product_names",
+            "Product names",
+            not products or any(not _clean(p.name) for p in products),
+        ),
+        ReadinessItem(
+            "product_descriptions",
+            "Product descriptions",
+            not products or any(not _clean(p.description) for p in products),
+        ),
+    ]
+
+
 def _values(inputs: TemplateInputs) -> dict[str, str]:
     description = _clean(inputs.brand_description) or _clean(
         inputs.business_description
@@ -213,7 +268,7 @@ def _values(inputs: TemplateInputs) -> dict[str, str]:
     ]
     return {
         "brand_name": _wrap("Brand name", _clean(inputs.brand_name)),
-        "industry": _wrap("Industry", _clean(inputs.industry)),
+        "industry": _wrap("Industry", _industry_label(inputs.industry)),
         "website": _wrap("Website", _clean(inputs.website)),
         "brand_description": _wrap("About the brand", description),
         "price_positioning": _wrap("Price positioning", price),
@@ -259,7 +314,7 @@ def render_template(inputs: TemplateInputs) -> RenderedTemplate:
             part
             for part in (
                 _clean(inputs.brand_name),
-                _clean(inputs.industry),
+                _industry_label(inputs.industry),
                 _clean(inputs.website),
             )
             if part

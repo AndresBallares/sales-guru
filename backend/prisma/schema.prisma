@@ -132,6 +132,12 @@ model Business {
   brandRules                    BrandRules?
   buyerAvatars                  BuyerAvatar[]
   researchRuns                  ResearchRun[]
+  // Research access, set by hand by the app owner (never by the business user;
+  // backend/scripts/research_access.py). A JSON array of model ids the business
+  // may run research on, and how many runs it gets per calendar month (UTC).
+  // Billing will hook into both (BACKLOG.md).
+  allowedResearchModels String @default("[\"claude-opus-5-5\"]")
+  researchRunsPerMonth Int @default(1)
   products                      Product[]
   audiences                     Audience[]
   metaConnection                MetaConnection?
@@ -269,6 +275,14 @@ model ResearchRun {
   extraCompetitorUrls String    @default("[]")
   findings            String    @default("{}")
   coverageNote        String?
+  // Why the run ended before finishing everything, if it did: cap, max_tokens,
+  // time, canceled, stale. Null for a run that completed.
+  stopReason          String?
+  // Customer-voice sources reached (forum, Reddit, review, Q&A) and the level
+  // derived from them: OK or LOW, with the reason in evidenceReason.
+  customerVoiceSources Int      @default(0)
+  evidenceLevel       String?
+  evidenceReason      String?
   error               String?
   cancelRequested     Boolean   @default(false)
   heartbeatAt         DateTime?

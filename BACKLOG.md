@@ -21,6 +21,20 @@ into the two per-business settings the research agent adds in 7b (`docs/phase-7.
 should also decide what a run costs a customer against the actual cost stored on each run, and what happens to
 a run that reaches its dollar cap.
 
+### Research runner follow-ups (found in 7b)
+- **Newer web tool versions.** `web_search_20260318` / `web_fetch_20260318` accept `response_inclusion: "excluded"`, which
+  drops the nested result blocks from the response and "reduces output token costs". 7b uses `_20260209`. Using the
+  newer version also removes the fetched page text the runner compares quotes against, so quote verification would
+  rely on its own fetch for everything. Decide with measured numbers from the paid run.
+- **Pin the resolved address in the quote fetch.** `research_pages.fetch_page_text` checks that a host resolves to public
+  addresses, then the HTTP client resolves it again (the same window `url_reachability` has). Connect to the checked
+  address to close it.
+- **Cache re-write at the brand-to-customer-voice boundary.** The tools array changes there (`max_uses`), so the prompt
+  cache restarts. Measure the cost in the paid run; if it is large, hold the reserve another way (for example one
+  phase with an in-prompt budget and a per-request check).
+- **Customer-voice classifier.** `research_evidence.classify_source` recognizes Reddit, a fixed list of review and Q&A
+  hosts, and forum-looking hosts and paths. Review it against the sources a real run reaches.
+
 ### E2E seeding hook for per-ad metric history
 The common-window comparison (`docs/common-window.md`) shows a period label, a "Not compared"
 row and a window note on the dashboard, but the production build the e2e suite runs has no way
