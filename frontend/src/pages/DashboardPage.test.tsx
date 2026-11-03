@@ -799,8 +799,13 @@ describe('DashboardPage', () => {
     await user.selectOptions(screen.getByLabelText('Industry'), 'OTHER')
     await user.click(screen.getByRole('button', { name: 'Save Business' }))
 
-    expect(await screen.findByLabelText(/Brand overview/)).toHaveFocus()
-    expect(screen.getByLabelText('Business', { exact: true })).toHaveValue('biz-new')
+    // Focus moves in an effect once the new business's form has mounted, which can be a
+    // moment after the field first appears, so wait for it (finding the field is not enough),
+    // asking for the field again on every try.
+    await waitFor(() => expect(screen.getByLabelText(/Brand overview/)).toHaveFocus())
+    await waitFor(() =>
+      expect(screen.getByLabelText('Business', { exact: true })).toHaveValue('biz-new'),
+    )
     expect(mockedApi.getBrandProfile).toHaveBeenCalledWith('biz-new')
   })
 
