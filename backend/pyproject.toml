@@ -99,6 +99,9 @@ python-version = "3.12"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = [
+    "meta_helpers_under_test: the test exercises the real Meta HTTP helpers (with a fake httpx client), so conftest leaves them in place",
+]
 addopts = "--cov=app --cov-report=term-missing --cov-report=html --cov-fail-under=90"
 
 [tool.coverage.run]
