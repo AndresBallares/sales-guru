@@ -8,7 +8,7 @@ tool schema so the model sees them, and enforced again when its answer is read.
 
 from typing import Annotated
 
-from pydantic import BaseModel, Field, StringConstraints
+from pydantic import BaseModel, Field, StringConstraints, model_validator
 
 from app.schemas.base import CamelCaseModel
 from app.schemas.buyer_avatar import (
@@ -118,3 +118,24 @@ class BuyerAvatarBulkRequest(CamelCaseModel):
     avatars: list[BuyerAvatarCreateRequest] = Field(
         min_length=1, max_length=MAX_BUYER_AVATARS_PER_BUSINESS
     )
+    # Saving from a research run: the avatars record it and which draft of the run each
+    # one came from (research_draft_indexes, one per avatar, in the same order). The run
+    # stays open, so more drafts can be saved later. Left out, the endpoint behaves as
+    # it always did.
+    research_run_id: str | None = None
+    research_draft_indexes: list[Annotated[int, Field(ge=0)]] | None = None
+
+    @model_validator(mode="after")
+    def _indexes_match_the_run(self) -> "BuyerAvatarBulkRequest":
+        indexes = self.research_draft_indexes
+        if (self.research_run_id is None) != (indexes is None):
+            raise ValueError(
+                "researchRunId and researchDraftIndexes go together: send both "
+                "or neither"
+            )
+        if indexes is not None:
+            if len(indexes) != len(self.avatars):
+                raise ValueError("researchDraftIndexes needs one index per avatar")
+            if len(set(indexes)) != len(indexes):
+                raise ValueError("A draft can only be saved once per request")
+        return self

@@ -234,7 +234,14 @@ function AvatarEditForm({
 // inactive, in the order the Strategist sees them. Edit any field, switch an avatar off and
 // on, move it up or down, or delete it (a soft delete: ads and results that used it keep its
 // name, marked archived). The import from research lives here too.
-export function AvatarsSection({ businessId }: { businessId: string }) {
+export function AvatarsSection({
+  businessId,
+  focusAvatarId,
+}: {
+  businessId: string
+  // An avatar to scroll to and focus once the list is shown (a link from a research run).
+  focusAvatarId?: string | null
+}) {
   const [avatars, setAvatars] = useState<BuyerAvatar[] | null>(null)
   const [loadError, setLoadError] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -276,6 +283,17 @@ export function AvatarsSection({ businessId }: { businessId: string }) {
     // Applied once: a later change to the list must not pull focus back to this button.
     setFocusMove(null)
   }, [focusMove])
+
+  useEffect(() => {
+    if (!focusAvatarId || avatars === null) return
+    const target = listRef.current?.querySelector<HTMLElement>(
+      `[data-avatar-item="${focusAvatarId}"]`,
+    )
+    target?.scrollIntoView({ block: 'center' })
+    target?.focus()
+    // Only when the list first appears for this avatar, not on every later edit.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [focusAvatarId, avatars === null])
 
   useEffect(() => {
     if (confirmingId) cancelRef.current?.focus()
@@ -374,7 +392,13 @@ export function AvatarsSection({ businessId }: { businessId: string }) {
       {avatars !== null && avatars.length > 0 && (
         <ul className="avatar-list" aria-label="Buyer avatars" ref={listRef}>
           {avatars.map((avatar, index) => (
-            <li key={avatar.id} className="avatar-item" aria-label={avatar.name}>
+            <li
+              key={avatar.id}
+              className="avatar-item"
+              aria-label={avatar.name}
+              data-avatar-item={avatar.id}
+              tabIndex={-1}
+            >
               <div className="avatar-item-head">
                 <h3>{avatar.name}</h3>
                 <span className="avatar-badge">

@@ -47,6 +47,9 @@ export default defineConfig({
         // live model output. See playwright.real-llm.config.ts for the
         // opt-in, local-only spec that exercises the real thing.
         FAKE_LLM: 'true',
+        // The avatar research screens (Phase 7c). FAKE_LLM plays a canned run and exposes the
+        // test-only seed, so no spec makes a paid call.
+        AVATAR_RESEARCH_ENABLED: 'true',
       },
       reuseExistingServer: false,
       timeout: 30_000,

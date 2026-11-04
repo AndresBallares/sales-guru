@@ -8,12 +8,17 @@ warning, so it never reaches the review screen.
 
 import re
 from dataclasses import dataclass
+from functools import cache
+from pathlib import Path
 from urllib.parse import urlsplit
 
 from app.schemas.research import ResearchAvatar, ResearchConcept
 from app.services.research_text import normalize
 
 _MIN_DOMAIN_TERM = 4
+_COMMON_WORDS_PATH = (
+    Path(__file__).resolve().parent.parent / "data" / "common_words.txt"
+)
 # Second-level registries where the brand is the label before them (shop.x.co.uk).
 _REGISTRY_SECOND_LEVELS = {"co", "com", "org", "net", "gov", "ac"}
 
@@ -50,6 +55,38 @@ def competitor_terms_from_urls(urls: list[str]) -> list[str]:
         if len(brand) >= _MIN_DOMAIN_TERM and brand not in terms:
             terms.append(brand)
     return terms
+
+
+@cache
+def _common_words() -> frozenset[str]:
+    lines = _COMMON_WORDS_PATH.read_text(encoding="utf-8").splitlines()
+    return frozenset(
+        line.strip() for line in lines if line.strip() and not line.startswith("#")
+    )
+
+
+def split_ignored_terms(terms: list[str]) -> tuple[list[str], list[str]]:
+    """Separate terms worth filtering on from single common English words.
+
+    A single word such as "Spur" or "Spectrum" would remove a legitimate hook, so it
+    is ignored; brand names ("Cartier") and multi-word names ("Harwell Godfrey",
+    "Bulgari Serpenti") are kept.
+
+    Args:
+        terms: Banned phrases or competitor terms, in any case.
+
+    Returns:
+        The terms to apply and the terms ignored, each in the order given.
+    """
+    words = _common_words()
+    active: list[str] = []
+    ignored: list[str] = []
+    for term in terms:
+        single = len(term.split()) == 1
+        (ignored if single and term.strip().casefold() in words else active).append(
+            term
+        )
+    return active, ignored
 
 
 def terms_in(text: str, terms: list[str]) -> list[str]:

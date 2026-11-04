@@ -6124,3 +6124,106 @@ main > section.campaigns-overview {
 .impact-warning ul {
   padding-left: 1.1rem;
 }
+
+/* Avatar research (Phase 7c) */
+.research-group {
+  margin: 1rem 0;
+  padding: 0.75rem 1rem;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+}
+
+.research-group legend {
+  padding: 0 0.4rem;
+  font-weight: 600;
+}
+
+.research-choice {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.5rem;
+  margin: 0.4rem 0;
+}
+
+.research-choice label {
+  flex: 1 1 14rem;
+}
+
+.research-warning {
+  margin: 0.5rem 0;
+  padding: 0.6rem 0.8rem;
+  border: 2px solid var(--border-strong);
+  border-left-width: 6px;
+  border-radius: 8px;
+  font-weight: 500;
+}
+
+.research-evidence,
+.research-ready,
+.research-cost,
+.research-terms,
+.research-drafts,
+.research-entry {
+  margin: 1.25rem 0;
+}
+
+.research-block {
+  margin: 1.25rem 0;
+}
+
+.research-block summary h3 {
+  display: inline;
+}
+
+.research-list {
+  padding-left: 1.25rem;
+}
+
+.research-list li {
+  margin: 0.75rem 0;
+}
+
+.research-quote {
+  margin: 0.4rem 0 0.4rem 0.5rem;
+  padding-left: 0.75rem;
+  border-left: 3px solid var(--border-strong);
+}
+
+.research-terms-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  padding: 0;
+  list-style: none;
+}
+
+.research-counts {
+  padding-left: 1.25rem;
+}
+
+.research-concept {
+  margin: 0.75rem 0;
+  padding: 0.5rem 0.75rem;
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+}
+
+.research-runs {
+  width: 100%;
+  margin-top: 1rem;
+  border-collapse: collapse;
+}
+
+.research-runs caption {
+  margin-bottom: 0.4rem;
+  text-align: left;
+  font-weight: 600;
+}
+
+.research-runs th,
+.research-runs td {
+  padding: 0.4rem 0.5rem;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+}

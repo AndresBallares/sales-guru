@@ -70,6 +70,28 @@ function item(name: string) {
   return within(screen.getByRole('listitem', { name: new RegExp(`^${name}`) }))
 }
 
+describe('AvatarsSection focusing an avatar', () => {
+  beforeEach(() => vi.resetAllMocks())
+
+  it('scrolls to and focuses the avatar it is pointed at (a link from a research run)', async () => {
+    mockedApi.listAvatars.mockResolvedValue([promo, gift, off])
+    const scroll = vi.fn<() => void>()
+    Element.prototype.scrollIntoView = scroll
+    render(<AvatarsSection businessId="biz-1" focusAvatarId="a2" />)
+    const li = await screen.findByRole('listitem', { name: /^The Deadline Gift-Giver/ })
+    await waitFor(() => expect(li).toHaveFocus())
+    expect(scroll).toHaveBeenCalled()
+  })
+
+  it('does nothing special when the avatar is no longer in the library', async () => {
+    mockedApi.listAvatars.mockResolvedValue([promo])
+    Element.prototype.scrollIntoView = vi.fn<() => void>()
+    render(<AvatarsSection businessId="biz-1" focusAvatarId="gone" />)
+    await screen.findByRole('list', { name: 'Buyer avatars' })
+    expect(screen.getByRole('listitem', { name: /^The Promotion Ring Buyer/ })).not.toHaveFocus()
+  })
+})
+
 describe('AvatarsSection', () => {
   beforeEach(() => {
     vi.resetAllMocks()

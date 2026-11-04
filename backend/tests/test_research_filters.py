@@ -79,3 +79,62 @@ def test_drop_violations_removes_items_and_warns() -> None:
     assert len(warnings) == 1
     assert "serpenti" in warnings[0].lower()
     assert "A" in warnings[0]
+
+
+# --- common English words (7c) ----------------------------------------------------
+
+
+def test_single_common_words_are_ignored_and_brand_names_kept() -> None:
+    from app.services.research_filters import split_ignored_terms
+
+    active, ignored = split_ignored_terms(
+        [
+            "Spur",
+            "Spectrum",
+            "Feelings",
+            "Foundrae",
+            "Harwell Godfrey",
+            "Bulgari Serpenti",
+            "Cartier",
+            "Tiffany",
+            "Chanel",
+            "Verdura",
+            "David Yurman",
+            "bulgari",
+            "Love bracelet",
+        ]
+    )
+    assert ignored == ["Spur", "Spectrum", "Feelings"]
+    assert active == [
+        "Foundrae",
+        "Harwell Godfrey",
+        "Bulgari Serpenti",
+        "Cartier",
+        "Tiffany",
+        "Chanel",
+        "Verdura",
+        "David Yurman",
+        "bulgari",
+        "Love bracelet",
+    ]
+
+
+def test_the_common_word_check_ignores_case_and_surrounding_space() -> None:
+    from app.services.research_filters import split_ignored_terms
+
+    assert split_ignored_terms([" SPUR ", "spur"])[1] == [" SPUR ", "spur"]
+
+
+def test_a_multi_word_term_is_never_ignored_even_if_each_word_is_common() -> None:
+    from app.services.research_filters import split_ignored_terms
+
+    assert split_ignored_terms(["Free Shipping"])[0] == ["Free Shipping"]
+
+
+def test_the_runner_filters_common_words_from_the_terms_it_applies() -> None:
+    from app.services.research_filters import split_ignored_terms
+
+    banned = ["free shipping"]
+    active, _ = split_ignored_terms(["Spur", "Rivalring"])
+    avatar = _avatar(hooks=["Spur your day", "h2", "h3", "h4", "h5"])
+    assert find_violations([avatar], [*banned, *active]) == []

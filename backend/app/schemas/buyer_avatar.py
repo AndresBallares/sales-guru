@@ -273,3 +273,5 @@ class BuyerAvatarResponse(CamelCaseModel):
     concepts: list[AvatarConcept] = Field(default_factory=list)
     # Set once the avatar is deleted; old angles and results still resolve it.
     deleted_at: datetime | None = None
+    # The research run it was saved from, if any (docs/phase-7.md, 7c).
+    source_run_id: str | None = None

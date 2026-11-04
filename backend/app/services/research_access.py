@@ -116,7 +116,7 @@ async def runs_used_this_month(
     return sum(
         1
         for r in runs
-        if r.status in ("QUEUED", "RUNNING", "NEEDS_REVIEW")
+        if r.status in ("QUEUED", "RUNNING", "NEEDS_REVIEW", "REVIEWED", "DISCARDED")
         or (r.status == "CANCELED" and r.costUsd > 0)
     )
 

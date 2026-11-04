@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { BackButton } from '../components/BackButton'
-import { AvatarsSection } from '../components/AvatarsSection'
+import { AvatarsTab } from '../components/AvatarsTab'
 import { BusinessTabs } from '../components/BusinessTabs'
 import { AudiencesSection } from '../components/AudiencesSection'
 import { BrandRequiredNotice } from '../components/BrandRequiredNotice'
@@ -314,7 +314,10 @@ export function BusinessDetailPage() {
             {
               id: AVATARS_TAB,
               label: 'Avatars',
-              content: <AvatarsSection businessId={businessId} />,
+              // Stays mounted when you look at another tab, so a research review in
+              // progress (checked avatars, edits) is not thrown away.
+              keepMounted: true,
+              content: <AvatarsTab businessId={businessId} />,
             },
             {
               id: PRODUCTS_TAB,
