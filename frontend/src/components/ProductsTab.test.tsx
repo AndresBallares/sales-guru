@@ -11,6 +11,7 @@ vi.mock('../lib/api', async (importOriginal) => {
     listProducts: vi.fn<typeof actual.listProducts>(),
     createProduct: vi.fn<typeof actual.createProduct>(),
     updateProduct: vi.fn<typeof actual.updateProduct>(),
+    deleteProduct: vi.fn<typeof actual.deleteProduct>(),
     listProductImages: vi.fn<typeof actual.listProductImages>(),
     getProductEditImpact: vi.fn<typeof actual.getProductEditImpact>(),
   }
@@ -149,5 +150,111 @@ describe('ProductsTab', () => {
     await waitFor(() => expect(screen.getByLabelText('What do you sell?')).toHaveValue(''))
     expect(screen.getByLabelText(/Product name/)).toHaveValue('')
     expect(screen.getByLabelText(/Mechanism/)).toHaveValue('')
+  })
+
+  describe('deleting a product', () => {
+    it('offers Delete on every row, named after the product', async () => {
+      render(<ProductsTab businessId="biz-1" />)
+
+      expect(await screen.findByRole('button', { name: 'Delete Emerald Coil' })).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: 'Delete Triangle band' })).toBeInTheDocument()
+    })
+
+    it('asks first, and Keep it changes nothing and returns focus to Delete', async () => {
+      const user = userEvent.setup()
+      render(<ProductsTab businessId="biz-1" />)
+
+      await user.click(await screen.findByRole('button', { name: 'Delete Emerald Coil' }))
+
+      const confirm = screen.getByRole('group', { name: 'Confirm deleting Emerald Coil' })
+      expect(confirm).toHaveTextContent('Delete Emerald Coil and all its photos and videos?')
+      expect(confirm).toHaveTextContent("can't be undone")
+      expect(mockedApi.deleteProduct).not.toHaveBeenCalled()
+      await user.click(within(confirm).getByRole('button', { name: 'Keep it' }))
+      expect(screen.queryByRole('group', { name: /Confirm deleting/ })).not.toBeInTheDocument()
+      expect(screen.getByRole('button', { name: 'Delete Emerald Coil' })).toHaveFocus()
+      expect(mockedApi.deleteProduct).not.toHaveBeenCalled()
+    })
+
+    it('deletes after Yes, reloads the list and moves focus to the Products heading', async () => {
+      mockedApi.deleteProduct.mockResolvedValue(undefined)
+      const onProductsChange = vi.fn<(products: api.Product[]) => void>()
+      const user = userEvent.setup()
+      render(<ProductsTab businessId="biz-1" onProductsChange={onProductsChange} />)
+      await user.click(await screen.findByRole('button', { name: 'Delete Emerald Coil' }))
+      mockedApi.listProducts.mockResolvedValue([unnamed])
+
+      await user.click(screen.getByRole('button', { name: 'Yes, delete' }))
+
+      await waitFor(() => expect(screen.queryByText('Emerald Coil')).not.toBeInTheDocument())
+      expect(mockedApi.deleteProduct).toHaveBeenCalledExactlyOnceWith('biz-1', 'prod-1')
+      expect(screen.getByText('Triangle band')).toBeInTheDocument()
+      expect(onProductsChange).toHaveBeenLastCalledWith([unnamed])
+      await waitFor(() =>
+        expect(screen.getByRole('heading', { name: 'Products', level: 2 })).toHaveFocus(),
+      )
+    })
+
+    it('sends one request when Yes is clicked twice', async () => {
+      let finish: () => void = () => undefined
+      mockedApi.deleteProduct.mockReturnValue(new Promise((resolve) => (finish = () => resolve())))
+      const user = userEvent.setup()
+      render(<ProductsTab businessId="biz-1" />)
+      await user.click(await screen.findByRole('button', { name: 'Delete Emerald Coil' }))
+
+      await user.click(screen.getByRole('button', { name: 'Yes, delete' }))
+      const busy = screen.getByRole('button', { name: 'Deleting…' })
+      expect(busy).toBeDisabled()
+      await user.click(busy)
+
+      expect(mockedApi.deleteProduct).toHaveBeenCalledTimes(1)
+      mockedApi.listProducts.mockResolvedValue([unnamed])
+      finish()
+      await waitFor(() => expect(screen.queryByText('Emerald Coil')).not.toBeInTheDocument())
+    })
+
+    it('shows why a product used by a campaign cannot be deleted and keeps it', async () => {
+      mockedApi.deleteProduct.mockRejectedValue(
+        new api.ApiError(409, 'This product is used by 1 campaign: Snake-Ring (LIVE). Change the product on each of them first, then delete it.'),
+      )
+      const user = userEvent.setup()
+      render(<ProductsTab businessId="biz-1" />)
+      await user.click(await screen.findByRole('button', { name: 'Delete Emerald Coil' }))
+
+      await user.click(screen.getByRole('button', { name: 'Yes, delete' }))
+
+      const alert = await screen.findByRole('alert')
+      expect(alert).toHaveTextContent('Snake-Ring (LIVE)')
+      expect(alert).toHaveFocus()
+      expect(screen.getByText('Emerald Coil')).toBeInTheDocument()
+      expect(screen.queryByRole('group', { name: /Confirm deleting/ })).not.toBeInTheDocument()
+      expect(screen.getByRole('button', { name: 'Delete Emerald Coil' })).toBeEnabled()
+      expect(mockedApi.listProducts).toHaveBeenCalledTimes(1)
+    })
+
+    it('falls back to a plain message for any other failure', async () => {
+      mockedApi.deleteProduct.mockRejectedValue(new Error('network'))
+      const user = userEvent.setup()
+      render(<ProductsTab businessId="biz-1" />)
+      await user.click(await screen.findByRole('button', { name: 'Delete Triangle band' }))
+
+      await user.click(screen.getByRole('button', { name: 'Yes, delete' }))
+
+      expect(await screen.findByRole('alert')).toHaveTextContent(
+        'Could not delete this product. Try again.',
+      )
+      expect(screen.getByText('Triangle band')).toBeInTheDocument()
+    })
+
+    it('asks about one product at a time', async () => {
+      const user = userEvent.setup()
+      render(<ProductsTab businessId="biz-1" />)
+      await user.click(await screen.findByRole('button', { name: 'Delete Emerald Coil' }))
+
+      await user.click(screen.getByRole('button', { name: 'Delete Triangle band' }))
+
+      expect(screen.getAllByRole('group', { name: /Confirm deleting/ })).toHaveLength(1)
+      expect(screen.getByRole('group', { name: 'Confirm deleting Triangle band' })).toBeInTheDocument()
+    })
   })
 })

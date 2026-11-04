@@ -33,6 +33,34 @@ vi.mock('../lib/media', async (importOriginal) => {
   return { ...actual, readVideoInfo: vi.fn<typeof actual.readVideoInfo>() }
 })
 
+interface PublishPolls {
+  hold: boolean
+  held: (() => void)[]
+  sleep: () => Promise<void>
+  release: () => void
+  reset: () => void
+}
+
+// The pause between two publish status checks. By default it is a real, tiny pause. A test that
+// needs to look at an in-between status sets `hold`: every pause then waits until the test calls
+// `release`, so the status on screen stays put (no timing involved) until the test is done with it.
+const publishPolls = vi.hoisted<PublishPolls>(() => {
+  const polls: PublishPolls = {
+    hold: false,
+    held: [],
+    sleep: () =>
+      polls.hold
+        ? new Promise<void>((resolve) => polls.held.push(resolve))
+        : new Promise<void>((resolve) => setTimeout(resolve, 30)),
+    release: () => polls.held.shift()?.(),
+    reset: () => {
+      polls.hold = false
+      polls.held.length = 0
+    },
+  }
+  return polls
+})
+
 // The publish job is polled every two seconds in the app; tests poll immediately.
 vi.mock('../lib/publishJob', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../lib/publishJob')>()
@@ -43,8 +71,7 @@ vi.mock('../lib/publishJob', async (importOriginal) => {
     ) =>
       actual.waitForPublishJob(businessId, campaignId, onStatus, {
         intervalMs: 0,
-        // A real (tiny) pause, so each in-between status is on screen long enough to see.
-        sleep: () => new Promise((resolve) => setTimeout(resolve, 30)),
+        sleep: () => publishPolls.sleep(),
         ...options,
       }),
   }
@@ -426,6 +453,7 @@ const ALL_OPTIONS: api.OptionsResponse = {
 
 beforeEach(() => {
   window.sessionStorage.clear()
+  publishPolls.reset()
   vi.resetAllMocks()
   mockedApi.getOptions.mockResolvedValue(ALL_OPTIONS)
   mockedApi.getBusiness.mockResolvedValue({
@@ -5921,13 +5949,22 @@ describe('CampaignsSection video ads and the creative test format', () => {
           elapsedSeconds: 12,
         })
         .mockResolvedValueOnce({ state: 'DONE' })
+      // Each pause between status checks waits for the test, so every status stays on screen
+      // until the assertions on it have run.
+      publishPolls.hold = true
       const user = userEvent.setup()
 
       renderCampaigns(<CampaignsSection businessId="biz-1" />)
       await user.click(await screen.findByRole('button', { name: 'Approve & Publish' }))
 
+      expect(await screen.findByText(/Uploading video…/)).toBeInTheDocument()
+      await waitFor(() => expect(publishPolls.held).toHaveLength(1))
+      publishPolls.release()
       expect(await screen.findByText(/Processing video… 40%/)).toBeInTheDocument()
       expect(screen.getByRole('button', { name: /Processing video… 40%/ })).toBeDisabled()
+      expect(mockedApi.getPublishStatus).toHaveBeenCalledTimes(2)
+      await waitFor(() => expect(publishPolls.held).toHaveLength(1))
+      publishPolls.release()
       await waitFor(() => expect(mockedApi.getPublishStatus).toHaveBeenCalledTimes(3))
       await waitFor(() =>
         expect(screen.queryByText(/Processing video/)).not.toBeInTheDocument(),

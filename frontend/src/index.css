@@ -6087,8 +6087,16 @@ main > section.campaigns-overview {
 
 .products-list-item {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 0.75rem;
+}
+
+/* The delete question and any refusal take a full row under the product. */
+.products-list-item .products-delete-confirm,
+.products-list-item .form-error {
+  flex-basis: 100%;
+  margin: 0;
 }
 
 .products-list-text {

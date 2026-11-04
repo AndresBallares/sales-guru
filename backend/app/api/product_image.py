@@ -18,7 +18,11 @@ from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile, stat
 from fastapi.responses import Response
 from prisma import Base64
 from prisma.models import Product, ProductImage
-from prisma.types import CreativeCardWhereInput, CreativeWhereInput
+from prisma.types import (
+    CreativeCardWhereInput,
+    CreativeWhereInput,
+    ProductImageWhereInput,
+)
 
 from app.core.authz import get_owned_product
 from app.core.config import get_settings
@@ -110,19 +114,36 @@ async def get_primary_image(product_id: str) -> ProductImage | None:
 
 
 async def get_primary_image_url(product_id: str) -> str | None:
-    """The URL of a product's primary photo (position 0), if it has one.
+    """The image shown as a product's thumbnail: its primary photo, else a video's.
 
-    Used by app/api/product.py's ProductResponse.primary_image_url and by
-    app/api/creative.py's own primary-photo auto-attach.
+    Used by app/api/product.py's ProductResponse.primary_image_url, which every
+    product thumbnail in the app reads. A product with no photo falls back to the
+    thumbnail of its first video (lowest position) so a video-only product is not
+    blank. The creative auto-attach does not use this: it needs a real photo and
+    calls get_primary_image, which never returns a video.
 
     Args:
         product_id: The product to look up.
 
     Returns:
-        The primary photo's public URL, or None if it has no photos yet.
+        The primary photo's public URL, else the first video's thumbnail URL, or
+        None if it has neither (or its videos have no stored thumbnail).
     """
     image = await get_primary_image(product_id)
-    return product_image_url(image.id) if image is not None else None
+    if image is not None:
+        return product_image_url(image.id)
+    video_filter: ProductImageWhereInput = {
+        "productId": product_id,
+        "mediaType": "VIDEO",
+        # Videos stored before thumbnails were required have none. The content type is
+        # set together with the bytes at upload (the bytes column cannot be filtered
+        # in the typed client).
+        "NOT": [{"thumbnailContentType": None}],
+    }
+    video = await db.productimage.find_first(
+        where=video_filter, order={"position": "asc"}
+    )
+    return product_thumbnail_url(video.id) if video is not None else None
 
 
 def _to_response(

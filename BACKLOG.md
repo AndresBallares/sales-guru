@@ -66,11 +66,24 @@ and a backfill, so it was left out on purpose.
 
 Record the exact test name here whenever a vitest or e2e test fails and then passes on a rerun.
 
+- `frontend/e2e/axe-ready.spec.ts:21` "analyzeWhenReady waits for the page to render before running axe". Failed once on the
+  first attempt of a full `CI=true npm run test:e2e` run on the Products delete branch (2026-11-04) at line 23
+  (`expect(locator).toBeVisible()`: element not found, the page had not rendered yet) and passed on Playwright's retry
+  (104 passed, 1 flaky). The spec's own comment records an earlier failure under load (2026-10-31). Full output:
+  `e2e-delete.log` in the session scratchpad. Fix: have the test wait for the element it checks with the same patience as
+  the helper it tests, instead of a fixed first-load window.
 - `frontend/e2e/split-card.spec.ts:6` "shows a two-column card on desktop with a gold Generate
   strategy button". Failed once on the first attempt of a full `CI=true npm run test:e2e` run
   (2026-11-02) at line 34: `top.y + top.height` was not `<= panel.y + 1`, a layout measurement taken
   before the card settled. It passed on Playwright's retry. Fix: wait for layout to settle
   (for example `expect.poll` the bounding boxes) before measuring.
+- vitest: `src/components/CampaignsSection.test.tsx` > "CampaignsSection video ads and the creative test format" >
+  "publishing a video ad" > "shows the processing step while the background publish runs, then finishes" failed once in
+  CI (PR #149, 2026-11-04, `frontend-ci`) at the `findByText(/Processing video… 40%/)` line and passed on the rerun and in
+  3 of 3 local runs. Cause: the test replaced the 2-second publish poll with a real 30 ms pause, so the in-between status was
+  on screen for 30 ms and a loaded runner could miss it (with a 0 ms pause it fails 5 of 5). Fixed in the Products delete PR:
+  the pause is a gate the test controls (`publishPolls.hold` / `release`), so the status stays up until the test has checked
+  it; the file ran 20 times in a row with no failure. Full CI output: `ci149-frontend-fail.log` in the session scratchpad.
 - vitest: `src/components/ResearchRunView.test.tsx` > "after the run" > "shows a reviewed run with the avatars it
   produced" failed once in the first full `npm run test:coverage` run (2026-11-04) and passed alone and on two reruns.
   Cause: it read the saved-avatars list right after the heading, but the names load a moment later. Fixed in 7c by
@@ -83,6 +96,22 @@ Record the exact test name here whenever a vitest or e2e test fails and then pas
 - vitest: one test failed on the first of three `npm run test:coverage` runs (2026-11-02) and the
   two reruns were clean. The failing test's name was not captured (the output was piped to `tail`),
   so it is unknown. Next time, save the whole output to a file, per "Keep the e2e logs" below.
+
+### Sweep the other tests that can pass or fail on timing
+Found while fixing the video-publish flake (a test-only PR after the Products delete PR). Same pattern: a state that is on
+screen for a moment, or an effect that has not run when the assertion does. Fix each with a controlled gate (the
+`publishPolls` approach in `CampaignsSection.test.tsx`) or `waitFor`, never a longer timeout, and run each changed file 20
+times.
+- **Real 30 ms poll pause:** `CampaignsSection.test.tsx` (the 70% progress test and any other test that reads an in-between
+  publish status), `AdPreviewPage.test.tsx` (line 18 and the status chain near line 1126), `CreativeRoundsPanel.test.tsx`
+  (the Processing/Uploading chain near line 197). Confirm `publishJob.test.ts` (instant sleep, asserts its own outputs).
+- **Focus asserted right after an async render** (the two flakes already fixed had this shape): `ResearchStart.test.tsx:258`,
+  `ResearchReview.test.tsx:247` and `:590`, `AvatarsSection.test.tsx:350` and `:402`, `DashboardPage.test.tsx:767`. The
+  keyboard-driven focus checks (`BusinessTabs`, `CampaignCard`, `PhotoList`) run synchronously after user-event and are fine.
+- **First-load timing in e2e:** `frontend/e2e/axe-ready.spec.ts:21` ("analyzeWhenReady waits for the page to render before
+  running axe"; flaky once on the Products delete branch, listed under Known flaky tests).
+- **Timers in source that tests may race:** `ResearchRunView` (3-second poll), `ResearchStart`, `CreativeRoundsPanel`,
+  `PreviewDetailsPanel`, `PhotoList`, `lib/media.ts`.
 
 ### Commit hooks take about 16 minutes: use a faster pre-commit set
 The pre-commit pytest hook runs every test file related to the staged files. A change to
