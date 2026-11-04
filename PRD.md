@@ -32,9 +32,9 @@ The MVP is this end-to-end flow, in order. Each step is a fully working componen
 
 ## 3. Plans (post-MVP monetization target)
 
-| Plan | Monthly | Annual | Credits | Campaigns/mo | Businesses | Notes |
+| Plan | Monthly | Annual (per month, billed yearly) | Credits | Campaigns/mo | Businesses | Notes |
 |---|---|---|---|---|---|---|
-| PRO | $90 | $49 | 400 (≈15 standard images) | 8+ | 1 | Strategy AI, ad-gen AI, auto-optimizer |
+| PRO | $90 | $75 ($900/year) | 400 (≈15 standard images) | 8+ | 1 | Strategy AI, ad-gen AI, auto-optimizer |
 | BUSINESS | $119 | $99 | 3180 (≈30 ultra-HD or 138 basic images) | 30 | 3 | + priority AI speed, comparative data |
 | AGENCY | — | — | — | — | — | Future — multi-client agency tier, not in MVP |
 
