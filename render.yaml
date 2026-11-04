@@ -103,6 +103,12 @@ services:
         sync: false
       - key: ANTHROPIC_API_KEY
         sync: false
+      # Avatar Research Agent (PRD 11a). Declared with sync: false so a Blueprint sync
+      # never turns it on or off; the owner sets it in the Render dashboard
+      # (value: true) after the launch checklist in docs/phase-7.md. Unset = off,
+      # and every research route answers 404.
+      - key: AVATAR_RESEARCH_ENABLED
+        sync: false
       - key: META_APP_ID
         sync: false
       - key: META_APP_SECRET
