@@ -59,6 +59,7 @@ from app.services.research_filters import (
     competitor_terms_from_urls,
     drop_violations,
     find_violations,
+    split_ignored_terms,
 )
 from app.services.research_pages import fetch_page_text
 from app.services.research_parse import salvage_avatars, salvage_findings
@@ -160,15 +161,15 @@ class _Stop(Exception):  # noqa: N818 - control flow, not an error
         self.message = message
 
 
-def _camel(value: Any) -> Any:  # noqa: ANN401
+def camel_keys(value: Any) -> Any:  # noqa: ANN401
     """Rename every dict key to camelCase, recursively (the stored findings' style)."""
     if isinstance(value, dict):
         return {
-            re.sub(r"_([a-z])", lambda m: m.group(1).upper(), k): _camel(v)
+            re.sub(r"_([a-z])", lambda m: m.group(1).upper(), k): camel_keys(v)
             for k, v in value.items()
         }
     if isinstance(value, list):
-        return [_camel(v) for v in value]
+        return [camel_keys(v) for v in value]
     return value
 
 
@@ -667,7 +668,10 @@ class _Run:
         return not truncated
 
     def banned_and_competitor_terms(self) -> list[str]:
-        return _dedupe([*self.inputs.banned_phrases, *self.competitor_terms])
+        # Single common English words are ignored (the stored list keeps them, so the
+        # owner can see what was ignored on the review screen).
+        competitors, _ = split_ignored_terms(self.competitor_terms)
+        return _dedupe([*self.inputs.banned_phrases, *competitors])
 
     def competitor_url_list(self) -> list[str]:
         return competitor_urls(
@@ -726,7 +730,7 @@ class _Run:
                 for p in (findings.problems if findings else [])
             ]
         avatars = self.avatars
-        snapshot: dict[str, Any] = _camel(
+        snapshot: dict[str, Any] = camel_keys(
             {
                 "problems": problems,
                 "solutions": [s.model_dump() for s in findings.solutions]

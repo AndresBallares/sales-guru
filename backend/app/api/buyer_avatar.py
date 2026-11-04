@@ -11,6 +11,7 @@ from datetime import UTC, datetime
 from typing import Any, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
+from prisma.errors import UniqueViolationError
 from prisma.models import Business, BuyerAvatar
 from prisma.types import (
     BuyerAvatarCreateInput,
@@ -71,6 +72,7 @@ def _to_response(avatar: BuyerAvatar) -> BuyerAvatarResponse:
         sort_order=avatar.sortOrder,
         concepts=json.loads(avatar.concepts),
         deleted_at=avatar.deletedAt,
+        source_run_id=avatar.sourceRunId,
         **lists,
     )
 
@@ -197,6 +199,18 @@ async def import_avatars(
     return AvatarImportResponse(drafts=result.drafts, warnings=warnings)
 
 
+async def _already_saved_drafts(run_id: str, indexes: list[int]) -> set[int]:
+    """The drafts among ``indexes`` that already have a library avatar from this run."""
+    saved = await db.buyeravatar.find_many(
+        where={
+            "sourceRunId": run_id,
+            "sourceDraftIndex": {"in": indexes},
+            "deletedAt": None,
+        }
+    )
+    return {a.sourceDraftIndex for a in saved if a.sourceDraftIndex is not None}
+
+
 @router.post(
     "/bulk",
     response_model=list[BuyerAvatarResponse],
@@ -219,6 +233,40 @@ async def bulk_create_avatars(
     Raises:
         HTTPException: 409 if they would not all fit under the library's limit.
     """
+    run_id = payload.research_run_id
+    draft_indexes = payload.research_draft_indexes
+    if run_id is not None:
+        assert draft_indexes is not None  # the request model guarantees both or neither
+        run = await db.researchrun.find_first(
+            where={"id": run_id, "businessId": business.id}
+        )
+        if run is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="Research run not found"
+            )
+        if run.status != "NEEDS_REVIEW":
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    "This research is finished, so no more avatars can be saved from it"
+                    if run.status in ("REVIEWED", "DISCARDED")
+                    else "This research run is not ready to review"
+                ),
+            )
+        drafts = len(json.loads(run.findings or "{}").get("avatars", []))
+        if any(index >= drafts for index in draft_indexes):
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail="One of these drafts is not part of this research",
+            )
+        if await _already_saved_drafts(run_id, draft_indexes):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    "One of these drafts was already saved to your library. "
+                    "Reload the research to see which."
+                ),
+            )
     existing = await db.buyeravatar.find_many(
         where={"businessId": business.id, "deletedAt": None}
     )
@@ -241,15 +289,24 @@ async def bulk_create_avatars(
                 item.sort_order if item.sort_order is not None else next_order + n,
             ),
             "id": ids[n],
+            "sourceRunId": run_id,
+            "sourceDraftIndex": draft_indexes[n] if draft_indexes else None,
         }
         for n, item in enumerate(payload.avatars)
     ]
     # One batch is a single write that commits or fails as a whole. An interactive
     # transaction held open across these reads and writes expired whenever SQLite
     # was busy (a full e2e run), and its commit then failed with a 500.
-    async with db.batch_() as batcher:
-        for row in rows:
-            batcher.buyeravatar.create(data=cast(BuyerAvatarCreateInput, row))
+    try:
+        async with db.batch_() as batcher:
+            for row in rows:
+                batcher.buyeravatar.create(data=cast(BuyerAvatarCreateInput, row))
+    except UniqueViolationError as exc:
+        # Two overlapping requests saved the same draft: the database let one through.
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="One of these drafts was already saved to your library.",
+        ) from exc
     created = await db.buyeravatar.find_many(where={"id": {"in": ids}})
     by_id = {a.id: a for a in created}
     return [_to_response(by_id[avatar_id]) for avatar_id in ids]
@@ -404,7 +461,10 @@ async def delete_avatar(
         An empty 204.
     """
     avatar = await _find_avatar(business, avatar_id)
+    # A deleted avatar frees the research draft it came from, so that draft can be
+    # saved again (sourceRunId stays, so the avatar still says where it came from).
     await db.buyeravatar.update(
-        where={"id": avatar.id}, data={"deletedAt": datetime.now(UTC)}
+        where={"id": avatar.id},
+        data={"deletedAt": datetime.now(UTC), "sourceDraftIndex": None},
     )
     return Response(status_code=status.HTTP_204_NO_CONTENT)

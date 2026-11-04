@@ -1865,6 +1865,8 @@ export interface BuyerAvatar extends BuyerAvatarDraft {
   isActive: boolean
   sortOrder: number
   deletedAt: string | null
+  // The research run it was saved from, if any.
+  sourceRunId?: string | null
 }
 
 export interface AvatarImportResult {
@@ -1883,10 +1885,18 @@ export function importAvatars(businessId: string, document: string): Promise<Ava
 export function bulkCreateAvatars(
   businessId: string,
   avatars: BuyerAvatarDraft[],
+  // Saving from a research run: each avatar records which draft of the run it came from
+  // (draftIndexes, one per avatar, same order), so a draft can only be saved once. The
+  // run stays open for more.
+  research?: { runId: string; draftIndexes: number[] },
 ): Promise<BuyerAvatar[]> {
   return request<BuyerAvatar[]>(`/businesses/${businessId}/avatars/bulk`, {
     method: 'POST',
-    body: JSON.stringify({ avatars }),
+    body: JSON.stringify(
+      research
+        ? { avatars, researchRunId: research.runId, researchDraftIndexes: research.draftIndexes }
+        : { avatars },
+    ),
   })
 }
 
@@ -1915,5 +1925,198 @@ export function reorderAvatars(businessId: string, ids: string[]): Promise<Buyer
   return request<BuyerAvatar[]>(`/businesses/${businessId}/avatars/reorder`, {
     method: 'POST',
     body: JSON.stringify({ ids }),
+  })
+}
+
+// Avatar research (Phase 7, docs/phase-7.md). Every route is a 404 while the feature is
+// off, so a 404 from listResearchRuns means "hide the feature".
+export type ResearchDepth = 'light' | 'standard' | 'deep'
+export type ResearchModel = 'claude-opus-5-5' | 'claude-fable-5-1'
+export type ResearchStatus =
+  | 'QUEUED'
+  | 'RUNNING'
+  | 'NEEDS_REVIEW'
+  | 'REVIEWED'
+  | 'DISCARDED'
+  | 'FAILED'
+  | 'CANCELED'
+
+export interface ResearchEvidenceItem {
+  kind: 'quote' | 'inference'
+  text: string
+  sourceUrl: string
+  // Quotes only: checked against the page (verified) or kept without being able to check.
+  status?: 'verified' | 'unverified' | null
+}
+
+export interface ResearchProblem {
+  number: number
+  problem: string
+  evidence: ResearchEvidenceItem[]
+  inferred: boolean
+}
+
+export interface ResearchSolution {
+  number: number
+  solution: string
+  problemNumbers: number[]
+  mechanism: string
+  inferred: boolean
+}
+
+export interface ResearchGap {
+  need: string
+  problemNumbers: number[]
+}
+
+export interface ResearchConceptDraft {
+  name: string
+  pillar: ConceptPillar
+  description: string
+}
+
+export interface ResearchAvatarDraft {
+  name: string
+  who: string
+  purchaseFor: PurchaseFor
+  primaryProblems: number[]
+  unknownProblems: string[]
+  primarySolutions: number[]
+  alternatives: string[]
+  objections: string[]
+  hooks: string[]
+  creativeAngles: string[]
+  concepts: ResearchConceptDraft[]
+  inferred: boolean
+}
+
+export interface ResearchSourceRef {
+  url: string
+  title: string
+  reached: boolean
+}
+
+// What a finished (or partly finished) run stored. Every part may be missing on a run
+// that stopped early.
+export interface ResearchFindings {
+  problems?: ResearchProblem[]
+  solutions?: ResearchSolution[]
+  gaps?: ResearchGap[]
+  avatars?: ResearchAvatarDraft[]
+  sources?: ResearchSourceRef[]
+  competitorTerms?: string[]
+  droppedQuotes?: { problem: number; text: string; sourceUrl: string; reason: string }[]
+  warnings?: string[]
+  quotes?: { verified: number; unverified: number; dropped: number }
+  partial?: boolean
+}
+
+export interface ResearchRun {
+  id: string
+  businessId: string
+  status: ResearchStatus
+  phase: string | null
+  depth: ResearchDepth
+  model: string
+  maxSearches: number
+  maxFetches: number
+  maxCostUsd: number
+  searchesUsed: number
+  fetchesUsed: number
+  costUsd: number
+  findings: ResearchFindings
+  coverageNote: string | null
+  error: string | null
+  stopReason: string | null
+  customerVoiceSources: number
+  customerVoiceMinimum: number
+  evidenceLevel: 'OK' | 'LOW' | null
+  evidenceReason: string | null
+  competitorTerms: string[]
+  ignoredCompetitorTerms: string[]
+  savedAvatarIds: string[]
+  // Which draft of the run each saved avatar came from.
+  savedDrafts: { draftIndex: number; avatarId: string }[]
+  reviewedAt: string | null
+  cancelRequested: boolean
+  startedAt: string | null
+  finishedAt: string | null
+  createdAt: string
+}
+
+export interface ResearchReadinessItem {
+  field: string
+  label: string
+  empty: boolean
+}
+
+export interface ResearchEstimate {
+  depth: ResearchDepth
+  model: ResearchModel
+  maxSearches: number
+  maxFetches: number
+  expectedUsd: number
+  maxUsd: number
+  suggestedMaxCostUsd: number
+  allowedModels: string[]
+  runsPerMonth: number
+  runsUsed: number
+  runsRemaining: number
+  readiness: ResearchReadinessItem[]
+}
+
+export interface ResearchRunInput {
+  depth: ResearchDepth
+  model: ResearchModel
+  productIds?: string[]
+  competitorUrls: string[]
+}
+
+export function listResearchRuns(businessId: string): Promise<ResearchRun[]> {
+  return request<ResearchRun[]>(`/businesses/${businessId}/research-runs`)
+}
+
+export function getResearchRun(businessId: string, runId: string): Promise<ResearchRun> {
+  return request<ResearchRun>(`/businesses/${businessId}/research-runs/${runId}`)
+}
+
+export function estimateResearchRun(
+  businessId: string,
+  input: ResearchRunInput,
+): Promise<ResearchEstimate> {
+  return request<ResearchEstimate>(`/businesses/${businessId}/research-runs/estimate`, {
+    method: 'POST',
+    body: JSON.stringify(input),
+  })
+}
+
+export function startResearchRun(businessId: string, input: ResearchRunInput): Promise<ResearchRun> {
+  return request<ResearchRun>(`/businesses/${businessId}/research-runs`, {
+    method: 'POST',
+    body: JSON.stringify(input),
+  })
+}
+
+export function cancelResearchRun(businessId: string, runId: string): Promise<ResearchRun> {
+  return request<ResearchRun>(`/businesses/${businessId}/research-runs/${runId}/cancel`, {
+    method: 'POST',
+  })
+}
+
+export function markResearchRunDone(businessId: string, runId: string): Promise<ResearchRun> {
+  return request<ResearchRun>(`/businesses/${businessId}/research-runs/${runId}/done`, {
+    method: 'POST',
+  })
+}
+
+export function reopenResearchRun(businessId: string, runId: string): Promise<ResearchRun> {
+  return request<ResearchRun>(`/businesses/${businessId}/research-runs/${runId}/reopen`, {
+    method: 'POST',
+  })
+}
+
+export function discardResearchRun(businessId: string, runId: string): Promise<ResearchRun> {
+  return request<ResearchRun>(`/businesses/${businessId}/research-runs/${runId}/discard`, {
+    method: 'POST',
   })
 }

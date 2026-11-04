@@ -238,8 +238,20 @@ model BuyerAvatar {
   // Ad concepts for this avatar: a JSON array of {slug, pillar, description},
   // at most 5 (app/schemas/buyer_avatar.py). "[]" when it has none.
   concepts        String   @default("[]")
+  // The research run this avatar was saved from (docs/phase-7.md, 7c); null for one
+  // added by hand or by import. A plain id, not a relation, so deleting an avatar or a
+  // run never touches the other.
+  sourceRunId     String?
+  // Which draft of that run this avatar was saved from: the position in the run's
+  // avatar drafts (0 is the first). With sourceRunId it makes a draft savable once; the
+  // database refuses a second row for the same draft, even from two overlapping
+  // requests. Cleared when the avatar is deleted, so that draft can be saved again.
+  // Null for avatars not saved from a run (and any saved before this column existed).
+  sourceDraftIndex Int?
 
   @@index([businessId, sortOrder])
+  @@index([sourceRunId])
+  @@unique([sourceRunId, sourceDraftIndex])
 }
 
 // One run of the Avatar Research Agent (Phase 7, docs/phase-7.md): the owner's
@@ -290,6 +302,9 @@ model ResearchRun {
   finishedAt          DateTime?
   createdAt           DateTime  @default(now())
   updatedAt           DateTime  @updatedAt
+  // When the owner saved avatars from this run or discarded it (status REVIEWED or
+  // DISCARDED); null until then.
+  reviewedAt          DateTime?
 
   @@index([businessId, createdAt])
 }

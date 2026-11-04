@@ -24,13 +24,28 @@ a run that reaches its dollar cap.
 - **Cache re-write at the brand-to-customer-voice boundary.** The tools array changes there (`max_uses`), so the prompt
   cache restarts. Measure the cost in the paid run; if it is large, hold the reserve another way (for example one
   phase with an in-prompt budget and a per-request check).
-- **Competitor-term filtering.** The terms kept out of hooks, angles and concepts (`research_filters`) are the competitor
+- **Competitor-term filtering (built in 7c, `Phase7c` branch; delete when it merges).** The terms kept out of hooks, angles and concepts (`research_filters`) are the competitor
   domains' names plus the model's `competitor_terms` list. The list is long (50 entries in the second paid run) and can
   hold single common English words ("Spur"), which would remove a legitimate hook. Ignore single common English words,
   and keep brand names and multi-word names (for example "Harwell Godfrey", "Bulgari Serpenti"). Also let the owner view
   and edit the list on the 7c review screen, so a wrong term can be removed and a missing one added.
 - **Customer-voice classifier.** `research_evidence.classify_source` recognizes Reddit, a fixed list of review and Q&A
   hosts, and forum-looking hosts and paths. Review it against the sources a real run reaches.
+
+### Research review follow-ups (found in 7c)
+- **Keep review edits across a refresh.** Checkbox choices, avatar edits and the term list live in the browser only; the
+  unsaved-edit warning is the only protection, and it cannot see the browser Back button. Store the draft per run (for
+  example in `localStorage`) and offer to restore it.
+- **Review the common-word list** (`backend/app/data/common_words.txt`) against the terms real runs produce; a brand name
+  that is also a common word would be ignored.
+
+### Object storage for product images (S3/R2)
+Product photos and videos are stored as bytes in Postgres (`ProductImage.data`, "Option A", 2026-09-02). They survive
+deploys (checked read-only 2026-11-04: VENZI has 43 media rows, about 23 MB, and every photo URL tested returned 200),
+but each image request reads a whole database row and the database is small (1 GB disk). When media volume or customer
+count grows, move the bytes to object storage (S3 or R2) and keep `/product-images/{id}` as the public URL (Meta fetches
+it), either redirecting or proxying. It needs a new service and credentials, so confirm with the user before building,
+and plan a backfill from the existing rows.
 
 ### E2E seeding hook for per-ad metric history
 The common-window comparison (`docs/common-window.md`) shows a period label, a "Not compared"
@@ -56,6 +71,15 @@ Record the exact test name here whenever a vitest or e2e test fails and then pas
   (2026-11-02) at line 34: `top.y + top.height` was not `<= panel.y + 1`, a layout measurement taken
   before the card settled. It passed on Playwright's retry. Fix: wait for layout to settle
   (for example `expect.poll` the bounding boxes) before measuring.
+- vitest: `src/components/ResearchRunView.test.tsx` > "after the run" > "shows a reviewed run with the avatars it
+  produced" failed once in the first full `npm run test:coverage` run (2026-11-04) and passed alone and on two reruns.
+  Cause: it read the saved-avatars list right after the heading, but the names load a moment later. Fixed in 7c by
+  waiting for the list (`findByRole`). Full output of the failing run: `frontend-vitest-run1-flake.log` in the session
+  scratchpad.
+- vitest: `src/components/ResearchRunView.test.tsx` > "progress" > "moves focus to the heading" failed once in the
+  pre-commit run of the 7c commit (2026-11-04; the same file passed in the earlier full run) with `toHaveFocus()` receiving
+  `<body>`. Cause: it read focus the moment the heading appeared, before the effect that focuses it ran. Fixed in 7c by
+  waiting for focus (`waitFor`). Full output: `precommit-vitest-focus-flake.log` in the session scratchpad.
 - vitest: one test failed on the first of three `npm run test:coverage` runs (2026-11-02) and the
   two reruns were clean. The failing test's name was not captured (the output was piped to `tail`),
   so it is unknown. Next time, save the whole output to a file, per "Keep the e2e logs" below.

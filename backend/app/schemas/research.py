@@ -36,7 +36,9 @@ MAX_PRODUCT_CHOICES = 3
 MAX_COST_CAP_USD = 25.0
 
 Depth = Literal["light", "standard", "deep"]
-RunStatus = Literal["QUEUED", "RUNNING", "NEEDS_REVIEW", "FAILED", "CANCELED"]
+RunStatus = Literal[
+    "QUEUED", "RUNNING", "NEEDS_REVIEW", "REVIEWED", "DISCARDED", "FAILED", "CANCELED"
+]
 ResearchModel = Literal["claude-opus-5-5", "claude-fable-5-1"]
 
 
@@ -312,6 +314,13 @@ class CostEstimateResponse(CamelCaseModel):
     readiness: list[ReadinessItemResponse]
 
 
+class SavedDraft(CamelCaseModel):
+    """One draft of a run that is now an avatar in the library."""
+
+    draft_index: int
+    avatar_id: str
+
+
 class ResearchRunResponse(CamelCaseModel):
     """A stored research run."""
 
@@ -342,8 +351,19 @@ class ResearchRunResponse(CamelCaseModel):
     stop_reason: str | None
     # Customer-voice pages reached, and OK / LOW with the reason when low.
     customer_voice_sources: int
+    # Customer-voice sources a run of this depth needs (research_evidence).
+    customer_voice_minimum: int
     evidence_level: str | None
     evidence_reason: str | None
+    # Competitor terms that filter hooks, angles and concepts, and the single common
+    # words ignored (research_filters.split_ignored_terms). Read from the findings.
+    competitor_terms: list[str]
+    ignored_competitor_terms: list[str]
+    # The avatars saved from this run (BuyerAvatar.sourceRunId), once reviewed.
+    saved_avatar_ids: list[str]
+    # Which draft each saved avatar came from, so the review screen can mark it "Saved".
+    saved_drafts: list[SavedDraft]
+    reviewed_at: datetime | None
     cancel_requested: bool
     heartbeat_at: datetime | None
     started_at: datetime | None

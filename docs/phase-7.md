@@ -12,6 +12,7 @@ Last updated: 2026-11-03.
 | Template file `backend/app/prompts/avatar_research_v1.md` | Saved exactly as pasted (2026-11-02), 15 placeholders |
 | Step 2 (7a build) | Built, verified and merged (PR #138) |
 | Step 3 (7b build) | Built on branch `7b`; backend gates green (see "7b build notes"); **no PR yet, no paid run yet** |
+| Step 4 (7c research screens) | Plan approved 2026-11-03; **built and all gates green on branch `Phase7c` (see "7c build notes"); owner's manual re-test passed 2026-11-04; PR opened** |
 
 Rules: tests red first; FAKE_LLM for e2e; no paid calls; database writes only to test databases (ask before
 writing `dev.db`, after `make backup-dev`); ask before any commit, push, merge or database write; stop and
@@ -281,7 +282,7 @@ can see what was removed. Also checked in code: at most 14 words, no username, a
 
 ## Launch checklist (before enabling research in production)
 
-- [ ] **Rename the Serpenti product before enabling research in production.** The final name is **"Emerald Coil"**
+- [x] **Rename the Serpenti product before enabling research in production.** *Done 2026-11-04: production product `cmvzqszw20004kpk1mk5slpnn` reads "Emerald Coil" and its mechanism is complete (351 characters, ends on a full sentence, no bracket numbers), checked read-only.* The final name is **"Emerald Coil"**
   (decided 2026-11-03; Serpenti is Bulgari's trademarked line). The user will rename "Serpenti" to "Emerald Coil" once the
   product edit screen exists. The dev product `cmvv83tim0006rb6n931w80o4` was renamed from "Emerald Serpent Ring" to "Emerald
   Coil" on 2026-11-03 (after `make backup-dev`).
@@ -497,3 +498,213 @@ library.
   (and the copy that mentions the ring) predate "Emerald Coil". The three avatars the user plans to add through the 7c
   review screen (Plain-Gold Loyalist, Next-Chapter Right-Hand Buyer, Mother Passing It Forward) stay in the saved findings
   file, which is kept; nothing was saved to the avatar library.
+
+## 7c plan (2026-11-03, branch `Phase7c`; read-only survey, nothing built)
+
+### Launch-checklist check (read-only, production, 2026-11-03)
+
+Product `cmvzqszw20004kpk1mk5slpnn` is named **"Emerald Coil"** (updated 2026-11-03 22:54 UTC), but its mechanism is **not
+complete**: exactly 300 characters, ending mid-word ("...the money goes into gold and ston"), and it still contains
+citation markers such as `[1, 2, 19]`. The rename item is therefore **not marked done**. The owner re-pastes the full
+mechanism (up to 600 characters, no markers) in the Products tab first.
+
+### Facts the design rests on
+
+- Everything is behind `AVATAR_RESEARCH_ENABLED`; with it off every research route is a 404. The frontend has no flag
+  endpoint, so the "Research avatars" button appears only when `GET /businesses/{id}/research-runs` answers 200; a 404
+  hides the feature. No new endpoint is needed for that.
+- The estimate endpoint already returns allowed models, runs per month / used / remaining, the `readiness` list (key
+  messages, customer problems, competitors, product names, product descriptions), expected and maximum cost. Start
+  refusals already carry plain messages (503 not configured, 403 model, 409 running, 429 monthly limit). Cancel exists.
+- The stored run row already holds status, phase, searches / fetches used, cost, `startedAt`, evidence level / reason /
+  customer-voice count, coverage note, and findings (problems with per-quote `verified` / `unverified`, solutions, gaps,
+  avatars, sources, `competitorTerms`, `droppedQuotes`, `warnings`).
+- The library: bulk save is all-or-nothing, 12-avatar limit, 409 when they do not fit; concepts are sent as
+  `{name, pillar, description}` and stored as slugs.
+- **Stored run vs the library (checked against `cmw0vqcmj0001qqsu142cr0nh`).** A research avatar refers to problems and
+  solutions by *number*; a library avatar stores *text*. The review screen maps `primaryProblems` to the text of the
+  numbered problems, and `mechanisms` to the `mechanism` of the numbered primary solutions; both stay editable. With
+  that mapping all 5 stored avatars pass the library's limits (names <= 39 of 60, who <= 374 of 600, every list item
+  <= 162 of 200, 4-5 problems and mechanisms of 8 and 6, 5 hooks, 3 angles, 3 concepts with descriptions <= 133 of 200).
+  So the stored run needs **no repair**. The dev library holds 5 avatars (7 free slots) and none of the 3 picks is a
+  duplicate name. A run whose text exceeds a limit shows the server's field error beside the field instead of failing.
+
+### Backend additions
+
+1. **Run states `REVIEWED` and `DISCARDED`** (the `status` column is a free string: no migration for the values).
+   **Risk handled:** `research_access.runs_used_this_month` counts only QUEUED / RUNNING / NEEDS_REVIEW (and paid
+   CANCELED), so a run that moved to REVIEWED or DISCARDED would silently give its monthly run back. Both count; a test
+   fails without it. `RunStatus` in the API schema and the past-runs list know the new values.
+2. **Provenance, two nullable columns** (both Prisma schemas, both migrations, throwaway-Postgres check):
+   `ResearchRun.reviewedAt DateTime?` and `BuyerAvatar.sourceRunId String?` (plain id, no foreign key, so deleting an
+   avatar never touches the run; indexed). Existing rows get null. The run response lists `savedAvatarIds`, read from
+   `sourceRunId`.
+3. **Bulk save takes an optional `researchRunId`.** In one batch (same all-or-nothing write) it creates the avatars with
+   `sourceRunId` set and moves the run NEEDS_REVIEW -> REVIEWED with `reviewedAt`. A run of another business or not in
+   NEEDS_REVIEW is a 409 and nothing is written, so a double click or a second tab cannot save twice. Without
+   `researchRunId` the endpoint behaves exactly as today (the import flow is unchanged).
+4. **`POST .../research-runs/{id}/discard`**: NEEDS_REVIEW -> DISCARDED, 409 otherwise. Findings are kept.
+5. **Competitor-term filter** (`research_filters`): single-word terms that are common English words are ignored; brand
+   names and multi-word names are kept. The ignore list is a small checked-in word list (`backend/app/data/`, no new
+   dependency), with tests that "Spur" is ignored and that Foundrae, Harwell Godfrey, Bulgari Serpenti, Cartier, Tiffany,
+   Chanel, Verdura and the domain-derived names are kept. Applied when a run is made **and** when a stored run is read,
+   so the existing run's "Spur" is handled. The run response gets `competitorTerms` (active) and
+   `ignoredCompetitorTerms`; the stored findings are not rewritten.
+6. **Response additions:** `customerVoiceMinimum` (from the depth), `reviewedAt`, `savedAvatarIds`.
+7. **Test-only seed** under FAKE_LLM only (404 otherwise, like `fake-connect`): `POST .../research-runs/fake-seed` writes a
+   NEEDS_REVIEW run from the canned fakes, with options for LOW evidence, unverified quotes and a long term list. The
+   happy path in e2e uses no seed: it starts a run through the screen and the fake client plays it.
+
+### Screens (Avatars tab; the sub-view lives in the URL as `?research=new` or `?research=<runId>`, so a refresh keeps it)
+
+- **Start.** "Research avatars" button, top of the Avatars tab. Page heading, then: Depth (radio group: light "a quick
+  pass, a few searches"; standard "the usual choice"; deep "the most sources, takes longest and costs most", with each
+  depth's search / fetch caps); Model (radio group; models the business may not use are disabled, and Fable 5.1 is listed
+  as a premium option with "Not enabled for this business; ask us to turn it on"; the screen only sends an allowed
+  model); Products (up to 3, checkboxes, default all up to 3); Extra competitor URLs (up to 5, validated with the
+  frontend's URL check, the backend stays authoritative); **Readiness** panel naming each empty item and why it matters,
+  with links (brand profile; Products tab `#products`) and a "Research anyway" choice that is required to continue when
+  anything is empty; **Cost** (expected, maximum, runs left this month, refreshed when depth / model / products change);
+  Start. Every refusal shows its plain message in a `role="alert"` region; an already-running run offers "View progress".
+- **Progress.** Phase in plain words ("Reading your site and competitors", "Looking for what customers say", "Writing
+  up problems and solutions", "Drafting avatars"), searches and fetches used of caps, cost so far, elapsed time, Cancel
+  (with a confirm line), polling every 3 s, stops when the run ends. A past-runs list (status, date, depth, model, cost)
+  sits under the start button and opens a run; a NEEDS_REVIEW run opens the review, a FAILED run shows its plain reason.
+- **Review** (NEEDS_REVIEW only; REVIEWED / DISCARDED runs open read-only with the avatars they produced).
+  1. Evidence banner: "N customer-voice sources reached; minimum M"; a LOW level shows a prominent warning with
+     `evidenceReason`. Coverage note below.
+  2. Problems: text, `inferred` badge, quotes labeled verified / unverified, source links.
+  3. Solutions with the problem numbers they solve; gaps.
+  4. Avatar drafts: checkbox + inline editing of every field (name, who, purchaseFor default self, problems, unknown
+     problems, mechanisms, alternatives, objections, hooks, angles, concepts as name / pillar / description with add and
+     remove, up to 5). Duplicate-name warning against the library; "N of 12 slots left"; Save is disabled past the limit.
+  5. Competitor terms: list with add / remove; any hook, angle or concept containing a term is flagged (live as the list
+     changes; same whole-word, case- and quote-folded rule as `terms_in`). Ignored common words are listed separately.
+  6. "Save selected" (bulk, with `researchRunId`) and "Discard" (confirm). After saving: the run shows as reviewed and
+     links to the new avatars.
+- **Accessibility.** One `h2` per view and `h3` per section, labeled fields and fieldsets, focus moves to the view heading
+  on a view change and to the first error on a failed save, polling updates in an `aria-live="polite"` region, axe with
+  `analyzeWhenReady` on the start, progress and review screens.
+
+### Known limits (accepted for 7c)
+
+- Edits on the review screen (checkboxes, avatar edits, the term list) live in the browser and are lost on refresh; saving
+  or discarding is what persists.
+- Edits to the term list change the flags on the screen only; they do not rewrite the stored run.
+- `dev.db` needs the migration (a write): after `make backup-dev` and the user's go-ahead. Production gets it on deploy.
+
+### Order of work
+
+Tests red first at each step: (1) schema + migrations + status counting, (2) bulk / discard / response additions, (3) term
+filter, (4) seed endpoint, (5) api client + start screen, (6) progress + past runs, (7) review screen, (8) e2e + axe. Then
+the full backend, frontend and e2e runs, saving the whole output to files. After the build: a manual test on dev with the
+existing run `cmw0vqcmj0001qqsu142cr0nh` (no new paid run).
+
+## 7c build notes (2026-11-04, branch `Phase7c`)
+
+Plan as approved, plus the owner's addition: **the review screen warns before leaving or refreshing with unsaved edits**.
+No paid call was made. Nothing is committed.
+
+### Backend
+- **Migrations** `20261104000000_add_research_review_provenance` (SQLite and Postgres): `ResearchRun.reviewedAt`,
+  `BuyerAvatar.sourceRunId` (+ index). Both nullable, so existing rows are untouched. Checked with `prisma migrate diff` (no
+  drift) on `dev.db` and on a throwaway Postgres database (created and dropped). **`dev.db` was backed up first**
+  (`dev.db.bak.20261103231245`) and then migrated with `prisma migrate deploy`.
+- **Statuses** `REVIEWED` and `DISCARDED`; both count toward the monthly limit (`research_access.runs_used_this_month`).
+- **`POST /businesses/{id}/avatars/bulk`** takes an optional `researchRunId`. In one batch it creates the avatars (with
+  `sourceRunId`) and moves the run to `REVIEWED`. 404 for an unknown run or another business's run; 409 if the run is not in
+  `NEEDS_REVIEW` (a second save is refused); the library-full 409 and a 422 leave the run open. Avatar responses carry
+  `sourceRunId`.
+- **`POST .../research-runs/{id}/discard`** (`NEEDS_REVIEW` -> `DISCARDED`, 409 otherwise, findings kept).
+- **Run response** gains `customerVoiceMinimum`, `competitorTerms`, `ignoredCompetitorTerms`, `savedAvatarIds`, `reviewedAt`.
+- **Term filter.** `research_filters.split_ignored_terms` ignores a single word found in `backend/app/data/common_words.txt` (about
+  1,470 lower-case words, checked in; no new dependency); multi-word and brand names are kept. The runner applies it when it
+  filters hooks, angles and concepts; the stored list is not rewritten, so the review screen can show what was ignored.
+- **Test-only seed** `POST .../research-runs/fake-seed` (404 unless FAKE_LLM and the research flag are on): `evidence: ok|low`,
+  `status: needs_review|running`.
+- `research_runner._camel` is now the public `camel_keys` (the seed uses it).
+
+### Frontend
+- `AvatarsTab` (replaces `AvatarsSection` in the page, which is unchanged) shows the library, then `ResearchEntry` (the
+  "Research avatars" button, a running-run notice and the past-runs table; hidden when `GET research-runs` answers 404).
+  `?research=new` or `?research=<runId>` selects the research view and keeps the `#avatars` hash, so a refresh returns to it. The
+  Avatars tab is now `keepMounted`, so checked boxes and edits survive a switch to another tab.
+- `ResearchStart` (depth with plain-words meanings, model, up to 3 products, up to 5 extra URLs, readiness with links, expected
+  and maximum cost, runs left, "Research anyway" when anything is empty), `ResearchRunView` (progress polled every 3 s, cancel;
+  review; read-only summaries for saved, discarded, failed, canceled), `ResearchReview`.
+- **Unsaved edits** (`lib/useUnsavedWarning.ts`): while checkboxes, avatar edits or the term list differ from what the screen
+  loaded, `beforeunload` is cancelled (refresh, close, typed address) and a click on a link that leaves the page asks with
+  `window.confirm`; "Back to avatars" asks too. Cleared by saving or discarding, or by undoing the change.
+- Mapping: a research avatar's problem and solution numbers become library text (problems -> `primaryProblems`; the numbered
+  primary solutions' `mechanism` -> `mechanisms`).
+
+### Tests (red first for the backend and for every component; `lib/research.ts` was written together with its test file)
+Backend: `test_research_review.py` (save, discard, limits, fields), `test_research_seed.py`, additions to
+`test_research_filters.py`. Frontend: `research.test.ts`, `ResearchStart`, `ResearchReview` (34), `ResearchRunView`,
+`ResearchEntry`, `AvatarsTab`. E2E `research-avatars.spec.ts` (5 specs; axe with `analyzeWhenReady` on the start screen, the
+progress view and the review screen; a canned run started on the screen, reviewed, edited and saved). The e2e backend now runs
+with `AVATAR_RESEARCH_ENABLED=true`.
+
+Results: backend 3,032 passed, coverage 96.41%; ruff, format, mypy, ty clean. Frontend lint and `tsc -b` clean, 1,459 vitest
+tests passed (statements 95.7%, branches 91.6%), twice. E2E 104 passed, no retries. Output is kept in the session scratchpad.
+
+### Known limits
+- Edits are not kept across a refresh (the warning is the protection), and the warning cannot see the browser's Back button.
+- The term list only changes the flags on the screen; it does not rewrite the stored run.
+- The common-word list is a judgment call, not a dictionary: a brand that is also on the list would be ignored.
+
+
+## 7c change after the manual test (2026-11-04): a run is not one-shot
+
+Found in the owner's manual test: saving closed the run, so the other avatars could not be picked later.
+
+- **Saving leaves the run open.** `POST .../avatars/bulk` with `researchRunId` no longer changes the run's status. The run stays `NEEDS_REVIEW` until the owner chooses **Mark as done** (`POST .../research-runs/{id}/done`, `NEEDS_REVIEW` to `REVIEWED`, refused with a 409 if nothing was saved) or **Discard** (refused once anything was saved, so a run with saved avatars is finished with Mark as done).
+- **A draft is saved once.** Each saved avatar records its run (`sourceRunId`) and which draft of the run it came from (`sourceDraftIndex`, new nullable column). The bulk request must send `researchDraftIndexes` with `researchRunId`, one index per avatar. A draft already saved is refused with a 409 (checked first), and a unique index on `(sourceRunId, sourceDraftIndex)` refuses it even if two requests overlap (a double click that got past the screen). Renaming a draft does not hide it from the check. Deleting the library avatar clears its `sourceDraftIndex`, so that draft can be saved again; `sourceRunId` stays.
+- **Review screen.** A saved draft shows "Saved" and a link "View <name> in your library", has no checkbox and cannot be edited. The link opens the library with that avatar scrolled to and focused (`?avatar=<id>`). Unsaved-edit warnings only look at drafts not yet saved. The screen sends one request for a double click.
+- **Done runs.** A done run (`REVIEWED`) is read-only, still lists its saved avatars (each a link), and cannot take more saves (409 "finished") until it is reopened.
+- **Past-runs list.** New "Avatars saved" column. A run still open with saves reads "In review"; a done run reads "Done".
+- **Monthly limit unchanged.** `NEEDS_REVIEW`, `REVIEWED` and `DISCARDED` all count, so saving and marking done change nothing (tested).
+- **Migration** `20261105000000_add_source_draft_index` (SQLite and Postgres). Verified on a throwaway Postgres (no drift); applied to dev.db only after backup and approval.
+- **Reopen.** A done run shows "Reopen to save more" (`POST .../research-runs/{id}/reopen`, `REVIEWED` to `NEEDS_REVIEW`, `reviewedAt` cleared; any other status is a 409). The saved avatars stay marked Saved. A discarded run cannot be reopened. The monthly count is unchanged.
+- **Known limit.** An avatar saved before this column existed has no draft index, so its draft is not shown as Saved unless the index is filled in by hand (done once for the dev run).
+
+## After 7c: Strategist uses an avatar's saved concepts (plan only, 2026-11-04; nothing built)
+
+### Today (read-only check)
+The Strategist does **not** use saved concepts. `library_block` (`app/services/avatar_library_prompt.py`) gives each
+library avatar one line: id, name, who buys, who it is, up to two problems, the first "doesn't know yet" entry and the
+first mechanism. `BuyerAvatar.concepts` (a JSON list of `{slug, pillar, description}`, saved by 7a/7c) is never read
+there, and the prompts in `app/services/strategist.py` tell the model to invent each angle's concept slug, description
+and pillar. There is no campaign-level "assigned avatar": each of the four angles names one library avatar by
+`buyer_avatar_id`, and at least 3 distinct avatars must appear (`MIN_DISTINCT_LIBRARY_AVATARS`).
+
+### Proposal
+1. **Show the concepts.** Add a `concepts:` part to each avatar's line in `library_block`: up to 3 saved concepts as
+   `slug (pillar): description`, each cut short (same `_cut` helper), inside the existing quarantined block.
+   Hooks stay out. Saved concepts are owner-approved text, so they stay inside the data block, never in the instructions.
+2. **Prefer them.** In the library-mode instruction (and the round-2 "new angles" instruction), say: for each angle, first
+   use one of that avatar's listed concepts, copying its slug and pillar exactly and writing the description for this
+   product; only when the avatar has none left (all used, or the pillar mix would break the 3-pillar rule) invent a new
+   concept, as today. The model never edits a saved concept; it only reuses it.
+3. **Check it in code, not just in the prompt.** After parsing, a helper marks each angle `saved` when its
+   (avatar, slug) matches a stored concept, and then forces the pillar to the stored one (the model's pillar for a saved
+   slug is overwritten, as `avatar` already is from `purchase_for`). Existing rules are unchanged: unique avatar and
+   concept pair, 3 distinct pillars, personalized angle, ad naming. If forcing the pillar would leave fewer than 3 pillars,
+   the existing validation error and one repair retry apply, as today.
+4. **Rounds.** In round 2 and later, concepts already used by earlier ads are listed as used (the "angles already used"
+   list exists), so an avatar's unused saved concepts come first.
+5. **Fallback.** An avatar with no concepts (older avatars, hand-made ones) behaves exactly as now. No schema change.
+6. **No cost surprise.** The block grows by at most about 3 short lines per avatar, so input tokens rise slightly;
+   the cached prefix is unchanged apart from that block. Measure on the first real strategy.
+
+### Tests (red first)
+- `library_block` includes concepts, cut to length, quoted as data; an avatar with none has no `concepts:` part.
+- Prompt text for library mode contains the prefer-then-invent instruction (and the round-2 version).
+- Post-parse: an angle using a saved slug gets the stored pillar; an invented slug is left alone; duplicates and the
+  3-pillar rule still fail as before.
+- FAKE_LLM fakes (`fake_library_angles`) use a saved concept when one exists, so e2e covers the path; no paid calls.
+
+### Decisions (owner, 2026-11-04)
+- Each saved concept is used **at most once per campaign**. Later rounds prefer saved concepts not yet used by that campaign's earlier ads; when an avatar has none left, the model invents a new concept as today.
+- Angles and ad cards that came from a saved concept show a small **"From your avatar"** note. This needs a way to remember it: either a `fromSavedConcept` flag on the stored angle (the strategy is stored JSON, so no migration) and on the ad's creative record (a new nullable column, so both Prisma schemas, both migrations and a throwaway-Postgres check), or deriving it by matching `(buyerAvatarId, concept)` against the avatar's current concepts at read time (no schema change, but the note would vanish if the owner later edits or deletes the concept). Proposed: derive at read time for the strategy screen and ad cards first, and only add a column if the owner wants the note to be permanent.
+- Order: this is the step right after the 7c PR merges. The Products Delete button and video-thumbnail PR is independent and follows it.
