@@ -42,3 +42,15 @@ def test_meta_callback_is_documented_behind_the_frontend_address() -> None:
     text = BLUEPRINT.read_text()
 
     assert "https://sales-guru-frontend.onrender.com/api/meta/callback" in text
+
+
+def test_research_flag_is_declared_but_never_set_by_the_blueprint() -> None:
+    """AVATAR_RESEARCH_ENABLED has sync: false, so a sync cannot switch it on."""
+    text = BLUEPRINT.read_text()
+    start = text.index("name: sales-guru-backend")
+    backend = text[start : text.index("name: sales-guru-frontend")]
+
+    match = re.search(r"- key: AVATAR_RESEARCH_ENABLED\n(\s+)(\S+): (\S+)", backend)
+
+    assert match is not None
+    assert (match.group(2), match.group(3)) == ("sync", "false")
