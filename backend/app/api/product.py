@@ -32,6 +32,7 @@ _URL_REQUIRED_FOR_OBJECTIVE = (
 _REACHABILITY_CHECK_DISABLED = "URL reachability checking is not enabled"
 _PRODUCT_NOT_FOUND = "Product not found"
 _PRODUCT_HAS_NO_URL = "This product has no URL to check"
+_UNTITLED_CAMPAIGN = "Untitled campaign"
 
 
 async def _product_url_is_required(business_id: str, campaign_id: str | None) -> bool:
@@ -193,6 +194,44 @@ async def update_product(
     updated = await db.product.update(where={"id": product.id}, data=update_data)
     assert updated is not None  # just fetched above, can't vanish mid-request
     return await _to_response(updated)
+
+
+@router.delete("/{product_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_product(
+    product: Product = Depends(get_owned_product),
+) -> None:
+    """Delete a product and its photos and videos, if no campaign uses it.
+
+    A campaign that uses the product (in any status, archived included) blocks the
+    delete: its ads and results are written against that product. The message names
+    each campaign and its status so the owner knows which to change first. The media
+    rows and the product go in one batch, so a failure removes neither.
+
+    Args:
+        product: The product, resolved and ownership-checked by get_owned_product.
+
+    Raises:
+        HTTPException: 404 if the product isn't this business's (via
+            get_owned_product); 409 if any campaign uses it.
+    """
+    campaigns = await db.campaign.find_many(
+        where={"productId": product.id}, order={"createdAt": "asc"}
+    )
+    if campaigns:
+        listed = ", ".join(
+            f"{c.name or _UNTITLED_CAMPAIGN} ({c.status})" for c in campaigns
+        )
+        noun = "campaign" if len(campaigns) == 1 else "campaigns"
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                f"This product is used by {len(campaigns)} {noun}: {listed}. "
+                "Change the product on each of them first, then delete it."
+            ),
+        )
+    async with db.batch_() as batcher:
+        batcher.productimage.delete_many(where={"productId": product.id})
+        batcher.product.delete(where={"id": product.id})
 
 
 def _proposed_changes(payload: ProductUpdateRequest) -> dict[str, object]:

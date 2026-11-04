@@ -136,3 +136,43 @@ test('an edit that would make ads out of date asks first, and Go back changes no
   await expect(page.getByText('Handmade leather wallets, now in navy')).toBeVisible()
   expect((await staleFlags()).every((stale) => stale)).toBe(true)
 })
+
+test('delete: a product no campaign uses goes after a question; one a campaign uses is refused', async ({
+  page,
+}) => {
+  // Onboarding leaves one campaign using one product (the wallets).
+  await reachMetaPixelStep(page)
+  await page.getByLabel('Meta Pixel').selectOption({ label: 'Fake Pixel' })
+  await page.getByRole('button', { name: 'Save Pixel' }).click()
+  await finishOnboarding(page, { objectiveLabel: 'Sales' })
+
+  await page.getByRole('tab', { name: 'Products' }).click()
+  await page.getByLabel('What do you sell?').fill('Gold hoops')
+  await page.getByLabel(/Product name/).fill('Hoops')
+  await page.getByRole('button', { name: 'Add product' }).click()
+  await expect(page.getByRole('button', { name: 'Edit Hoops' })).toBeVisible()
+
+  // Asking first: Keep it changes nothing and focus returns to Delete.
+  await page.getByRole('button', { name: 'Delete Hoops' }).click()
+  const confirm = page.getByRole('group', { name: 'Confirm deleting Hoops' })
+  await expect(confirm).toContainText('Delete Hoops and all its photos and videos?')
+  await expectNoAxeViolations(page)
+  await confirm.getByRole('button', { name: 'Keep it' }).click()
+  await expect(confirm).toHaveCount(0)
+  await expect(page.getByRole('button', { name: 'Delete Hoops' })).toBeFocused()
+
+  // Yes, delete: the product is gone and focus moves to the list heading.
+  await page.getByRole('button', { name: 'Delete Hoops' }).click()
+  await confirm.getByRole('button', { name: 'Yes, delete' }).click()
+  await expect(page.getByRole('button', { name: 'Edit Hoops' })).toHaveCount(0)
+  await expect(page.getByRole('heading', { name: 'Products', level: 2 })).toBeFocused()
+
+  // The wallets are used by the campaign: refused, with the campaign named, nothing removed.
+  await page.getByRole('button', { name: /^Delete Handmade leather wallets/ }).click()
+  await page.getByRole('button', { name: 'Yes, delete' }).click()
+  const refusal = page.getByRole('alert').filter({ hasText: 'used by 1 campaign' })
+  await expect(refusal).toBeVisible()
+  await expect(refusal).toBeFocused()
+  await expectNoAxeViolations(page)
+  await expect(page.getByRole('button', { name: /^Edit Handmade leather wallets/ })).toBeVisible()
+})

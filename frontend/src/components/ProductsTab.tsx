@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useState } from 'react'
-import { listProducts, type Product } from '../lib/api'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { ApiError, deleteProduct, listProducts, type Product } from '../lib/api'
 import { productLabel } from '../lib/productLabel'
 import { ProductForm } from './ProductForm'
 
@@ -23,6 +23,18 @@ export function ProductsTab({
   const [loading, setLoading] = useState(true)
   const [listError, setListError] = useState<string | null>(null)
   const [editingId, setEditingId] = useState<string | null>(null)
+  // Deleting: the product being asked about, the one being deleted, the refusal to show, and
+  // where focus goes once the screen has updated.
+  const [confirmingId, setConfirmingId] = useState<string | null>(null)
+  const [deletingId, setDeletingId] = useState<string | null>(null)
+  const [deleteError, setDeleteError] = useState<{ id: string; message: string } | null>(null)
+  const [focusTarget, setFocusTarget] = useState<
+    { kind: 'heading' } | { kind: 'delete'; id: string } | { kind: 'alert' } | null
+  >(null)
+  const busyRef = useRef(false)
+  const headingRef = useRef<HTMLHeadingElement>(null)
+  const alertRef = useRef<HTMLParagraphElement>(null)
+  const deleteButtons = useRef(new Map<string, HTMLButtonElement>())
   // Changing the key remounts the add form after a save, so every field (the name and the
   // mechanism included) starts empty again.
   const [addFormKey, setAddFormKey] = useState(0)
@@ -45,10 +57,44 @@ export function ProductsTab({
     void refresh()
   }, [refresh])
 
+  useEffect(() => {
+    if (!focusTarget) return
+    if (focusTarget.kind === 'heading') headingRef.current?.focus()
+    else if (focusTarget.kind === 'alert') alertRef.current?.focus()
+    else deleteButtons.current.get(focusTarget.id)?.focus()
+    setFocusTarget(null)
+  }, [focusTarget])
+
+  async function confirmDelete(product: Product) {
+    if (busyRef.current) return
+    busyRef.current = true
+    setDeletingId(product.id)
+    setDeleteError(null)
+    try {
+      await deleteProduct(businessId, product.id)
+      setConfirmingId(null)
+      await refresh()
+      setFocusTarget({ kind: 'heading' })
+    } catch (err) {
+      setConfirmingId(null)
+      setDeleteError({
+        id: product.id,
+        message:
+          err instanceof ApiError ? err.message : 'Could not delete this product. Try again.',
+      })
+      setFocusTarget({ kind: 'alert' })
+    } finally {
+      busyRef.current = false
+      setDeletingId(null)
+    }
+  }
+
   return (
     <>
       <section>
-        <h2>Products</h2>
+        <h2 tabIndex={-1} ref={headingRef}>
+          Products
+        </h2>
         {loading && <p>Loading…</p>}
         {listError && (
           <p className="form-error" role="alert">
@@ -102,6 +148,55 @@ export function ProductsTab({
                 >
                   Edit
                 </button>
+                <button
+                  type="button"
+                  className="btn-outline"
+                  aria-label={`Delete ${label}`}
+                  ref={(node) => {
+                    if (node) deleteButtons.current.set(product.id, node)
+                    else deleteButtons.current.delete(product.id)
+                  }}
+                  onClick={() => {
+                    setDeleteError(null)
+                    setConfirmingId(product.id)
+                  }}
+                >
+                  Delete
+                </button>
+                {confirmingId === product.id && (
+                  <fieldset className="avatar-confirm products-delete-confirm">
+                    <legend className="visually-hidden">Confirm deleting {label}</legend>
+                    <p>
+                      Delete {label} and all its photos and videos? This can&apos;t be undone.
+                    </p>
+                    <div className="avatar-actions">
+                      <button
+                        type="button"
+                        className="btn-outline btn-gold"
+                        disabled={deletingId === product.id}
+                        onClick={() => void confirmDelete(product)}
+                      >
+                        {deletingId === product.id ? 'Deleting…' : 'Yes, delete'}
+                      </button>
+                      <button
+                        type="button"
+                        className="btn-outline"
+                        disabled={deletingId === product.id}
+                        onClick={() => {
+                          setConfirmingId(null)
+                          setFocusTarget({ kind: 'delete', id: product.id })
+                        }}
+                      >
+                        Keep it
+                      </button>
+                    </div>
+                  </fieldset>
+                )}
+                {deleteError?.id === product.id && (
+                  <p className="form-error" role="alert" tabIndex={-1} ref={alertRef}>
+                    {deleteError.message}
+                  </p>
+                )}
               </li>
             )
           })}

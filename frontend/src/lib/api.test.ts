@@ -11,6 +11,7 @@ import {
   createProduct,
   createRecommendation,
   deleteAvatar,
+  deleteProduct,
   deleteProductImage,
   disconnectMeta,
   finalizeMetaConnection,
@@ -424,6 +425,38 @@ describe('listProductImages', () => {
     await expect(listProductImages('biz-1', 'prod-1')).resolves.toEqual([])
     const [url] = fetchMock.mock.calls[0]
     expect(url).toContain('/businesses/biz-1/products/prod-1/images')
+  })
+})
+
+describe('deleteProduct', () => {
+  it('sends a DELETE request for the product', async () => {
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(new Response(null, { status: 204 }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(deleteProduct('biz-1', 'prod-1')).resolves.toBeUndefined()
+    const [url, options] = fetchMock.mock.calls[0]
+    expect(url).toContain('/businesses/biz-1/products/prod-1')
+    expect(url).not.toContain('/images')
+    expect(options?.method).toBe('DELETE')
+  })
+
+  it('rejects with the server message when a campaign uses the product', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn<typeof fetch>().mockResolvedValue(
+        new Response(JSON.stringify({ detail: 'This product is used by 1 campaign: Spring (LIVE).' }), {
+          status: 409,
+          headers: { 'Content-Type': 'application/json' },
+        }),
+      ),
+    )
+
+    await expect(deleteProduct('biz-1', 'prod-1')).rejects.toMatchObject({
+      status: 409,
+      message: 'This product is used by 1 campaign: Spring (LIVE).',
+    })
   })
 })
 

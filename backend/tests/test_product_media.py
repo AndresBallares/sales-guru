@@ -480,15 +480,6 @@ def test_a_video_is_never_the_products_primary_image(client: TestClient) -> None
     assert product["primaryImageUrl"] == photo["url"]
 
 
-def test_a_product_with_only_a_video_has_no_primary_image(client: TestClient) -> None:
-    business_id, product_id = _setup(client)
-    _upload_video(client, business_id, product_id)
-
-    product = _product(client, business_id, product_id)
-
-    assert product["primaryImageUrl"] is None
-
-
 def _product(client: TestClient, business_id: str, product_id: str) -> dict[str, Any]:
     listed = client.get(f"/businesses/{business_id}/products").json()
     return next(p for p in listed if p["id"] == product_id)

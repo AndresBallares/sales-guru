@@ -607,6 +607,14 @@ export function listProductImages(
   )
 }
 
+// Deletes a product and its photos and videos. The server refuses (409, with a message naming
+// the campaigns) while any campaign uses the product.
+export function deleteProduct(businessId: string, productId: string): Promise<void> {
+  return request<void>(`/businesses/${businessId}/products/${productId}`, {
+    method: 'DELETE',
+  })
+}
+
 export function deleteProductImage(
   businessId: string,
   productId: string,
