@@ -141,6 +141,12 @@ path the rule above requires explicit confirmation for).
 - **Schema changes**: always `uv run prisma migrate dev --name <desc>`, never
   `prisma db push` — see README.md's Database schema changes section for why.
 - Any schema change must update both prisma/schema.prisma (SQLite) and prisma/postgres/schema.prisma, with migrations for both, and be verified on a throwaway Postgres before the PR is marked ready.
+- **Tests must not reach the network.** `tests/network_guard.py` refuses real
+  connections and DNS lookups and fails the test that tried, naming the host. Meta's
+  HTTP helpers are offline by default through the autouse `_meta_offline` fixture in
+  `tests/conftest.py` (mock the Meta function you need); mark a test
+  `meta_helpers_under_test` only when it exercises the real helpers with a fake
+  `httpx` client, as `test_meta_service.py` does.
 - **Real Meta or Anthropic API calls that cost money require an explicit approved cap in the message authorizing them. Stop and report before exceeding it; never assume a higher amount is fine.**
 - **Destructive commands** (`prisma db push --force-reset`, `prisma migrate
   reset`, `DROP`, `rm -rf`, `git push --force`, `git reset --hard`, deleting

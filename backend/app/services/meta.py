@@ -232,6 +232,44 @@ def is_business_tools_terms_error(exc: MetaConnectionError) -> bool:
     return all(marker in message for marker in _BUSINESS_TOOLS_TERMS_TEXT_MARKERS)
 
 
+_BODY_EXCERPT_CHARS = 200
+
+
+def _json_body(url: str, response: httpx.Response) -> dict[str, Any]:
+    """The Graph API reply as a JSON object, or a MetaConnectionError.
+
+    A gateway or proxy in front of Meta can answer with an HTML error page (CI saw a
+    "4xx Client Error" page on 2026-11-03). Parsing that raised a JSONDecodeError
+    nobody caught, so a publish ended as a 500; it is a failed Meta call like any
+    other and is reported as one.
+
+    Args:
+        url: The Graph API URL that was called (for the message).
+        response: The HTTP response.
+
+    Returns:
+        The parsed body.
+
+    Raises:
+        MetaConnectionError: If the body is not JSON, or is JSON but not an object.
+    """
+
+    def refuse(reason: str) -> MetaConnectionError:
+        excerpt = " ".join(str(response.text).split())[:_BODY_EXCERPT_CHARS]
+        return MetaConnectionError(
+            f"Meta API call to {httpx.URL(url).path} returned a non-JSON response "
+            f"(HTTP {response.status_code}){reason}: {excerpt}"
+        )
+
+    try:
+        body = response.json()
+    except ValueError as exc:
+        raise refuse("") from exc
+    if not isinstance(body, dict):
+        raise refuse(", not a JSON object")
+    return body
+
+
 async def _get_json(url: str, params: dict[str, str]) -> dict[str, Any]:
     """GET a Graph API URL and return its parsed JSON body.
 
@@ -252,7 +290,7 @@ async def _get_json(url: str, params: dict[str, str]) -> dict[str, Any]:
     except httpx.HTTPError as exc:
         raise MetaConnectionError(f"Meta API call failed: {exc}") from exc
 
-    body: dict[str, Any] = response.json()
+    body = _json_body(url, response)
     if response.is_error or "error" in body:
         _raise_for_meta_error(url, body, response)
     return body
@@ -280,7 +318,7 @@ async def _delete_json(url: str, params: dict[str, str]) -> dict[str, Any]:
             f"Meta API call failed: {str(exc) or type(exc).__name__}"
         ) from exc
 
-    body: dict[str, Any] = response.json()
+    body = _json_body(url, response)
     if response.is_error or "error" in body:
         _raise_for_meta_error(url, body, response)
     return body
@@ -319,7 +357,7 @@ async def _post_json(
             f"Meta API call failed: {str(exc) or type(exc).__name__}"
         ) from exc
 
-    body: dict[str, Any] = response.json()
+    body = _json_body(url, response)
     if response.is_error or "error" in body:
         _raise_for_meta_error(url, body, response)
     return body
@@ -1065,7 +1103,7 @@ async def upload_meta_ad_image(
             f"Meta API call failed: {str(exc) or type(exc).__name__}"
         ) from exc
 
-    body: dict[str, Any] = response.json()
+    body = _json_body(url, response)
     if response.is_error or "error" in body:
         _raise_for_meta_error(url, body, response)
     images = body.get("images", {})
@@ -1132,7 +1170,7 @@ async def upload_meta_video(
             f"Meta API call failed: {str(exc) or type(exc).__name__}"
         ) from exc
 
-    body: dict[str, Any] = response.json()
+    body = _json_body(url, response)
     if response.is_error or "error" in body:
         _raise_for_meta_error(url, body, response)
     video_id = body.get("id")
