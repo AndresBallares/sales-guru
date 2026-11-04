@@ -60,13 +60,6 @@ Record the exact test name here whenever a vitest or e2e test fails and then pas
   two reruns were clean. The failing test's name was not captured (the output was piped to `tail`),
   so it is unknown. Next time, save the whole output to a file, per "Keep the e2e logs" below.
 
-### Dashboard test: focus assertion is timing-sensitive
-`DashboardPage.test.tsx` › "selects the new business in the Brand picker when others
-already exist" failed once in CI on `expect(...).toHaveFocus()`: focus was on `<body>`
-instead of the brand description field, because focus moves in an effect after an
-asynchronous load. It passed on re-run. Wait for the field to be focused (`waitFor`)
-rather than asserting immediately, or find why focus lands late.
-
 ### Commit hooks take about 16 minutes: use a faster pre-commit set
 The pre-commit pytest hook runs every test file related to the staged files. A change to
 the Creative Agent staged about 25 files and about 980 tests, which took about 16 minutes
