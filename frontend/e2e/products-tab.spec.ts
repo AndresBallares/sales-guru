@@ -20,6 +20,14 @@ async function expectNoAxeViolations(page: Page) {
   expect(results.violations).toEqual([])
 }
 
+// The whole row goes: its text, photo, Edit and Delete buttons, and the list item itself.
+async function expectRowGone(page: Page, label: string) {
+  await expect(page.getByRole('button', { name: `Edit ${label}` })).toHaveCount(0)
+  await expect(page.getByRole('button', { name: `Delete ${label}` })).toHaveCount(0)
+  await expect(page.getByRole('img', { name: label })).toHaveCount(0)
+  await expect(page.getByRole('listitem').filter({ hasText: label })).toHaveCount(0)
+}
+
 function businessIdOf(page: Page): string {
   const id = page.url().match(/businesses\/([^/?#]+)/)?.[1]
   expect(id).toBeTruthy()
@@ -164,7 +172,7 @@ test('delete: a product no campaign uses goes after a question; one a campaign u
   // Yes, delete: the product is gone and focus moves to the list heading.
   await page.getByRole('button', { name: 'Delete Hoops' }).click()
   await confirm.getByRole('button', { name: 'Yes, delete' }).click()
-  await expect(page.getByRole('button', { name: 'Edit Hoops' })).toHaveCount(0)
+  await expectRowGone(page, 'Hoops')
   await expect(page.getByRole('heading', { name: 'Products', level: 2 })).toBeFocused()
 
   // The wallets are used by the campaign: refused, with the campaign named, nothing removed.
@@ -175,4 +183,26 @@ test('delete: a product no campaign uses goes after a question; one a campaign u
   await expect(refusal).toBeFocused()
   await expectNoAxeViolations(page)
   await expect(page.getByRole('button', { name: /^Edit Handmade leather wallets/ })).toBeVisible()
+})
+
+test('delete: the row disappears even when the list reload after it fails', async ({ page }) => {
+  await createBusinessWithBrand(page)
+  await page.getByRole('tab', { name: 'Products' }).click()
+  await page.getByLabel('What do you sell?').fill('Gold hoops')
+  await page.getByLabel(/Product name/).fill('Hoops')
+  await page.getByRole('button', { name: 'Add product' }).click()
+  await expect(page.getByRole('button', { name: 'Edit Hoops' })).toBeVisible()
+
+  // From here on the product list cannot be fetched; only the delete itself goes through.
+  await page.route('**/businesses/*/products', (route) =>
+    route.request().method() === 'GET' ? route.abort() : route.continue(),
+  )
+  await page.getByRole('button', { name: 'Delete Hoops' }).click()
+  await page.getByRole('button', { name: 'Yes, delete' }).click()
+
+  await expectRowGone(page, 'Hoops')
+  await expect(page.getByRole('heading', { name: 'Products', level: 2 })).toBeFocused()
+  await page.unroute('**/businesses/*/products')
+  await page.reload()
+  await expect(page.getByText(/No products yet/)).toBeVisible()
 })

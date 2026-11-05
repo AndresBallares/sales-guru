@@ -176,7 +176,7 @@ describe('ProductsTab', () => {
       expect(mockedApi.deleteProduct).not.toHaveBeenCalled()
     })
 
-    it('deletes after Yes, reloads the list and moves focus to the Products heading', async () => {
+    it('deletes after Yes, removes the row and moves focus to the Products heading', async () => {
       mockedApi.deleteProduct.mockResolvedValue(undefined)
       const onProductsChange = vi.fn<(products: api.Product[]) => void>()
       const user = userEvent.setup()
@@ -193,6 +193,57 @@ describe('ProductsTab', () => {
       await waitFor(() =>
         expect(screen.getByRole('heading', { name: 'Products', level: 2 })).toHaveFocus(),
       )
+    })
+
+    // The row (photo, name, Edit, Delete) must go the moment the server says the product is
+    // deleted, not only when the list that is fetched afterwards happens to come back right.
+    describe('removes the whole row once the delete succeeds', () => {
+      function expectRowGone() {
+        expect(screen.queryByRole('button', { name: 'Edit Emerald Coil' })).not.toBeInTheDocument()
+        expect(screen.queryByRole('button', { name: 'Delete Emerald Coil' })).not.toBeInTheDocument()
+        expect(screen.queryByRole('img', { name: 'Emerald Coil' })).not.toBeInTheDocument()
+        expect(screen.queryByText('Emerald Coil')).not.toBeInTheDocument()
+        expect(screen.getAllByRole('listitem')).toHaveLength(1)
+        expect(screen.getByRole('button', { name: 'Edit Triangle band' })).toBeInTheDocument()
+      }
+
+      async function askToDelete() {
+        mockedApi.deleteProduct.mockResolvedValue(undefined)
+        const user = userEvent.setup()
+        render(<ProductsTab businessId="biz-1" />)
+        await user.click(await screen.findByRole('button', { name: 'Delete Emerald Coil' }))
+        return user
+      }
+
+      it('when the list fetched afterwards is stale and still has the product', async () => {
+        const user = await askToDelete()
+        mockedApi.listProducts.mockResolvedValue([coil, unnamed])
+
+        await user.click(screen.getByRole('button', { name: 'Yes, delete' }))
+
+        await waitFor(() => expect(screen.getByRole('heading', { name: 'Products', level: 2 })).toHaveFocus())
+        expectRowGone()
+      })
+
+      it('when the list fetched afterwards fails', async () => {
+        const user = await askToDelete()
+        mockedApi.listProducts.mockRejectedValue(new Error('network'))
+
+        await user.click(screen.getByRole('button', { name: 'Yes, delete' }))
+
+        await waitFor(() => expect(screen.getByRole('heading', { name: 'Products', level: 2 })).toHaveFocus())
+        expectRowGone()
+      })
+
+      it('while the list is still being fetched afterwards', async () => {
+        const user = await askToDelete()
+        mockedApi.listProducts.mockReturnValue(new Promise(() => undefined))
+
+        await user.click(screen.getByRole('button', { name: 'Yes, delete' }))
+
+        await waitFor(() => expect(screen.getByRole('heading', { name: 'Products', level: 2 })).toHaveFocus())
+        expectRowGone()
+      })
     })
 
     it('sends one request when Yes is clicked twice', async () => {

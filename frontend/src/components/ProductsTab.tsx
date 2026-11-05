@@ -72,8 +72,12 @@ export function ProductsTab({
     setDeleteError(null)
     try {
       await deleteProduct(businessId, product.id)
+      // The server has confirmed, so the whole row goes now. No reload follows: a list fetched
+      // here could be stale or fail and would leave (or bring back) a row for a deleted product.
+      const remaining = products.filter((p) => p.id !== product.id)
+      setProducts(remaining)
+      onProductsChange?.(remaining)
       setConfirmingId(null)
-      await refresh()
       setFocusTarget({ kind: 'heading' })
     } catch (err) {
       setConfirmingId(null)
