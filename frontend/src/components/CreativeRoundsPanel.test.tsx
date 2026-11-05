@@ -193,14 +193,23 @@ describe('CreativeRoundsPanel', () => {
     const closed = makeRound({ ...open, status: 'CLOSED' })
     mockedApi.listRounds.mockResolvedValueOnce([open]).mockResolvedValue([closed])
     mockedApi.publishRound.mockResolvedValue(open)
+    // The second status check waits on a gate the test opens, so the first step stays on screen
+    // for as long as the assertions need instead of racing the poller (1 ms in these tests).
+    let openGate: () => void = () => undefined
+    const gate = new Promise<void>((resolve) => (openGate = resolve))
     mockedApi.getPublishStatus
       .mockResolvedValueOnce({ state: 'PROCESSING', step: 'Processing video', progress: 40 })
-      .mockResolvedValueOnce({ state: 'PROCESSING', step: 'Uploading video' })
+      .mockImplementationOnce(async () => {
+        await gate
+        return { state: 'PROCESSING', step: 'Uploading video' }
+      })
       .mockResolvedValue({ state: 'DONE' })
     renderPanel()
 
     await userEvent.click(await screen.findByRole('button', { name: /publish 1 ad/i }))
 
+    expect(await screen.findByRole('button', { name: 'Processing video 40%' })).toBeDisabled()
+    openGate()
     expect(await screen.findByText('Published as Pack 2')).toBeVisible()
     expect(mockedApi.getPublishStatus).toHaveBeenCalledTimes(3)
   })

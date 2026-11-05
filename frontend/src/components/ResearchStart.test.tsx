@@ -255,6 +255,7 @@ describe('ResearchStart', () => {
 
   it('moves focus to the heading', async () => {
     renderStart()
-    expect(await screen.findByRole('heading', { level: 2, name: 'Research avatars' })).toHaveFocus()
+    const heading = await screen.findByRole('heading', { level: 2, name: 'Research avatars' })
+    await waitFor(() => expect(heading).toHaveFocus())
   })
 })

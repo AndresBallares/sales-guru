@@ -1,4 +1,4 @@
-import { render, screen, waitFor, within } from '@testing-library/react'
+import { act, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import type { ReactElement } from 'react'
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom'
@@ -33,33 +33,10 @@ vi.mock('../lib/media', async (importOriginal) => {
   return { ...actual, readVideoInfo: vi.fn<typeof actual.readVideoInfo>() }
 })
 
-interface PublishPolls {
-  hold: boolean
-  held: (() => void)[]
-  sleep: () => Promise<void>
-  release: () => void
-  reset: () => void
-}
-
-// The pause between two publish status checks. By default it is a real, tiny pause. A test that
-// needs to look at an in-between status sets `hold`: every pause then waits until the test calls
-// `release`, so the status on screen stays put (no timing involved) until the test is done with it.
-const publishPolls = vi.hoisted<PublishPolls>(() => {
-  const polls: PublishPolls = {
-    hold: false,
-    held: [],
-    sleep: () =>
-      polls.hold
-        ? new Promise<void>((resolve) => polls.held.push(resolve))
-        : new Promise<void>((resolve) => setTimeout(resolve, 30)),
-    release: () => polls.held.shift()?.(),
-    reset: () => {
-      polls.hold = false
-      polls.held.length = 0
-    },
-  }
-  return polls
-})
+// See src/test/publishPolls.ts: a test sets `hold` to keep an in-between status on screen.
+const publishPolls = await vi.hoisted(async () =>
+  (await import('../test/publishPolls')).createPublishPolls(),
+)
 
 // The publish job is polled every two seconds in the app; tests poll immediately.
 vi.mock('../lib/publishJob', async (importOriginal) => {
@@ -2260,8 +2237,11 @@ describe('CampaignsSection', () => {
     await user.click(screen.getByRole('button', { name: 'Generate Ads' }))
     expect(await screen.findByText('Headline B')).toBeInTheDocument()
 
-    finishOlderRequest([fakeCreative({ id: 'creative-1', headline: 'Headline A' })])
-    await new Promise((resolve) => setTimeout(resolve, 50))
+    // act() waits for the older request's answer and everything it triggers to settle, so what
+    // follows checks the screen after the late answer was handled, not after a guessed pause.
+    await act(async () => {
+      finishOlderRequest([fakeCreative({ id: 'creative-1', headline: 'Headline A' })])
+    })
 
     expect(screen.getByText('Headline A')).toBeInTheDocument()
     expect(screen.getByText('Headline B')).toBeInTheDocument()
@@ -5996,10 +5976,18 @@ describe('CampaignsSection video ads and the creative test format', () => {
         .mockResolvedValueOnce({ state: 'PROCESSING', step: 'Processing video', progress: 70 })
         .mockResolvedValueOnce({ state: 'DONE' })
 
+      publishPolls.hold = true
+
       renderCampaigns(<CampaignsSection businessId="biz-1" />)
 
       expect(await screen.findByText(/Processing video… 70%/)).toBeInTheDocument()
+      expect(mockedApi.getPublishStatus).toHaveBeenCalledTimes(1)
+      await waitFor(() => expect(publishPolls.held).toHaveLength(1))
+      publishPolls.release()
       await waitFor(() => expect(mockedApi.getPublishStatus).toHaveBeenCalledTimes(2))
+      await waitFor(() =>
+        expect(screen.queryByText(/Processing video/)).not.toBeInTheDocument(),
+      )
       expect(mockedApi.publishCampaign).not.toHaveBeenCalled()
     })
 

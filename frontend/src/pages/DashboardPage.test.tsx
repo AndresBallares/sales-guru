@@ -764,7 +764,7 @@ describe('DashboardPage', () => {
     // open with the cursor in the first field.
     expect(await screen.findByRole('link', { name: 'Acme Widgets' })).toBeInTheDocument()
     const overview = await screen.findByLabelText(/Brand overview/)
-    expect(overview).toHaveFocus()
+    await waitFor(() => expect(overview).toHaveFocus())
     expect(mockedApi.getBrandProfile).toHaveBeenCalledWith('1')
     expect(screen.queryByText('Business detail page')).not.toBeInTheDocument()
     // The Company Information form is emptied and closed again.
