@@ -1,7 +1,13 @@
+import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { test, expect, type Page } from '@playwright/test'
 import { createBusinessWithBrand, finishOnboarding, reachMetaPixelStep } from './support/fakeMetaFlow'
 import { analyzeWhenReady, WCAG_TAGS } from './support/axe'
 import { E2E_API_URL } from './support/ports'
+
+const FIXTURES = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures')
+const PRODUCT_PHOTO_PATH = path.join(FIXTURES, 'product-photo.jpg')
+const SECOND_PRODUCT_PHOTO_PATH = path.join(FIXTURES, 'product-photo-2.jpg')
 
 // The Products tab on the business page: list, add, edit, the mechanism counter, and the
 // warning before an edit that would mark ads out of date. No model or Meta call is paid for:
@@ -34,11 +40,19 @@ async function chooseFromMenu(page: Page, label: string, action: 'Edit Product' 
   await page.getByRole('menuitem', { name: action }).click()
 }
 
-async function addProductInDrawer(page: Page, description: string, name: string) {
+async function addProductInDrawer(
+  page: Page,
+  description: string,
+  name: string,
+  url?: string,
+  photoPath?: string,
+) {
   await page.getByRole('button', { name: 'Add Product' }).click()
   const drawer = page.getByRole('dialog', { name: 'Add New Product' })
   await drawer.getByLabel('What do you sell?').fill(description)
   await drawer.getByLabel(/Product name/).fill(name)
+  if (url) await drawer.getByLabel(/^URL/).fill(url)
+  if (photoPath) await drawer.getByLabel(/Product photos/).setInputFiles(photoPath)
   await drawer.getByRole('button', { name: 'Save Product' }).click()
   await expect(drawer).toHaveCount(0)
   await expect(page.getByRole('heading', { name, level: 3 })).toBeVisible()
@@ -286,7 +300,8 @@ test('the grid is three columns on a wide screen and one on a phone, and the dra
 
   await page.setViewportSize({ width: 1280, height: 900 })
   expect(new Set((await tops()).slice(0, 3)).size).toBe(1)
-  expect(new Set(await heights()).size).toBe(1)
+  // Cards in one row are the same height; a row is only as tall as its own cards.
+  expect(new Set((await heights()).slice(0, 3)).size).toBe(1)
   await expectNoAxeViolations(page)
 
   await page.setViewportSize({ width: 390, height: 800 })
@@ -318,4 +333,111 @@ test('search narrows the grid by name and says so when nothing matches', async (
 
   await page.getByRole('searchbox', { name: 'Search products' }).fill('zzz')
   await expect(page.getByText('No products found. Try another search.')).toBeVisible()
+})
+
+test('the Products page uses the desktop width, with compact cards and readable type', async ({
+  page,
+}) => {
+  await createBusinessWithBrand(page)
+  await page.getByRole('tab', { name: 'Products' }).click()
+  for (const [description, name] of [
+    ['Gold hoops, hand polished', 'Hoops'],
+    ['Silver studs with a satin finish', 'Studs'],
+    ['Pearl pendant on a fine chain', 'Pendant'],
+  ]) {
+    await addProductInDrawer(page, description, name, 'https://example.com/products/' + name.toLowerCase())
+  }
+  await page.setViewportSize({ width: 1440, height: 900 })
+
+  const metrics = await page.evaluate(() => {
+    const px = (el: Element | null, prop: string) =>
+      el ? parseFloat(getComputedStyle(el).getPropertyValue(prop)) : Number.NaN
+    const grid = document.querySelector('.product-grid') as HTMLElement
+    const card = document.querySelector('.product-card') as HTMLElement
+    const media = card.querySelector('.product-card-media') as HTMLElement
+    const description = card.querySelector('.product-card-description') as HTMLElement
+    const url = card.querySelector('.product-card-url') as HTMLElement
+    return {
+      gridWidth: grid.getBoundingClientRect().width,
+      cardWidth: card.getBoundingClientRect().width,
+      cardHeight: card.getBoundingClientRect().height,
+      mediaHeight: media.getBoundingClientRect().height,
+      gapDescriptionToUrl:
+        url.getBoundingClientRect().top - description.getBoundingClientRect().bottom,
+      heading: px(document.querySelector('.products-header h2'), 'font-size'),
+      name: px(card.querySelector('.product-card-name'), 'font-size'),
+      description: px(description, 'font-size'),
+      url: px(url, 'font-size'),
+      count: px(document.querySelector('.products-count'), 'font-size'),
+      overflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+    }
+  })
+
+  // Content width about 1,000-1,100 px (the business page's container), three real columns.
+  expect(metrics.gridWidth).toBeGreaterThanOrEqual(1000)
+  expect(metrics.gridWidth).toBeLessThanOrEqual(1120)
+  expect(metrics.cardWidth).toBeGreaterThanOrEqual(320)
+  expect(metrics.overflow).toBeLessThanOrEqual(0)
+  // The photo area is a share of the card, not most of it, and the card has no tall empty body.
+  expect(metrics.mediaHeight / metrics.cardHeight).toBeLessThanOrEqual(0.72)
+  expect(metrics.cardHeight).toBeLessThanOrEqual(metrics.cardWidth * 1.15)
+  // The URL sits right under the description, not pinned to the bottom of a tall card.
+  expect(metrics.gapDescriptionToUrl).toBeLessThanOrEqual(16)
+  // Type sizes (px): heading 20-22, name 15-16, description 13-14, URL 11-12, count about 12.
+  expect(metrics.heading).toBeGreaterThanOrEqual(20)
+  expect(metrics.heading).toBeLessThanOrEqual(22)
+  expect(metrics.name).toBeGreaterThanOrEqual(15)
+  expect(metrics.name).toBeLessThanOrEqual(16)
+  expect(metrics.description).toBeGreaterThanOrEqual(13)
+  expect(metrics.description).toBeLessThanOrEqual(14)
+  expect(metrics.url).toBeGreaterThanOrEqual(11)
+  expect(metrics.url).toBeLessThanOrEqual(12)
+  expect(metrics.count).toBeGreaterThanOrEqual(11.5)
+  expect(metrics.count).toBeLessThanOrEqual(12.5)
+
+  // Heading and Add Product share a row (heading left, button right); the search toolbar is
+  // its own row directly above the grid.
+  const layout = await page.evaluate(() => {
+    const rect = (selector: string) => document.querySelector(selector)!.getBoundingClientRect()
+    return {
+      headingTop: rect('.products-header h2').top,
+      buttonTop: rect('.products-add').top,
+      headingRight: rect('.products-header h2').right,
+      buttonLeft: rect('.products-add').left,
+      toolbarBottom: rect('.products-toolbar').bottom,
+      gridTop: rect('.product-grid').top,
+    }
+  })
+  expect(Math.abs(layout.headingTop - layout.buttonTop)).toBeLessThan(40)
+  expect(layout.buttonLeft).toBeGreaterThan(layout.headingRight)
+  expect(layout.gridTop - layout.toolbarBottom).toBeLessThanOrEqual(32)
+})
+
+test('a photo never makes its card taller than a card without one', async ({ page }) => {
+  await createBusinessWithBrand(page)
+  await page.getByRole('tab', { name: 'Products' }).click()
+  // Two photos of different shapes and one product with none.
+  await addProductInDrawer(page, 'Gold hoops', 'Hoops', undefined, PRODUCT_PHOTO_PATH)
+  await addProductInDrawer(page, 'Silver studs', 'Studs', undefined, SECOND_PRODUCT_PHOTO_PATH)
+  await addProductInDrawer(page, 'Pearl pendant', 'Pendant')
+  await expect(page.getByRole('img', { name: 'Hoops' })).toBeVisible()
+  await page.setViewportSize({ width: 1440, height: 900 })
+
+  const media = await page.locator('.product-card-media').evaluateAll((boxes) =>
+    boxes.map((box) => {
+      const rect = box.getBoundingClientRect()
+      const img = box.querySelector('img')?.getBoundingClientRect()
+      return {
+        width: Math.round(rect.width),
+        height: Math.round(rect.height),
+        // The whole photo fits inside the box, in its own proportions.
+        fits: img ? img.width <= rect.width + 1 && img.height <= rect.height + 1 : true,
+      }
+    }),
+  )
+  expect(media).toHaveLength(3)
+  expect(new Set(media.map((m) => m.height)).size).toBe(1)
+  expect(media.every((m) => m.fits)).toBe(true)
+  // A 3:2 box, not a square.
+  expect(media[0].height / media[0].width).toBeLessThan(0.7)
 })

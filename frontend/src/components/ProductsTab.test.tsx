@@ -187,6 +187,25 @@ describe('the product cards', () => {
     expect(within(bare).queryByRole('link')).not.toBeInTheDocument()
   })
 
+  it('takes the title from the product name and the preview from the description, never one for the other', async () => {
+    const businessy: api.Product = {
+      ...coil,
+      id: 'prod-9',
+      name: 'Serpent Ring',
+      description: 'VENZI Jewelry sells contemporary handcrafted fine jewelry in New York.',
+    }
+    const blankName: api.Product = { ...unnamed, id: 'prod-10', name: '   ', description: 'Band' }
+    mockedApi.listProducts.mockResolvedValue([businessy, blankName])
+    render(<ProductsTab businessId="biz-1" />)
+
+    const named = await screen.findByRole('listitem', { name: 'Serpent Ring' })
+    expect(within(named).getByRole('heading', { level: 3 })).toHaveTextContent('Serpent Ring')
+    expect(within(named).getByText(/VENZI Jewelry sells/)).not.toHaveAttribute('role', 'heading')
+    // A name of only spaces is no name: the title says so, the description stays a description.
+    const bare = screen.getByRole('listitem', { name: 'Band' })
+    expect(within(bare).getByRole('heading', { level: 3 })).toHaveTextContent('Untitled Product')
+  })
+
   it('leaves out the description area when there is no description text', async () => {
     mockedApi.listProducts.mockResolvedValue([{ ...coil, description: '   ' }])
     const { container } = render(<ProductsTab businessId="biz-1" />)

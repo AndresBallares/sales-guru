@@ -6087,16 +6087,18 @@ main > section.campaigns-overview {
 
 .products-header h2 {
   margin: 0 0 0.25rem;
+  font-size: 1.35rem;
 }
 
 .products-subtitle {
   margin: 0;
+  font-size: 0.9rem;
   color: var(--text-secondary);
 }
 
 .products-count {
-  margin: 0.4rem 0 0;
-  font-size: 0.85rem;
+  margin: 0.35rem 0 0;
+  font-size: 0.75rem;
   color: var(--text-tertiary);
 }
 
@@ -6108,13 +6110,15 @@ main > section.campaigns-overview {
   white-space: nowrap;
 }
 
-.products-search {
-  margin-bottom: 1.25rem;
+/* The search sits in its own row right above the grid. */
+.products-toolbar {
+  display: flex;
+  margin-bottom: 1rem;
 }
 
-.products-search input {
+.products-toolbar input {
   width: 100%;
-  max-width: 22rem;
+  max-width: 24rem;
 }
 
 .product-grid {
@@ -6123,8 +6127,8 @@ main > section.campaigns-overview {
   padding: 0;
   display: grid;
   grid-template-columns: minmax(0, 1fr);
-  /* Every row as tall as the tallest card, so all cards are the same height. */
-  grid-auto-rows: 1fr;
+  /* Cards in a row stretch to the tallest one in that row; a row is no taller than that. */
+  align-items: stretch;
   gap: 1.25rem;
 }
 
@@ -6161,15 +6165,20 @@ main > section.campaigns-overview {
 }
 
 .product-card-media {
+  position: relative;
   display: grid;
   place-items: center;
-  aspect-ratio: 4 / 3;
+  aspect-ratio: 3 / 2;
+  overflow: hidden;
   background: var(--row-bg);
   border-bottom: 1px solid var(--border);
 }
 
-/* The whole photo shows (contain), never cropped; the neutral background fills the rest. */
+/* The whole photo shows (contain), never cropped; the neutral background fills the rest. The
+   image fills the box instead of sizing it, so a square photo cannot make its card taller. */
 .product-card-media img {
+  position: absolute;
+  inset: 0;
   width: 100%;
   height: 100%;
   object-fit: contain;
@@ -6182,8 +6191,8 @@ main > section.campaigns-overview {
 }
 
 .product-card-placeholder svg {
-  width: 44px;
-  height: 44px;
+  width: 40px;
+  height: 40px;
 }
 
 .product-card-actions {
@@ -6225,9 +6234,9 @@ main > section.campaigns-overview {
   display: flex;
   flex: 1;
   flex-direction: column;
-  gap: 0.35rem;
+  gap: 0.25rem;
   min-width: 0;
-  padding: 1rem 1.1rem 1.1rem;
+  padding: 0.8rem 1rem 0.9rem;
 }
 
 /* A long name wraps, then stops at two lines, so no card grows taller than its neighbours. */
@@ -6243,24 +6252,24 @@ main > section.campaigns-overview {
 }
 
 .product-card-name {
-  font-size: 1.05rem;
+  font-size: 0.97rem;
   font-weight: 600;
   line-height: 1.3;
 }
 
 .product-card-description {
-  font-size: 0.9rem;
-  line-height: 1.45;
+  font-size: 0.85rem;
+  line-height: 1.4;
   color: var(--text-secondary);
 }
 
+/* Right under the description, so a short card has no gap in the middle. */
 .product-card-url {
-  margin-top: auto;
-  padding-top: 0.25rem;
+  margin-top: 0.15rem;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 0.8rem;
+  font-size: 0.72rem;
   color: var(--text-tertiary);
   text-decoration: none;
 }
@@ -6291,7 +6300,7 @@ main > section.campaigns-overview {
 }
 
 .product-card-error {
-  margin: 0 1.1rem 1.1rem;
+  margin: 0 1rem 1rem;
 }
 
 .product-card-skeleton {

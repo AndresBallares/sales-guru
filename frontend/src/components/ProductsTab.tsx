@@ -173,7 +173,7 @@ export function ProductsTab({
       )}
 
       {showSearch && (
-        <div className="products-search">
+        <div className="products-toolbar">
           <input
             type="search"
             aria-label="Search products"
