@@ -123,6 +123,11 @@ path the rule above requires explicit confirmation for).
   gate before merge.
 - **Minimum test coverage is 90% for both backend and frontend, enforced in CI.**
   Never lower a coverage threshold.
+- **Docs ship with behavior.** Every PR that changes behavior also updates
+  `PRD.md` (the readable summary, for example §11a) and, where relevant,
+  `docs/phase-7.md` (the engineering log) in the same PR, not in a follow-up. Show the
+  doc changes before committing them. A PR that changes no behavior (a test-only
+  one, say) needs no doc change.
 - **Before pushing to a branch with an open PR, check the PR's state.** If it's
   merged, open a new branch off main instead (`gh pr view <n> --json state`). A
   merged PR's head stops updating, so a push there looks like GitHub lag but

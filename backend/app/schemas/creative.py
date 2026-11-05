@@ -687,6 +687,10 @@ class CreativeResponse(CamelCaseModel):
     pillar: str | None = None
     buyer_avatar_id: str | None = None
     buyer_avatar: BuyerAvatarRefResponse | None = None
+    # True when the ad's angle reused one of its avatar's saved concepts. Read from the
+    # angle's own record in the plan (written when the angle was created), never from
+    # the avatar's concepts today, so it does not change when a concept is edited.
+    from_saved_concept: bool = False
     image_prompt: str | None
     video_prompt: str | None
     image_url: str | None

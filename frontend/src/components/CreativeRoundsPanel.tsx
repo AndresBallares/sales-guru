@@ -11,6 +11,7 @@ import {
   type CreativeRound,
 } from '../lib/api'
 import { angleLabel } from '../lib/creativeAngle'
+import { SavedConceptNote } from './SavedConceptNote'
 
 interface CreativeRoundsPanelProps {
   businessId: string
@@ -152,6 +153,12 @@ export function CreativeRoundsPanel({
                 <li key={`${angle.avatar}-${angle.concept}`}>
                   <strong>{angleLabel(angle)}</strong>
                   {angle.description ? ` — ${angle.description}` : ''}
+                  {angle.fromSavedConcept && (
+                    <>
+                      {' '}
+                      <SavedConceptNote />
+                    </>
+                  )}
                 </li>
               ))}
             </ul>

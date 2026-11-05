@@ -8,10 +8,13 @@ library, and both the first batch and the follow-up rounds use them.
 import json
 import logging
 import math
-from collections.abc import Mapping, Sequence
+import re
+from collections.abc import Collection, Mapping, Sequence
+from typing import get_args
 
 from prisma.models import BuyerAvatar
 
+from app.schemas.strategy import MIN_DISTINCT_PILLARS, Pillar
 from app.services.prompt_safety import quarantine
 from app.services.round_results import AdResult, RoundResults
 
@@ -24,6 +27,15 @@ _ITEM_CHARS = 160
 _ITEMS_SHOWN = 2
 
 _BUYS_FOR = {"self": "themselves", "gift": "someone else, as a gift"}
+
+# Saved concepts the Strategist is shown: a few per avatar, each description cut short.
+_CONCEPTS_SHOWN = 3
+_CONCEPT_CHARS = 120
+# An angle's concept is a lowercase slug of at most this many characters
+# (GeneratedCreativeAngle.concept); a saved slug that cannot be one is never offered.
+_ANGLE_SLUG = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")
+_ANGLE_SLUG_MAX = 30
+_PILLARS = frozenset(get_args(Pillar))
 
 
 def library_by_id(avatars: Sequence[BuyerAvatar]) -> dict[str, str]:
@@ -48,12 +60,61 @@ def _first(stored: str) -> str:
     return _cut(items[0], _ITEM_CHARS) if items else ""
 
 
-def library_block(avatars: Sequence[BuyerAvatar]) -> str:
+def saved_concepts(avatar: BuyerAvatar) -> list[tuple[str, str, str]]:
+    """The avatar's usable saved concepts, as (slug, pillar, description) tuples.
+
+    Only a concept with a slug an angle can carry (lowercase and hyphens, at most 30
+    characters), a known pillar and a description is returned, in the order saved.
+    """
+    usable: list[tuple[str, str, str]] = []
+    for item in json.loads(avatar.concepts):
+        if not isinstance(item, dict):
+            continue
+        slug, pillar, description = (
+            item.get("slug"),
+            item.get("pillar"),
+            item.get("description"),
+        )
+        if (
+            isinstance(slug, str)
+            and len(slug) <= _ANGLE_SLUG_MAX
+            and _ANGLE_SLUG.match(slug)
+            and isinstance(pillar, str)
+            and pillar in _PILLARS
+            and isinstance(description, str)
+            and description.strip()
+        ):
+            usable.append((slug, pillar, description))
+    return usable
+
+
+def saved_concept_pillars(avatars: Sequence[BuyerAvatar]) -> dict[str, dict[str, str]]:
+    """Each avatar's usable saved concepts as {avatar id: {slug: pillar}}.
+
+    What the code checks an angle against; avatars with none are left out.
+    """
+    return {
+        avatar.id: {slug: pillar for slug, pillar, _ in found}
+        for avatar in avatars
+        if (found := saved_concepts(avatar))
+    }
+
+
+def library_block(
+    avatars: Sequence[BuyerAvatar],
+    used: Collection[tuple[str | None, str]] = (),
+) -> str:
     """The avatar library as a quarantined block for the request details.
 
     The text comes from the owner's research document, so it is wrapped as data. Each
     avatar's line carries who they are, up to two problems, the first thing they do
-    not know yet and the first mechanism that matters to them.
+    not know yet, the first mechanism that matters to them and up to three of its
+    saved concepts.
+
+    Args:
+        avatars: The assignable library avatars.
+        used: (avatar id, concept slug) pairs this campaign's earlier ads already
+            used; a saved concept in it is not offered again.
     """
     lines: list[str] = []
     for avatar in avatars:
@@ -74,6 +135,15 @@ def library_block(avatars: Sequence[BuyerAvatar]) -> str:
             line += f" | doesn't know yet: {unknown}"
         if mechanism:
             line += f" | mechanism: {mechanism}"
+        # Saved concepts are the owner's approved ideas for this avatar; the Strategist
+        # is told to prefer them. One this campaign already used is left out.
+        offered = [
+            f"{slug} ({pillar}): {_cut(description, _CONCEPT_CHARS)}"
+            for slug, pillar, description in saved_concepts(avatar)
+            if (avatar.id, slug) not in used
+        ][:_CONCEPTS_SHOWN]
+        if offered:
+            line += " | concepts: " + "; ".join(offered)
         lines.append(line)
     return quarantine("Buyer avatar library", "\n".join(lines))
 
@@ -114,12 +184,15 @@ def fake_library_angles(
     angles: Sequence[object],
     avatars: Sequence[BuyerAvatar],
     favored_id: str | None = None,
+    used: Collection[tuple[str | None, str]] = (),
 ) -> list[dict[str, object]]:
     """Give canned angles library avatars that satisfy the coverage rules.
 
     Puts one self and one gift avatar first when the library has both, then
     cycles through the rest, so a library of three or more is covered by three or
-    more different avatars.
+    more different avatars. An angle takes one of its avatar's saved concepts when
+    it has an unused one and the angles still span three pillars, so the fake path
+    exercises the saved-concept code too.
     """
     selfs = [a for a in avatars if a.purchaseFor == "self"]
     gifts = [a for a in avatars if a.purchaseFor == "gift"]
@@ -143,7 +216,29 @@ def fake_library_angles(
                 "buyer_avatar_id": avatar_id,
             }
         )
+    _use_saved_concepts(fitted, {a.id: a for a in avatars}, set(used))
     return fitted
+
+
+def _use_saved_concepts(
+    fitted: list[dict[str, object]],
+    by_id: Mapping[str, BuyerAvatar],
+    taken: set[tuple[str | None, str]],
+) -> None:
+    """Swap canned concepts for saved ones, each at most once, keeping 3+ pillars."""
+    for angle in fitted:
+        avatar = by_id[str(angle["buyer_avatar_id"])]
+        for slug, pillar, description in saved_concepts(avatar):
+            if (avatar.id, slug) in taken:
+                continue
+            before = dict(angle)
+            angle.update(concept=slug, pillar=pillar, description=description)
+            if len({a["pillar"] for a in fitted}) < MIN_DISTINCT_PILLARS:
+                angle.clear()
+                angle.update(before)
+                continue
+            taken.add((avatar.id, slug))
+            break
 
 
 def winning_avatar_id(

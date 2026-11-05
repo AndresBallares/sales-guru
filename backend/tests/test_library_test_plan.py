@@ -46,6 +46,7 @@ def _avatar(id_: str, purchase_for: str = "self", **overrides: Any) -> BuyerAvat
         "objections": "[]",
         "hooks": json.dumps([f"{id_} hook one", f"{id_} hook two"]),
         "creativeAngles": "[]",
+        "concepts": "[]",
     }
     fields.update(overrides)
     return cast(BuyerAvatar, SimpleNamespace(**fields))
@@ -61,7 +62,7 @@ def _angle(avatar_id: str, concept: str, pillar: str) -> dict[str, str]:
     }
 
 
-def _raw(angles: list[dict[str, str]]) -> dict[str, Any]:
+def _raw(angles: list[dict[str, Any]]) -> dict[str, Any]:
     return {**_VALID_INPUT, "creative_angles": angles}
 
 

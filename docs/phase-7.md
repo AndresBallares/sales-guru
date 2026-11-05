@@ -2,7 +2,7 @@
 
 Branch: `research-agent` (from `main` at `b20aeea`). Phases 1-6 and the common-window comparison are merged.
 
-Last updated: 2026-11-03.
+Last updated: 2026-11-05.
 
 ## Status
 
@@ -668,7 +668,7 @@ Found in the owner's manual test: saving closed the run, so the other avatars co
 - **Reopen.** A done run shows "Reopen to save more" (`POST .../research-runs/{id}/reopen`, `REVIEWED` to `NEEDS_REVIEW`, `reviewedAt` cleared; any other status is a 409). The saved avatars stay marked Saved. A discarded run cannot be reopened. The monthly count is unchanged.
 - **Known limit.** An avatar saved before this column existed has no draft index, so its draft is not shown as Saved unless the index is filled in by hand (done once for the dev run).
 
-## After 7c: Strategist uses an avatar's saved concepts (plan only, 2026-11-04; nothing built)
+## After 7c: Strategist uses an avatar's saved concepts (built 2026-11-05 on branch `strategist-saved-concepts`; PR pending)
 
 ### Today (read-only check)
 The Strategist does **not** use saved concepts. `library_block` (`app/services/avatar_library_prompt.py`) gives each
@@ -708,3 +708,14 @@ and pillar. There is no campaign-level "assigned avatar": each of the four angle
 - Each saved concept is used **at most once per campaign**. Later rounds prefer saved concepts not yet used by that campaign's earlier ads; when an avatar has none left, the model invents a new concept as today.
 - Angles and ad cards that came from a saved concept show a small **"From your avatar"** note. This needs a way to remember it: either a `fromSavedConcept` flag on the stored angle (the strategy is stored JSON, so no migration) and on the ad's creative record (a new nullable column, so both Prisma schemas, both migrations and a throwaway-Postgres check), or deriving it by matching `(buyerAvatarId, concept)` against the avatar's current concepts at read time (no schema change, but the note would vanish if the owner later edits or deletes the concept). Proposed: derive at read time for the strategy screen and ad cards first, and only add a column if the owner wants the note to be permanent.
 - Order: this is the step right after the 7c PR merges. The Products Delete button and video-thumbnail PR is independent and follows it.
+
+### Build notes (2026-11-05)
+What was built, and where it differs from the plan above.
+
+- **The "From your avatar" note is recorded, not derived (owner decision, 2026-11-05).** The plan proposed working it out at read time from the avatar's current concepts. Instead the validator stores `fromSavedConcept` on each angle in the plan JSON when the angle is created (`GeneratedCreativeAngle.from_saved_concept`, hidden from the model's tool schema and always set by the code, never taken from the model). History therefore does not change when a concept is edited or deleted, a same-slug concept saved later adds no note, and a plan from before the field shows none. No schema change, no migration.
+- **Ad cards read the flag from their angle.** A creative row has no flag column (that would have needed a migration on both schemas). `_saved_angles_for(campaign)` in `app/api/creative.py` reads the campaign's recorded angles (the strategy's, and each round's) and the creative response sets `fromSavedConcept` when its (buyer avatar id, concept) pair is among them. The round response and every creative endpoint use it.
+- **Where the code lives.** `avatar_library_prompt.py`: `saved_concepts` (usable concepts: slug of at most 30 lowercase-hyphen characters, a known pillar, a description), `saved_concept_pillars` (the {avatar: {slug: pillar}} map the validator checks against) and `library_block(avatars, used=...)` (up to 3 concepts per avatar, descriptions cut to 120 characters, concepts the campaign already used left out). `strategist.py`: the shared `_PREFER_SAVED_CONCEPTS` sentence in the first-batch and round prompts, and the `saved_concepts` validation context for both. `schemas/strategy.py`: `_with_derived_avatars` forces the stored pillar and sets the flag. `fake_library_angles` takes saved concepts (each at most once, never one already used, keeping three pillars).
+- **At most once per campaign** needed no new rule: the existing unique (avatar, concept) pair check (first batch) and freshness check (rounds) already forbid reuse; the change is that a used concept is no longer listed, so the model is not steered toward it.
+- **Frontend.** `fromSavedConcept` on the API's angle and creative types; a small `SavedConceptNote` ("From your avatar") on the strategy angle cards, the rounds panel's angle list and the ad cards.
+- **Tests.** Backend: `tests/test_saved_concepts.py` (prompt block, prompts, the forced pillar, the flag, rounds, fake mode) and `tests/test_saved_concept_note_api.py` (ad cards read the note from their angle; the note stays after the concept is edited or the avatar deleted; a same-slug concept saved later adds none; a plan without the field shows none; round angles and ads carry it). Frontend unit tests for the three surfaces and `e2e/saved-concept-note.spec.ts`.
+- **Still to measure.** The added input tokens on the first real strategy with saved concepts (estimate: about 700 for 5 avatars, at most about 1,600 for 12), and whether the model follows "prefer saved concepts" without the retry.

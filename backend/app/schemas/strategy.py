@@ -599,6 +599,11 @@ class GeneratedCreativeAngle(CamelCaseModel):
     # the tool schema: the model only names one in library mode (LibraryAngle),
     # and the code sets avatar from that avatar's purchase_for.
     buyer_avatar_id: SkipJsonSchema[str | None] = None
+    # True when the angle reuses one of the avatar's saved concepts (same avatar and
+    # slug), recorded when the angle is created and stored with it in the plan. Left
+    # out of the tool schema and set only by the code (_with_derived_avatars), never
+    # by the model; an editing or deleting of the concept later does not change it.
+    from_saved_concept: SkipJsonSchema[bool] = False
 
 
 class CreativeAngle(GeneratedCreativeAngle):
@@ -838,6 +843,10 @@ def _with_derived_avatars(data: object, info: ValidationInfo) -> object:
     angles = data.get(key)
     if not isinstance(angles, list):
         return data
+    # avatar id -> {slug: pillar} of the concepts each avatar has saved (usable ones).
+    saved: Mapping[str, Mapping[str, str]] = (info.context or {}).get(
+        "saved_concepts"
+    ) or {}
     derived: list[object] = []
     for angle in angles:
         if not isinstance(angle, dict):
@@ -849,7 +858,25 @@ def _with_derived_avatars(data: object, info: ValidationInfo) -> object:
                 f"buyer_avatar_id {avatar_id!r} is not in the buyer avatar "
                 f"library; use one of: {', '.join(sorted(library))}"
             )
-        derived.append({**angle, "avatar": AVATAR_FOR_PURCHASE[library[avatar_id]]})
+        # The code decides whether an angle reuses a saved concept, never the model:
+        # whatever it sent for the flag is dropped, and a matching concept gets its
+        # stored pillar.
+        concept = angle.get("concept")
+        stored_pillar = (
+            saved.get(str(avatar_id), {}).get(concept)
+            if isinstance(concept, str)
+            else None
+        )
+        cleaned = {
+            k: v
+            for k, v in angle.items()
+            if k not in ("from_saved_concept", "fromSavedConcept")
+        }
+        cleaned["avatar"] = AVATAR_FOR_PURCHASE[library[avatar_id]]
+        cleaned["from_saved_concept"] = stored_pillar is not None
+        if stored_pillar is not None:
+            cleaned["pillar"] = stored_pillar
+        derived.append(cleaned)
     return {**data, key: derived}
 
 

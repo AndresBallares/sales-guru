@@ -188,6 +188,22 @@ describe('CreativeRoundsPanel', () => {
     expect(screen.queryByRole('button', { name: /^publish/i })).not.toBeInTheDocument()
   })
 
+  it('marks a round angle that reused a saved concept with "From your avatar"', async () => {
+    const open = makeRound({
+      angles: [
+        { avatar: 'self_purchaser', concept: 'nobody-chose-this-for', pillar: 'emotion', description: 'Saved.', fromSavedConcept: true },
+        { avatar: 'gift_buyer', concept: 'easy-returns', pillar: 'offer', description: 'Invented.', fromSavedConcept: false },
+        { avatar: 'gift_buyer', concept: 'daily-ritual', pillar: 'emotion', description: 'Older plan.' },
+      ],
+    })
+    mockedApi.listRounds.mockResolvedValue([open])
+    renderPanel()
+
+    const saved = (await screen.findByText(/Nobody chose this for/)).closest('li') as HTMLElement
+    expect(within(saved).getByText('From your avatar')).toBeInTheDocument()
+    expect(screen.getAllByText('From your avatar')).toHaveLength(1)
+  })
+
   it('shows the progress of a video round published in the background', async () => {
     const open = makeRound({ creatives: [makeCreative('a', { status: 'SELECTED' })] })
     const closed = makeRound({ ...open, status: 'CLOSED' })

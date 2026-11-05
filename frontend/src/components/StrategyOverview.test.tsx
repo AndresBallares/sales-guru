@@ -169,4 +169,33 @@ describe('StrategyOverview', () => {
     renderOverview()
     expect(screen.queryByRole('button', { name: 'Generate Ads' })).not.toBeInTheDocument()
   })
+
+  describe('the "From your avatar" note', () => {
+    function planWith(angles: Array<Record<string, unknown>>) {
+      return {
+        ...creativeTest,
+        creativeAngles: angles,
+      } as unknown as CreativeTestPlanContent
+    }
+
+    it('marks an angle that reused one of its avatar\'s saved concepts, and only that one', () => {
+      renderOverview(
+        planWith([
+          { avatar: 'self_purchaser', concept: 'nobody-chose-this-for', pillar: 'emotion', description: 'Saved one', fromSavedConcept: true },
+          { avatar: 'gift_buyer', concept: 'gifting', pillar: 'offer', description: 'Invented one', fromSavedConcept: false },
+        ]),
+      )
+
+      const saved = screen.getByText('Saved one').closest('li') as HTMLElement
+      const invented = screen.getByText('Invented one').closest('li') as HTMLElement
+      expect(within(saved).getByText('From your avatar')).toBeInTheDocument()
+      expect(within(invented).queryByText('From your avatar')).not.toBeInTheDocument()
+    })
+
+    it('shows no note for a plan stored before the field existed', () => {
+      renderOverview(planWith([{ avatar: 'gift_buyer', concept: 'gifting', pillar: 'emotion', description: 'Old plan angle' }]))
+
+      expect(screen.queryByText('From your avatar')).not.toBeInTheDocument()
+    })
+  })
 })
