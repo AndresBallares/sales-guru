@@ -5,6 +5,11 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { AdPreviewPage } from './AdPreviewPage'
 import * as api from '../lib/api'
 
+// See src/test/publishPolls.ts: a test sets `hold` to keep an in-between status on screen.
+const publishPolls = await vi.hoisted(async () =>
+  (await import('../test/publishPolls')).createPublishPolls(),
+)
+
 // The publish job is polled every two seconds in the app; tests poll quickly.
 vi.mock('../lib/publishJob', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../lib/publishJob')>()
@@ -15,7 +20,7 @@ vi.mock('../lib/publishJob', async (importOriginal) => {
     ) =>
       actual.waitForPublishJob(businessId, campaignId, onStatus, {
         intervalMs: 0,
-        sleep: () => new Promise((resolve) => setTimeout(resolve, 30)),
+        sleep: () => publishPolls.sleep(),
         ...options,
       }),
   }
@@ -111,6 +116,7 @@ function renderPage() {
 
 beforeEach(() => {
   window.sessionStorage.clear()
+  publishPolls.reset()
   vi.resetAllMocks()
   mockedApi.getBusiness.mockResolvedValue(business)
   mockedApi.listRounds.mockResolvedValue([])
@@ -332,7 +338,10 @@ describe('AdPreviewPage', () => {
       renderPage()
 
       expect(await screen.findByRole('button', { name: 'Add new round' })).toBeInTheDocument()
-      expect(mockedApi.listRounds).toHaveBeenCalledWith('biz-1', 'camp-1')
+      // The rounds are requested by an effect after the panel first renders, so wait for it.
+      await waitFor(() =>
+        expect(mockedApi.listRounds).toHaveBeenCalledWith('biz-1', 'camp-1'),
+      )
     })
 
     it('explains why a test published before campaign budgets gets no new round', async () => {
@@ -1180,10 +1189,18 @@ describe('AdPreviewPage', () => {
         .mockResolvedValueOnce({ state: 'PROCESSING', step: 'Processing video', progress: 30 })
         .mockResolvedValueOnce({ state: 'DONE' })
 
+      publishPolls.hold = true
+
       renderPage()
 
       expect(await screen.findByText(/Processing video… 30%/)).toBeInTheDocument()
+      expect(mockedApi.getPublishStatus).toHaveBeenCalledTimes(1)
+      await waitFor(() => expect(publishPolls.held).toHaveLength(1))
+      publishPolls.release()
       await waitFor(() => expect(mockedApi.getPublishStatus).toHaveBeenCalledTimes(2))
+      await waitFor(() =>
+        expect(screen.queryByText(/Processing video/)).not.toBeInTheDocument(),
+      )
       expect(mockedApi.publishCampaign).not.toHaveBeenCalled()
     })
   })

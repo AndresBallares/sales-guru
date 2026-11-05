@@ -244,7 +244,7 @@ describe('saving', () => {
     await user.click(screen.getByRole('button', { name: 'Save selected' }))
     const alert = await screen.findByRole('alert')
     expect(alert).toHaveTextContent('Each entry must be at most 200 characters')
-    expect(alert).toHaveFocus()
+    await waitFor(() => expect(alert).toHaveFocus())
     expect(onSaved).not.toHaveBeenCalled()
     expect(screen.getByRole('checkbox', { name: /Save The Plain-Gold Loyalist/ })).toBeChecked()
     expect(screen.getByRole('button', { name: 'Save selected' })).toBeEnabled()
@@ -585,9 +585,10 @@ describe('marking the review as done', () => {
   })
 })
 
-it('moves focus to the heading', () => {
+it('moves focus to the heading', async () => {
   renderReview()
-  expect(screen.getByRole('heading', { level: 2, name: 'Review the research' })).toHaveFocus()
+  const heading = screen.getByRole('heading', { level: 2, name: 'Review the research' })
+  await waitFor(() => expect(heading).toHaveFocus())
 })
 
 it('works for a run that stopped early with nothing to review', () => {

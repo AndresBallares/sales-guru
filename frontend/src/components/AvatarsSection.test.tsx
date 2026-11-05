@@ -347,7 +347,9 @@ describe('AvatarsSection', () => {
     await waitFor(() =>
       expect(names()).toEqual(['The Deadline Gift-Giver', 'The Heirloom Commissioner']),
     )
-    expect(screen.getByRole('heading', { name: 'Buyer avatars', level: 2 })).toHaveFocus()
+    await waitFor(() =>
+      expect(screen.getByRole('heading', { name: 'Buyer avatars', level: 2 })).toHaveFocus(),
+    )
   })
 
   it('shows why a delete failed', async () => {
@@ -399,7 +401,9 @@ describe('AvatarsSection', () => {
     await waitFor(() =>
       expect(names()).toEqual(['The Deadline Gift-Giver', 'The Promotion Ring Buyer']),
     )
-    expect(screen.getByRole('heading', { name: 'Buyer avatars', level: 2 })).toHaveFocus()
+    await waitFor(() =>
+      expect(screen.getByRole('heading', { name: 'Buyer avatars', level: 2 })).toHaveFocus(),
+    )
   })
   describe('concepts', () => {
     const withConcepts = makeAvatar('a1', 'The Promotion Ring Buyer', {
