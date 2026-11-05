@@ -28,11 +28,36 @@ describe('ResearchEntry', () => {
     expect(container).toBeEmptyDOMElement()
   })
 
-  it('shows nothing when the runs cannot be loaded for another reason', async () => {
-    mockedApi.listResearchRuns.mockRejectedValue(new Error('network'))
+  it('does not vanish when the runs cannot be loaded: it says so and offers a retry', async () => {
+    const user = userEvent.setup()
+    mockedApi.listResearchRuns.mockRejectedValueOnce(new Error('network'))
+    mockedApi.listResearchRuns.mockResolvedValue([makeRun({ id: 'r1', status: 'REVIEWED' })])
     const { container } = renderEntry()
-    await new Promise((r) => setTimeout(r, 20))
-    expect(container).toBeEmptyDOMElement()
+    expect(await screen.findByRole('alert')).toHaveTextContent('Could not load your past research runs')
+    expect(container).not.toBeEmptyDOMElement()
+    await user.click(screen.getByRole('button', { name: 'Try again' }))
+    expect(await screen.findByRole('table', { name: 'Past research runs' })).toBeInTheDocument()
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+  })
+
+  it('shows a loading state while the runs load, not an empty gap', async () => {
+    let resolve: (runs: api.ResearchRun[]) => void = () => undefined
+    mockedApi.listResearchRuns.mockReturnValue(new Promise((r) => (resolve = r)))
+    renderEntry()
+    expect(screen.getByText('Loading past research runs…')).toBeInTheDocument()
+    resolve([makeRun({ id: 'r1', status: 'REVIEWED' })])
+    expect(await screen.findByRole('table', { name: 'Past research runs' })).toBeInTheDocument()
+    expect(screen.queryByText('Loading past research runs…')).not.toBeInTheDocument()
+  })
+
+  it('keeps the list on screen while it reloads after coming back from a run', async () => {
+    mockedApi.listResearchRuns.mockResolvedValue([makeRun({ id: 'r1', status: 'REVIEWED' })])
+    const onOpen = vi.fn<(view: string) => void>()
+    const { rerender } = render(<ResearchEntry businessId="biz-1" refreshKey={0} onOpen={onOpen} />)
+    await screen.findByRole('table', { name: 'Past research runs' })
+    mockedApi.listResearchRuns.mockReturnValue(new Promise(() => undefined))
+    rerender(<ResearchEntry businessId="biz-1" refreshKey={1} onOpen={onOpen} />)
+    expect(screen.getByRole('table', { name: 'Past research runs' })).toBeInTheDocument()
   })
 
   it('offers the Research avatars button when it is on, even with no runs yet', async () => {

@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react'
+import { render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter, useLocation } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
@@ -48,6 +48,56 @@ describe('AvatarsTab', () => {
     expect(await screen.findByRole('heading', { level: 2, name: 'Buyer avatars' })).toBeInTheDocument()
     await vi.waitFor(() => expect(mockedApi.listResearchRuns).toHaveBeenCalled())
     expect(screen.queryByRole('button', { name: 'Research avatars' })).not.toBeInTheDocument()
+  })
+
+  describe('the past research runs section', () => {
+    const runs = () => [
+      makeRun({ id: 'run-2', status: 'REVIEWED', savedAvatarIds: ['a1'], createdAt: '2026-11-04T16:00:00Z' }),
+      makeRun({ id: 'run-1', status: 'DISCARDED', createdAt: '2026-11-03T12:00:00Z' }),
+    ]
+
+    it('is shown at the bottom of the Avatars tab, after the library', async () => {
+      mockedApi.listResearchRuns.mockResolvedValue(runs())
+      renderTab('/businesses/biz-1?metaLater=1#avatars')
+      const library = await screen.findByRole('heading', { level: 2, name: 'Buyer avatars' })
+      const table = await screen.findByRole('table', { name: 'Past research runs' })
+      expect(library.compareDocumentPosition(table) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+      expect(screen.getAllByRole('button', { name: /^Open run from/ })).toHaveLength(2)
+    })
+
+    it('is still there when the library is empty and when there are no runs yet', async () => {
+      mockedApi.listResearchRuns.mockResolvedValue([])
+      renderTab('/businesses/biz-1?metaLater=1#avatars')
+      expect(await screen.findByRole('button', { name: 'Research avatars' })).toBeInTheDocument()
+      expect(screen.getByRole('heading', { level: 3, name: 'Research new avatars' })).toBeInTheDocument()
+    })
+
+    it('opens a run with its Open button, keeping the other address parts', async () => {
+      const user = userEvent.setup()
+      mockedApi.listResearchRuns.mockResolvedValue(runs())
+      mockedApi.getResearchRun.mockResolvedValue(runs()[0])
+      renderTab('/businesses/biz-1?metaLater=1#avatars')
+      const table = await screen.findByRole('table', { name: 'Past research runs' })
+      await user.click(within(table).getAllByRole('button', { name: /^Open run from/ })[0])
+      expect(await screen.findByRole('heading', { level: 2, name: 'Research done' })).toBeInTheDocument()
+      expect(screen.getByTestId('where')).toHaveTextContent('/businesses/biz-1?metaLater=1&research=run-2#avatars')
+    })
+
+    it('comes back after the run is closed', async () => {
+      const user = userEvent.setup()
+      mockedApi.listResearchRuns.mockResolvedValue(runs())
+      mockedApi.getResearchRun.mockResolvedValue(runs()[1])
+      renderTab('/businesses/biz-1?research=run-1#avatars')
+      await user.click(await screen.findByRole('button', { name: 'Back to avatars' }))
+      expect(await screen.findByRole('table', { name: 'Past research runs' })).toBeInTheDocument()
+    })
+
+    it('does not disappear when the runs fail to load', async () => {
+      mockedApi.listResearchRuns.mockRejectedValue(new Error('network'))
+      renderTab('/businesses/biz-1?metaLater=1#avatars')
+      expect(await screen.findByRole('alert')).toHaveTextContent('Could not load your past research runs')
+      expect(screen.getByRole('button', { name: 'Try again' })).toBeInTheDocument()
+    })
   })
 
   it('opens the start screen from the button, keeping the tab in the address', async () => {

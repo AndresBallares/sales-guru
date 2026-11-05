@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react'
-import { listResearchRuns, type ResearchRun } from '../lib/api'
+import { ApiError, listResearchRuns, type ResearchRun } from '../lib/api'
 import { depthLabel, modelLabel, statusLabel } from '../lib/research'
 
-// The "Research avatars" button and the list of past runs, on the Avatars tab. Hidden
-// while the feature is off (every research route answers 404) or cannot be reached.
+// The "Research avatars" button and the list of past runs, on the Avatars tab. Hidden only
+// while the feature is off (every research route answers 404); while loading it says so, and
+// when the runs cannot be loaded it says that and offers a retry.
 export function ResearchEntry({
   businessId,
   refreshKey,
@@ -16,22 +17,56 @@ export function ResearchEntry({
   onOpen: (view: string) => void
 }) {
   const [runs, setRuns] = useState<ResearchRun[] | null>(null)
+  // 'off' is the one case where the section is meant to be absent: the server answers 404
+  // while the feature is switched off. Any other failure shows a message, never a gap.
+  const [status, setStatus] = useState<'loading' | 'ready' | 'off' | 'error'>('loading')
+  const [attempt, setAttempt] = useState(0)
 
   useEffect(() => {
     let cancelled = false
     listResearchRuns(businessId)
       .then((list) => {
-        if (!cancelled) setRuns(list)
+        if (cancelled) return
+        setRuns(list)
+        setStatus('ready')
       })
-      .catch(() => {
-        if (!cancelled) setRuns(null)
+      .catch((error: unknown) => {
+        if (cancelled) return
+        setStatus(error instanceof ApiError && error.status === 404 ? 'off' : 'error')
       })
     return () => {
       cancelled = true
     }
-  }, [businessId, refreshKey])
+  }, [businessId, refreshKey, attempt])
 
-  if (runs === null) return null
+  if (status === 'off') return null
+  if (status === 'loading') {
+    return (
+      <section className="research-entry" aria-label="Research new avatars">
+        <output className="field-hint">Loading past research runs…</output>
+      </section>
+    )
+  }
+  if (status === 'error' || runs === null) {
+    return (
+      <section className="research-entry" aria-labelledby="research-entry-heading">
+        <h3 id="research-entry-heading">Research new avatars</h3>
+        <p className="form-error" role="alert">
+          Could not load your past research runs.
+        </p>
+        <button
+          type="button"
+          className="btn-outline"
+          onClick={() => {
+            setStatus('loading')
+            setAttempt((n) => n + 1)
+          }}
+        >
+          Try again
+        </button>
+      </section>
+    )
+  }
   const working = runs.find((r) => r.status === 'QUEUED' || r.status === 'RUNNING')
 
   return (
