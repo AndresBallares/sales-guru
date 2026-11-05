@@ -1,22 +1,9 @@
-import {
-  useEffect,
-  useId,
-  useRef,
-  useState,
-  type KeyboardEvent,
-  type ReactNode,
-} from 'react'
+import type { ReactNode } from 'react'
 import type { BadgeTone, CardProgress } from '../lib/campaignCard'
-import { MoreIcon, PackageIcon } from './icons'
+import { ActionsMenu, type MenuItem } from './ActionsMenu'
+import { PackageIcon } from './icons'
 
-export interface CardMenuItem {
-  key: string
-  label: string
-  icon?: ReactNode
-  danger?: boolean
-  disabled?: boolean
-  onClick: () => void
-}
+export type CardMenuItem = MenuItem
 
 export interface CampaignCardProps {
   title: string
@@ -55,49 +42,6 @@ export function CampaignCard({
   menuItems,
   children,
 }: CampaignCardProps) {
-  const [menuOpen, setMenuOpen] = useState(false)
-  const triggerRef = useRef<HTMLButtonElement>(null)
-  const menuRef = useRef<HTMLDivElement>(null)
-  const menuId = useId()
-
-  // Close when the user clicks or taps anywhere outside the menu.
-  useEffect(() => {
-    if (!menuOpen) return
-    function onPointerDown(event: MouseEvent) {
-      if (!menuRef.current?.contains(event.target as Node)) setMenuOpen(false)
-    }
-    document.addEventListener('mousedown', onPointerDown)
-    return () => document.removeEventListener('mousedown', onPointerDown)
-  }, [menuOpen])
-
-  // Put focus on the first action once the menu has rendered.
-  useEffect(() => {
-    if (menuOpen) {
-      menuRef.current?.querySelector<HTMLButtonElement>('[role="menuitem"]:not(:disabled)')?.focus()
-    }
-  }, [menuOpen])
-
-  function onMenuKeyDown(event: KeyboardEvent<HTMLUListElement>) {
-    const buttons = Array.from(
-      event.currentTarget.querySelectorAll<HTMLButtonElement>('button:not(:disabled)'),
-    )
-    const current = buttons.indexOf(document.activeElement as HTMLButtonElement)
-    if (event.key === 'Escape') {
-      event.preventDefault()
-      setMenuOpen(false)
-      triggerRef.current?.focus()
-    } else if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
-      event.preventDefault()
-      const step = event.key === 'ArrowDown' ? 1 : -1
-      buttons[(current + step + buttons.length) % buttons.length]?.focus()
-    } else if (event.key === 'Home' || event.key === 'End') {
-      event.preventDefault()
-      buttons[event.key === 'Home' ? 0 : buttons.length - 1]?.focus()
-    } else if (event.key === 'Tab') {
-      setMenuOpen(false)
-    }
-  }
-
   return (
     <li className="campaign-tile" data-status={status}>
       <div className="campaign-tile-top">
@@ -143,46 +87,8 @@ export function CampaignCard({
           {primary.label}
         </button>
         {menuItems.length > 0 && (
-          <div className="photo-menu campaign-tile-menu" ref={menuRef}>
-            <button
-              type="button"
-              ref={triggerRef}
-              className="icon-button photo-menu-trigger"
-              aria-label={`More actions for ${title}`}
-              aria-haspopup="menu"
-              aria-expanded={menuOpen}
-              aria-controls={menuOpen ? menuId : undefined}
-              onClick={() => setMenuOpen((open) => !open)}
-            >
-              <MoreIcon />
-            </button>
-            {menuOpen && (
-              <ul
-                id={menuId}
-                className="photo-menu-list"
-                role="menu"
-                aria-label={`Actions for ${title}`}
-                onKeyDown={onMenuKeyDown}
-              >
-                {menuItems.map((item) => (
-                  <li key={item.key} role="none">
-                    <button
-                      type="button"
-                      role="menuitem"
-                      className={item.danger ? 'photo-menu-danger' : undefined}
-                      disabled={item.disabled}
-                      onClick={() => {
-                        setMenuOpen(false)
-                        item.onClick()
-                      }}
-                    >
-                      {item.icon}
-                      {item.label}
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            )}
+          <div className="campaign-tile-menu">
+            <ActionsMenu label={title} items={menuItems} />
           </div>
         )}
       </div>

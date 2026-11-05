@@ -865,8 +865,8 @@ describe('BusinessDetailPage tabs', () => {
       'aria-selected',
       'true',
     )
-    expect(await screen.findByRole('button', { name: 'Edit Emerald Coil' })).toBeInTheDocument()
-    expect(screen.getByRole('heading', { name: 'Add a product' })).toBeInTheDocument()
+    expect(await screen.findByRole('heading', { name: 'Emerald Coil', level: 3 })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Add Product' })).toBeInTheDocument()
   })
 
   it('writes #products into the URL when the tab is chosen', async () => {
