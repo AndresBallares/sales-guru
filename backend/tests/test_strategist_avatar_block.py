@@ -31,6 +31,7 @@ def _avatar(id_: str, **overrides: Any) -> BuyerAvatar:  # noqa: ANN401
         "unknownProblems": json.dumps([f"{id_} unknown one", f"{id_} unknown two"]),
         "mechanisms": json.dumps([f"{id_} mechanism one", f"{id_} mechanism two"]),
         "hooks": json.dumps([f"{id_} hook one", f"{id_} hook two"]),
+        "concepts": "[]",
     }
     fields.update(overrides)
     return cast(BuyerAvatar, SimpleNamespace(**fields))

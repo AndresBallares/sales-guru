@@ -5973,6 +5973,18 @@ main > section.campaigns-overview {
 }
 
 /* The buyer an ad was written for, on creative cards and dashboard rows. */
+.saved-concept-note {
+  display: inline-block;
+  margin-top: 0.25rem;
+  padding: 0.1rem 0.5rem;
+  border-radius: 999px;
+  background: var(--primary-soft);
+  color: var(--primary-soft-text);
+  font-size: 0.72rem;
+  font-weight: 600;
+  line-height: 1.4;
+}
+
 .avatar-marker {
   color: var(--text-secondary);
   font-style: italic;

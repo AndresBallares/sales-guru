@@ -99,6 +99,7 @@ from app.services.avatar_library_prompt import (
     library_by_id,
     log_relaxed_kind_rule,
     results_lines,
+    saved_concept_pillars,
     steering_gap,
     winning_avatar_id,
 )
@@ -869,6 +870,18 @@ def is_personalized(product: Product | None) -> bool:
     )
 
 
+# Said to the model in library mode, for the first batch and for rounds: the avatar's
+# saved concepts are the owner's own ideas, so they come first. The code makes it true
+# (the stored pillar is forced and the angle is marked), not this sentence.
+_PREFER_SAVED_CONCEPTS = (
+    "When an avatar's line in the request details lists saved concepts, use one "
+    "of them for that avatar's angle whenever you can: copy its slug and pillar "
+    "exactly as listed and write the description for this product. Invent a new "
+    "concept only when the avatar has none listed, or when using a listed one "
+    "would leave the angles with fewer than 3 distinct pillars."
+)
+
+
 def _personalization_instruction(product: Product | None) -> str:
     """Prompt text for the Personalized angle, empty when it doesn't apply."""
     if not is_personalized(product):
@@ -984,6 +997,8 @@ def _build_creative_test_plan_prompt(
             + " Draw on the avatar's own problems, what they don't know yet and "
             "their mechanisms: build an education angle on the avatar's 'doesn't "
             "know yet' entry and a mechanism angle on its mechanism. "
+            + _PREFER_SAVED_CONCEPTS
+            + " "
             "Each description says what the ad shows and promises (the avatar, the "
             "problem it speaks to, the mechanism or offer it rests on) and is never "
             "a headline: write no ad copy in it, and never quote or paraphrase any "
@@ -1113,6 +1128,8 @@ def _build_round_angles_prompt(
             "write no ad copy in it, and never quote or paraphrase any avatar hook. "
             "Build an education angle on its avatar's 'doesn't know yet' entry and a "
             "mechanism angle on its avatar's mechanism. "
+            + _PREFER_SAVED_CONCEPTS
+            + " A saved concept this campaign already used is no longer listed. "
             "Never repeat an "
             "avatar and concept pair from the angles already used, listed "
             "below; the same concept for another avatar is allowed when the ad "
@@ -1164,7 +1181,8 @@ def _build_round_angles_prompt(
         taken,
     ]
     if avatars:
-        lines += ["", library_block(avatars)]
+        used = {(a.buyer_avatar_id, a.concept) for a in excluded_angles}
+        lines += ["", library_block(avatars, used=used)]
     if results is not None:
         library = library_by_id(avatars or [])
         steer_to = winning_avatar_id(results, library)
@@ -1242,8 +1260,10 @@ async def generate_round_angles(
         ),
         "personalization": None if is_personalized(product) else "forbidden",
     }
+    used_pairs = {(a.buyer_avatar_id, a.concept) for a in excluded_angles}
     if library:
         context["library"] = library
+        context["saved_concepts"] = saved_concept_pillars(library_avatars)
     winner_id = winning_avatar_id(previous_results, library)
     retry_note = ""
     # A valid answer that ignored the winner, kept in case the retry breaks a hard
@@ -1264,7 +1284,9 @@ async def generate_round_angles(
             if library:
                 canned = cast(
                     list[object],
-                    fake_library_angles(canned, library_avatars, winner_id),
+                    fake_library_angles(
+                        canned, library_avatars, winner_id, used=used_pairs
+                    ),
                 )
             raw = {**raw, "creative_angles": canned}
         try:
@@ -1514,6 +1536,9 @@ async def generate_strategy(
         plan_context: dict[str, object] = {"personalization": personalization}
         if library:
             plan_context["library"] = library
+            # The saved concepts an angle is checked against: a match gets the stored
+            # pillar and is recorded on the angle (from_saved_concept).
+            plan_context["saved_concepts"] = saved_concept_pillars(library_avatars)
             log_relaxed_kind_rule(library)
         # One retry when the angles break a rule (a missing, doubled or unwanted
         # Personalized angle, too few library avatars, a repeated pair...), naming

@@ -2,6 +2,7 @@ import { useId, useState } from 'react'
 import type { StrategyContent } from '../lib/api'
 import { buildStrategyView } from '../lib/strategyView'
 import { ArrowRightIcon, ChevronDownIcon, SpinnerIcon } from './icons'
+import { SavedConceptNote } from './SavedConceptNote'
 
 interface Props {
   strategy: StrategyContent
@@ -92,6 +93,7 @@ export function StrategyOverview({
             {view.angles.map((angle, index) => (
               <li key={`${angle.title}-${index}`} className="strategy-angle-card">
                 {angle.tag && <span className="strategy-angle-tag">{angle.tag}</span>}
+                {angle.fromAvatar && <SavedConceptNote />}
                 <h5>{angle.title}</h5>
                 {angle.description && <p>{angle.description}</p>}
               </li>

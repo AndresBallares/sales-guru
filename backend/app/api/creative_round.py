@@ -25,6 +25,7 @@ from app.api.campaign import (
 from app.api.creative import (
     _current_business,
     _current_product,
+    _saved_angles_for,
     _to_response,
     generate_batch,
 )
@@ -102,6 +103,7 @@ async def _round_response(
     product = await _current_product(campaign)
     business = await _current_business(campaign)
     avatars = await avatar_refs(business.id, [c.buyerAvatarId for c in creatives])
+    saved_angles = await _saved_angles_for(campaign)
     return CreativeRoundResponse(
         id=round_.id,
         campaign_id=round_.campaignId,
@@ -113,7 +115,8 @@ async def _round_response(
             GeneratedCreativeAngle.model_validate(a) for a in json.loads(round_.angles)
         ],
         creatives=[
-            _to_response(c, campaign, product, business, avatars) for c in creatives
+            _to_response(c, campaign, product, business, avatars, saved_angles)
+            for c in creatives
         ],
         created_at=round_.createdAt,
     )

@@ -1,6 +1,8 @@
 """Creative Agent endpoints (PRD.md build step 6)."""
 
+import json
 from collections.abc import Mapping, Sequence
+from collections.abc import Set as AbstractSet
 from typing import cast
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -34,6 +36,7 @@ from app.schemas.strategy import (
     MIN_ADS_TO_APPROVE,
     MULTI_AD_PLAN_TYPES,
     CreativeTestPlanContent,
+    GeneratedCreativeAngle,
     StrategyContentAdapter,
 )
 from app.services.brand_rules import banned_phrases_for
@@ -134,6 +137,7 @@ def _to_response(
     product: Product | None,
     business: Business,
     avatars: Mapping[str, AvatarRef],
+    saved_angles: AbstractSet[tuple[str | None, str]],
 ) -> CreativeResponse:
     """Map a Prisma Creative record to its public response shape.
 
@@ -151,6 +155,8 @@ def _to_response(
         business: The campaign's business, for its description snapshot.
         avatars: The business's avatars by id (``avatar_refs``), to name the
             creative's buyer avatar.
+        saved_angles: (buyer avatar id, concept) of the campaign's angles recorded as
+            reusing a saved concept (``_saved_angles_for``); the creative's note.
 
     Returns:
         The public-facing representation.
@@ -222,6 +228,8 @@ def _to_response(
             "status": creative.status,
             "createdAt": creative.createdAt,
             "isStale": is_creative_stale(creative, campaign, product, business),
+            "fromSavedConcept": creative.concept is not None
+            and (creative.buyerAvatarId, creative.concept) in saved_angles,
         }
     )
 
@@ -231,6 +239,31 @@ async def _avatars_for(
 ) -> dict[str, AvatarRef]:
     """The avatars these creatives were written for, to name them in responses."""
     return await avatar_refs(business_id, [c.buyerAvatarId for c in creatives])
+
+
+async def _saved_angles_for(campaign: Campaign) -> frozenset[tuple[str | None, str]]:
+    """The campaign's angles recorded as reusing a saved concept: (avatar id, concept).
+
+    Read from the plan JSON the angles were stored in (the strategy's angles and each
+    round's), where the flag was written when the angle was created. An older plan
+    without the field has none.
+    """
+    pairs: set[tuple[str | None, str]] = set()
+    strategy = await db.strategy.find_unique(where={"campaignId": campaign.id})
+    if strategy is not None:
+        plan = StrategyContentAdapter.validate_json(strategy.content)
+        if isinstance(plan, CreativeTestPlanContent):
+            pairs |= {
+                (a.buyer_avatar_id, a.concept)
+                for a in plan.creative_angles
+                if a.from_saved_concept
+            }
+    for round_ in await db.creativeround.find_many(where={"campaignId": campaign.id}):
+        for raw in json.loads(round_.angles):
+            angle = GeneratedCreativeAngle.model_validate(raw)
+            if angle.from_saved_concept:
+                pairs.add((angle.buyer_avatar_id, angle.concept))
+    return frozenset(pairs)
 
 
 async def _current_product(campaign: Campaign) -> Product | None:
@@ -257,7 +290,11 @@ async def _list_creatives(campaign: Campaign) -> list[CreativeResponse]:
     product = await _current_product(campaign)
     business = await _current_business(campaign)
     avatars = await _avatars_for(business.id, creatives)
-    return [_to_response(c, campaign, product, business, avatars) for c in creatives]
+    saved_angles = await _saved_angles_for(campaign)
+    return [
+        _to_response(c, campaign, product, business, avatars, saved_angles)
+        for c in creatives
+    ]
 
 
 async def _pick_assets(
@@ -841,6 +878,7 @@ async def select_creative(
         product,
         business,
         await _avatars_for(business.id, [updated]),
+        await _saved_angles_for(campaign),
     )
 
 
@@ -897,6 +935,7 @@ async def deselect_creative(
         product,
         business,
         await _avatars_for(business.id, [updated]),
+        await _saved_angles_for(campaign),
     )
 
 
@@ -994,6 +1033,7 @@ async def set_creative_image(
         product,
         business,
         await _avatars_for(business.id, [updated]),
+        await _saved_angles_for(campaign),
     )
 
 
@@ -1087,6 +1127,7 @@ async def set_creative_story_asset(
         product,
         business,
         await _avatars_for(business.id, [updated]),
+        await _saved_angles_for(campaign),
     )
 
 
@@ -1184,6 +1225,7 @@ async def set_creative_square_asset(
         product,
         business,
         await _avatars_for(business.id, [updated]),
+        await _saved_angles_for(campaign),
     )
 
 
@@ -1301,6 +1343,7 @@ async def regenerate_creative_copy(
         product,
         business,
         await _avatars_for(business.id, [updated]),
+        await _saved_angles_for(campaign),
     )
 
 
@@ -1407,6 +1450,7 @@ async def reorder_creative_cards(
         product,
         business,
         await _avatars_for(business.id, [updated]),
+        await _saved_angles_for(campaign),
     )
 
 
@@ -1464,4 +1508,5 @@ async def remove_creative_card(
         product,
         business,
         await _avatars_for(business.id, [updated]),
+        await _saved_angles_for(campaign),
     )

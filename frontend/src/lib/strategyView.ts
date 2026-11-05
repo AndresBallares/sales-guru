@@ -23,6 +23,8 @@ export interface AngleCard {
   title: string
   description: string
   tag: string
+  // The angle reused one of its avatar's saved concepts ("From your avatar").
+  fromAvatar: boolean
 }
 
 export interface StrategyView {
@@ -80,10 +82,13 @@ function plainAngle(raw: string, index: number): AngleCard {
       title: raw.slice(0, separator.index).trim(),
       description: raw.slice(separator.index + separator[0].length).trim(),
       tag: '',
+      fromAvatar: false,
     }
   }
-  if (raw.length <= MAX_ANGLE_TITLE) return { title: raw, description: '', tag: '' }
-  return { title: `Angle ${index + 1}`, description: raw, tag: '' }
+  if (raw.length <= MAX_ANGLE_TITLE) {
+    return { title: raw, description: '', tag: '', fromAvatar: false }
+  }
+  return { title: `Angle ${index + 1}`, description: raw, tag: '', fromAvatar: false }
 }
 
 function section(id: string, title: string, fields: (DetailField | null)[]): DetailSection | null {
@@ -254,6 +259,7 @@ export function buildStrategyView(strategy: StrategyContent): StrategyView {
         title: conceptLabel(angle.concept),
         description: angle.description,
         tag: angleTag(angle),
+        fromAvatar: angle.fromSavedConcept === true,
       })),
     }
   }

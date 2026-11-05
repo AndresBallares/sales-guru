@@ -913,6 +913,9 @@ export interface CreativeAngle {
   // The ad's main persuasion lever; the test's four angles span at least three.
   pillar?: CreativePillar | null
   description: string
+  // True when the angle reused one of its avatar's saved concepts, recorded when the
+  // angle was created. Absent on a plan stored before the field existed.
+  fromSavedConcept?: boolean
 }
 
 export interface CreativePersona {
@@ -1066,6 +1069,9 @@ export interface Creative {
   pillar?: CreativePillar | null
   buyerAvatarId?: string | null
   buyerAvatar?: BuyerAvatarRef | null
+  // True when this ad's angle reused a saved concept of its avatar (read from the angle's
+  // own record in the plan). Absent on older responses.
+  fromSavedConcept?: boolean
   imagePrompt: string | null
   videoPrompt: string | null
   imageUrl: string | null

@@ -2,6 +2,7 @@ import { useId, useState, type ReactNode } from 'react'
 import { CheckIcon, ChevronDownIcon } from './icons'
 import type { Creative, CreativeStatus } from '../lib/api'
 import { avatarMarker, creativeAngleText } from '../lib/avatarLabel'
+import { SavedConceptNote } from './SavedConceptNote'
 
 const STATUS_LABELS: Record<CreativeStatus, string> = {
   GENERATED: 'Generated',
@@ -79,6 +80,7 @@ export function CreativeCard({
             {marker && <span className="avatar-marker"> ({marker})</span>}
           </p>
         )}
+        {creative.fromSavedConcept && <SavedConceptNote />}
       </header>
 
       {creative.imageUrl && (

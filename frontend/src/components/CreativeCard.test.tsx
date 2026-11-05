@@ -63,3 +63,31 @@ describe('CreativeCard buyer avatar', () => {
     expect(line).toHaveTextContent('(inactive)')
   })
 })
+
+describe('CreativeCard "From your avatar" note', () => {
+  it('shows the note when the ad\'s angle reused a saved concept', () => {
+    render(
+      <CreativeCard
+        letter="A"
+        creative={makeCreative({ ...withAvatar('active'), fromSavedConcept: true })}
+        ctaLabel="Shop Now"
+      />,
+    )
+
+    expect(screen.getByText('From your avatar')).toBeInTheDocument()
+  })
+
+  it('shows nothing when the angle did not, or the ad has no such field', () => {
+    const { rerender } = render(
+      <CreativeCard
+        letter="A"
+        creative={makeCreative({ ...withAvatar('active'), fromSavedConcept: false })}
+        ctaLabel="Shop Now"
+      />,
+    )
+    expect(screen.queryByText('From your avatar')).not.toBeInTheDocument()
+
+    rerender(<CreativeCard letter="A" creative={makeCreative(withAvatar('active'))} ctaLabel="Shop Now" />)
+    expect(screen.queryByText('From your avatar')).not.toBeInTheDocument()
+  })
+})
