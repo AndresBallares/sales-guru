@@ -16,6 +16,7 @@ import {
   modelLabel,
   phaseLabel,
 } from '../lib/research'
+import { ResearchReadOnly } from './ResearchReadOnly'
 import { ResearchReview } from './ResearchReview'
 
 function message(error: unknown, fallback: string): string {
@@ -299,6 +300,9 @@ export function ResearchRunView({
           Back to avatars
         </button>
       </div>
+      {(run.status === 'REVIEWED' || run.status === 'DISCARDED') && (
+        <ResearchReadOnly run={run} library={library ?? []} onOpenAvatar={onOpenAvatar} />
+      )}
     </section>
   )
 }

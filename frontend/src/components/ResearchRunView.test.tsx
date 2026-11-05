@@ -40,6 +40,21 @@ function renderView(runId = 'run-1') {
   return { onBack, onLibraryChanged, onOpenAvatar }
 }
 
+function renderViewWithUnmount() {
+  return render(
+    <MemoryRouter>
+      <ResearchRunView
+        businessId="biz-1"
+        runId="run-1"
+        pollMs={10}
+        onBack={vi.fn<() => void>()}
+        onLibraryChanged={vi.fn<() => void>()}
+        onOpenAvatar={vi.fn<(id: string) => void>()}
+      />
+    </MemoryRouter>,
+  )
+}
+
 const running = (over: Partial<api.ResearchRun> = {}) =>
   makeRun({
     status: 'RUNNING',
@@ -191,6 +206,96 @@ describe('after the run', () => {
     await user.click(within(list).getByRole('link', { name: 'The Plain-Gold Loyalist' }))
     expect(onOpenAvatar).toHaveBeenCalledWith('a1')
     expect(screen.queryByRole('button', { name: 'Save selected' })).not.toBeInTheDocument()
+  })
+
+  describe('the research stays readable once the run is closed', () => {
+    const done = () =>
+      makeRun({
+        status: 'REVIEWED',
+        reviewedAt: '2026-11-04T11:00:00Z',
+        savedAvatarIds: ['a1'],
+        savedDrafts: [{ draftIndex: 0, avatarId: 'a1' }],
+      })
+
+    function expectNothingEditable() {
+      for (const name of [/Save selected/, /Mark as done/, /^Discard$/, /Add term/, /Remove term/]) {
+        expect(screen.queryByRole('button', { name })).not.toBeInTheDocument()
+      }
+      expect(screen.queryByRole('checkbox')).not.toBeInTheDocument()
+      expect(screen.queryByRole('textbox')).not.toBeInTheDocument()
+    }
+
+    it('shows a done run its evidence, problems, solutions, gaps and competitor terms', async () => {
+      mockedApi.getResearchRun.mockResolvedValue(done())
+      mockedApi.listAvatars.mockResolvedValue([{ id: 'a1', name: 'The Plain-Gold Loyalist' } as api.BuyerAvatar])
+      renderView()
+      await screen.findByRole('heading', { level: 2, name: 'Research done' })
+      expect(screen.getByRole('heading', { level: 3, name: 'Evidence' })).toBeInTheDocument()
+      expect(screen.getByText('Reached 12 of 14 linked pages.')).toBeInTheDocument()
+      const problems = screen.getByRole('list', { name: 'Problems' })
+      expect(within(problems).getAllByRole('listitem')).toHaveLength(2)
+      expect(within(problems).getByText(/it turned my finger green in a month/)).toBeInTheDocument()
+      expect(within(screen.getByRole('list', { name: 'Solutions' })).getAllByRole('listitem')).toHaveLength(2)
+      expect(within(screen.getByRole('list', { name: 'Gaps' })).getByText(/Free resizing for life/)).toBeInTheDocument()
+      const terms = screen.getByRole('list', { name: 'Competitor terms' })
+      expect(within(terms).getAllByRole('listitem').map((li) => li.textContent)).toEqual(['Cartier'])
+      expectNothingEditable()
+    })
+
+    it('marks each draft Saved (linking to the library) or Not saved', async () => {
+      const user = userEvent.setup()
+      mockedApi.getResearchRun.mockResolvedValue(done())
+      mockedApi.listAvatars.mockResolvedValue([{ id: 'a1', name: 'The Plain-Gold Loyalist' } as api.BuyerAvatar])
+      const { onOpenAvatar } = renderView()
+      const drafts = await screen.findByRole('list', { name: 'Avatar drafts' })
+      const saved = within(drafts).getByRole('listitem', { name: 'The Plain-Gold Loyalist' })
+      expect(within(saved).getByText('Saved')).toBeInTheDocument()
+      await user.click(within(saved).getByRole('link', { name: /View The Plain-Gold Loyalist in your library/ }))
+      expect(onOpenAvatar).toHaveBeenCalledWith('a1')
+      for (const name of ['The Mother Passing It Forward', 'The Heirloom Buyer']) {
+        const item = within(drafts).getByRole('listitem', { name })
+        expect(within(item).getByText('Not saved')).toBeInTheDocument()
+        expect(within(item).queryByRole('link')).not.toBeInTheDocument()
+      }
+      // What the unsaved draft held is readable, not just its name.
+      expect(within(drafts).getByText('The Mother Passing It Forward buys fine jewelry.')).toBeInTheDocument()
+      expect(within(drafts).getAllByText('The Sanitizer Test').length).toBeGreaterThan(0)
+    })
+
+    it('shows a discarded run its research, every draft Not saved', async () => {
+      mockedApi.getResearchRun.mockResolvedValue(makeRun({ status: 'DISCARDED', reviewedAt: '2026-11-04T11:00:00Z' }))
+      renderView()
+      await screen.findByRole('heading', { level: 2, name: 'Research discarded' })
+      expect(screen.getByRole('list', { name: 'Problems' })).toBeInTheDocument()
+      expect(screen.getAllByText('Not saved')).toHaveLength(3)
+      expectNothingEditable()
+    })
+
+    it('keeps a failed or canceled run as it was, with no research shown', async () => {
+      mockedApi.getResearchRun.mockResolvedValue(makeRun({ status: 'FAILED', error: 'It broke' }))
+      const { unmount } = renderViewWithUnmount()
+      await screen.findByRole('heading', { level: 2, name: 'Research failed' })
+      expect(screen.queryByRole('list', { name: 'Problems' })).not.toBeInTheDocument()
+      unmount()
+      mockedApi.getResearchRun.mockResolvedValue(makeRun({ status: 'CANCELED', stopReason: 'canceled' }))
+      renderViewWithUnmount()
+      await screen.findByRole('heading', { level: 2, name: 'Research canceled' })
+      expect(screen.queryByRole('list', { name: 'Problems' })).not.toBeInTheDocument()
+    })
+
+    it('still reopens, and the editable review comes back', async () => {
+      const user = userEvent.setup()
+      const closed = done()
+      mockedApi.getResearchRun
+        .mockResolvedValueOnce(closed)
+        .mockResolvedValue({ ...closed, status: 'NEEDS_REVIEW', reviewedAt: null })
+      mockedApi.listAvatars.mockResolvedValue([{ id: 'a1', name: 'The Plain-Gold Loyalist' } as api.BuyerAvatar])
+      mockedApi.reopenResearchRun.mockResolvedValue({ ...closed, status: 'NEEDS_REVIEW', reviewedAt: null })
+      renderView()
+      await user.click(await screen.findByRole('button', { name: 'Reopen to save more' }))
+      expect(await screen.findByRole('heading', { level: 2, name: 'Review the research' })).toBeInTheDocument()
+      expect(screen.getAllByRole('checkbox').length).toBeGreaterThan(0)
+    })
   })
 
   it('reopens a done run so more avatars can be saved', async () => {

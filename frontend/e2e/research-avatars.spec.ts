@@ -160,6 +160,15 @@ test('a research run started on the screen is watched, reviewed and saved to the
   const saved = page.getByRole('list', { name: 'Avatars saved from this research' })
   await expect(saved.getByRole('listitem')).toHaveCount(3)
   await expect(saved).toContainText('My Edited Avatar')
+  // The research itself stays readable on a done run: findings, and every draft marked Saved
+  // or Not saved, with nothing to edit.
+  await expect(page.getByRole('region', { name: 'Evidence' })).toBeVisible()
+  await expect(page.getByRole('list', { name: 'Problems' })).toBeVisible()
+  const doneDrafts = page.getByRole('list', { name: 'Avatar drafts' })
+  await expect(doneDrafts.getByText('Saved', { exact: true })).toHaveCount(3)
+  await expect(doneDrafts.getByText('Not saved', { exact: true }).first()).toBeVisible()
+  await expect(page.getByRole('checkbox')).toHaveCount(0)
+  await expect(page.getByRole('button', { name: 'Save selected' })).toHaveCount(0)
   await expectNoViolations(page)
   const runs = (await (await page.request.get(`${E2E_API_URL}/businesses/${id}/research-runs`)).json()) as {
     status: string
@@ -169,7 +178,10 @@ test('a research run started on the screen is watched, reviewed and saved to the
   // Reopening a done run still shows what was saved, and a link goes to the library entry.
   await page.reload()
   await expect(page.getByRole('list', { name: 'Avatars saved from this research' }).getByRole('listitem')).toHaveCount(3)
-  await page.getByRole('link', { name: 'My Edited Avatar' }).click()
+  await page
+    .getByRole('list', { name: 'Avatars saved from this research' })
+    .getByRole('link', { name: 'My Edited Avatar' })
+    .click()
   await expect(page.getByRole('listitem', { name: /^My Edited Avatar/ })).toBeFocused()
 
   // Reopen it, and the rest can be picked again.
@@ -230,6 +242,11 @@ test('review: low-evidence warning, competitor terms, unsaved-edit warning, disc
   await page.getByRole('button', { name: 'Discard' }).click()
   await page.getByRole('button', { name: 'Yes, discard' }).click()
   await expect(page.getByRole('heading', { level: 2, name: 'Research discarded' })).toBeVisible()
+  // A discarded run's research can still be read, every draft Not saved.
+  await expect(page.getByRole('list', { name: 'Problems' })).toBeVisible()
+  await expect(page.getByRole('list', { name: 'Avatar drafts' }).getByText('Not saved', { exact: true })).not.toHaveCount(0)
+  await expect(page.getByRole('checkbox')).toHaveCount(0)
+  await expectNoViolations(page)
   const avatars = (await (await page.request.get(`${E2E_API_URL}/businesses/${id}/avatars`)).json()) as unknown[]
   expect(avatars).toHaveLength(0)
 })
@@ -250,4 +267,30 @@ test('the library limit stops a save that would not fit', async ({ page }) => {
   await drafts.nth(1).getByRole('checkbox', { name: /Save/ }).check()
   await expect(page.getByText(/only 1 slot left/i)).toBeVisible()
   await expect(page.getByRole('button', { name: 'Save selected' })).toBeDisabled()
+})
+
+test('the past research runs section stays at the bottom of the Avatars tab, and Open reaches a run', async ({
+  page,
+}) => {
+  const id = await businessId(page)
+  const run = await seed(page, id)
+
+  // The address the owner lands on with the Meta step skipped: the section must be there.
+  await openAvatars(page, id, '?metaLater=1')
+  const library = page.getByRole('heading', { level: 2, name: 'Buyer avatars' })
+  const table = page.getByRole('table', { name: 'Past research runs' })
+  await expect(library).toBeVisible()
+  await expect(table).toBeVisible()
+  const [libraryBox, tableBox] = [await library.boundingBox(), await table.boundingBox()]
+  expect(tableBox?.y ?? 0).toBeGreaterThan(libraryBox?.y ?? Infinity)
+  await expectNoViolations(page)
+
+  // Its Open button reaches the run, and the run's own page can be left again.
+  await table.getByRole('button', { name: /^Open run from/ }).click()
+  await expect(page).toHaveURL(new RegExp(`research=${run.id}`))
+  await expect(page).toHaveURL(/metaLater=1/)
+  await expect(page.getByRole('heading', { level: 2, name: 'Review the research' })).toBeVisible()
+  await expect(page.getByRole('list', { name: 'Problems' })).toBeVisible()
+  await page.getByRole('button', { name: 'Back to avatars' }).click()
+  await expect(page.getByRole('table', { name: 'Past research runs' })).toBeVisible()
 })
