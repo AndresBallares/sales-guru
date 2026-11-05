@@ -1,7 +1,6 @@
 import { useState, type Ref } from 'react'
 import type { Product } from '../lib/api'
 import { productLabel } from '../lib/productLabel'
-import { ActionsMenu } from './ActionsMenu'
 import { PackageIcon, PencilIcon, TrashIcon } from './icons'
 
 // The product's URL without its scheme, for a link that fits on a line.
@@ -10,8 +9,8 @@ function shortUrl(url: string): string {
 }
 
 // One product in the grid: its photo, its name, a short preview of its description and its
-// link, with Edit and Delete in a three-dot menu. The delete question and a refusal replace
-// nothing on the card; they sit over it, so every card keeps the same height.
+// link, with Edit and Delete buttons under the text. The delete question sits over the card
+// and a refusal appears at its foot, so the card does not change shape for the question.
 export function ProductCard({
   product,
   confirmingDelete,
@@ -53,21 +52,6 @@ export function ProductCard({
           </span>
         )}
       </div>
-      <div className="product-card-actions">
-        <ActionsMenu
-          label={label}
-          items={[
-            { key: 'edit', label: 'Edit Product', icon: <PencilIcon />, onClick: onEdit },
-            {
-              key: 'delete',
-              label: 'Delete Product',
-              icon: <TrashIcon />,
-              danger: true,
-              onClick: onAskDelete,
-            },
-          ]}
-        />
-      </div>
       <div className="product-card-body">
         <h3 className="product-card-name" title={name || undefined}>
           {name || 'Untitled Product'}
@@ -88,6 +72,28 @@ export function ProductCard({
             {shortUrl(product.url)}
           </a>
         )}
+      </div>
+      <div className="product-card-footer">
+        <button
+          type="button"
+          className="btn-outline product-card-button"
+          data-action="edit"
+          aria-label={`Edit ${label}`}
+          onClick={onEdit}
+        >
+          <PencilIcon />
+          Edit
+        </button>
+        <button
+          type="button"
+          className="btn-outline product-card-button product-card-delete"
+          data-action="delete"
+          aria-label={`Delete ${label}`}
+          onClick={onAskDelete}
+        >
+          <TrashIcon />
+          Delete
+        </button>
       </div>
       {confirmingDelete && (
         <fieldset className="product-card-confirm">

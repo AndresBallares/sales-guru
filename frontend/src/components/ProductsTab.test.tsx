@@ -64,10 +64,10 @@ beforeEach(() => {
 
 type User = ReturnType<typeof userEvent.setup>
 
-async function openMenu(user: User, label: string) {
-  const trigger = await screen.findByRole('button', { name: `More actions for ${label}` })
-  await user.click(trigger)
-  return trigger
+async function clickEdit(user: User, label: string) {
+  const button = await screen.findByRole('button', { name: `Edit ${label}` })
+  await user.click(button)
+  return button
 }
 
 function cardOf(label: string): HTMLElement {
@@ -235,18 +235,22 @@ describe('the product cards', () => {
     expect(container.querySelector('.product-card-url')).toHaveAttribute('title', long.url as string)
   })
 
-  it('hides Edit and Delete in a three-dot menu on each card', async () => {
-    const user = userEvent.setup()
+  it('shows Edit and Delete as buttons under the text on each card', async () => {
     render(<ProductsTab businessId="biz-1" />)
 
-    await screen.findByText('Emerald Coil')
-    expect(screen.queryByRole('button', { name: /^Edit/ })).not.toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: /^Delete/ })).not.toBeInTheDocument()
-
-    await openMenu(user, 'Emerald Coil')
-    const menu = screen.getByRole('menu', { name: 'Actions for Emerald Coil' })
-    expect(within(menu).getByRole('menuitem', { name: 'Edit Product' })).toBeInTheDocument()
-    expect(within(menu).getByRole('menuitem', { name: 'Delete Product' })).toBeInTheDocument()
+    const card = await screen.findByRole('listitem', { name: 'Emerald Coil' })
+    const edit = within(card).getByRole('button', { name: 'Edit Emerald Coil' })
+    const del = within(card).getByRole('button', { name: 'Delete Emerald Coil' })
+    expect(screen.queryByRole('button', { name: /More actions/ })).not.toBeInTheDocument()
+    expect(within(card).queryByRole('menu')).not.toBeInTheDocument()
+    // In reading order they come after the name, the description and the link.
+    const link = within(card).getByRole('link')
+    expect(link.compareDocumentPosition(edit) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(edit.compareDocumentPosition(del) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    // Also on a card with no link.
+    const bare = screen.getByRole('listitem', { name: 'Triangle band' })
+    expect(within(bare).getByRole('button', { name: 'Edit Triangle band' })).toBeInTheDocument()
+    expect(within(bare).getByRole('button', { name: 'Delete Triangle band' })).toBeInTheDocument()
   })
 })
 
@@ -415,8 +419,7 @@ describe('editing a product in the drawer', () => {
     const user = userEvent.setup()
     render(<ProductsTab businessId="biz-1" />)
 
-    await openMenu(user, 'Emerald Coil')
-    await user.click(screen.getByRole('menuitem', { name: 'Edit Product' }))
+    await clickEdit(user, 'Emerald Coil')
 
     const drawer = screen.getByRole('dialog', { name: 'Edit Product' })
     expect(within(drawer).getByLabelText('What do you sell?')).toHaveValue(coil.description)
@@ -429,8 +432,7 @@ describe('editing a product in the drawer', () => {
     mockedApi.updateProduct.mockResolvedValue(renamed)
     const user = userEvent.setup()
     render(<ProductsTab businessId="biz-1" />)
-    const trigger = await openMenu(user, 'Emerald Coil')
-    await user.click(screen.getByRole('menuitem', { name: 'Edit Product' }))
+    const editButton = await clickEdit(user, 'Emerald Coil')
     mockedApi.listProducts.mockResolvedValue([renamed, unnamed])
 
     const name = screen.getByLabelText(/Product name/)
@@ -441,14 +443,14 @@ describe('editing a product in the drawer', () => {
     expect(await screen.findByRole('heading', { name: 'Emerald Coil Ring', level: 3 })).toBeInTheDocument()
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
     expect(mockedApi.updateProduct).toHaveBeenCalledTimes(1)
-    expect(trigger).toBeInTheDocument()
+    // Focus is back on the button that opened the drawer.
+    expect(editButton).toHaveFocus()
   })
 
   it('asks before throwing away an unsaved edit', async () => {
     const user = userEvent.setup()
     render(<ProductsTab businessId="biz-1" />)
-    await openMenu(user, 'Emerald Coil')
-    await user.click(screen.getByRole('menuitem', { name: 'Edit Product' }))
+    await clickEdit(user, 'Emerald Coil')
 
     await user.type(screen.getByLabelText('What do you sell?'), '!')
     await user.click(screen.getByRole('button', { name: 'Close' }))
@@ -460,8 +462,7 @@ describe('editing a product in the drawer', () => {
   it('closes without asking when nothing was changed', async () => {
     const user = userEvent.setup()
     render(<ProductsTab businessId="biz-1" />)
-    await openMenu(user, 'Emerald Coil')
-    await user.click(screen.getByRole('menuitem', { name: 'Edit Product' }))
+    await clickEdit(user, 'Emerald Coil')
 
     await user.click(screen.getByRole('button', { name: 'Cancel' }))
 
@@ -472,12 +473,12 @@ describe('editing a product in the drawer', () => {
 
 describe('deleting a product', () => {
   async function askToDelete(user: User, label = 'Emerald Coil') {
-    const trigger = await openMenu(user, label)
-    await user.click(screen.getByRole('menuitem', { name: 'Delete Product' }))
-    return trigger
+    const button = await screen.findByRole('button', { name: `Delete ${label}` })
+    await user.click(button)
+    return button
   }
 
-  it('asks first, and Keep it changes nothing and returns focus to the three-dot button', async () => {
+  it('asks first, and Keep it changes nothing and returns focus to the Delete button', async () => {
     const user = userEvent.setup()
     render(<ProductsTab businessId="biz-1" />)
 
@@ -503,7 +504,8 @@ describe('deleting a product', () => {
     await user.click(screen.getByRole('button', { name: 'Yes, delete' }))
 
     await waitFor(() => expect(screen.queryByRole('listitem', { name: 'Emerald Coil' })).not.toBeInTheDocument())
-    expect(screen.queryByRole('button', { name: 'More actions for Emerald Coil' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Edit Emerald Coil' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Delete Emerald Coil' })).not.toBeInTheDocument()
     expect(screen.queryByRole('img', { name: 'Emerald Coil' })).not.toBeInTheDocument()
     expect(mockedApi.deleteProduct).toHaveBeenCalledExactlyOnceWith('biz-1', 'prod-1')
     expect(screen.getByRole('listitem', { name: 'Triangle band' })).toBeInTheDocument()
@@ -562,7 +564,7 @@ describe('deleting a product', () => {
     expect(alert).toHaveFocus()
     expect(screen.getByRole('heading', { name: 'Emerald Coil', level: 3 })).toBeInTheDocument()
     expect(screen.queryByRole('group', { name: /Confirm deleting/ })).not.toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'More actions for Emerald Coil' })).toBeEnabled()
+    expect(screen.getByRole('button', { name: 'Delete Emerald Coil' })).toBeEnabled()
     expect(mockedApi.listProducts).toHaveBeenCalledTimes(1)
   })
 
@@ -585,8 +587,7 @@ describe('deleting a product', () => {
     render(<ProductsTab businessId="biz-1" />)
     await askToDelete(user)
 
-    await openMenu(user, 'Triangle band')
-    await user.click(screen.getByRole('menuitem', { name: 'Delete Product' }))
+    await askToDelete(user, 'Triangle band')
 
     expect(screen.getAllByRole('group', { name: /Confirm deleting/ })).toHaveLength(1)
     expect(screen.getByRole('group', { name: 'Confirm deleting Triangle band' })).toBeInTheDocument()

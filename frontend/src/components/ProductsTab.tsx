@@ -8,7 +8,7 @@ import { ProductFormDrawer } from './ProductFormDrawer'
 type DrawerState = { mode: 'add' } | { mode: 'edit'; product: Product }
 
 // The business page's Products tab: a library of cards, one per product, once setup is done.
-// Add Product (and Edit Product on a card's three-dot menu) open the same drawer, which warns
+// Add Product (and a card's Edit button) open the same drawer, which warns
 // when an edit would mark ads out of date. A new product is not attached to any campaign.
 // Onboarding keeps its own ProductsSection; this tab is where products are managed afterwards.
 export function ProductsTab({
@@ -32,7 +32,7 @@ export function ProductsTab({
   const [deletingId, setDeletingId] = useState<string | null>(null)
   const [deleteError, setDeleteError] = useState<{ id: string; message: string } | null>(null)
   const [focusTarget, setFocusTarget] = useState<
-    { kind: 'heading' } | { kind: 'menu'; id: string } | { kind: 'alert' } | null
+    { kind: 'heading' } | { kind: 'delete'; id: string } | { kind: 'alert' } | null
   >(null)
   const busyRef = useRef(false)
   const headingRef = useRef<HTMLHeadingElement>(null)
@@ -62,21 +62,21 @@ export function ProductsTab({
     void refresh()
   }, [refresh])
 
-  // The three-dot button of one card, found from the grid (the cards are plain list items).
-  const menuButtonOf = useCallback((id: string): HTMLElement | null => {
+  // One of a card's buttons, found from the grid (the cards are plain list items).
+  const cardButton = useCallback((id: string, action: 'edit' | 'delete'): HTMLElement | null => {
     const card = Array.from(gridRef.current?.children ?? []).find(
       (el) => el.getAttribute('data-product-id') === id,
     )
-    return card?.querySelector<HTMLElement>('button[aria-haspopup="menu"]') ?? null
+    return card?.querySelector<HTMLElement>(`button[data-action="${action}"]`) ?? null
   }, [])
 
   useEffect(() => {
     if (!focusTarget) return
     if (focusTarget.kind === 'heading') headingRef.current?.focus()
     else if (focusTarget.kind === 'alert') alertRef.current?.focus()
-    else menuButtonOf(focusTarget.id)?.focus()
+    else cardButton(focusTarget.id, 'delete')?.focus()
     setFocusTarget(null)
-  }, [focusTarget, menuButtonOf])
+  }, [focusTarget, cardButton])
 
   async function confirmDelete(product: Product) {
     if (busyRef.current) return
@@ -236,7 +236,7 @@ export function ProductsTab({
               }}
               onKeepIt={() => {
                 setConfirmingId(null)
-                setFocusTarget({ kind: 'menu', id: product.id })
+                setFocusTarget({ kind: 'delete', id: product.id })
               }}
               onConfirmDelete={() => void confirmDelete(product)}
             />
@@ -251,7 +251,9 @@ export function ProductsTab({
           product={drawer.mode === 'edit' ? drawer.product : undefined}
           onSaved={handleSaved}
           onClose={() => setDrawer(null)}
-          returnFocus={drawer.mode === 'edit' ? () => menuButtonOf(drawer.product.id) : undefined}
+          returnFocus={
+            drawer.mode === 'edit' ? () => cardButton(drawer.product.id, 'edit') : undefined
+          }
         />
       )}
     </section>

@@ -6174,14 +6174,15 @@ main > section.campaigns-overview {
   border-bottom: 1px solid var(--border);
 }
 
-/* The whole photo shows (contain), never cropped; the neutral background fills the rest. The
-   image fills the box instead of sizing it, so a square photo cannot make its card taller. */
+/* The photo is as wide as the card (cover): it fills the 3:2 box, and a photo of another shape
+   loses a little at its edges. The image fills the box instead of sizing it, so a square photo
+   cannot make its card taller. */
 .product-card-media img {
   position: absolute;
   inset: 0;
   width: 100%;
   height: 100%;
-  object-fit: contain;
+  object-fit: cover;
 }
 
 .product-card-placeholder {
@@ -6195,39 +6196,30 @@ main > section.campaigns-overview {
   height: 40px;
 }
 
-.product-card-actions {
-  position: absolute;
-  top: 0.5rem;
-  right: 0.5rem;
-  z-index: 1;
+.product-card-footer {
+  display: flex;
+  gap: 0.5rem;
+  padding: 0 1rem 1rem;
 }
 
-/* "Delete Product" stays on one line. */
-.product-card-actions .photo-menu-list {
-  min-width: 12rem;
+.product-card-button {
+  flex: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4rem;
+  min-height: 36px;
+  padding: 0.3rem 0.75rem;
+  font-size: 0.82rem;
 }
 
-.product-card-actions .photo-menu-list button {
-  white-space: nowrap;
+.product-card-button svg {
+  width: 15px;
+  height: 15px;
 }
 
-/* Quiet until the card is looked at or used; always reachable by keyboard and touch. */
-.product-card-actions .photo-menu-trigger {
-  width: 40px;
-  height: 40px;
-  min-height: 40px;
-  border: 1px solid transparent;
-  background: transparent;
-  color: var(--text-secondary);
-  opacity: 0.75;
-}
-
-.product-card:hover .product-card-actions .photo-menu-trigger,
-.product-card:focus-within .product-card-actions .photo-menu-trigger,
-.product-card-actions .photo-menu-trigger[aria-expanded='true'] {
-  opacity: 1;
-  background: var(--surface-solid, var(--bg));
-  border-color: var(--border);
+.product-card-delete {
+  color: var(--error);
 }
 
 .product-card-body {
@@ -6236,7 +6228,7 @@ main > section.campaigns-overview {
   flex-direction: column;
   gap: 0.25rem;
   min-width: 0;
-  padding: 0.8rem 1rem 0.9rem;
+  padding: 0.8rem 1rem 0.75rem;
 }
 
 /* A long name wraps, then stops at two lines, so no card grows taller than its neighbours. */

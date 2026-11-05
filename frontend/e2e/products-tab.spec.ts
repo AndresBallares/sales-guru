@@ -26,18 +26,18 @@ async function expectNoAxeViolations(page: Page) {
   expect(results.violations).toEqual([])
 }
 
-// The whole card goes: its text, photo, three-dot menu button, and the list item itself.
+// The whole card goes: its text, photo, Edit and Delete buttons, and the list item itself.
 async function expectCardGone(page: Page, label: string) {
-  await expect(page.getByRole('button', { name: `More actions for ${label}` })).toHaveCount(0)
+  await expect(page.getByRole('button', { name: `Edit ${label}` })).toHaveCount(0)
+  await expect(page.getByRole('button', { name: `Delete ${label}` })).toHaveCount(0)
   await expect(page.getByRole('img', { name: label })).toHaveCount(0)
   await expect(page.getByRole('listitem', { name: label })).toHaveCount(0)
   await expect(page.getByRole('heading', { name: label, level: 3 })).toHaveCount(0)
 }
 
-// Opens a card's three-dot menu and picks an action.
-async function chooseFromMenu(page: Page, label: string, action: 'Edit Product' | 'Delete Product') {
-  await page.getByRole('button', { name: `More actions for ${label}` }).click()
-  await page.getByRole('menuitem', { name: action }).click()
+// Presses a card's Edit or Delete button.
+async function chooseFromCard(page: Page, label: string, action: 'Edit' | 'Delete') {
+  await page.getByRole('button', { name: `${action} ${label}` }).click()
 }
 
 async function addProductInDrawer(
@@ -104,7 +104,7 @@ test('add a product in the drawer, watch the mechanism counter, edit it, and kee
   await expect(page.getByText('1 product', { exact: true })).toBeVisible()
   await expect(page.getByRole('button', { name: 'Add Product' })).toBeFocused()
 
-  await chooseFromMenu(page, 'Hoops', 'Edit Product')
+  await chooseFromCard(page, 'Hoops', 'Edit')
   const editor = page.getByRole('dialog', { name: 'Edit Product' })
   await expect(editor.getByLabel(/Mechanism/)).toHaveValue('Hand-polished solid gold')
   await expect(editor.getByText(/apply the next time ads are generated/)).toBeVisible()
@@ -153,8 +153,7 @@ test('an edit that would make ads out of date asks first, and Go back changes no
   expect((await staleFlags()).every((stale) => !stale)).toBe(true)
 
   await page.getByRole('tab', { name: 'Products' }).click()
-  await page.getByRole('button', { name: /^More actions for Handmade leather wallets/ }).click()
-  await page.getByRole('menuitem', { name: 'Edit Product' }).click()
+  await page.getByRole('button', { name: /^Edit Handmade leather wallets/ }).click()
   const editor = page.getByRole('dialog', { name: 'Edit Product' })
   await editor.getByLabel('What do you sell?').fill('Handmade leather wallets, now in navy')
   await editor.getByRole('button', { name: 'Save Changes' }).click()
@@ -198,31 +197,30 @@ test('delete: a product no campaign uses goes after a question; one a campaign u
   await page.getByRole('tab', { name: 'Products' }).click()
   await addProductInDrawer(page, 'Gold hoops', 'Hoops')
 
-  // Asking first: Keep it changes nothing and focus returns to the card's menu button.
-  await chooseFromMenu(page, 'Hoops', 'Delete Product')
+  // Asking first: Keep it changes nothing and focus returns to the card's Delete button.
+  await chooseFromCard(page, 'Hoops', 'Delete')
   const confirm = page.getByRole('group', { name: 'Confirm deleting Hoops' })
   await expect(confirm).toContainText('Delete Hoops and all its photos and videos?')
   await expectNoAxeViolations(page)
   await confirm.getByRole('button', { name: 'Keep it' }).click()
   await expect(confirm).toHaveCount(0)
-  await expect(page.getByRole('button', { name: 'More actions for Hoops' })).toBeFocused()
+  await expect(page.getByRole('button', { name: 'Delete Hoops' })).toBeFocused()
 
   // Yes, delete: the whole card is gone and focus moves to the list heading.
-  await chooseFromMenu(page, 'Hoops', 'Delete Product')
+  await chooseFromCard(page, 'Hoops', 'Delete')
   await confirm.getByRole('button', { name: 'Yes, delete' }).click()
   await expectCardGone(page, 'Hoops')
   await expect(page.getByRole('heading', { name: 'Products', level: 2 })).toBeFocused()
 
   // The wallets are used by the campaign: refused, with the campaign named, nothing removed.
-  await page.getByRole('button', { name: /^More actions for Handmade leather wallets/ }).click()
-  await page.getByRole('menuitem', { name: 'Delete Product' }).click()
+  await page.getByRole('button', { name: /^Delete Handmade leather wallets/ }).click()
   await page.getByRole('button', { name: 'Yes, delete' }).click()
   const refusal = page.getByRole('alert').filter({ hasText: 'used by 1 campaign' })
   await expect(refusal).toBeVisible()
   await expect(refusal).toBeFocused()
   await expectNoAxeViolations(page)
   await expect(
-    page.getByRole('button', { name: /^More actions for Handmade leather wallets/ }),
+    page.getByRole('button', { name: /^Delete Handmade leather wallets/ }),
   ).toBeVisible()
 })
 
@@ -235,7 +233,7 @@ test('delete: the card disappears even when the list reload after it fails', asy
   await page.route('**/businesses/*/products', (route) =>
     route.request().method() === 'GET' ? route.abort() : route.continue(),
   )
-  await chooseFromMenu(page, 'Hoops', 'Delete Product')
+  await chooseFromCard(page, 'Hoops', 'Delete')
   await page.getByRole('button', { name: 'Yes, delete' }).click()
 
   await expectCardGone(page, 'Hoops')
@@ -357,7 +355,11 @@ test('the Products page uses the desktop width, with compact cards and readable 
     const media = card.querySelector('.product-card-media') as HTMLElement
     const description = card.querySelector('.product-card-description') as HTMLElement
     const url = card.querySelector('.product-card-url') as HTMLElement
+    const edit = card.querySelector('.product-card-footer button') as HTMLElement
     return {
+      buttonsBelowText: edit.getBoundingClientRect().top >= url.getBoundingClientRect().bottom,
+      buttonsInsideCard: edit.getBoundingClientRect().bottom <= card.getBoundingClientRect().bottom,
+      menuButtons: card.querySelectorAll('[aria-haspopup="menu"]').length,
       gridWidth: grid.getBoundingClientRect().width,
       cardWidth: card.getBoundingClientRect().width,
       cardHeight: card.getBoundingClientRect().height,
@@ -381,6 +383,10 @@ test('the Products page uses the desktop width, with compact cards and readable 
   // The photo area is a share of the card, not most of it, and the card has no tall empty body.
   expect(metrics.mediaHeight / metrics.cardHeight).toBeLessThanOrEqual(0.72)
   expect(metrics.cardHeight).toBeLessThanOrEqual(metrics.cardWidth * 1.15)
+  // Edit and Delete are buttons on the card, under the text, not a menu.
+  expect(metrics.buttonsBelowText).toBe(true)
+  expect(metrics.buttonsInsideCard).toBe(true)
+  expect(metrics.menuButtons).toBe(0)
   // The URL sits right under the description, not pinned to the bottom of a tall card.
   expect(metrics.gapDescriptionToUrl).toBeLessThanOrEqual(16)
   // Type sizes (px): heading 20-22, name 15-16, description 13-14, URL 11-12, count about 12.
@@ -430,14 +436,14 @@ test('a photo never makes its card taller than a card without one', async ({ pag
       return {
         width: Math.round(rect.width),
         height: Math.round(rect.height),
-        // The whole photo fits inside the box, in its own proportions.
-        fits: img ? img.width <= rect.width + 1 && img.height <= rect.height + 1 : true,
+        // The photo is as wide as the box that holds it.
+        fillsWidth: img ? Math.abs(img.width - rect.width) <= 1 : true,
       }
     }),
   )
   expect(media).toHaveLength(3)
   expect(new Set(media.map((m) => m.height)).size).toBe(1)
-  expect(media.every((m) => m.fits)).toBe(true)
+  expect(media.every((m) => m.fillsWidth)).toBe(true)
   // A 3:2 box, not a square.
   expect(media[0].height / media[0].width).toBeLessThan(0.7)
 })
