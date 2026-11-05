@@ -228,10 +228,14 @@ describe('ProductForm — create mode photo staging', () => {
     // 2026-09-10 — this exact gap left campaign-list thumbnails blank
     // until an unrelated full reload).
     await waitFor(() =>
-      expect(onSaved).toHaveBeenCalledWith({
-        ...product,
-        primaryImageUrl: 'http://localhost:8000/product-images/img-1',
-      }),
+      expect(onSaved).toHaveBeenCalledWith(
+        {
+          ...product,
+          primaryImageUrl: 'http://localhost:8000/product-images/img-1',
+        },
+        // No photo failed, so there is nothing to warn about.
+        undefined,
+      ),
     )
     expect(mockedApi.uploadProductImage).toHaveBeenNthCalledWith(1, 'biz-1', 'prod-1', fileA, undefined)
     expect(mockedApi.uploadProductImage).toHaveBeenNthCalledWith(2, 'biz-1', 'prod-1', fileB, undefined)
@@ -240,7 +244,7 @@ describe('ProductForm — create mode photo staging', () => {
   it('still reports the product as saved if a staged photo fails to upload', async () => {
     mockedApi.createProduct.mockResolvedValue(product)
     mockedApi.uploadProductImage.mockRejectedValue(new api.ApiError(400, 'Could not read this image'))
-    const onSaved = vi.fn<(product: api.Product) => void>()
+    const onSaved = vi.fn<(product: api.Product, warning?: string) => void>()
     const user = userEvent.setup()
     render(<ProductForm businessId="biz-1" onSaved={onSaved} />)
 
@@ -249,7 +253,13 @@ describe('ProductForm — create mode photo staging', () => {
     await screen.findByRole('img')
     await user.click(screen.getByRole('button', { name: 'Add product' }))
 
-    await waitFor(() => expect(onSaved).toHaveBeenCalledWith(product))
+    // The caller is told in words, so a drawer that closes can still say a photo failed.
+    await waitFor(() =>
+      expect(onSaved).toHaveBeenCalledWith(
+        product,
+        'Product saved, but a photo failed to upload: Could not read this image',
+      ),
+    )
     expect(await screen.findByRole('alert')).toHaveTextContent('Could not read this image')
   })
 })
@@ -1239,5 +1249,89 @@ describe('ProductForm — what an edit does to ads', () => {
 
     expect(await screen.findByRole('alert')).toHaveTextContent(/Could not check/)
     expect(mockedApi.updateProduct).not.toHaveBeenCalled()
+  })
+})
+
+describe('ProductForm — drawer support', () => {
+  it('uses the labels it is given for the save button, idle and while saving', async () => {
+    let finish: (value: api.Product) => void = () => undefined
+    mockedApi.createProduct.mockReturnValue(new Promise((resolve) => (finish = resolve)))
+    const user = userEvent.setup()
+    render(
+      <ProductForm
+        businessId="biz-1"
+        submitLabel="Save Product"
+        submittingLabel="Saving…"
+        onSaved={vi.fn<(p: api.Product) => void>()}
+      />,
+    )
+
+    await user.type(screen.getByLabelText('What do you sell?'), 'Gold hoops')
+    await user.click(screen.getByRole('button', { name: 'Save Product' }))
+
+    expect(screen.getByRole('button', { name: 'Saving…' })).toBeDisabled()
+    finish({ ...product, id: 'prod-9', description: 'Gold hoops' })
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Save Product' })).toBeEnabled())
+  })
+
+  it('keeps its usual labels when none are given', () => {
+    render(<ProductForm businessId="biz-1" onSaved={vi.fn<(p: api.Product) => void>()} />)
+
+    expect(screen.getByRole('button', { name: 'Add product' })).toBeInTheDocument()
+  })
+
+  it('reports whether there is anything unsaved, and not before the owner types', async () => {
+    const onDirtyChange = vi.fn<(dirty: boolean) => void>()
+    const user = userEvent.setup()
+    render(
+      <ProductForm
+        businessId="biz-1"
+        onDirtyChange={onDirtyChange}
+        onSaved={vi.fn<(p: api.Product) => void>()}
+      />,
+    )
+    expect(onDirtyChange).not.toHaveBeenCalledWith(true)
+
+    await user.type(screen.getByLabelText('What do you sell?'), 'G')
+    expect(onDirtyChange).toHaveBeenLastCalledWith(true)
+
+    await user.clear(screen.getByLabelText('What do you sell?'))
+    expect(onDirtyChange).toHaveBeenLastCalledWith(false)
+  })
+
+  it('in edit mode only counts a change from the saved values as unsaved', async () => {
+    mockedApi.listProductImages.mockResolvedValue([])
+    const onDirtyChange = vi.fn<(dirty: boolean) => void>()
+    const user = userEvent.setup()
+    render(
+      <ProductForm
+        businessId="biz-1"
+        product={product}
+        onDirtyChange={onDirtyChange}
+        onSaved={vi.fn<(p: api.Product) => void>()}
+      />,
+    )
+    expect(onDirtyChange).not.toHaveBeenCalledWith(true)
+
+    await user.type(screen.getByLabelText('What do you sell?'), '!')
+    expect(onDirtyChange).toHaveBeenLastCalledWith(true)
+
+    await user.type(screen.getByLabelText('What do you sell?'), '{Backspace}')
+    expect(onDirtyChange).toHaveBeenLastCalledWith(false)
+  })
+
+  it('marks its action row so a drawer can keep it in view', () => {
+    const { container } = render(
+      <ProductForm
+        businessId="biz-1"
+        stickyActions
+        onSaved={vi.fn<(p: api.Product) => void>()}
+        onCancel={vi.fn<() => void>()}
+      />,
+    )
+
+    expect(container.querySelector('.form-actions-sticky')).toContainElement(
+      screen.getByRole('button', { name: 'Cancel' }),
+    )
   })
 })

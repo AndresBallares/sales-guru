@@ -1,5 +1,6 @@
 import {
   useEffect,
+  useLayoutEffect,
   useRef,
   useState,
   type ChangeEvent,
@@ -46,6 +47,10 @@ export function ProductForm({
   product,
   campaignId,
   urlRequired = false,
+  submitLabel,
+  submittingLabel,
+  stickyActions = false,
+  onDirtyChange,
   onSaved,
   onCancel,
 }: {
@@ -59,7 +64,17 @@ export function ProductForm({
   // guessing across the business.
   campaignId?: string
   urlRequired?: boolean
-  onSaved: (product: Product) => void
+  // Labels for the save button when the caller wants its own ("Save Product" in the drawer);
+  // the usual "Add product" / "Save" and "Adding…" / "Saving…" apply otherwise.
+  submitLabel?: string
+  submittingLabel?: string
+  // Keep the Save and Cancel row in view at the bottom of a scrolling container.
+  stickyActions?: boolean
+  // Told whenever the form gains or loses unsaved changes, so a drawer can ask before it
+  // closes. Photos picked for a new product count; in edit mode photos save as they change.
+  onDirtyChange?: (dirty: boolean) => void
+  // `warning` is set when the product was saved but a photo picked with it failed to upload.
+  onSaved: (product: Product, warning?: string) => void
   onCancel?: () => void
 }) {
   const isEditing = product !== undefined
@@ -147,6 +162,28 @@ export function ProductForm({
     // change would invalidate previews still in use.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
+
+  // Unsaved changes: any field that differs from where the form started (empty for a new
+  // product, the saved values for an edit), or a photo picked for a product not yet created.
+  const dirty =
+    description !== (product?.description ?? '') ||
+    name !== (product?.name ?? '') ||
+    price !== (product?.price != null ? String(product.price) : '') ||
+    margin !== (product?.margin != null ? String(product.margin) : '') ||
+    features !== (product?.features ?? '') ||
+    benefits !== (product?.benefits ?? '') ||
+    mechanism !== (product?.mechanism ?? '') ||
+    personalizable !== (product?.personalizable ?? false) ||
+    personalizationOptions !== (product?.personalizationOptions ?? '') ||
+    url !== (product?.url ?? '') ||
+    stagedPhotos.length > 0
+  const onDirtyChangeRef = useRef(onDirtyChange)
+  onDirtyChangeRef.current = onDirtyChange
+  // A layout effect, so the caller knows before the browser handles the next key press (an
+  // Escape right after typing must already see the unsaved text).
+  useLayoutEffect(() => {
+    onDirtyChangeRef.current?.(dirty)
+  }, [dirty])
 
   async function handleFilesSelected(event: ChangeEvent<HTMLInputElement>) {
     const files = Array.from(event.target.files ?? [])
@@ -344,6 +381,7 @@ export function ProductForm({
       // CampaignsSection, NewCampaignFlow) otherwise shows a stale,
       // photo-less product until its own next full data reload.
       let primaryImageUrl = saved.primaryImageUrl
+      let photoWarning: string | undefined
       if (!isEditing && stagedPhotos.length > 0) {
         // Sequential, not parallel — upload order determines display
         // order (app/api/product_image.py's _next_position appends), so
@@ -362,11 +400,11 @@ export function ProductForm({
             // photo upload failing here shouldn't hide that. Surfaced as
             // a form-level warning instead of blocking onSaved; the user
             // can still add photos afterward via edit mode.
-            setFormError(
+            photoWarning =
               err instanceof ApiError
                 ? `Product saved, but a photo failed to upload: ${err.message}`
-                : 'Product saved, but a photo failed to upload.',
-            )
+                : 'Product saved, but a photo failed to upload.'
+            setFormError(photoWarning)
             break
           }
         }
@@ -374,7 +412,7 @@ export function ProductForm({
         setStagedPhotos([])
       }
 
-      onSaved({ ...saved, primaryImageUrl })
+      onSaved({ ...saved, primaryImageUrl }, photoWarning)
       if (!isEditing) {
         setDescription('')
         setPrice('')
@@ -688,10 +726,12 @@ export function ProductForm({
           ads are generated.
         </p>
       )}
-      <div className="button-row">
+      <div className={stickyActions ? 'button-row form-actions-sticky' : 'button-row'}>
         <button type="submit" className="btn-outline btn-gold" disabled={submitting}>
           {isEditing ? <SaveIcon /> : <PlusIcon />}
-          {submitting ? (isEditing ? 'Saving…' : 'Adding…') : isEditing ? 'Save' : 'Add product'}
+          {submitting
+            ? (submittingLabel ?? (isEditing ? 'Saving…' : 'Adding…'))
+            : (submitLabel ?? (isEditing ? 'Save' : 'Add product'))}
         </button>
         {onCancel && (
           <button type="button" className="cancel-link" onClick={onCancel} disabled={submitting}>

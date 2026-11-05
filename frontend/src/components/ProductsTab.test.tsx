@@ -1,8 +1,9 @@
-import { render, screen, waitFor, within } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { ProductsTab } from './ProductsTab'
 import * as api from '../lib/api'
+import * as imageValidation from '../lib/imageValidation'
 
 vi.mock('../lib/api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../lib/api')>()
@@ -12,11 +13,22 @@ vi.mock('../lib/api', async (importOriginal) => {
     createProduct: vi.fn<typeof actual.createProduct>(),
     updateProduct: vi.fn<typeof actual.updateProduct>(),
     deleteProduct: vi.fn<typeof actual.deleteProduct>(),
+    uploadProductImage: vi.fn<typeof actual.uploadProductImage>(),
     listProductImages: vi.fn<typeof actual.listProductImages>(),
     getProductEditImpact: vi.fn<typeof actual.getProductEditImpact>(),
   }
 })
 const mockedApi = vi.mocked(api)
+
+// The photo's size is read by the browser's image decoder, which jsdom lacks.
+vi.mock('../lib/imageValidation', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../lib/imageValidation')>()
+  return {
+    ...actual,
+    readImageDimensions: vi.fn<typeof actual.readImageDimensions>(),
+  }
+})
+const mockedImageValidation = vi.mocked(imageValidation)
 
 const coil: api.Product = {
   id: 'prod-1',
@@ -47,45 +59,63 @@ beforeEach(() => {
   vi.resetAllMocks()
   mockedApi.listProducts.mockResolvedValue([coil, unnamed])
   mockedApi.listProductImages.mockResolvedValue([])
+  mockedImageValidation.readImageDimensions.mockResolvedValue({ width: 1200, height: 1200 })
 })
 
-describe('ProductsTab', () => {
-  it('lists every product with its name, link and photo', async () => {
+type User = ReturnType<typeof userEvent.setup>
+
+async function openMenu(user: User, label: string) {
+  const trigger = await screen.findByRole('button', { name: `More actions for ${label}` })
+  await user.click(trigger)
+  return trigger
+}
+
+function cardOf(label: string): HTMLElement {
+  return screen.getByRole('listitem', { name: label })
+}
+
+describe('ProductsTab page', () => {
+  it('has a header with the title, a supporting line, the count and a primary Add Product button', async () => {
     render(<ProductsTab businessId="biz-1" />)
 
-    expect(screen.getByText('Loading…')).toBeInTheDocument()
-    expect(await screen.findByText('Emerald Coil')).toBeInTheDocument()
-    // A product with no name shows its description instead.
-    expect(screen.getByText('Triangle band')).toBeInTheDocument()
-    expect(screen.getByRole('img', { name: 'Emerald Coil' })).toHaveAttribute(
-      'src',
-      'https://img.example/coil.jpg',
-    )
-    const link = screen.getByRole('link', { name: /venzijewelry\.com\/products\/serpent/ })
-    expect(link).toHaveAttribute(
-      'href',
-      'https://venzijewelry.com/products/serpent-emerald-diamonds-ceramic',
-    )
-    expect(link).toHaveAttribute('rel', expect.stringContaining('noreferrer'))
-    expect(screen.getByRole('button', { name: 'Edit Emerald Coil' })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Edit Triangle band' })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Products', level: 2 })).toBeInTheDocument()
+    expect(
+      screen.getByText('Manage the products used to create and launch your marketing campaigns.'),
+    ).toBeInTheDocument()
+    expect(await screen.findByText('2 products')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Add Product' })).toBeEnabled()
+  })
+
+  it('says "1 product" for a single product', async () => {
+    mockedApi.listProducts.mockResolvedValue([coil])
+    render(<ProductsTab businessId="biz-1" />)
+
+    expect(await screen.findByText('1 product')).toBeInTheDocument()
+  })
+
+  it('no longer shows the add form on the page', async () => {
+    render(<ProductsTab businessId="biz-1" />)
+
+    await screen.findByText('Emerald Coil')
+    expect(screen.queryByLabelText('What do you sell?')).not.toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: 'Add a product' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
   })
 
   it('tells the page which products it loaded', async () => {
     const onProductsChange = vi.fn<(products: api.Product[]) => void>()
     render(<ProductsTab businessId="biz-1" onProductsChange={onProductsChange} />)
 
-    await screen.findByText('Emerald Coil')
-    expect(onProductsChange).toHaveBeenCalledWith([coil, unnamed])
+    await waitFor(() => expect(onProductsChange).toHaveBeenCalledWith([coil, unnamed]))
   })
 
-  it('says so when there are no products yet, and still offers the add form', async () => {
-    mockedApi.listProducts.mockResolvedValue([])
-    render(<ProductsTab businessId="biz-1" />)
+  it('shows skeleton cards while loading', () => {
+    mockedApi.listProducts.mockReturnValue(new Promise(() => undefined))
+    const { container } = render(<ProductsTab businessId="biz-1" />)
 
-    expect(await screen.findByText(/No products yet/)).toBeInTheDocument()
-    expect(screen.getByRole('heading', { name: 'Add a product' })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Add product' })).toBeInTheDocument()
+    expect(screen.getByRole('status')).toHaveTextContent('Loading products…')
+    expect(container.querySelectorAll('.product-card-skeleton')).toHaveLength(3)
+    expect(screen.queryByText('No products yet')).not.toBeInTheDocument()
   })
 
   it('shows a clear error when the list cannot be loaded', async () => {
@@ -95,217 +125,451 @@ describe('ProductsTab', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent('Could not load products.')
   })
 
-  it('opens the edit form for one product, filled in, and closes it on Cancel', async () => {
-    const user = userEvent.setup()
+  describe('the empty state', () => {
+    beforeEach(() => {
+      mockedApi.listProducts.mockResolvedValue([])
+    })
+
+    it('invites the first product and opens the same drawer', async () => {
+      const user = userEvent.setup()
+      render(<ProductsTab businessId="biz-1" />)
+
+      expect(await screen.findByRole('heading', { name: 'No products yet' })).toBeInTheDocument()
+      expect(
+        screen.getByText('Add your first product to start creating marketing campaigns.'),
+      ).toBeInTheDocument()
+      expect(screen.getByText('0 products')).toBeInTheDocument()
+      expect(screen.queryByRole('searchbox')).not.toBeInTheDocument()
+
+      await user.click(screen.getByRole('button', { name: 'Add Your First Product' }))
+
+      expect(screen.getByRole('dialog', { name: 'Add New Product' })).toBeInTheDocument()
+    })
+  })
+})
+
+describe('the product cards', () => {
+  it('lists every product as a card in a grid, with its name, description and link', async () => {
     render(<ProductsTab businessId="biz-1" />)
 
-    await user.click(await screen.findByRole('button', { name: 'Edit Emerald Coil' }))
-
-    const editor = screen.getByRole('listitem', { name: /Emerald Coil/ })
-    expect(within(editor).getByLabelText('What do you sell?')).toHaveValue(coil.description)
-    expect(within(editor).getByLabelText(/Mechanism/)).toHaveValue('Solid 18k gold')
-    await user.click(within(editor).getByRole('button', { name: 'Cancel' }))
-    expect(screen.getByRole('button', { name: 'Edit Emerald Coil' })).toBeInTheDocument()
+    const coilCard = await screen.findByRole('listitem', { name: 'Emerald Coil' })
+    expect(within(coilCard).getByRole('heading', { name: 'Emerald Coil', level: 3 })).toBeInTheDocument()
+    expect(within(coilCard).getByText(coil.description)).toBeInTheDocument()
+    const link = within(coilCard).getByRole('link', { name: /venzijewelry\.com\/products\/serpent/ })
+    expect(link).toHaveAttribute('href', coil.url)
+    expect(link).toHaveAttribute('target', '_blank')
+    expect(link).toHaveAttribute('rel', expect.stringContaining('noreferrer'))
+    expect(screen.getAllByRole('listitem').filter((li) => li.classList.contains('product-card'))).toHaveLength(2)
   })
 
-  it('saves an edit, closes the form and reloads the list', async () => {
-    const renamed = { ...coil, name: 'Emerald Coil Ring' }
-    mockedApi.updateProduct.mockResolvedValue(renamed)
-    const user = userEvent.setup()
+  it('shows the photo, and a placeholder (never a broken image) when there is none or it fails', async () => {
+    const { container } = render(<ProductsTab businessId="biz-1" />)
+
+    const coilCard = await screen.findByRole('listitem', { name: 'Emerald Coil' })
+    const photo = within(coilCard).getByRole('img', { name: 'Emerald Coil' })
+    expect(photo).toHaveAttribute('src', 'https://img.example/coil.jpg')
+    // No photo: a placeholder with an icon, not an empty box or an <img>.
+    const bare = cardOf('Triangle band')
+    expect(within(bare).queryByRole('img')).not.toBeInTheDocument()
+    expect(bare.querySelector('.product-card-placeholder svg')).not.toBeNull()
+    // A photo that fails to load is swapped for the placeholder too.
+    fireEvent.error(photo)
+    expect(within(coilCard).queryByRole('img')).not.toBeInTheDocument()
+    expect(container.querySelectorAll('.product-card-placeholder')).toHaveLength(2)
+  })
+
+  it('titles a product with no name "Untitled Product" and keeps its text as the description', async () => {
     render(<ProductsTab businessId="biz-1" />)
 
-    await user.click(await screen.findByRole('button', { name: 'Edit Emerald Coil' }))
-    mockedApi.listProducts.mockResolvedValue([renamed, unnamed])
-    const editor = screen.getByRole('listitem', { name: 'Editing Emerald Coil' })
-    const name = within(editor).getByLabelText(/Product name/)
-    await user.clear(name)
-    await user.type(name, 'Emerald Coil Ring')
-    await user.click(within(editor).getByRole('button', { name: 'Save' }))
-
-    expect(await screen.findByText('Emerald Coil Ring')).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Edit Emerald Coil Ring' })).toBeInTheDocument()
-    expect(mockedApi.listProducts).toHaveBeenCalledTimes(2)
+    const bare = await screen.findByRole('listitem', { name: 'Triangle band' })
+    expect(within(bare).getByRole('heading', { level: 3 })).toHaveTextContent('Untitled Product')
+    expect(within(bare).getByText('Triangle band')).toBeInTheDocument()
+    expect(within(bare).queryByRole('link')).not.toBeInTheDocument()
   })
 
-  it('adds a product that is not attached to any campaign, then clears the form', async () => {
-    const added: api.Product = { ...unnamed, id: 'prod-3', description: 'Gold hoops', name: 'Hoops' }
-    mockedApi.createProduct.mockResolvedValue(added)
+  it('leaves out the description area when there is no description text', async () => {
+    mockedApi.listProducts.mockResolvedValue([{ ...coil, description: '   ' }])
+    const { container } = render(<ProductsTab businessId="biz-1" />)
+
+    await screen.findByRole('heading', { name: 'Emerald Coil', level: 3 })
+    expect(container.querySelector('.product-card-description')).toBeNull()
+  })
+
+  it('keeps a long name, description and URL inside the card', async () => {
+    const long: api.Product = {
+      ...coil,
+      id: 'prod-long',
+      name: 'A very long product name '.repeat(8).trim(),
+      description: 'A long description. '.repeat(60),
+      url: `https://example.com/${'very-long-path-segment/'.repeat(12)}`,
+    }
+    mockedApi.listProducts.mockResolvedValue([long])
+    const { container } = render(<ProductsTab businessId="biz-1" />)
+
+    await screen.findByRole('heading', { level: 3 })
+    // The text is whole in the page (for screen readers and the tooltip); the CSS clamps it.
+    expect(container.querySelector('.product-card-name')).toHaveAttribute('title', long.name)
+    expect(container.querySelector('.product-card-description')).toHaveAttribute(
+      'title',
+      long.description.trim(),
+    )
+    expect(container.querySelector('.product-card-url')).toHaveAttribute('title', long.url as string)
+  })
+
+  it('hides Edit and Delete in a three-dot menu on each card', async () => {
     const user = userEvent.setup()
     render(<ProductsTab businessId="biz-1" />)
 
     await screen.findByText('Emerald Coil')
+    expect(screen.queryByRole('button', { name: /^Edit/ })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /^Delete/ })).not.toBeInTheDocument()
+
+    await openMenu(user, 'Emerald Coil')
+    const menu = screen.getByRole('menu', { name: 'Actions for Emerald Coil' })
+    expect(within(menu).getByRole('menuitem', { name: 'Edit Product' })).toBeInTheDocument()
+    expect(within(menu).getByRole('menuitem', { name: 'Delete Product' })).toBeInTheDocument()
+  })
+})
+
+describe('searching', () => {
+  it('appears when there are several products and filters them by name', async () => {
+    const user = userEvent.setup()
+    render(<ProductsTab businessId="biz-1" />)
+
+    await user.type(await screen.findByRole('searchbox', { name: 'Search products' }), 'coil')
+
+    expect(screen.getByRole('heading', { name: 'Emerald Coil', level: 3 })).toBeInTheDocument()
+    expect(screen.queryByRole('listitem', { name: 'Triangle band' })).not.toBeInTheDocument()
+    // The count still says how many products the business has.
+    expect(screen.getByText('2 products')).toBeInTheDocument()
+  })
+
+  it('finds a product with no name by its text', async () => {
+    const user = userEvent.setup()
+    render(<ProductsTab businessId="biz-1" />)
+
+    await user.type(await screen.findByRole('searchbox'), 'triangle')
+
+    expect(screen.getByRole('listitem', { name: 'Triangle band' })).toBeInTheDocument()
+    expect(screen.queryByRole('listitem', { name: 'Emerald Coil' })).not.toBeInTheDocument()
+  })
+
+  it('says so when nothing matches', async () => {
+    const user = userEvent.setup()
+    render(<ProductsTab businessId="biz-1" />)
+
+    await user.type(await screen.findByRole('searchbox'), 'zzz')
+
+    expect(screen.getByText('No products found. Try another search.')).toBeInTheDocument()
+    expect(screen.queryByText('No products yet')).not.toBeInTheDocument()
+  })
+
+  it('is not shown for a single product', async () => {
+    mockedApi.listProducts.mockResolvedValue([coil])
+    render(<ProductsTab businessId="biz-1" />)
+
+    await screen.findByText('Emerald Coil')
+    expect(screen.queryByRole('searchbox')).not.toBeInTheDocument()
+  })
+})
+
+describe('adding a product in the drawer', () => {
+  it('opens a right-side drawer with the existing form, Save Product and Cancel', async () => {
+    const user = userEvent.setup()
+    render(<ProductsTab businessId="biz-1" />)
+
+    const opener = await screen.findByRole('button', { name: 'Add Product' })
+    await user.click(opener)
+
+    const drawer = screen.getByRole('dialog', { name: 'Add New Product' })
+    expect(within(drawer).getByText('Add a product to your business catalog.')).toBeInTheDocument()
+    // Every existing field is still there.
+    for (const label of [/What do you sell/, /Product name/, /Mechanism/, /Personalizable/]) {
+      expect(within(drawer).getByLabelText(label)).toBeInTheDocument()
+    }
+    expect(within(drawer).getByLabelText('What do you sell?')).toHaveFocus()
+    expect(within(drawer).getByRole('button', { name: 'Save Product' })).toBeInTheDocument()
+    expect(within(drawer).getByRole('button', { name: 'Cancel' })).toBeInTheDocument()
+    expect(within(drawer).getByRole('button', { name: 'Close' })).toBeInTheDocument()
+  })
+
+  it('creates the product, closes the drawer and shows the new card straight away', async () => {
+    const added: api.Product = { ...unnamed, id: 'prod-3', description: 'Gold hoops', name: 'Hoops' }
+    mockedApi.createProduct.mockResolvedValue(added)
+    const user = userEvent.setup()
+    render(<ProductsTab businessId="biz-1" />)
+    await user.click(await screen.findByRole('button', { name: 'Add Product' }))
     mockedApi.listProducts.mockResolvedValue([coil, unnamed, added])
+
     await user.type(screen.getByLabelText('What do you sell?'), 'Gold hoops')
     await user.type(screen.getByLabelText(/Product name/), 'Hoops')
-    await user.type(screen.getByLabelText(/Mechanism/), 'Hand polished')
-    await user.click(screen.getByRole('button', { name: 'Add product' }))
+    await user.click(screen.getByRole('button', { name: 'Save Product' }))
 
-    await waitFor(() => expect(mockedApi.createProduct).toHaveBeenCalled())
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
     const [businessId, input] = mockedApi.createProduct.mock.calls[0]
     expect(businessId).toBe('biz-1')
     expect(input.description).toBe('Gold hoops')
     expect(input.campaignId).toBeUndefined()
-    expect(await screen.findByRole('button', { name: 'Edit Hoops' })).toBeInTheDocument()
-    // The whole form starts over, including the name and mechanism.
-    await waitFor(() => expect(screen.getByLabelText('What do you sell?')).toHaveValue(''))
-    expect(screen.getByLabelText(/Product name/)).toHaveValue('')
-    expect(screen.getByLabelText(/Mechanism/)).toHaveValue('')
+    expect(await screen.findByRole('heading', { name: 'Hoops', level: 3 })).toBeInTheDocument()
+    expect(screen.getByText('3 products')).toBeInTheDocument()
+    expect(screen.getByText('Hoops was added.')).toBeInTheDocument()
+    // Focus goes back to the button that opened it.
+    expect(screen.getByRole('button', { name: 'Add Product' })).toHaveFocus()
   })
 
-  describe('deleting a product', () => {
-    it('offers Delete on every row, named after the product', async () => {
-      render(<ProductsTab businessId="biz-1" />)
+  it('closes after saving but still says so when a photo picked with the product failed', async () => {
+    const added: api.Product = { ...unnamed, id: 'prod-3', description: 'Gold hoops', name: 'Hoops' }
+    mockedApi.createProduct.mockResolvedValue(added)
+    mockedApi.uploadProductImage.mockRejectedValue(new api.ApiError(400, 'Could not read this image'))
+    const user = userEvent.setup()
+    render(<ProductsTab businessId="biz-1" />)
+    await user.click(await screen.findByRole('button', { name: 'Add Product' }))
+    mockedApi.listProducts.mockResolvedValue([coil, unnamed, added])
 
-      expect(await screen.findByRole('button', { name: 'Delete Emerald Coil' })).toBeInTheDocument()
-      expect(screen.getByRole('button', { name: 'Delete Triangle band' })).toBeInTheDocument()
-    })
+    await user.type(screen.getByLabelText('What do you sell?'), 'Gold hoops')
+    await user.upload(
+      screen.getByLabelText(/Product photos/),
+      new File([new Uint8Array(1024)], 'hoops.jpg', { type: 'image/jpeg' }),
+    )
+    await user.click(screen.getByRole('button', { name: 'Save Product' }))
 
-    it('asks first, and Keep it changes nothing and returns focus to Delete', async () => {
-      const user = userEvent.setup()
-      render(<ProductsTab businessId="biz-1" />)
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      'Hoops: Product saved, but a photo failed to upload: Could not read this image Edit the product to add photos.',
+    )
+    expect(screen.getByRole('heading', { name: 'Hoops', level: 3 })).toBeInTheDocument()
+  })
 
-      await user.click(await screen.findByRole('button', { name: 'Delete Emerald Coil' }))
+  it('shows the error and keeps the drawer open when saving fails', async () => {
+    mockedApi.createProduct.mockRejectedValue(new api.ApiError(422, 'Name is too long'))
+    const user = userEvent.setup()
+    render(<ProductsTab businessId="biz-1" />)
+    await user.click(await screen.findByRole('button', { name: 'Add Product' }))
 
-      const confirm = screen.getByRole('group', { name: 'Confirm deleting Emerald Coil' })
-      expect(confirm).toHaveTextContent('Delete Emerald Coil and all its photos and videos?')
-      expect(confirm).toHaveTextContent("can't be undone")
-      expect(mockedApi.deleteProduct).not.toHaveBeenCalled()
-      await user.click(within(confirm).getByRole('button', { name: 'Keep it' }))
-      expect(screen.queryByRole('group', { name: /Confirm deleting/ })).not.toBeInTheDocument()
-      expect(screen.getByRole('button', { name: 'Delete Emerald Coil' })).toHaveFocus()
-      expect(mockedApi.deleteProduct).not.toHaveBeenCalled()
-    })
+    await user.type(screen.getByLabelText('What do you sell?'), 'Gold hoops')
+    await user.click(screen.getByRole('button', { name: 'Save Product' }))
 
-    it('deletes after Yes, removes the row and moves focus to the Products heading', async () => {
-      mockedApi.deleteProduct.mockResolvedValue(undefined)
-      const onProductsChange = vi.fn<(products: api.Product[]) => void>()
-      const user = userEvent.setup()
-      render(<ProductsTab businessId="biz-1" onProductsChange={onProductsChange} />)
-      await user.click(await screen.findByRole('button', { name: 'Delete Emerald Coil' }))
-      mockedApi.listProducts.mockResolvedValue([unnamed])
+    const drawer = screen.getByRole('dialog', { name: 'Add New Product' })
+    expect(await within(drawer).findByRole('alert')).toHaveTextContent('Name is too long')
+    expect(within(drawer).getByLabelText('What do you sell?')).toHaveValue('Gold hoops')
+  })
 
-      await user.click(screen.getByRole('button', { name: 'Yes, delete' }))
+  it('closes at once when nothing was typed, with Cancel, X and Escape', async () => {
+    const user = userEvent.setup()
+    render(<ProductsTab businessId="biz-1" />)
+    const opener = await screen.findByRole('button', { name: 'Add Product' })
 
-      await waitFor(() => expect(screen.queryByText('Emerald Coil')).not.toBeInTheDocument())
-      expect(mockedApi.deleteProduct).toHaveBeenCalledExactlyOnceWith('biz-1', 'prod-1')
-      expect(screen.getByText('Triangle band')).toBeInTheDocument()
-      expect(onProductsChange).toHaveBeenLastCalledWith([unnamed])
-      await waitFor(() =>
-        expect(screen.getByRole('heading', { name: 'Products', level: 2 })).toHaveFocus(),
-      )
-    })
+    for (const close of [
+      () => user.click(screen.getByRole('button', { name: 'Cancel' })),
+      () => user.click(screen.getByRole('button', { name: 'Close' })),
+      () => user.keyboard('{Escape}'),
+    ]) {
+      await user.click(opener)
+      await close()
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+      expect(opener).toHaveFocus()
+    }
+  })
 
-    // The row (photo, name, Edit, Delete) must go the moment the server says the product is
-    // deleted, not only when the list that is fetched afterwards happens to come back right.
-    describe('removes the whole row once the delete succeeds', () => {
-      function expectRowGone() {
-        expect(screen.queryByRole('button', { name: 'Edit Emerald Coil' })).not.toBeInTheDocument()
-        expect(screen.queryByRole('button', { name: 'Delete Emerald Coil' })).not.toBeInTheDocument()
-        expect(screen.queryByRole('img', { name: 'Emerald Coil' })).not.toBeInTheDocument()
-        expect(screen.queryByText('Emerald Coil')).not.toBeInTheDocument()
-        expect(screen.getAllByRole('listitem')).toHaveLength(1)
-        expect(screen.getByRole('button', { name: 'Edit Triangle band' })).toBeInTheDocument()
-      }
+  it('asks before throwing away what was typed', async () => {
+    const user = userEvent.setup()
+    render(<ProductsTab businessId="biz-1" />)
+    await user.click(await screen.findByRole('button', { name: 'Add Product' }))
+    await user.type(screen.getByLabelText('What do you sell?'), 'Gold hoops')
 
-      async function askToDelete() {
-        mockedApi.deleteProduct.mockResolvedValue(undefined)
-        const user = userEvent.setup()
-        render(<ProductsTab businessId="biz-1" />)
-        await user.click(await screen.findByRole('button', { name: 'Delete Emerald Coil' }))
-        return user
-      }
+    await user.keyboard('{Escape}')
 
-      it('when the list fetched afterwards is stale and still has the product', async () => {
-        const user = await askToDelete()
-        mockedApi.listProducts.mockResolvedValue([coil, unnamed])
+    const ask = screen.getByRole('alertdialog', { name: 'Discard your changes?' })
+    expect(within(ask).getByRole('button', { name: 'Keep editing' })).toHaveFocus()
+    await user.click(within(ask).getByRole('button', { name: 'Keep editing' }))
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
+    expect(screen.getByLabelText('What do you sell?')).toHaveValue('Gold hoops')
 
-        await user.click(screen.getByRole('button', { name: 'Yes, delete' }))
+    await user.click(screen.getByRole('button', { name: 'Cancel' }))
+    await user.click(screen.getByRole('button', { name: 'Discard changes' }))
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+  })
+})
 
-        await waitFor(() => expect(screen.getByRole('heading', { name: 'Products', level: 2 })).toHaveFocus())
-        expectRowGone()
-      })
+describe('editing a product in the drawer', () => {
+  it('opens the same drawer, titled Edit Product, with the product filled in', async () => {
+    const user = userEvent.setup()
+    render(<ProductsTab businessId="biz-1" />)
 
-      it('when the list fetched afterwards fails', async () => {
-        const user = await askToDelete()
-        mockedApi.listProducts.mockRejectedValue(new Error('network'))
+    await openMenu(user, 'Emerald Coil')
+    await user.click(screen.getByRole('menuitem', { name: 'Edit Product' }))
 
-        await user.click(screen.getByRole('button', { name: 'Yes, delete' }))
+    const drawer = screen.getByRole('dialog', { name: 'Edit Product' })
+    expect(within(drawer).getByLabelText('What do you sell?')).toHaveValue(coil.description)
+    expect(within(drawer).getByLabelText(/Mechanism/)).toHaveValue('Solid 18k gold')
+    expect(within(drawer).getByRole('button', { name: 'Save Changes' })).toBeInTheDocument()
+  })
 
-        await waitFor(() => expect(screen.getByRole('heading', { name: 'Products', level: 2 })).toHaveFocus())
-        expectRowGone()
-      })
+  it('saves the edit, closes the drawer and updates that card', async () => {
+    const renamed = { ...coil, name: 'Emerald Coil Ring' }
+    mockedApi.updateProduct.mockResolvedValue(renamed)
+    const user = userEvent.setup()
+    render(<ProductsTab businessId="biz-1" />)
+    const trigger = await openMenu(user, 'Emerald Coil')
+    await user.click(screen.getByRole('menuitem', { name: 'Edit Product' }))
+    mockedApi.listProducts.mockResolvedValue([renamed, unnamed])
 
-      it('while the list is still being fetched afterwards', async () => {
-        const user = await askToDelete()
-        mockedApi.listProducts.mockReturnValue(new Promise(() => undefined))
+    const name = screen.getByLabelText(/Product name/)
+    await user.clear(name)
+    await user.type(name, 'Emerald Coil Ring')
+    await user.click(screen.getByRole('button', { name: 'Save Changes' }))
 
-        await user.click(screen.getByRole('button', { name: 'Yes, delete' }))
+    expect(await screen.findByRole('heading', { name: 'Emerald Coil Ring', level: 3 })).toBeInTheDocument()
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    expect(mockedApi.updateProduct).toHaveBeenCalledTimes(1)
+    expect(trigger).toBeInTheDocument()
+  })
 
-        await waitFor(() => expect(screen.getByRole('heading', { name: 'Products', level: 2 })).toHaveFocus())
-        expectRowGone()
-      })
-    })
+  it('asks before throwing away an unsaved edit', async () => {
+    const user = userEvent.setup()
+    render(<ProductsTab businessId="biz-1" />)
+    await openMenu(user, 'Emerald Coil')
+    await user.click(screen.getByRole('menuitem', { name: 'Edit Product' }))
 
-    it('sends one request when Yes is clicked twice', async () => {
-      let finish: () => void = () => undefined
-      mockedApi.deleteProduct.mockReturnValue(new Promise((resolve) => (finish = () => resolve())))
-      const user = userEvent.setup()
-      render(<ProductsTab businessId="biz-1" />)
-      await user.click(await screen.findByRole('button', { name: 'Delete Emerald Coil' }))
+    await user.type(screen.getByLabelText('What do you sell?'), '!')
+    await user.click(screen.getByRole('button', { name: 'Close' }))
 
-      await user.click(screen.getByRole('button', { name: 'Yes, delete' }))
-      const busy = screen.getByRole('button', { name: 'Deleting…' })
-      expect(busy).toBeDisabled()
-      await user.click(busy)
+    expect(screen.getByRole('alertdialog', { name: 'Discard your changes?' })).toBeInTheDocument()
+    expect(mockedApi.updateProduct).not.toHaveBeenCalled()
+  })
 
-      expect(mockedApi.deleteProduct).toHaveBeenCalledTimes(1)
-      mockedApi.listProducts.mockResolvedValue([unnamed])
-      finish()
-      await waitFor(() => expect(screen.queryByText('Emerald Coil')).not.toBeInTheDocument())
-    })
+  it('closes without asking when nothing was changed', async () => {
+    const user = userEvent.setup()
+    render(<ProductsTab businessId="biz-1" />)
+    await openMenu(user, 'Emerald Coil')
+    await user.click(screen.getByRole('menuitem', { name: 'Edit Product' }))
 
-    it('shows why a product used by a campaign cannot be deleted and keeps it', async () => {
-      mockedApi.deleteProduct.mockRejectedValue(
-        new api.ApiError(409, 'This product is used by 1 campaign: Snake-Ring (LIVE). Change the product on each of them first, then delete it.'),
-      )
-      const user = userEvent.setup()
-      render(<ProductsTab businessId="biz-1" />)
-      await user.click(await screen.findByRole('button', { name: 'Delete Emerald Coil' }))
+    await user.click(screen.getByRole('button', { name: 'Cancel' }))
 
-      await user.click(screen.getByRole('button', { name: 'Yes, delete' }))
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
+  })
+})
 
-      const alert = await screen.findByRole('alert')
-      expect(alert).toHaveTextContent('Snake-Ring (LIVE)')
-      expect(alert).toHaveFocus()
-      expect(screen.getByText('Emerald Coil')).toBeInTheDocument()
-      expect(screen.queryByRole('group', { name: /Confirm deleting/ })).not.toBeInTheDocument()
-      expect(screen.getByRole('button', { name: 'Delete Emerald Coil' })).toBeEnabled()
-      expect(mockedApi.listProducts).toHaveBeenCalledTimes(1)
-    })
+describe('deleting a product', () => {
+  async function askToDelete(user: User, label = 'Emerald Coil') {
+    const trigger = await openMenu(user, label)
+    await user.click(screen.getByRole('menuitem', { name: 'Delete Product' }))
+    return trigger
+  }
 
-    it('falls back to a plain message for any other failure', async () => {
-      mockedApi.deleteProduct.mockRejectedValue(new Error('network'))
-      const user = userEvent.setup()
-      render(<ProductsTab businessId="biz-1" />)
-      await user.click(await screen.findByRole('button', { name: 'Delete Triangle band' }))
+  it('asks first, and Keep it changes nothing and returns focus to the three-dot button', async () => {
+    const user = userEvent.setup()
+    render(<ProductsTab businessId="biz-1" />)
 
-      await user.click(screen.getByRole('button', { name: 'Yes, delete' }))
+    const trigger = await askToDelete(user)
 
-      expect(await screen.findByRole('alert')).toHaveTextContent(
-        'Could not delete this product. Try again.',
-      )
-      expect(screen.getByText('Triangle band')).toBeInTheDocument()
-    })
+    const confirm = screen.getByRole('group', { name: 'Confirm deleting Emerald Coil' })
+    expect(confirm).toHaveTextContent('Delete Emerald Coil and all its photos and videos?')
+    expect(confirm).toHaveTextContent("can't be undone")
+    expect(mockedApi.deleteProduct).not.toHaveBeenCalled()
+    await user.click(within(confirm).getByRole('button', { name: 'Keep it' }))
+    expect(screen.queryByRole('group', { name: /Confirm deleting/ })).not.toBeInTheDocument()
+    expect(trigger).toHaveFocus()
+    expect(mockedApi.deleteProduct).not.toHaveBeenCalled()
+  })
 
-    it('asks about one product at a time', async () => {
-      const user = userEvent.setup()
-      render(<ProductsTab businessId="biz-1" />)
-      await user.click(await screen.findByRole('button', { name: 'Delete Emerald Coil' }))
+  it('deletes after Yes: the whole card goes and focus moves to the Products heading', async () => {
+    mockedApi.deleteProduct.mockResolvedValue(undefined)
+    const onProductsChange = vi.fn<(products: api.Product[]) => void>()
+    const user = userEvent.setup()
+    render(<ProductsTab businessId="biz-1" onProductsChange={onProductsChange} />)
+    await askToDelete(user)
 
-      await user.click(screen.getByRole('button', { name: 'Delete Triangle band' }))
+    await user.click(screen.getByRole('button', { name: 'Yes, delete' }))
 
-      expect(screen.getAllByRole('group', { name: /Confirm deleting/ })).toHaveLength(1)
-      expect(screen.getByRole('group', { name: 'Confirm deleting Triangle band' })).toBeInTheDocument()
-    })
+    await waitFor(() => expect(screen.queryByRole('listitem', { name: 'Emerald Coil' })).not.toBeInTheDocument())
+    expect(screen.queryByRole('button', { name: 'More actions for Emerald Coil' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('img', { name: 'Emerald Coil' })).not.toBeInTheDocument()
+    expect(mockedApi.deleteProduct).toHaveBeenCalledExactlyOnceWith('biz-1', 'prod-1')
+    expect(screen.getByRole('listitem', { name: 'Triangle band' })).toBeInTheDocument()
+    expect(screen.getByText('1 product')).toBeInTheDocument()
+    expect(onProductsChange).toHaveBeenLastCalledWith([unnamed])
+    await waitFor(() =>
+      expect(screen.getByRole('heading', { name: 'Products', level: 2 })).toHaveFocus(),
+    )
+  })
+
+  it('removes the card even when a reload afterwards would be stale or fail', async () => {
+    mockedApi.deleteProduct.mockResolvedValue(undefined)
+    mockedApi.listProducts.mockResolvedValue([coil, unnamed])
+    const user = userEvent.setup()
+    render(<ProductsTab businessId="biz-1" />)
+    await askToDelete(user)
+
+    await user.click(screen.getByRole('button', { name: 'Yes, delete' }))
+
+    await waitFor(() => expect(screen.queryByRole('listitem', { name: 'Emerald Coil' })).not.toBeInTheDocument())
+    expect(mockedApi.listProducts).toHaveBeenCalledTimes(1)
+  })
+
+  it('sends one request when Yes is clicked twice', async () => {
+    let finish: () => void = () => undefined
+    mockedApi.deleteProduct.mockReturnValue(new Promise((resolve) => (finish = () => resolve())))
+    const user = userEvent.setup()
+    render(<ProductsTab businessId="biz-1" />)
+    await askToDelete(user)
+
+    await user.click(screen.getByRole('button', { name: 'Yes, delete' }))
+    const busy = screen.getByRole('button', { name: 'Deleting…' })
+    expect(busy).toBeDisabled()
+    await user.click(busy)
+
+    expect(mockedApi.deleteProduct).toHaveBeenCalledTimes(1)
+    finish()
+    await waitFor(() => expect(screen.queryByRole('listitem', { name: 'Emerald Coil' })).not.toBeInTheDocument())
+  })
+
+  it('shows why a product used by a campaign cannot be deleted and keeps it', async () => {
+    mockedApi.deleteProduct.mockRejectedValue(
+      new api.ApiError(
+        409,
+        'This product is used by 1 campaign: Snake-Ring (LIVE). Change the product on each of them first, then delete it.',
+      ),
+    )
+    const user = userEvent.setup()
+    render(<ProductsTab businessId="biz-1" />)
+    await askToDelete(user)
+
+    await user.click(screen.getByRole('button', { name: 'Yes, delete' }))
+
+    const alert = await screen.findByRole('alert')
+    expect(alert).toHaveTextContent('Snake-Ring (LIVE)')
+    expect(alert).toHaveFocus()
+    expect(screen.getByRole('heading', { name: 'Emerald Coil', level: 3 })).toBeInTheDocument()
+    expect(screen.queryByRole('group', { name: /Confirm deleting/ })).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'More actions for Emerald Coil' })).toBeEnabled()
+    expect(mockedApi.listProducts).toHaveBeenCalledTimes(1)
+  })
+
+  it('falls back to a plain message for any other failure', async () => {
+    mockedApi.deleteProduct.mockRejectedValue(new Error('network'))
+    const user = userEvent.setup()
+    render(<ProductsTab businessId="biz-1" />)
+    await askToDelete(user, 'Triangle band')
+
+    await user.click(screen.getByRole('button', { name: 'Yes, delete' }))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'Could not delete this product. Try again.',
+    )
+    expect(screen.getByRole('listitem', { name: 'Triangle band' })).toBeInTheDocument()
+  })
+
+  it('asks about one product at a time', async () => {
+    const user = userEvent.setup()
+    render(<ProductsTab businessId="biz-1" />)
+    await askToDelete(user)
+
+    await openMenu(user, 'Triangle band')
+    await user.click(screen.getByRole('menuitem', { name: 'Delete Product' }))
+
+    expect(screen.getAllByRole('group', { name: /Confirm deleting/ })).toHaveLength(1)
+    expect(screen.getByRole('group', { name: 'Confirm deleting Triangle band' })).toBeInTheDocument()
   })
 })

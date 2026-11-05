@@ -6076,41 +6076,381 @@ main > section.campaigns-overview {
   border-radius: 10px;
 }
 
-/* The Products tab: one row per product, with its photo, name, link and an Edit button. */
-.products-list {
-  list-style: none;
-  padding: 0;
+/* The Products tab: a library of cards (header, search, grid) and the drawer that adds or edits. */
+.products-header {
   display: flex;
-  flex-direction: column;
-  gap: 0.75rem;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 1.25rem;
 }
 
-.products-list-item {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 0.75rem;
+.products-header h2 {
+  margin: 0 0 0.25rem;
 }
 
-/* The delete question and any refusal take a full row under the product. */
-.products-list-item .products-delete-confirm,
-.products-list-item .form-error {
-  flex-basis: 100%;
+.products-subtitle {
   margin: 0;
+  color: var(--text-secondary);
 }
 
-.products-list-text {
+.products-count {
+  margin: 0.4rem 0 0;
+  font-size: 0.85rem;
+  color: var(--text-tertiary);
+}
+
+.products-add {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  white-space: nowrap;
+}
+
+.products-search {
+  margin-bottom: 1.25rem;
+}
+
+.products-search input {
+  width: 100%;
+  max-width: 22rem;
+}
+
+.product-grid {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  /* Every row as tall as the tallest card, so all cards are the same height. */
+  grid-auto-rows: 1fr;
+  gap: 1.25rem;
+}
+
+@media (min-width: 640px) {
+  .product-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (min-width: 1040px) {
+  .product-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+.product-card {
+  position: relative;
   display: flex;
   flex-direction: column;
   min-width: 0;
-  flex: 1;
+  overflow: hidden;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card);
+  transition:
+    border-color 0.15s ease,
+    box-shadow 0.15s ease;
 }
 
-.products-list-text a {
+.product-card:hover,
+.product-card:focus-within {
+  border-color: var(--border-hover);
+  box-shadow: var(--shadow-card);
+}
+
+.product-card-media {
+  display: grid;
+  place-items: center;
+  aspect-ratio: 4 / 3;
+  background: var(--row-bg);
+  border-bottom: 1px solid var(--border);
+}
+
+/* The whole photo shows (contain), never cropped; the neutral background fills the rest. */
+.product-card-media img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.product-card-placeholder {
+  display: grid;
+  place-items: center;
+  color: var(--text-tertiary);
+}
+
+.product-card-placeholder svg {
+  width: 44px;
+  height: 44px;
+}
+
+.product-card-actions {
+  position: absolute;
+  top: 0.5rem;
+  right: 0.5rem;
+  z-index: 1;
+}
+
+/* "Delete Product" stays on one line. */
+.product-card-actions .photo-menu-list {
+  min-width: 12rem;
+}
+
+.product-card-actions .photo-menu-list button {
+  white-space: nowrap;
+}
+
+/* Quiet until the card is looked at or used; always reachable by keyboard and touch. */
+.product-card-actions .photo-menu-trigger {
+  width: 40px;
+  height: 40px;
+  min-height: 40px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text-secondary);
+  opacity: 0.75;
+}
+
+.product-card:hover .product-card-actions .photo-menu-trigger,
+.product-card:focus-within .product-card-actions .photo-menu-trigger,
+.product-card-actions .photo-menu-trigger[aria-expanded='true'] {
+  opacity: 1;
+  background: var(--surface-solid, var(--bg));
+  border-color: var(--border);
+}
+
+.product-card-body {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 0.35rem;
+  min-width: 0;
+  padding: 1rem 1.1rem 1.1rem;
+}
+
+/* A long name wraps, then stops at two lines, so no card grows taller than its neighbours. */
+.product-card-name,
+.product-card-description {
+  margin: 0;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+}
+
+.product-card-name {
+  font-size: 1.05rem;
+  font-weight: 600;
+  line-height: 1.3;
+}
+
+.product-card-description {
+  font-size: 0.9rem;
+  line-height: 1.45;
+  color: var(--text-secondary);
+}
+
+.product-card-url {
+  margin-top: auto;
+  padding-top: 0.25rem;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 0.85rem;
+  font-size: 0.8rem;
+  color: var(--text-tertiary);
+  text-decoration: none;
+}
+
+.product-card-url:hover {
+  color: var(--text-secondary);
+  text-decoration: underline;
+}
+
+/* The delete question sits over the card, so the card keeps its height. */
+.product-card-confirm {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 1rem;
+  margin: 0;
+  padding: 1.25rem;
+  border: 0;
+  background: var(--surface-solid, var(--bg));
+}
+
+.product-card-confirm p {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.product-card-error {
+  margin: 0 1.1rem 1.1rem;
+}
+
+.product-card-skeleton {
+  aspect-ratio: 4 / 5;
+  border-style: dashed;
+  background: var(--row-bg);
+  animation: campaign-tile-pulse 1.4s ease-in-out infinite;
+}
+
+.products-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 3rem 1.5rem;
+  text-align: center;
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius-card);
+}
+
+.products-empty h3,
+.products-empty p {
+  margin: 0;
+}
+
+.products-empty p {
+  color: var(--text-secondary);
+  margin-bottom: 0.75rem;
+}
+
+.products-empty-icon {
+  display: grid;
+  place-items: center;
+  width: 64px;
+  height: 64px;
+  border-radius: 50%;
+  background: var(--row-bg);
+  color: var(--text-tertiary);
+}
+
+.products-empty-icon svg {
+  width: 32px;
+  height: 32px;
+}
+
+.products-no-match {
+  margin: 0;
+  padding: 2rem 0;
+  text-align: center;
+  color: var(--text-secondary);
+}
+
+/* The right-side drawer (add or edit a product). */
+.drawer-root {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+}
+
+.drawer-overlay {
+  position: absolute;
+  inset: 0;
+  background: rgba(8, 8, 14, 0.55);
+}
+
+.drawer-panel {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  display: flex;
+  flex-direction: column;
+  width: min(520px, 100%);
+  background: var(--surface-solid, var(--bg));
+  border-left: 1px solid var(--border-strong);
+  box-shadow: var(--shadow-card);
+  animation: drawer-in 0.2s ease-out;
+}
+
+@keyframes drawer-in {
+  from {
+    transform: translateX(24px);
+    opacity: 0;
+  }
+  to {
+    transform: none;
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .drawer-panel {
+    animation: none;
+  }
+}
+
+.drawer-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 1.25rem 1.5rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.drawer-header h2 {
+  margin: 0 0 0.25rem;
+  font-size: 1.25rem;
+}
+
+.drawer-description {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 0.9rem;
+}
+
+.drawer-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 1.5rem 1.5rem 0;
+}
+
+/* Save and Cancel stay in view at the bottom while the fields scroll. */
+.form-actions-sticky {
+  position: sticky;
+  bottom: 0;
+  z-index: 1;
+  margin: 1rem -1.5rem 0;
+  padding: 1rem 1.5rem;
+  background: var(--surface-solid, var(--bg));
+  border-top: 1px solid var(--border);
+}
+
+.drawer-discard {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 0.75rem;
+  padding: 2rem 1.5rem;
+  background: var(--surface-solid, var(--bg));
+}
+
+.drawer-discard h3,
+.drawer-discard p {
+  margin: 0;
+}
+
+@media (max-width: 720px) {
+  .products-header {
+    flex-direction: column;
+  }
+
+  .drawer-panel {
+    width: 100%;
+    border-left: 0;
+  }
 }
 
 /* Shown before saving a product edit that would mark ads out of date. */
