@@ -413,3 +413,29 @@ export function CopyIcon() {
     </Icon>
   )
 }
+
+export function BoltIcon() {
+  return (
+    <Icon>
+      <path d="M13 3 5 13h6l-1 8 8-10h-6l1-8Z" />
+    </Icon>
+  )
+}
+
+export function SearchIcon() {
+  return (
+    <Icon>
+      <circle cx="11" cy="11" r="6" />
+      <path d="m20 20-4.2-4.2" />
+    </Icon>
+  )
+}
+
+export function MicroscopeIcon() {
+  return (
+    <Icon>
+      <path d="M6 20h12M9 20a6 6 0 0 0 6-6M10 4l3 1.2-3.4 8.6-3-1.2L10 4ZM13.4 3.2 15 3.8" />
+      <path d="M12 14.5v2" />
+    </Icon>
+  )
+}
