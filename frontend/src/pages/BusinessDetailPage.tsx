@@ -188,7 +188,13 @@ export function BusinessDetailPage() {
 
   return (
     <main className="business-detail">
-      <BackButton to="/" label="Back to dashboard" />
+      {/* On the Avatars tab "back" goes up one level, to the business page itself (no #avatars,
+          no research view); everywhere else it still goes to the dashboard. */}
+      {selectedTab === AVATARS_TAB && businessId ? (
+        <BackButton to={`/businesses/${businessId}`} label="Back to business page" />
+      ) : (
+        <BackButton to="/" label="Back to dashboard" />
+      )}
       <h1>{business ? business.name : 'Loading…'}</h1>
       {business?.industry && (
         <p className="field-hint">

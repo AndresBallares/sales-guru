@@ -67,6 +67,33 @@ test('the selected tab is kept in the URL, so a refresh or a link opens the same
   await expect(page).not.toHaveURL(/#avatars/)
 })
 
+test('the back button on the Avatars tab returns to the business page without #avatars', async ({
+  page,
+}) => {
+  await businessWithAvatars(page)
+  const businessUrl = page.url().split('#')[0]
+  await page.getByRole('tab', { name: 'Avatars' }).click()
+  await expect(page).toHaveURL(/#avatars$/)
+  await expect(page.getByRole('heading', { name: 'Buyer avatars', level: 2 })).toBeVisible()
+
+  await page.getByRole('button', { name: 'Back to business page' }).click()
+
+  await expect(page).toHaveURL(businessUrl)
+  await expect(page.getByRole('tab', { name: 'Results and campaigns' })).toHaveAttribute(
+    'aria-selected',
+    'true',
+  )
+  await expect(page.getByRole('heading', { name: 'Buyer avatars', level: 2 })).toHaveCount(0)
+  // A refresh stays on the business page, and its back button goes to the dashboard again.
+  await page.reload()
+  await expect(page.getByRole('tab', { name: 'Results and campaigns' })).toHaveAttribute(
+    'aria-selected',
+    'true',
+  )
+  await page.getByRole('button', { name: 'Back to dashboard' }).click()
+  await expect(page).toHaveURL(/\/$/)
+})
+
 test('lists, edits, reorders, deactivates and deletes avatars', async ({ page }) => {
   const { url } = await businessWithAvatars(page)
   await page.getByRole('tab', { name: 'Avatars' }).click()
