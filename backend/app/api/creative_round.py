@@ -244,7 +244,11 @@ async def create_round(
     )
     try:
         await generate_batch(
-            campaign, plan_override=round_plan, round_id=round_.id, batch_size=count
+            campaign,
+            plan_override=round_plan,
+            round_id=round_.id,
+            batch_size=count,
+            round_number=round_.number,
         )
     except HTTPException:
         # generate_batch raised (including its own 500 for a Creative Agent

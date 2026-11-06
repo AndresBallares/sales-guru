@@ -129,6 +129,12 @@ log had been piped through `grep | head`, so it was gone and the cause is unknow
 Whenever an e2e run is repeated or scripted, write the whole output to a file and keep
 it (and `test-results/` for the failing specs) until the failure is explained.
 
+### Phase 4 of creative learning: feed results back by hook shape
+Once enough campaigns have run, aggregate results by `hookType` (with a minimum-data rule) and feed a short
+"what has worked for this business" note into later rounds' Creative prompts, keeping one exploratory shape per
+batch. (`Creative.hookType` is stored and returned since the `creative-hook` PR, and nothing reads it yet; see
+`docs/creative-learning-review.md`.)
+
 ## Done
 
 - **Dashboard tests leaked a `scrollIntoView` stub.** Tests assigned a stub to

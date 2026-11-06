@@ -117,8 +117,8 @@ def assigned_block(
     hooks = _rotate(_entries(avatar.hooks), occurrence, _HOOKS_SHOWN)
     if hooks:
         lines.append(
-            "Hooks (inspiration for tone only, never copy one word for word): "
-            + " | ".join(_cut(hook, _ENTRY_CHARS) for hook in hooks)
+            "Hooks (source material for the address and moment shapes; never copy one "
+            "word for word): " + " | ".join(_cut(hook, _ENTRY_CHARS) for hook in hooks)
         )
     return quarantine(f"Avatar for {heading}", "\n".join(lines))
 
@@ -127,7 +127,11 @@ GUIDANCE = (
     "Each avatar block above is the customer that variant is written to: speak to "
     "their problem in their own terms and build the ad on the field its block names. "
     "If an angle's description and its avatar block differ on the problem, the "
-    "mechanism or what to teach, the avatar block wins. Hooks are inspiration for "
-    "tone only; never copy one, and never say anything about the product that the "
-    "business details above do not support."
+    "mechanism or what to teach, the avatar block wins. The saved hooks are source "
+    "material for the address and moment shapes: borrow their situation and words, "
+    "reworded to fit; never copy one word for word, and never say anything about the "
+    "product that the business details above do not support. A block describes the "
+    "buyer for your understanding only: never state or imply any of it about the "
+    "viewer, such as relationship status, age, health or finances, which are "
+    "personal attributes."
 )
