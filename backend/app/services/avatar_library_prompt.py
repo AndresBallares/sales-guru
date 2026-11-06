@@ -14,7 +14,11 @@ from typing import get_args
 
 from prisma.models import BuyerAvatar
 
-from app.schemas.strategy import MIN_DISTINCT_PILLARS, Pillar
+from app.schemas.strategy import (
+    MIN_DISTINCT_LIBRARY_AVATARS,
+    MIN_DISTINCT_PILLARS,
+    Pillar,
+)
 from app.services.prompt_safety import quarantine
 from app.services.round_results import AdResult, RoundResults
 
@@ -151,7 +155,12 @@ def library_block(
 def coverage_sentence(library: Mapping[str, str]) -> str:
     """How many avatars the four first-batch angles must cover, and which kinds."""
     count = len(library)
-    if count >= 3:
+    if count >= MIN_DISTINCT_LIBRARY_AVATARS:
+        sentence = (
+            "Use four different avatars of the library, one for each angle: no "
+            "avatar appears in two of the four angles."
+        )
+    elif count == 3:
         sentence = (
             "Across the four angles, cover at least 3 different avatars of the library."
         )
