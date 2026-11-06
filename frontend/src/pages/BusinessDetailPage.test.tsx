@@ -824,6 +824,38 @@ describe('BusinessDetailPage tabs', () => {
     expect(mockedApi.listAvatars).toHaveBeenCalledWith('biz-1')
   })
 
+  it('on the Avatars tab the back button returns to the business page (no #avatars), not the dashboard', async () => {
+    renderWithLocation('/businesses/biz-1#avatars')
+
+    expect(await screen.findByRole('heading', { name: 'Buyer avatars', level: 2 })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Back to dashboard' })).not.toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: 'Back to business page' }))
+
+    expect(screen.getByTestId('location')).toHaveTextContent(/^\/businesses\/biz-1$/)
+    expect(screen.getByRole('tab', { name: 'Results and campaigns' })).toHaveAttribute(
+      'aria-selected',
+      'true',
+    )
+    expect(screen.queryByRole('heading', { name: 'Buyer avatars' })).not.toBeInTheDocument()
+    // Now on the first tab, the button goes back to the dashboard again.
+    expect(screen.getByRole('button', { name: 'Back to dashboard' })).toBeInTheDocument()
+  })
+
+  it('from a research view inside the Avatars tab, back also lands on the plain business page', async () => {
+    renderWithLocation('/businesses/biz-1?research=new#avatars')
+
+    await userEvent.click(await screen.findByRole('button', { name: 'Back to business page' }))
+
+    expect(screen.getByTestId('location')).toHaveTextContent(/^\/businesses\/biz-1$/)
+  })
+
+  it('the Products tab keeps its back button to the dashboard', async () => {
+    renderWithLocation('/businesses/biz-1#products')
+
+    expect(await screen.findByRole('button', { name: 'Back to dashboard' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Back to business page' })).not.toBeInTheDocument()
+  })
+
   it('writes the selected tab into the URL hash, and removes it for the first tab', async () => {
     renderWithLocation('/businesses/biz-1')
 
