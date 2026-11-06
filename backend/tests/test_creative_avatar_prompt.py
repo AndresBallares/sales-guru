@@ -192,10 +192,10 @@ def test_an_emotion_angle_is_the_problem_and_hooks_only() -> None:
     assert "Objection to answer" not in block
 
 
-def test_hooks_are_inspiration_for_tone_and_never_copied() -> None:
+def test_hooks_are_source_material_for_address_and_moment_and_never_copied() -> None:
     _, tail = _parts()
 
-    assert "inspiration" in tail.lower()
+    assert "source material for the address and moment shapes" in tail.lower()
     assert "never copy" in tail.lower()
     assert tail.count("a1 hook") <= 6  # at most three per block, two blocks
 

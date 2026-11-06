@@ -1069,6 +1069,9 @@ export interface Creative {
   pillar?: CreativePillar | null
   buyerAvatarId?: string | null
   buyerAvatar?: BuyerAvatarRef | null
+  // The shape of the ad's opening line (statement, question, contrast, moment or address),
+  // assigned in code when the ad was generated. Null on older ads; shown nowhere yet.
+  hookType?: string | null
   // True when this ad's angle reused a saved concept of its avatar (read from the angle's
   // own record in the plan). Absent on older responses.
   fromSavedConcept?: boolean

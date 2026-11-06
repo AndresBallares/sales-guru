@@ -114,6 +114,7 @@ from app.schemas.strategy import (
     required_test_ads,
 )
 from app.services import ad_quality, avatar_copy_prompt
+from app.services import hook_shapes as hook_shape_rules
 from app.services.brand_voice import brand_voice_lines
 from app.services.creative_naming import angle_label
 from app.services.llm_call import ToolSpec, call_with_tool
@@ -619,7 +620,9 @@ def _retry_prompt(prompt: str, first_failure: object, variant_count: int) -> str
 def _build_system_prompt() -> str:
     """The Creative Agent's static instructions, identical for every request.
 
-    Role, ad quality rules, ad structure and Meta's ad quality rules. Sent as a
+    Role, ad quality rules, ad structure, Meta's ad quality rules and the hook
+    shapes and rules (which shape a variant gets is per request, so it is in the
+    tail, see hook_shapes.tail_line). Sent as a
     cached ``system`` block (see generate_creatives), so the text must not vary
     by business, product, industry or format — anything that does belongs in
     _build_prompt. Tools render before system in the cache prefix, so the tool
@@ -645,6 +648,7 @@ def _build_system_prompt() -> str:
     lines += _quality_rule_lines()
     lines += ad_quality.structure_lines()
     lines += ad_quality.rule_lines(None)
+    lines += hook_shape_rules.system_lines()
     return "\n".join(lines)
 
 
@@ -692,6 +696,7 @@ def _build_prompt_parts(
     banned_phrases: Sequence[str] = (),
     buyer_avatars: Sequence[BuyerAvatar] = (),
     assigned_avatars: Mapping[str, BuyerAvatar] | None = None,
+    hook_shapes: Sequence[str] = (),
 ) -> tuple[str, str]:
     """Build the per-request prompt as (campaign context, per-call tail).
 
@@ -760,9 +765,15 @@ def _build_prompt_parts(
             regenerate, so the cache still holds).
         assigned_avatars: Every avatar the test's angles were assigned, by id (also
             deleted or inactive ones), for the per-call blocks in the tail.
+        hook_shapes: The hook shape each variant is assigned (app/services/
+            hook_shapes.py), one per variant in order. Named in the tail, never in
+            the cached context. Empty means no shape is asked for.
 
     Returns:
         ``(context, tail)``.
+
+    Raises:
+        ValueError: If hook_shapes does not have one known shape per variant.
     """
     objective = strategy.objective
     variant_count = 1 if single_variant is not None else batch_size
@@ -1012,6 +1023,19 @@ def _build_prompt_parts(
     else:
         tail.append(
             f"Creative angles to draw from: {', '.join(strategy.creative_angles)}"
+        )
+    if hook_shapes:
+        if len(hook_shapes) != variant_count:
+            raise ValueError(
+                f"one shape per variant is required: {variant_count} variants, "
+                f"{len(hook_shapes)} shapes"
+            )
+        tail.append(
+            hook_shape_rules.tail_line(
+                hook_shapes,
+                single=single_variant is not None,
+                max_chars=MAX_BODY_TEXT_LENGTH,
+            )
         )
     if variant_count > 1:
         tail.append(
@@ -1415,6 +1439,7 @@ async def generate_creatives(
     banned_phrases: Sequence[str] = (),
     buyer_avatars: Sequence[BuyerAvatar] = (),
     assigned_avatars: Mapping[str, BuyerAvatar] | None = None,
+    hook_shapes: Sequence[str] = (),
 ) -> list[GeneratedCreativeVariant]:
     """Call the Creative Agent and return a batch of ad creative variants.
 
@@ -1475,6 +1500,9 @@ async def generate_creatives(
             cached campaign context of a creative test).
         assigned_avatars: Every avatar the test's angles were assigned, by id; each
             variant is written to its own (per-call tail).
+        hook_shapes: The hook shape each variant is assigned, one per variant in
+            order (the code assigns them, see app/services/hook_shapes.py); named in
+            the per-call tail. Empty asks for no particular shape.
 
     Returns:
         Exactly batch_size generated creative variants (four, Creative A-D,
@@ -1525,6 +1553,7 @@ async def generate_creatives(
         banned_phrases=banned_phrases,
         buyer_avatars=buyer_avatars,
         assigned_avatars=assigned_avatars,
+        hook_shapes=hook_shapes,
     )
 
     image_blocks: list[ImageBlockParam] = []

@@ -53,6 +53,7 @@ from app.services.creative import (
     test_ads_required,
 )
 from app.services.creative_naming import angle_label
+from app.services.hook_shapes import assign_shapes, is_hook_type
 from app.services.media_info import is_square
 
 router = APIRouter(
@@ -219,6 +220,7 @@ def _to_response(
             "concept": creative.concept,
             "pillar": creative.pillar,
             "buyerAvatarId": creative.buyerAvatarId,
+            "hookType": creative.hookType,
             "buyerAvatar": None if ref is None else ref._asdict(),
             "imagePrompt": creative.imagePrompt,
             "videoPrompt": creative.videoPrompt,
@@ -412,6 +414,7 @@ async def generate_batch(
     plan_override: CreativeTestPlanContent | None = None,
     round_id: str | None = None,
     batch_size: int = CREATIVE_TEST_AD_COUNT,
+    round_number: int = 1,
 ) -> list[str]:
     """Generate a batch of creatives for a campaign and store it.
 
@@ -427,6 +430,8 @@ async def generate_batch(
             stored one (a round passes the plan with its own fresh angles).
         round_id: The CreativeRound the new creatives belong to, if any.
         batch_size: How many ads to generate (four unless a round says three).
+        round_number: 1 for the campaign's first batch, the round's own number for a
+            follow-up round; with the campaign it decides the hook shapes assigned.
 
     Returns:
         The ids of the newly created creatives, in creation order.
@@ -526,6 +531,9 @@ async def generate_batch(
     library, assigned_avatars = await avatars_for_copy(
         business.id, [getattr(a, "buyer_avatar_id", None) for a in plan.creative_angles]
     )
+    # The code, not the model, picks each ad's hook shape: four different ones, started
+    # from the campaign and moved on by one per round (app/services/hook_shapes.py).
+    shapes = assign_shapes(campaign.id, round_number, batch_size)
     try:
         variants = await generate_creatives(
             business=business,
@@ -541,6 +549,7 @@ async def generate_batch(
             banned_phrases=await banned_phrases_for(business.id),
             buyer_avatars=library,
             assigned_avatars=assigned_avatars,
+            hook_shapes=shapes,
         )
     except CreativeAgentError as exc:
         raise HTTPException(
@@ -578,7 +587,7 @@ async def generate_batch(
         if plan.plan_type == "CREATIVE_TEST_PLAN"
         else {}
     )
-    for variant in variants:
+    for index, variant in enumerate(variants):
         data: CreativeCreateInput = {
             "campaignId": campaign.id,
             "roundId": round_id,
@@ -593,6 +602,7 @@ async def generate_batch(
             "concept": plan_angle.concept if plan_angle else None,
             "pillar": plan_angle.pillar if plan_angle else None,
             "buyerAvatarId": plan_angle.buyer_avatar_id if plan_angle else None,
+            "hookType": shapes[index] if index < len(shapes) else None,
             "format": creative_format,
             # Snapshot the business/product this batch was actually
             # grounded in (app/services/creative.py's is_creative_stale
@@ -1314,6 +1324,8 @@ async def regenerate_creative_copy(
             banned_phrases=await banned_phrases_for(business.id),
             buyer_avatars=library,
             assigned_avatars=assigned_avatars,
+            # The rewrite keeps the shape the ad was assigned; an older ad has none.
+            hook_shapes=[creative.hookType] if is_hook_type(creative.hookType) else [],
         )
     except CreativeAgentError as exc:
         raise HTTPException(

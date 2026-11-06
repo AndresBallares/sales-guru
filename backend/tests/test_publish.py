@@ -891,6 +891,34 @@ async def test_publish_test_plan_duplicate_creative_carries_the_source_snapshot(
     assert is_creative_stale(duplicate, db_campaign, db_product, db_business) is False
 
 
+@pytest.mark.asyncio
+async def test_publish_test_plan_duplicate_creative_keeps_the_hook_shape(
+    client: TestClient,
+    mock_services: dict[str, AsyncMock],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The hypothesis variant's duplicate row is the same copy, so keeps its shape."""
+    business_id, campaign_id = _ready_campaign(
+        client, monkeypatch=monkeypatch, test_plan=True
+    )
+    seeder = Prisma()
+    await seeder.connect()
+    await seeder.creative.update_many(
+        where={"campaignId": campaign_id, "status": "SELECTED"},
+        data={"hookType": "question"},
+    )
+
+    response = client.post(f"/businesses/{business_id}/campaigns/{campaign_id}/publish")
+    assert response.status_code == 200
+
+    rows = await seeder.creative.find_many(
+        where={"campaignId": campaign_id, "status": "SELECTED"}
+    )
+    await seeder.disconnect()
+    assert len(rows) == 2
+    assert {row.hookType for row in rows} == {"question"}
+
+
 def test_publish_targets_the_curated_venue_for_an_event_campaign(
     client: TestClient, mock_services: dict[str, AsyncMock]
 ) -> None:

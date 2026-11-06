@@ -372,6 +372,7 @@ async def _publish_test_plan_variant(
                 "description": creative.description,
                 "cta": creative.cta,
                 "creativeAngle": creative.creativeAngle,
+                "hookType": creative.hookType,
                 "imagePrompt": creative.imagePrompt,
                 "videoPrompt": creative.videoPrompt,
                 "imageUrl": creative.imageUrl,
