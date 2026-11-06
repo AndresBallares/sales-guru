@@ -335,6 +335,24 @@ async def test_after_the_retry_unsteered_angles_are_accepted_with_a_warning(
 
 
 @pytest.mark.asyncio
+async def test_a_round_is_not_asked_for_one_avatar_each_even_with_four_or_more_avatars(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    library = [*LIBRARY, _avatar("x1"), _avatar("x2")]
+
+    angles, agent = await _generate(
+        monkeypatch, _reply(STEERED), avatars=library, results=_winner()
+    )
+
+    prompt = _sent(agent)["prompt"]
+    assert "one for each angle" not in prompt
+    assert "different avatars of the library" not in prompt
+    assert "at least half" in prompt  # the round keeps its own rule
+    assert agent.await_count == 1  # and its angles need not be four different avatars
+    assert len({a.buyer_avatar_id for a in angles}) < 4
+
+
+@pytest.mark.asyncio
 async def test_angles_that_follow_the_winner_need_no_retry(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

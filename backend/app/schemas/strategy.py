@@ -809,8 +809,9 @@ AVATAR_FOR_PURCHASE: dict[str, Avatar] = {
     "gift": "gift_buyer",
 }
 # A creative test's four ads speak to this many different library avatars, when
-# the library has that many.
-MIN_DISTINCT_LIBRARY_AVATARS = 3
+# the library has that many: with four or more avatars each ad has its own, and
+# with three the four ads cover all three.
+MIN_DISTINCT_LIBRARY_AVATARS = 4
 
 
 class LibraryAngle(GeneratedCreativeAngle):

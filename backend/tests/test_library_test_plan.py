@@ -166,7 +166,7 @@ async def test_a_reply_with_camel_case_keys_throughout_is_understood(
 
 
 @pytest.mark.asyncio
-async def test_with_three_or_more_avatars_four_angles_must_cover_three(
+async def test_with_three_avatars_the_four_angles_must_cover_all_three(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     two_only = _raw(
@@ -184,6 +184,135 @@ async def test_with_three_or_more_avatars_four_angles_must_cover_three(
     assert "3" in agent.await_args_list[1].kwargs["prompt"]
     assert "was rejected" in agent.await_args_list[1].kwargs["prompt"]
     assert len({a.buyer_avatar_id for a in plan.creative_angles}) == 3
+
+
+# self a1, a2, a3 and gift g1
+_FOUR = [_avatar("a1"), _avatar("a2"), _avatar("a3"), _avatar("g1", "gift")]
+_FOUR_DIFFERENT = [
+    _angle("a1", "everyday-wear", "emotion"),
+    _angle("a2", "craftsmanship", "mechanism"),
+    _angle("a3", "social-proof", "offer"),
+    _angle("g1", "the-perfect-gift", "emotion"),
+]
+
+
+@pytest.mark.asyncio
+async def test_with_four_avatars_the_four_angles_must_use_four_different_ones(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    three_of_four = _raw(
+        [
+            _angle("a1", "everyday-wear", "emotion"),
+            _angle("a2", "craftsmanship", "mechanism"),
+            _angle("g1", "the-perfect-gift", "emotion"),
+            _angle("a1", "social-proof", "offer"),
+        ]
+    )
+
+    plan, agent = await _generate(
+        monkeypatch, _FOUR, three_of_four, _raw(_FOUR_DIFFERENT)
+    )
+
+    assert agent.await_count == 2
+    retry_prompt = agent.await_args_list[1].kwargs["prompt"]
+    assert "was rejected" in retry_prompt
+    assert "at least 4 different library avatars; got 3" in retry_prompt
+    assert [a.buyer_avatar_id for a in plan.creative_angles] == ["a1", "a2", "a3", "g1"]
+
+
+@pytest.mark.asyncio
+async def test_with_more_than_four_avatars_the_four_angles_still_use_four_different(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    library = [*_FOUR, _avatar("a4"), _avatar("g2", "gift")]
+    repeats_one = _raw(
+        [
+            _angle("a1", "everyday-wear", "emotion"),
+            _angle("a2", "craftsmanship", "mechanism"),
+            _angle("g1", "the-perfect-gift", "emotion"),
+            _angle("a2", "social-proof", "offer"),
+        ]
+    )
+    five_choices = _raw(
+        [
+            _angle("a4", "everyday-wear", "emotion"),
+            _angle("a2", "craftsmanship", "mechanism"),
+            _angle("g2", "the-perfect-gift", "emotion"),
+            _angle("a1", "social-proof", "offer"),
+        ]
+    )
+
+    plan, agent = await _generate(monkeypatch, library, repeats_one, five_choices)
+
+    assert agent.await_count == 2
+    assert len({a.buyer_avatar_id for a in plan.creative_angles}) == 4
+
+
+@pytest.mark.asyncio
+async def test_four_different_avatars_are_not_enough_without_both_kinds(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    library = [*_FOUR, _avatar("a4")]
+    selfs_only = _raw(
+        [
+            _angle("a1", "everyday-wear", "emotion"),
+            _angle("a2", "craftsmanship", "mechanism"),
+            _angle("a3", "social-proof", "offer"),
+            _angle("a4", "heirloom", "education"),
+        ]
+    )
+
+    plan, agent = await _generate(
+        monkeypatch, library, selfs_only, _raw(_FOUR_DIFFERENT)
+    )
+
+    assert agent.await_count == 2
+    assert "buy gifts" in agent.await_args_list[1].kwargs["prompt"]
+    assert {a.avatar for a in plan.creative_angles} == {"self_purchaser", "gift_buyer"}
+
+
+@pytest.mark.asyncio
+async def test_four_different_avatars_still_need_three_pillars(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    two_pillars = _raw(
+        [
+            _angle("a1", "everyday-wear", "emotion"),
+            _angle("a2", "craftsmanship", "emotion"),
+            _angle("a3", "social-proof", "offer"),
+            _angle("g1", "the-perfect-gift", "offer"),
+        ]
+    )
+
+    plan, agent = await _generate(
+        monkeypatch, _FOUR, two_pillars, _raw(_FOUR_DIFFERENT)
+    )
+
+    assert agent.await_count == 2
+    assert len({a.pillar for a in plan.creative_angles}) >= 3
+
+
+@pytest.mark.asyncio
+async def test_the_prompt_asks_for_one_avatar_each_with_four_or_more_avatars(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _, agent = await _generate(monkeypatch, _FOUR, _raw(_FOUR_DIFFERENT))
+
+    prompt = _sent(agent)["prompt"]
+    assert "four different avatars of the library, one for each angle" in prompt
+    assert "cover at least one of each" in prompt  # both kinds in the library
+    assert "at least 3 different avatars" not in prompt
+
+
+@pytest.mark.asyncio
+async def test_the_prompt_for_three_avatars_keeps_the_cover_all_three_rule(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _, agent = await _generate(monkeypatch, _THREE, _raw(_GOOD))
+
+    prompt = _sent(agent)["prompt"]
+    assert "cover at least 3 different avatars of the library" in prompt
+    assert "one for each angle" not in prompt
 
 
 @pytest.mark.asyncio
@@ -456,6 +585,10 @@ def fake_llm(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
         ([_avatar("a1"), _avatar("g1", "gift")], 2),
         ([_avatar("a1"), _avatar("a2"), _avatar("g1", "gift"), _avatar("a3")], 4),
         ([_avatar("a1"), _avatar("a2"), _avatar("a3")], 3),
+        (
+            [_avatar(f"a{n}") for n in range(5)] + [_avatar("g1", "gift")],
+            4,
+        ),
     ],
 )
 async def test_the_fake_plan_is_valid_for_any_library(
