@@ -70,6 +70,12 @@ function item(name: string) {
   return within(screen.getByRole('listitem', { name: new RegExp(`^${name}`) }))
 }
 
+// Everything an avatar can do now sits in its three-dot menu: open it, pick the action.
+async function choose(name: string, action: string) {
+  await userEvent.click(screen.getByRole('button', { name: `More actions for ${name}` }))
+  await userEvent.click(screen.getByRole('menuitem', { name: action }))
+}
+
 describe('AvatarsSection focusing an avatar', () => {
   beforeEach(() => vi.resetAllMocks())
 
@@ -134,7 +140,7 @@ describe('AvatarsSection', () => {
   it('opens every field for editing, including who the avatar buys for', async () => {
     await renderLoaded()
 
-    await userEvent.click(screen.getByRole('button', { name: 'Edit The Promotion Ring Buyer' }))
+    await choose('The Promotion Ring Buyer', 'Edit avatar')
 
     const form = screen.getByRole('form', {
       name: 'Edit The Promotion Ring Buyer',
@@ -165,7 +171,7 @@ describe('AvatarsSection', () => {
       purchaseFor: 'gift',
       hooks: ['One', 'Two'],
     })
-    await userEvent.click(screen.getByRole('button', { name: 'Edit The Promotion Ring Buyer' }))
+    await choose('The Promotion Ring Buyer', 'Edit avatar')
     const form = screen.getByRole('form', {
       name: 'Edit The Promotion Ring Buyer',
     })
@@ -195,7 +201,7 @@ describe('AvatarsSection', () => {
   it('keeps the form open and shows the reason when saving fails', async () => {
     await renderLoaded()
     mockedApi.updateAvatar.mockRejectedValue(new api.ApiError(422, 'Name is too long'))
-    await userEvent.click(screen.getByRole('button', { name: 'Edit The Promotion Ring Buyer' }))
+    await choose('The Promotion Ring Buyer', 'Edit avatar')
 
     await userEvent.click(screen.getByRole('button', { name: 'Save changes' }))
 
@@ -205,7 +211,7 @@ describe('AvatarsSection', () => {
 
   it('cancels an edit without saving', async () => {
     await renderLoaded()
-    await userEvent.click(screen.getByRole('button', { name: 'Edit The Promotion Ring Buyer' }))
+    await choose('The Promotion Ring Buyer', 'Edit avatar')
 
     await userEvent.click(screen.getByRole('button', { name: 'Cancel' }))
 
@@ -217,11 +223,7 @@ describe('AvatarsSection', () => {
     await renderLoaded()
     mockedApi.updateAvatar.mockResolvedValueOnce({ ...promo, isActive: false })
 
-    await userEvent.click(
-      screen.getByRole('button', {
-        name: 'Deactivate The Promotion Ring Buyer',
-      }),
-    )
+    await choose('The Promotion Ring Buyer', 'Deactivate avatar')
 
     expect(mockedApi.updateAvatar).toHaveBeenCalledWith('biz-1', 'a1', {
       isActive: false,
@@ -229,7 +231,7 @@ describe('AvatarsSection', () => {
     expect(await item('The Promotion Ring Buyer').findByText('Inactive')).toBeInTheDocument()
 
     mockedApi.updateAvatar.mockResolvedValueOnce({ ...promo, isActive: true })
-    await userEvent.click(screen.getByRole('button', { name: 'Activate The Promotion Ring Buyer' }))
+    await choose('The Promotion Ring Buyer', 'Activate avatar')
 
     expect(mockedApi.updateAvatar).toHaveBeenLastCalledWith('biz-1', 'a1', {
       isActive: true,
@@ -247,11 +249,7 @@ describe('AvatarsSection', () => {
       { ...off, sortOrder: 2 },
     ])
 
-    await userEvent.click(
-      screen.getByRole('button', {
-        name: 'Move down The Promotion Ring Buyer',
-      }),
-    )
+    await choose('The Promotion Ring Buyer', 'Move down')
 
     expect(mockedApi.reorderAvatars).toHaveBeenCalledWith('biz-1', ['a2', 'a1', 'a3'])
     await waitFor(() =>
@@ -261,52 +259,43 @@ describe('AvatarsSection', () => {
         'The Heirloom Commissioner',
       ]),
     )
-    expect(
-      screen.getByRole('button', {
-        name: 'Move down The Promotion Ring Buyer',
-      }),
-    ).toHaveFocus()
+    // Focus follows the avatar: its reorder handle, in its new place.
+    expect(screen.getByRole('button', { name: /^Reorder The Promotion Ring Buyer/ })).toHaveFocus()
   })
 
   it('cannot move the first avatar up or the last one down', async () => {
     await renderLoaded()
 
-    expect(screen.getByRole('button', { name: 'Move up The Promotion Ring Buyer' })).toBeDisabled()
-    expect(
-      screen.getByRole('button', {
-        name: 'Move down The Heirloom Commissioner',
-      }),
-    ).toBeDisabled()
-    expect(screen.getByRole('button', { name: 'Move up The Deadline Gift-Giver' })).toBeEnabled()
+    await userEvent.click(screen.getByRole('button', { name: 'More actions for The Promotion Ring Buyer' }))
+    expect(screen.getByRole('menuitem', { name: 'Move up' })).toBeDisabled()
+    expect(screen.getByRole('menuitem', { name: 'Move to top' })).toBeDisabled()
+    await userEvent.keyboard('{Escape}')
+    await userEvent.click(screen.getByRole('button', { name: 'More actions for The Heirloom Commissioner' }))
+    expect(screen.getByRole('menuitem', { name: 'Move down' })).toBeDisabled()
+    await userEvent.keyboard('{Escape}')
+    await userEvent.click(screen.getByRole('button', { name: 'More actions for The Deadline Gift-Giver' }))
+    expect(screen.getByRole('menuitem', { name: 'Move up' })).toBeEnabled()
+    expect(screen.getByRole('menuitem', { name: 'Move to top' })).toBeEnabled()
   })
 
-  it('keeps focus usable when a move leaves the avatar at the end of the list', async () => {
+  it('keeps focus on the avatar\'s handle when a move leaves it at the end of the list', async () => {
     await renderLoaded([promo, gift])
     mockedApi.reorderAvatars.mockResolvedValueOnce([
       { ...gift, sortOrder: 0 },
       { ...promo, sortOrder: 1 },
     ])
 
-    await userEvent.click(
-      screen.getByRole('button', {
-        name: 'Move down The Promotion Ring Buyer',
-      }),
-    )
+    await choose('The Promotion Ring Buyer', 'Move down')
 
     await waitFor(() => expect(names()[1]).toBe('The Promotion Ring Buyer'))
-    // Its "down" button is now disabled, so focus goes to its "up" button.
-    expect(screen.getByRole('button', { name: 'Move up The Promotion Ring Buyer' })).toHaveFocus()
+    expect(screen.getByRole('button', { name: /^Reorder The Promotion Ring Buyer/ })).toHaveFocus()
   })
 
   it('shows why a reorder failed and keeps the old order', async () => {
     await renderLoaded()
     mockedApi.reorderAvatars.mockRejectedValue(new api.ApiError(409, 'The avatar list has changed'))
 
-    await userEvent.click(
-      screen.getByRole('button', {
-        name: 'Move down The Promotion Ring Buyer',
-      }),
-    )
+    await choose('The Promotion Ring Buyer', 'Move down')
 
     expect(await screen.findByRole('alert')).toHaveTextContent('The avatar list has changed')
     expect(names()[0]).toBe('The Promotion Ring Buyer')
@@ -315,7 +304,7 @@ describe('AvatarsSection', () => {
   it('asks before deleting, and cancelling deletes nothing', async () => {
     await renderLoaded()
 
-    await userEvent.click(screen.getByRole('button', { name: 'Delete The Promotion Ring Buyer' }))
+    await choose('The Promotion Ring Buyer', 'Delete avatar')
 
     const confirm = screen.getByRole('group', {
       name: 'Confirm deleting The Promotion Ring Buyer',
@@ -331,7 +320,7 @@ describe('AvatarsSection', () => {
   it('moves focus into the confirmation, onto its safe choice', async () => {
     await renderLoaded()
 
-    await userEvent.click(screen.getByRole('button', { name: 'Delete The Promotion Ring Buyer' }))
+    await choose('The Promotion Ring Buyer', 'Delete avatar')
 
     expect(screen.getByRole('button', { name: 'Cancel' })).toHaveFocus()
   })
@@ -340,7 +329,7 @@ describe('AvatarsSection', () => {
     await renderLoaded()
     mockedApi.deleteAvatar.mockResolvedValue(undefined)
 
-    await userEvent.click(screen.getByRole('button', { name: 'Delete The Promotion Ring Buyer' }))
+    await choose('The Promotion Ring Buyer', 'Delete avatar')
     await userEvent.click(screen.getByRole('button', { name: 'Delete avatar' }))
 
     expect(mockedApi.deleteAvatar).toHaveBeenCalledWith('biz-1', 'a1')
@@ -356,14 +345,14 @@ describe('AvatarsSection', () => {
     await renderLoaded()
     mockedApi.deleteAvatar.mockRejectedValue(new api.ApiError(500, 'Could not delete'))
 
-    await userEvent.click(screen.getByRole('button', { name: 'Delete The Promotion Ring Buyer' }))
+    await choose('The Promotion Ring Buyer', 'Delete avatar')
     await userEvent.click(screen.getByRole('button', { name: 'Delete avatar' }))
 
     expect(await screen.findByRole('alert')).toHaveTextContent('Could not delete')
     expect(names()).toContain('The Promotion Ring Buyer')
   })
 
-  it('contains the import from research section, and reloads the list after it saves', async () => {
+  it('opens the document import from the header, and reloads the list after it saves', async () => {
     await renderLoaded([promo])
     const imported = makeAvatar('a9', 'Last-minute giver', { sortOrder: 1 })
     mockedApi.importAvatars.mockResolvedValue({
@@ -373,7 +362,7 @@ describe('AvatarsSection', () => {
     mockedApi.bulkCreateAvatars.mockResolvedValue([imported])
     mockedApi.listAvatars.mockResolvedValue([promo, imported])
 
-    await userEvent.click(screen.getByText('Import buyer avatars from research'))
+    await userEvent.click(screen.getByRole('button', { name: 'Import from document' }))
     await userEvent.type(screen.getByLabelText('Research document'), 'Gift buyers panic.')
     await userEvent.click(screen.getByRole('button', { name: 'Read document' }))
     await userEvent.click(await screen.findByRole('button', { name: /Save 1 selected/ }))
@@ -389,13 +378,11 @@ describe('AvatarsSection', () => {
       { ...promo, sortOrder: 1 },
       { ...off, sortOrder: 2 },
     ])
-    await userEvent.click(
-      screen.getByRole('button', { name: 'Move down The Promotion Ring Buyer' }),
-    )
+    await choose('The Promotion Ring Buyer', 'Move down')
     await waitFor(() => expect(names()[1]).toBe('The Promotion Ring Buyer'))
     mockedApi.deleteAvatar.mockResolvedValue(undefined)
 
-    await userEvent.click(screen.getByRole('button', { name: 'Delete The Heirloom Commissioner' }))
+    await choose('The Heirloom Commissioner', 'Delete avatar')
     await userEvent.click(screen.getByRole('button', { name: 'Delete avatar' }))
 
     await waitFor(() =>
@@ -415,9 +402,8 @@ describe('AvatarsSection', () => {
     async function openEdit(avatar: api.BuyerAvatar) {
       mockedApi.listAvatars.mockResolvedValue([avatar])
       render(<AvatarsSection businessId="biz-1" />)
-      await userEvent.click(
-        await screen.findByRole('button', { name: `Edit ${avatar.name}` }),
-      )
+      await screen.findByRole('list', { name: 'Buyer avatars' })
+      await choose(avatar.name, 'Edit avatar')
       return screen.getByRole('form', { name: `Edit ${avatar.name}` })
     }
 

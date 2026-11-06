@@ -63,7 +63,7 @@ describe('ResearchEntry', () => {
   it('offers the Research avatars button when it is on, even with no runs yet', async () => {
     mockedApi.listResearchRuns.mockResolvedValue([])
     const { onOpen } = renderEntry()
-    await userEvent.click(await screen.findByRole('button', { name: 'Research avatars' }))
+    await userEvent.click(await screen.findByRole('button', { name: 'Research avatars (AI)' }))
     expect(onOpen).toHaveBeenCalledWith('new')
     expect(screen.queryByRole('table')).not.toBeInTheDocument()
   })

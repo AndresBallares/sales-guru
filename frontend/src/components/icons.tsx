@@ -294,6 +294,15 @@ export function ArrowDownIcon() {
   )
 }
 
+// Two arrows, up and down: "the order here can change" (the buyer avatars' priority panel).
+export function ReorderIcon() {
+  return (
+    <Icon size={20}>
+      <path d="M8 19V5M4 9l4-4 4 4M16 5v14M12 15l4 4 4-4" />
+    </Icon>
+  )
+}
+
 export function InfoIcon() {
   return (
     <Icon size={20}>

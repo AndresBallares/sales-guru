@@ -6088,6 +6088,279 @@ main > section.campaigns-overview {
   border-radius: 10px;
 }
 
+/* The Avatars tab redesign: header, priority panel and the card grid. Every rule here is new
+   and named avatars-* / avatar-card* / avatar-grid, so no other page's cards can change. */
+.avatars-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 1rem;
+}
+
+.avatars-title-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+.avatars-title-row h2 {
+  margin: 0;
+  font-size: 1.35rem;
+}
+
+.avatars-count {
+  padding: 0.1rem 0.6rem;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+}
+
+.avatars-subtitle {
+  margin: 0.25rem 0 0;
+  font-size: 0.9rem;
+  color: var(--text-secondary);
+}
+
+.avatars-header-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.avatars-create {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  white-space: nowrap;
+}
+
+.avatars-limit {
+  margin: 0 0 1rem;
+}
+
+.avatars-priority {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.75rem;
+  margin: 0 0 1rem;
+  padding: 0.75rem 1rem;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--primary-soft);
+}
+
+.avatars-priority h3 {
+  margin: 0 0 0.2rem;
+  font-size: 0.95rem;
+}
+
+.avatars-priority p {
+  margin: 0 0 0.25rem;
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+}
+
+.avatars-priority p:last-child {
+  margin-bottom: 0;
+}
+
+.avatars-priority-icon {
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  color: var(--accent);
+}
+
+.avatars-create-panel {
+  margin: 0 0 1rem;
+  padding: 1rem;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-card);
+}
+
+.avatars-empty {
+  display: grid;
+  justify-items: center;
+  gap: 0.5rem;
+  margin: 1rem 0;
+  padding: 2.5rem 1rem;
+  text-align: center;
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius-card);
+}
+
+.avatars-empty h3,
+.avatars-empty p {
+  margin: 0;
+}
+
+.avatars-empty p {
+  max-width: 34rem;
+  color: var(--text-secondary);
+}
+
+.avatar-grid {
+  list-style: none;
+  margin: 1rem 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  align-items: stretch;
+  gap: 1rem;
+}
+
+@media (min-width: 640px) {
+  .avatar-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (min-width: 1024px) {
+  .avatar-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+.avatar-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  min-width: 0;
+  padding: 0.75rem 1rem 1rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card);
+  transition:
+    border-color 0.15s ease,
+    box-shadow 0.15s ease,
+    opacity 0.15s ease;
+}
+
+.avatar-card:hover,
+.avatar-card:focus-within {
+  border-color: var(--border-hover);
+  box-shadow: var(--shadow-card);
+}
+
+.avatar-card.is-inactive {
+  opacity: 0.72;
+}
+
+.avatar-card.is-editing {
+  grid-column: 1 / -1;
+}
+
+.avatar-card.is-dragging {
+  opacity: 0.5;
+  border-style: dashed;
+}
+
+.avatar-card.is-over {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent);
+}
+
+.avatar-card-top {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+.avatar-card-rank {
+  margin-right: auto;
+  font-size: 1.1rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--accent);
+}
+
+.avatar-card-handle {
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  min-height: 44px;
+  padding: 0;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: grab;
+}
+
+.avatar-card-handle:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+  box-shadow: none;
+}
+
+.avatar-card-handle[aria-disabled='true'] {
+  color: var(--text-disabled);
+  cursor: not-allowed;
+}
+
+.avatar-card .photo-menu {
+  margin-left: 0;
+}
+
+.avatar-card-name {
+  margin: 0;
+  font-size: 1.05rem;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.avatar-card-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.avatar-badge-on {
+  border-color: var(--success-border);
+  background: var(--success-bg);
+  color: var(--success);
+}
+
+.avatar-card-who {
+  margin: 0;
+  font-size: 0.9rem;
+  color: var(--text-secondary);
+  overflow-wrap: anywhere;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  line-clamp: 3;
+  overflow: hidden;
+}
+
+.avatar-card-who.is-expanded {
+  display: block;
+  -webkit-line-clamp: unset;
+  line-clamp: unset;
+  overflow: visible;
+}
+
+.avatar-card-more {
+  align-self: flex-start;
+  min-height: 0;
+  padding: 0.15rem 0;
+  border: 0;
+  background: transparent;
+  font-size: 0.85rem;
+  color: var(--accent);
+  cursor: pointer;
+}
+
+.avatar-card-more:hover {
+  background: transparent;
+  box-shadow: none;
+  text-decoration: underline;
+}
+
 /* The Products tab: a library of cards (header, search, grid) and the drawer that adds or edits. */
 .products-header {
   display: flex;
@@ -6930,6 +7203,12 @@ main > section.campaigns-overview {
 .research-drafts,
 .research-entry {
   margin: 1.25rem 0;
+}
+
+/* Air above the Research avatars (AI) button, so it does not sit on the hint text. Only the
+   direct button of this section; the "View progress" and table buttons are not touched. */
+.research-entry > .btn-gold {
+  margin-top: 1rem;
 }
 
 .research-block {

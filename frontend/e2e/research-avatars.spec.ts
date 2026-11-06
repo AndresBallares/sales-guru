@@ -36,7 +36,7 @@ async function expectNoViolations(page: Page) {
 test('start screen: choices, readiness, cost, and no accessibility violations', async ({ page }) => {
   const id = await businessId(page)
   await openAvatars(page, id)
-  await page.getByRole('button', { name: 'Research avatars' }).click()
+  await page.getByRole('button', { name: 'Research avatars (AI)' }).click()
   await expect(page).toHaveURL(/\?research=new#avatars$/)
   await expect(page.getByRole('heading', { level: 2, name: 'Research Avatars' })).toBeFocused()
 

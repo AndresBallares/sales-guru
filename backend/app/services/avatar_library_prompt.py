@@ -173,6 +173,14 @@ def coverage_sentence(library: Mapping[str, str]) -> str:
             " The library has avatars who buy for themselves and avatars who buy "
             "gifts; cover at least one of each."
         )
+    if count > MIN_DISTINCT_LIBRARY_AVATARS:
+        # The owner orders the library by priority. With more avatars than angles,
+        # that order breaks the tie; it never overrides the coverage rules above.
+        sentence += (
+            " The library is listed in the owner's priority order. When choosing "
+            "which avatars to use, prefer the ones listed earlier in the library, "
+            "as far as the rules above allow."
+        )
     return sentence
 
 
