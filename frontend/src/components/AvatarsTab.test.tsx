@@ -47,7 +47,7 @@ describe('AvatarsTab', () => {
     renderTab()
     expect(await screen.findByRole('heading', { level: 2, name: 'Buyer avatars' })).toBeInTheDocument()
     await vi.waitFor(() => expect(mockedApi.listResearchRuns).toHaveBeenCalled())
-    expect(screen.queryByRole('button', { name: 'Research avatars' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Research avatars (AI)' })).not.toBeInTheDocument()
   })
 
   describe('the past research runs section', () => {
@@ -65,10 +65,48 @@ describe('AvatarsTab', () => {
       expect(screen.getAllByRole('button', { name: /^Open run from/ })).toHaveLength(2)
     })
 
+    it('stays below the whole card grid, with every control, once avatars are loaded', async () => {
+      const user = userEvent.setup()
+      const avatar = (id: string, name: string, sortOrder: number): api.BuyerAvatar => ({
+        id,
+        businessId: 'biz-1',
+        name,
+        who: `${name} buys.`,
+        purchaseFor: 'self',
+        primaryProblems: [],
+        unknownProblems: [],
+        mechanisms: [],
+        alternatives: [],
+        objections: [],
+        hooks: [],
+        creativeAngles: [],
+        concepts: [],
+        isActive: true,
+        sortOrder,
+        deletedAt: null,
+      })
+      mockedApi.listAvatars.mockResolvedValue([avatar('a1', 'First', 0), avatar('a2', 'Second', 1), avatar('a3', 'Third', 2)])
+      mockedApi.listResearchRuns.mockResolvedValue(runs())
+      mockedApi.getResearchRun.mockResolvedValue(runs()[0])
+      renderTab('/businesses/biz-1?metaLater=1#avatars')
+
+      const cards = await screen.findAllByRole('listitem', { name: /^(First|Second|Third)/ })
+      const table = await screen.findByRole('table', { name: 'Past research runs' })
+      const last = cards[cards.length - 1]
+      expect(last.compareDocumentPosition(table) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+      // The import panel opens above the grid, so the runs stay the last thing on the page.
+      await user.click(screen.getByRole('button', { name: 'Import from document' }))
+      expect(last.compareDocumentPosition(table) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+      expect(screen.getByRole('button', { name: 'Research avatars (AI)' })).toBeInTheDocument()
+      expect(within(table).getAllByRole('button', { name: /^Open run from/ })).toHaveLength(2)
+      await user.click(within(table).getAllByRole('button', { name: /^Open run from/ })[0])
+      expect(await screen.findByRole('heading', { level: 2, name: 'Research done' })).toBeInTheDocument()
+    })
+
     it('is still there when the library is empty and when there are no runs yet', async () => {
       mockedApi.listResearchRuns.mockResolvedValue([])
       renderTab('/businesses/biz-1?metaLater=1#avatars')
-      expect(await screen.findByRole('button', { name: 'Research avatars' })).toBeInTheDocument()
+      expect(await screen.findByRole('button', { name: 'Research avatars (AI)' })).toBeInTheDocument()
       expect(screen.getByRole('heading', { level: 3, name: 'Research new avatars' })).toBeInTheDocument()
     })
 
@@ -103,7 +141,7 @@ describe('AvatarsTab', () => {
   it('opens the start screen from the button, keeping the tab in the address', async () => {
     const user = userEvent.setup()
     renderTab()
-    await user.click(await screen.findByRole('button', { name: 'Research avatars' }))
+    await user.click(await screen.findByRole('button', { name: 'Research avatars (AI)' }))
     expect(await screen.findByRole('heading', { level: 2, name: 'Research Avatars' })).toBeInTheDocument()
     expect(screen.getByTestId('where')).toHaveTextContent('/businesses/biz-1?research=new#avatars')
   })

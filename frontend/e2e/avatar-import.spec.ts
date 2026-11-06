@@ -13,7 +13,7 @@ test('pasted research becomes drafts, and only the kept ones are saved', async (
 
   // The import lives in the Avatars tab.
   await page.getByRole('tab', { name: 'Avatars' }).click()
-  await page.getByText('Import buyer avatars from research').click()
+  await page.getByRole('button', { name: 'Import from document' }).click()
   await page.getByLabel('Research document').fill('Gift buyers panic two days before an anniversary.')
   await page.getByRole('button', { name: 'Read document' }).click()
 

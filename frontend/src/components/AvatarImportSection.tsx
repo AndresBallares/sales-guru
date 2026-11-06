@@ -62,10 +62,16 @@ function toDraft(editable: EditableDraft): BuyerAvatarDraft {
 export function AvatarImportSection({
   businessId,
   onSaved,
+  open,
+  onOpenChange,
 }: {
   businessId: string
   // Called after the kept drafts are saved, so a list of avatars can reload.
   onSaved?: () => void
+  // The page can open this panel from its header button; left out, the panel opens and
+  // closes itself through its own summary.
+  open?: boolean
+  onOpenChange?: (open: boolean) => void
 }) {
   const [document, setDocument] = useState('')
   const [drafts, setDrafts] = useState<EditableDraft[] | null>(null)
@@ -115,8 +121,12 @@ export function AvatarImportSection({
   const keptCount = drafts?.filter((d) => d.keep).length ?? 0
 
   return (
-    <details className="avatar-import">
-      <summary>Import buyer avatars from research</summary>
+    <details
+      className="avatar-import"
+      {...(open === undefined ? {} : { open })}
+      onToggle={(event) => onOpenChange?.(event.currentTarget.open)}
+    >
+      <summary>Import from document</summary>
       <p className="field-hint">
         Paste research about your customers. The AI drafts avatars from what it says (nothing is
         invented) and nothing is saved until you choose which drafts to keep.

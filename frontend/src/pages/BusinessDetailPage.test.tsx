@@ -820,7 +820,7 @@ describe('BusinessDetailPage tabs', () => {
 
     expect(await screen.findByRole('heading', { name: 'Buyer avatars', level: 2 })).toBeInTheDocument()
     expect(screen.getByRole('tab', { name: 'Avatars' })).toHaveAttribute('aria-selected', 'true')
-    expect(screen.getByText('Import buyer avatars from research')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Import from document' })).toBeInTheDocument()
     expect(mockedApi.listAvatars).toHaveBeenCalledWith('biz-1')
   })
 

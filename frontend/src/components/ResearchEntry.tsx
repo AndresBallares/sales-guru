@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { ApiError, listResearchRuns, type ResearchRun } from '../lib/api'
 import { depthLabel, modelLabel, statusLabel } from '../lib/research'
 
-// The "Research avatars" button and the list of past runs, on the Avatars tab. Hidden only
+// The "Research avatars (AI)" button and the list of past runs, on the Avatars tab. Hidden only
 // while the feature is off (every research route answers 404); while loading it says so, and
 // when the runs cannot be loaded it says that and offers a retry.
 export function ResearchEntry({
@@ -84,7 +84,7 @@ export function ResearchEntry({
         </p>
       )}
       <button type="button" className="btn-outline btn-gold" onClick={() => onOpen('new')}>
-        Research avatars
+        Research avatars (AI)
       </button>
       {runs.length > 0 && (
         <table className="research-runs">

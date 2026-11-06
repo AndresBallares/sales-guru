@@ -33,7 +33,7 @@ function makeDraft(name: string, overrides: Partial<api.BuyerAvatarDraft> = {}):
 }
 
 async function openAndImport(document = 'Some research about gift buyers.') {
-  await userEvent.click(screen.getByText('Import buyer avatars from research'))
+  await userEvent.click(screen.getByText('Import from document'))
   await userEvent.type(screen.getByLabelText('Research document'), document)
   await userEvent.click(screen.getByRole('button', { name: 'Read document' }))
 }
@@ -45,7 +45,7 @@ describe('AvatarImportSection', () => {
 
   it('cannot read an empty document', async () => {
     render(<AvatarImportSection businessId="biz-1" />)
-    await userEvent.click(screen.getByText('Import buyer avatars from research'))
+    await userEvent.click(screen.getByText('Import from document'))
     expect(screen.getByRole('button', { name: 'Read document' })).toBeDisabled()
   })
 
