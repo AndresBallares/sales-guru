@@ -6499,16 +6499,419 @@ main > section.campaigns-overview {
   font-weight: 600;
 }
 
-.research-choice {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  gap: 0.5rem;
-  margin: 0.4rem 0;
+/* Research start screen: choice cards, product cards and the live summary */
+.research-intro {
+  max-width: 62ch;
 }
 
-.research-choice label {
-  flex: 1 1 14rem;
+.research-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 2.1fr) minmax(0, 1fr);
+  gap: 1.5rem;
+  align-items: start;
+  margin-top: 1rem;
+}
+
+@media (max-width: 900px) {
+  .research-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.research-config {
+  min-width: 0;
+}
+
+.research-section {
+  min-width: 0;
+  margin: 0 0 1.75rem;
+  padding: 0;
+  border: 0;
+}
+
+.research-section legend {
+  padding: 0;
+  margin-bottom: 0.15rem;
+  font-size: 1.05rem;
+  font-weight: 600;
+}
+
+.research-step {
+  color: var(--text-tertiary);
+}
+
+.research-section > .field-hint {
+  margin: 0 0 0.75rem;
+}
+
+.choice-grid {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.choice-grid-three {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.choice-grid-two {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+@media (max-width: 640px) {
+  .choice-grid-three,
+  .choice-grid-two {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.choice-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  min-width: 0;
+  padding: 1rem;
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-card);
+  cursor: pointer;
+  transition:
+    border-color 0.15s ease,
+    background-color 0.15s ease;
+}
+
+.choice-card:hover:not(.is-disabled) {
+  border-color: var(--border-hover);
+  background: var(--surface-hover);
+}
+
+/* Selected: a thicker accent border, a filled check and a tinted background, so the state
+   does not depend on colour alone. */
+.choice-card.is-selected,
+.product-choice.is-selected {
+  border-color: var(--primary);
+  box-shadow: inset 0 0 0 1px var(--primary);
+  background: var(--glow);
+}
+
+.choice-card:focus-within,
+.product-choice:focus-within {
+  outline: 2px solid var(--border-focus);
+  outline-offset: 2px;
+}
+
+.choice-card.is-disabled,
+.product-choice.is-disabled {
+  cursor: not-allowed;
+  opacity: 0.65;
+  border-style: dashed;
+}
+
+/* The real input is transparent and covers its card: a click anywhere on the card lands on it,
+   it keeps keyboard focus and its place in the accessibility tree, and it is on screen. */
+.choice-input {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.choice-input:disabled {
+  cursor: not-allowed;
+}
+
+.choice-card-top,
+.choice-card-title,
+.choice-card-tag,
+.choice-card-description,
+.choice-card-cost,
+.choice-card-note {
+  position: relative;
+}
+
+.choice-card-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.choice-card-icon {
+  display: inline-grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+  background: var(--row-bg);
+  color: var(--text-secondary);
+}
+
+.choice-card-mark,
+.product-choice-mark {
+  display: inline-grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border: 1.5px solid var(--border-strong);
+  border-radius: 50%;
+  background: var(--surface);
+  color: transparent;
+}
+
+.is-selected .choice-card-mark,
+.is-selected .product-choice-mark {
+  border-color: var(--primary);
+  background: var(--primary);
+  color: #fff;
+}
+
+.choice-card-mark svg,
+.product-choice-mark svg {
+  width: 14px;
+  height: 14px;
+}
+
+.choice-card-title {
+  font-size: 1.05rem;
+  font-weight: 600;
+}
+
+.choice-card-tag {
+  align-self: flex-start;
+  padding: 0.1rem 0.5rem;
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.choice-card-description {
+  color: var(--text-secondary);
+  font-size: 0.9rem;
+  line-height: 1.4;
+}
+
+.choice-card-cost {
+  margin-top: auto;
+  padding-top: 0.35rem;
+  font-weight: 600;
+}
+
+.choice-card-note {
+  margin-top: 0.25rem;
+  font-size: 0.85rem;
+  font-weight: 500;
+  color: var(--text);
+}
+
+.research-counter {
+  display: block;
+  margin: 0 0 0.5rem;
+  font-weight: 600;
+}
+
+.research-limit-note {
+  margin: 0 0 0.75rem;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--border-strong);
+  border-left-width: 4px;
+  border-radius: 8px;
+  font-size: 0.9rem;
+}
+
+.product-choice-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(10.5rem, 1fr));
+  gap: 0.75rem;
+}
+
+@media (max-width: 480px) {
+  .product-choice-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+.product-choice {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  min-width: 0;
+  overflow: hidden;
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-card);
+  cursor: pointer;
+  transition:
+    border-color 0.15s ease,
+    background-color 0.15s ease;
+}
+
+.product-choice:hover:not(.is-disabled) {
+  border-color: var(--border-hover);
+}
+
+.product-choice-media {
+  position: relative;
+  display: grid;
+  place-items: center;
+  aspect-ratio: 1 / 1;
+  overflow: hidden;
+  background: var(--row-bg);
+  border-bottom: 1px solid var(--border);
+}
+
+.product-choice-media img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.product-choice-mark {
+  position: absolute;
+  top: 0.5rem;
+  right: 0.5rem;
+}
+
+.research-thumb-placeholder {
+  display: grid;
+  place-items: center;
+  color: var(--text-tertiary);
+}
+
+.research-thumb-placeholder svg {
+  width: 36px;
+  height: 36px;
+}
+
+.product-choice-name {
+  padding: 0.5rem 0.75rem 0;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+/* The side and bottom space is margin, not padding: padding below a line-clamped box shows a
+   third line of the text. */
+.product-choice-description {
+  margin: 0 0.75rem 0.75rem;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  color: var(--text-secondary);
+  font-size: 0.85rem;
+  line-height: 1.35;
+}
+
+.research-summary-panel {
+  min-width: 0;
+  padding: 1rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card);
+}
+
+@media (min-width: 901px) {
+  .research-summary-panel {
+    position: sticky;
+    top: 1rem;
+  }
+}
+
+.research-summary-panel h3 {
+  margin: 0 0 0.15rem;
+}
+
+.research-summary-list {
+  margin: 0.75rem 0;
+}
+
+.research-summary-list > div {
+  padding: 0.6rem 0;
+  border-top: 1px solid var(--border);
+}
+
+.research-summary-list dt {
+  font-size: 0.8rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--text-tertiary);
+}
+
+.research-summary-list dd {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  margin: 0.2rem 0 0;
+}
+
+.research-summary-products {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  margin: 0.35rem 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.research-summary-products li {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.research-summary-thumb {
+  position: relative;
+  display: grid;
+  place-items: center;
+  flex: 0 0 36px;
+  width: 36px;
+  height: 36px;
+  overflow: hidden;
+  background: var(--row-bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.research-summary-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.research-summary-thumb .research-thumb-placeholder svg {
+  width: 20px;
+  height: 20px;
+}
+
+.research-summary-panel .research-cost {
+  margin: 0.75rem 0;
+  padding-top: 0.6rem;
+  border-top: 1px solid var(--border);
+}
+
+.research-summary-panel .research-cost h4 {
+  margin: 0 0 0.25rem;
+}
+
+.research-summary-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.research-summary-actions .btn-gold {
+  width: 100%;
 }
 
 .research-warning {

@@ -38,18 +38,18 @@ test('start screen: choices, readiness, cost, and no accessibility violations', 
   await openAvatars(page, id)
   await page.getByRole('button', { name: 'Research avatars' }).click()
   await expect(page).toHaveURL(/\?research=new#avatars$/)
-  await expect(page.getByRole('heading', { level: 2, name: 'Research avatars' })).toBeFocused()
+  await expect(page.getByRole('heading', { level: 2, name: 'Research Avatars' })).toBeFocused()
 
   await expect(page.getByText(/research runs left this month/)).toBeVisible()
-  const depth = page.getByRole('group', { name: 'Depth' })
+  const depth = page.getByRole('group', { name: /Research depth/ })
   await expect(depth.getByRole('radio', { name: /Standard/ })).toBeChecked()
-  await expect(depth.getByText(/The most sources/)).toBeVisible()
+  await expect(depth.getByText(/An extensive investigation/)).toBeVisible()
 
   // Only models the business may use are selectable; Fable 5.1 is shown but off.
-  const model = page.getByRole('group', { name: 'Model' })
+  const model = page.getByRole('group', { name: /AI research model/ })
   await expect(model.getByRole('radio', { name: /Opus 5\.5/ })).toBeEnabled()
   await expect(model.getByRole('radio', { name: /Fable 5\.1/ })).toBeDisabled()
-  await expect(model.getByText(/Not turned on for this business/)).toBeVisible()
+  await expect(model.getByText(/not enabled for this business/)).toBeVisible()
 
   // This business has no products or key messages, so the check names what is missing.
   const ready = page.getByRole('region', { name: 'Before you start' })
@@ -96,7 +96,7 @@ test('a research run started on the screen is watched, reviewed and saved to the
   await page.getByLabel(/Extra competitor web addresses/).fill('https://www.rivalring.com/rings')
   await page.getByRole('radio', { name: /Light/ }).check()
   await expect(page.getByText(/research runs left this month/)).toBeVisible()
-  await page.getByRole('button', { name: /Start research|Research anyway/ }).click()
+  await page.getByRole('button', { name: /Start Research|Research anyway/ }).click()
 
   // The canned run finishes quickly; the screen moves from progress to the review by itself.
   await expect(page.getByRole('heading', { level: 2, name: 'Review the research' })).toBeVisible({
@@ -293,4 +293,68 @@ test('the past research runs section stays at the bottom of the Avatars tab, and
   await expect(page.getByRole('list', { name: 'Problems' })).toBeVisible()
   await page.getByRole('button', { name: 'Back to avatars' }).click()
   await expect(page.getByRole('table', { name: 'Past research runs' })).toBeVisible()
+})
+
+async function addProduct(page: Page, id: string, name: string | null, description: string) {
+  const response = await page.request.post(`${E2E_API_URL}/businesses/${id}/products`, {
+    data: { description, ...(name ? { name } : {}) },
+  })
+  expect(response.ok()).toBe(true)
+}
+
+test('start screen: selection cards, the three-product limit and the live summary', async ({ page }) => {
+  const id = await businessId(page)
+  await addProduct(page, id, 'Emerald Coil', 'A coiled emerald ring in 18K gold.')
+  await addProduct(page, id, 'Triangle Band', 'A triangle band with ceramic inlay.')
+  await addProduct(page, id, null, 'An unnamed piece with a long description of its own.')
+  await addProduct(page, id, 'Fourth Piece', 'The fourth product, left out by default.')
+  await openAvatars(page, id, '?research=new')
+
+  const summary = page.getByRole('region', { name: 'Your research configuration' })
+  await expect(summary).toBeVisible()
+
+  // Depth: a click anywhere on a card selects it, and the summary follows.
+  const depth = page.getByRole('group', { name: /Research depth/ })
+  // Near a corner, away from the middle: the whole card is the target.
+  // Every depth shows the server's expected cost for the model and products chosen.
+  await expect(depth.getByText(/^Expected \$\d/)).toHaveCount(3)
+  await depth.getByRole('radio', { name: /Deep/ }).click({ position: { x: 8, y: 8 } })
+  await expect(depth.getByRole('radio', { name: /Deep/ })).toBeChecked()
+  await expect(summary.getByText('Research depth').locator('..')).toContainText('Deep')
+
+  // Products: three are chosen for you, the fourth waits until one is removed.
+  const products = page.getByRole('group', { name: /Products to research/ })
+  await expect(products.getByText('3 of 3 selected')).toBeVisible()
+  await expect(products.getByText(/maximum of three products/)).toBeVisible()
+  await expect(products.getByRole('checkbox', { name: /Fourth Piece/ })).toBeDisabled()
+  await expect(summary.getByRole('list', { name: 'Selected products' }).getByRole('listitem')).toHaveCount(3)
+  await expect(summary.getByText('Untitled Product')).toBeVisible()
+
+  await products.getByRole('checkbox', { name: /Triangle Band/ }).click({ position: { x: 8, y: 60 } })
+  await expect(products.getByText('2 of 3 selected')).toBeVisible()
+  await expect(products.getByText(/maximum of three products/)).toHaveCount(0)
+  await products.getByRole('checkbox', { name: /Fourth Piece/ }).click({ position: { x: 8, y: 60 } })
+  await expect(products.getByText('3 of 3 selected')).toBeVisible()
+  await expect(summary.getByText('Fourth Piece')).toBeVisible()
+  await expect(summary.getByText('Triangle Band')).toHaveCount(0)
+
+  // The model the business may not use stays off.
+  await expect(page.getByRole('radio', { name: /Fable 5\.1/ })).toBeDisabled()
+
+  // The layout holds without sideways scrolling on a phone and a tablet.
+  for (const width of [390, 768]) {
+    await page.setViewportSize({ width, height: 900 })
+    const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)
+    expect(overflow).toBeLessThanOrEqual(0)
+    await expect(page.getByRole('button', { name: /Start Research|Research anyway/ })).toBeVisible()
+  }
+  await page.setViewportSize({ width: 1280, height: 900 })
+  await expectNoViolations(page)
+
+  // Start sends the chosen depth and products.
+  const request = page.waitForRequest(
+    (r) => r.method() === 'POST' && /\/research-runs$/.test(r.url()),
+  )
+  await page.getByRole('button', { name: /Start Research|Research anyway/ }).click()
+  expect((await request).postDataJSON()).toMatchObject({ depth: 'deep', model: 'claude-opus-5-5' })
 })

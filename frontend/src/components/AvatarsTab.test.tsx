@@ -104,13 +104,13 @@ describe('AvatarsTab', () => {
     const user = userEvent.setup()
     renderTab()
     await user.click(await screen.findByRole('button', { name: 'Research avatars' }))
-    expect(await screen.findByRole('heading', { level: 2, name: 'Research avatars' })).toBeInTheDocument()
+    expect(await screen.findByRole('heading', { level: 2, name: 'Research Avatars' })).toBeInTheDocument()
     expect(screen.getByTestId('where')).toHaveTextContent('/businesses/biz-1?research=new#avatars')
   })
 
   it('opens the start screen straight from the address (a refresh keeps the view)', async () => {
     renderTab('/businesses/biz-1?research=new#avatars')
-    expect(await screen.findByRole('heading', { level: 2, name: 'Research avatars' })).toBeInTheDocument()
+    expect(await screen.findByRole('heading', { level: 2, name: 'Research Avatars' })).toBeInTheDocument()
   })
 
   it('opens a run from the address and goes back to the library', async () => {
@@ -155,7 +155,7 @@ describe('AvatarsTab', () => {
     const started = makeRun({ id: 'run-9', status: 'QUEUED', phase: null, startedAt: null, finishedAt: null })
     vi.spyOn(api, 'startResearchRun').mockResolvedValue(started)
     mockedApi.getResearchRun.mockResolvedValue(started)
-    await user.click(await screen.findByRole('button', { name: 'Start research' }))
+    await user.click(await screen.findByRole('button', { name: /^(Start Research|Research anyway)/ }))
     expect(await screen.findByRole('heading', { level: 2, name: 'Research in progress' })).toBeInTheDocument()
     expect(screen.getByTestId('where')).toHaveTextContent('?research=run-9#avatars')
   })

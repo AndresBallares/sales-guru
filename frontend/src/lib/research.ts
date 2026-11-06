@@ -13,43 +13,64 @@ import { AVATAR_LIST_FIELDS, type AvatarListField } from './avatarFields'
 export const MAX_RESEARCH_PRODUCTS = 3
 export const MAX_RESEARCH_COMPETITOR_URLS = 5
 
-export const RESEARCH_DEPTHS: { value: ResearchDepth; label: string; meaning: string }[] = [
+export const RESEARCH_DEPTHS: {
+  value: ResearchDepth
+  label: string
+  description: string
+  // The short tag on the card, and the one-line version the summary shows.
+  tag: string
+  summary: string
+}[] = [
   {
     value: 'light',
     label: 'Light',
-    meaning: 'A quick pass: a handful of searches. Cheapest, but the thinnest on customer voice.',
+    description: 'A quick initial assessment using a smaller selection of research sources.',
+    tag: 'Fastest',
+    summary: 'A quick initial assessment',
   },
   {
     value: 'standard',
     label: 'Standard',
-    meaning: 'The usual choice: enough searches to reach forums, reviews and competitor sites.',
+    description:
+      'A balanced investigation across customer discussions, reviews, forums, and competitor websites.',
+    tag: 'Recommended',
+    summary: 'A balanced investigation',
   },
   {
     value: 'deep',
     label: 'Deep',
-    meaning: 'The most sources. Takes longest and costs the most; use it for a new market.',
+    description:
+      'An extensive investigation across more sources for deeper market and customer insights.',
+    tag: 'Most comprehensive',
+    summary: 'An extensive investigation',
   },
 ]
 
 export const RESEARCH_MODELS: {
   value: ResearchModel
   label: string
-  note: string
-  // Shown instead of the note while the business may not use the model.
+  // Standard or Premium, as the card and the summary show it.
+  status: 'Standard' | 'Premium'
+  description: string
+  // Shown under the card while the business may not use the model.
   unavailableNote: string
 }[] = [
   {
     value: 'claude-opus-5-5',
     label: 'Claude Opus 5.5',
-    note: 'The standard research model.',
-    unavailableNote: 'Not turned on for this business.',
+    status: 'Standard',
+    description:
+      'The standard research model for analyzing customer behavior, market trends, and competitor positioning.',
+    unavailableNote:
+      'This model is not enabled for this business. Contact your administrator to request access.',
   },
   {
     value: 'claude-fable-5-1',
-    label: 'Claude Fable 5.1 (premium)',
-    note: 'A premium model that costs about twice as much.',
+    label: 'Claude Fable 5.1',
+    status: 'Premium',
+    description: 'Premium research model offering an advanced research option.',
     unavailableNote:
-      'Premium, about twice the cost. Not turned on for this business: ask us to enable it.',
+      'This model is not enabled for this business. Contact your administrator to request access.',
   },
 ]
 
