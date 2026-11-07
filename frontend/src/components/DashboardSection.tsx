@@ -206,6 +206,12 @@ export function DashboardSection({
                 </p>
               )}
 
+              {shown.metricsWarning && (
+                <p className="dash-warning" role="alert">
+                  <strong>Results may be incomplete:</strong> {shown.metricsWarning}
+                </p>
+              )}
+
               {shown.saturationWarning && (
                 <p className="dash-warning" role="alert">
                   <strong>Audience saturation:</strong>{' '}

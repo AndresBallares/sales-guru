@@ -136,6 +136,8 @@ class CampaignResponse(CamelCaseModel):
     # An audience-saturation warning with the numbers behind it, set once the
     # rule has held on two daily evaluations in a row (app/services/saturation.py).
     saturation_warning: str | None = None
+    # Meta's account spend is above what Sales Guru recorded (spend reconciliation).
+    metrics_warning: str | None = None
     # Computed at read time (app/api/campaign.py's _to_response), never
     # stored: true when a product is attached but lacks a destination URL
     # that this campaign's SALES/TRAFFIC objective requires. Swapping a

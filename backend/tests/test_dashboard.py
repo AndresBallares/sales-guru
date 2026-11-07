@@ -113,6 +113,7 @@ async def _seed_campaign(
     strategy: str | None = None,
     pixel_warning: str | None = None,
     saturation_warning: str | None = None,
+    metrics_warning: str | None = None,
     ad_sets: int = 1,
     budget_level: str = "AD_SET",
     paused_at: datetime | None = None,
@@ -130,6 +131,7 @@ async def _seed_campaign(
                 "metaCampaignId": "meta_campaign" if published else None,
                 "pixelWarning": pixel_warning,
                 "saturationWarning": saturation_warning,
+                "metricsWarning": metrics_warning,
                 "budgetLevel": budget_level,
                 "pausedAt": paused_at,
                 "pausedReason": paused_reason,
@@ -1081,3 +1083,23 @@ def test_sample_data_only_appears_when_asked_for(
         assert strip["campaigns"] == []
     finally:
         get_settings.cache_clear()
+
+
+def test_the_spend_mismatch_warning_shows_on_the_dashboard_even_with_no_snapshot(
+    client: TestClient,
+) -> None:
+    business_id, campaign_id = _setup(
+        client, metrics_warning="Meta shows $16.60 spent but Sales Guru has $0.00"
+    )
+
+    body = client.get(_url(business_id, campaign_id)).json()
+
+    assert body["metricsWarning"] == "Meta shows $16.60 spent but Sales Guru has $0.00"
+
+
+def test_no_spend_mismatch_means_a_null_warning_on_the_dashboard(
+    client: TestClient,
+) -> None:
+    business_id, campaign_id = _setup(client)
+
+    assert client.get(_url(business_id, campaign_id)).json()["metricsWarning"] is None

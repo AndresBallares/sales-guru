@@ -4855,3 +4855,54 @@ async def test_a_long_html_page_is_cut_in_the_error_message(
         await meta.list_pages("token")
 
     assert len(str(raised.value)) < 600
+
+
+@pytest.mark.asyncio
+async def test_the_ad_accounts_lifetime_spend_is_read_in_major_units(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """amount_spent is on the account object, outside the Insights windows, and is
+    in minor units (cents): "1660" is $16.60."""
+    client = _mock_client_returning(
+        monkeypatch,
+        _FakeResponse({"amount_spent": "1660", "currency": "USD", "id": "act_1"}),
+    )
+
+    spent = await meta.fetch_ad_account_amount_spent(
+        access_token="token", ad_account_id="act_1"
+    )
+
+    assert spent == 16.6
+    url, params = client.calls[0]
+    assert url == "https://graph.facebook.com/v21.0/act_1"
+    assert params["fields"] == "amount_spent,currency"
+
+
+@pytest.mark.asyncio
+async def test_a_zero_decimal_currency_is_not_divided_by_a_hundred(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _mock_client_returning(
+        monkeypatch,
+        _FakeResponse({"amount_spent": "1660", "currency": "JPY", "id": "act_1"}),
+    )
+
+    spent = await meta.fetch_ad_account_amount_spent(
+        access_token="token", ad_account_id="act_1"
+    )
+
+    assert spent == 1660.0
+
+
+@pytest.mark.asyncio
+async def test_an_account_reply_without_amount_spent_reads_as_unknown(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _mock_client_returning(monkeypatch, _FakeResponse({"id": "act_1"}))
+
+    assert (
+        await meta.fetch_ad_account_amount_spent(
+            access_token="token", ad_account_id="act_1"
+        )
+        is None
+    )

@@ -545,6 +545,31 @@ describe('DashboardSection', () => {
     expect(alert.compareDocumentPosition(cards) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
   })
 
+  it('warns above the cards when Meta shows more spend than Sales Guru recorded', async () => {
+    mockedApi.getCampaignDashboard.mockResolvedValue(
+      dashboard('c1', {
+        status: 'PAUSED',
+        metricsWarning:
+          'Meta shows $16.60 spent on this ad account, but Sales Guru has recorded $0.00, so the results here may read too low.',
+      }),
+    )
+
+    renderSection()
+
+    const alert = await screen.findByRole('alert')
+    expect(alert).toHaveTextContent('Results may be incomplete')
+    expect(alert).toHaveTextContent('Meta shows $16.60 spent on this ad account')
+    const cards = screen.getByLabelText('Campaign results')
+    expect(alert.compareDocumentPosition(cards) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
+
+  it('shows no spend-mismatch warning when the numbers agree', async () => {
+    renderSection()
+
+    await screen.findByLabelText('Campaign results')
+    expect(screen.queryByText(/Results may be incomplete/)).not.toBeInTheDocument()
+  })
+
   it('shows no saturation warning when there is none', async () => {
     renderSection()
 

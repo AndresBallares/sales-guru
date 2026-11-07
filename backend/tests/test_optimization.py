@@ -817,3 +817,13 @@ def test_the_campaign_response_carries_the_pixel_warning(client: TestClient) -> 
     campaigns = client.get(f"/businesses/{business_id}/campaigns").json()
 
     assert campaigns[0]["pixelWarning"] is None
+
+
+def test_the_campaign_response_carries_the_spend_mismatch_warning(
+    client: TestClient,
+) -> None:
+    business_id, _ = _live_campaign(client)
+
+    campaigns = client.get(f"/businesses/{business_id}/campaigns").json()
+
+    assert campaigns[0]["metricsWarning"] is None

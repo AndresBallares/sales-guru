@@ -2091,6 +2091,9 @@ async def _fetch_insights(
                 "impressions,reach,frequency,spend,clicks,cpm,ctr,cpc,"
                 "inline_link_clicks,inline_link_click_ctr,actions,action_values"
             ),
+            # Without a window Meta answers for the last 30 days ending *yesterday*:
+            # a campaign that first spent today came back empty and read as $0.
+            "date_preset": "maximum",
             "access_token": access_token,
         },
     )
@@ -2276,6 +2279,43 @@ async def fetch_ad_insights(*, access_token: str, meta_ad_id: str) -> CampaignIn
     if get_settings().fake_meta_enabled:
         return CampaignInsights(impressions=0, clicks=0, spend=0.0, conversions=0)
     return await _fetch_insights(access_token=access_token, meta_object_id=meta_ad_id)
+
+
+# Currencies whose amounts Meta reports in whole units, not hundredths.
+_ZERO_DECIMAL_CURRENCIES = frozenset({"JPY", "KRW", "VND", "CLP", "ISK", "UGX", "PYG"})
+
+
+async def fetch_ad_account_amount_spent(
+    *, access_token: str, ad_account_id: str
+) -> float | None:
+    """Read an ad account's lifetime spend from the account object itself.
+
+    ``amount_spent`` is not an Insights field, so no date window can hide any of it:
+    it is the independent figure that spend recorded from Insights is checked against.
+
+    Args:
+        access_token: The business's Meta access token.
+        ad_account_id: The ad account id, as stored (``act_...``).
+
+    Returns:
+        The lifetime spend in the account currency's major units (Meta sends minor
+        units, so "1660" USD is 16.6), or None when Meta did not send it, and always
+        None in fake mode.
+
+    Raises:
+        MetaConnectionError: If the call fails.
+    """
+    if get_settings().fake_meta_enabled:
+        return None
+    body = await _get_json(
+        f"{_GRAPH_BASE_URL}/{ad_account_id}",
+        {"fields": "amount_spent,currency", "access_token": access_token},
+    )
+    raw = body.get("amount_spent")
+    if raw is None:
+        return None
+    divisor = 1 if body.get("currency") in _ZERO_DECIMAL_CURRENCIES else 100
+    return float(raw) / divisor
 
 
 class AccountCampaignInsights(NamedTuple):

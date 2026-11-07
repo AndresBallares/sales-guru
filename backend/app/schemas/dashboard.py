@@ -226,6 +226,8 @@ class CampaignDashboardResponse(CamelCaseModel):
     pixel_warning: str | None
     # Set while the audience-saturation rule holds (see the Optimizer).
     saturation_warning: str | None = None
+    # Set while Meta's account spend is above what was recorded (spend reconciliation).
+    metrics_warning: str | None = None
     proposals: list[Proposal]
     tier1: Tier1 | None
     tier2: Tier2 | None

@@ -156,6 +156,7 @@ async def campaign_dashboard(
         ],
         pixel_warning=campaign.pixelWarning,
         saturation_warning=campaign.saturationWarning,
+        metrics_warning=campaign.metricsWarning,
         is_sample=False,
         paused_at=campaign.pausedAt,
         paused_reason=campaign.pausedReason,

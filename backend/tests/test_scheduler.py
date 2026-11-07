@@ -10,13 +10,15 @@ must run inside an actual event loop (@pytest.mark.asyncio), not as plain
 sync tests.
 """
 
+from datetime import timedelta
+
 import pytest
 from app.core import scheduler as scheduler_module
 
 
 @pytest.mark.asyncio
-async def test_start_scheduler_registers_all_three_jobs() -> None:
-    """All three periodic jobs are registered under their expected ids."""
+async def test_start_scheduler_registers_all_five_jobs() -> None:
+    """All five periodic jobs are registered under their expected ids."""
     scheduler_module.start_scheduler()
 
     job_ids = {job.id for job in scheduler_module.scheduler.get_jobs()}
@@ -24,6 +26,8 @@ async def test_start_scheduler_registers_all_three_jobs() -> None:
         "collect_metrics",
         "evaluate_campaigns",
         "pause_expired_campaigns",
+        "settle_paused_campaigns",
+        "reconcile_account_spend",
     }
     assert scheduler_module.scheduler.running
 
@@ -41,6 +45,8 @@ async def test_start_scheduler_is_idempotent() -> None:
         "collect_metrics",
         "evaluate_campaigns",
         "pause_expired_campaigns",
+        "reconcile_account_spend",
+        "settle_paused_campaigns",
     ]
 
     scheduler_module.stop_scheduler()
@@ -53,3 +59,16 @@ def test_stop_scheduler_is_safe_to_call_when_not_running() -> None:
     scheduler_module.stop_scheduler()
 
     assert not scheduler_module.scheduler.running
+
+
+@pytest.mark.asyncio
+async def test_the_settle_and_reconcile_jobs_run_every_fifteen_minutes() -> None:
+    """The post-pause re-read and the spend reconciliation share the 15-minute beat."""
+    scheduler_module.start_scheduler()
+    try:
+        for job_id in ("settle_paused_campaigns", "reconcile_account_spend"):
+            job = scheduler_module.scheduler.get_job(job_id)
+            assert job is not None
+            assert job.trigger.interval == timedelta(minutes=15)
+    finally:
+        scheduler_module.stop_scheduler()

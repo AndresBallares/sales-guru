@@ -4925,3 +4925,350 @@ async def test_the_pause_prompt_falls_back_to_labeled_lifetime_numbers(
     old = {p.ad_id: p for p in performances}[ads[0]]
     assert old.period == "lifetime"
     assert old.spend == 120.0
+
+
+# --- settle re-reads after a pause ---------------------------------------------------
+#
+# Meta's numbers for the last hours of a campaign keep landing after the pause (the
+# Snake-Ring final snapshot read $0 while Meta had billed about $16.60), so a paused
+# campaign is read again about an hour and about a day after it was paused. Stateless:
+# a re-read is due when no snapshot taken since the stage's time exists yet.
+
+
+async def _pause_hours_ago(campaign_id: str, hours: float) -> None:
+    """Make a campaign look paused `hours` ago, its snapshots taken at that moment."""
+    paused_at = datetime.now(UTC) - timedelta(hours=hours)
+    seeder = Prisma()
+    await seeder.connect()
+    try:
+        await seeder.campaign.update(
+            where={"id": campaign_id},
+            data={"status": "PAUSED", "pausedAt": paused_at},
+        )
+        await seeder.metric.update_many(
+            where={"campaignId": campaign_id}, data={"fetchedAt": paused_at}
+        )
+    finally:
+        await seeder.disconnect()
+
+
+def _paused_campaign(
+    client: TestClient, mock_services: dict[str, AsyncMock], *, hours_ago: float
+) -> str:
+    """A campaign paused through the app (one final snapshot), then backdated."""
+    business_id, campaign_id = _live_campaign(client)
+    mock_services["insights"].return_value = CampaignInsights(
+        impressions=0, clicks=0, spend=0.0, conversions=0
+    )
+    client.post(f"/businesses/{business_id}/campaigns/{campaign_id}/pause")
+    _run(client, _pause_hours_ago, campaign_id, hours_ago)
+    return campaign_id
+
+
+def _meta_now_says(mock_services: dict[str, AsyncMock], spend: float) -> None:
+    mock_services["insights"].side_effect = None
+    mock_services["insights"].return_value = CampaignInsights(
+        impressions=1200, clicks=40, spend=spend, conversions=0
+    )
+
+
+def test_a_campaign_paused_under_an_hour_ago_is_not_read_again(
+    client: TestClient, mock_services: dict[str, AsyncMock]
+) -> None:
+    campaign_id = _paused_campaign(client, mock_services, hours_ago=0.5)
+    _meta_now_says(mock_services, 16.6)
+
+    _run(client, optimization_jobs.settle_paused_campaigns)
+
+    assert len(_run(client, _metric_rows, campaign_id)) == 1
+
+
+def test_an_hour_after_the_pause_the_numbers_are_read_again(
+    client: TestClient, mock_services: dict[str, AsyncMock]
+) -> None:
+    campaign_id = _paused_campaign(client, mock_services, hours_ago=1.5)
+    _meta_now_says(mock_services, 16.6)
+
+    _run(client, optimization_jobs.settle_paused_campaigns)
+
+    rows = sorted(_run(client, _metric_rows, campaign_id), key=lambda r: r.fetchedAt)
+    assert [r.spend for r in rows] == [0.0, 16.6]
+
+
+def test_the_one_hour_re_read_happens_once(
+    client: TestClient, mock_services: dict[str, AsyncMock]
+) -> None:
+    campaign_id = _paused_campaign(client, mock_services, hours_ago=1.5)
+    _meta_now_says(mock_services, 16.6)
+
+    _run(client, optimization_jobs.settle_paused_campaigns)
+    _run(client, optimization_jobs.settle_paused_campaigns)
+
+    assert len(_run(client, _metric_rows, campaign_id)) == 2
+
+
+def test_a_day_after_the_pause_the_numbers_are_read_a_second_time(
+    client: TestClient, mock_services: dict[str, AsyncMock]
+) -> None:
+    campaign_id = _paused_campaign(client, mock_services, hours_ago=25)
+    _meta_now_says(mock_services, 16.6)
+    # The one-hour re-read already happened, a day ago.
+    _run(
+        client,
+        lambda: _seed_metric(
+            campaign_id,
+            fetched_at=datetime.now(UTC) - timedelta(hours=23.5),
+            spend=15.0,
+        ),
+    )
+
+    _run(client, optimization_jobs.settle_paused_campaigns)
+    _run(client, optimization_jobs.settle_paused_campaigns)
+
+    rows = sorted(_run(client, _metric_rows, campaign_id), key=lambda r: r.fetchedAt)
+    assert [r.spend for r in rows] == [0.0, 15.0, 16.6]
+
+
+def test_a_failed_re_read_is_retried_on_the_next_cycle(
+    client: TestClient, mock_services: dict[str, AsyncMock]
+) -> None:
+    campaign_id = _paused_campaign(client, mock_services, hours_ago=2)
+    mock_services["insights"].side_effect = MetaConnectionError("Meta is down")
+
+    _run(client, optimization_jobs.settle_paused_campaigns)
+    assert len(_run(client, _metric_rows, campaign_id)) == 1
+
+    _meta_now_says(mock_services, 16.6)
+    _run(client, optimization_jobs.settle_paused_campaigns)
+    assert len(_run(client, _metric_rows, campaign_id)) == 2
+
+
+def test_a_campaign_paused_over_a_week_ago_is_left_alone(
+    client: TestClient, mock_services: dict[str, AsyncMock]
+) -> None:
+    campaign_id = _paused_campaign(client, mock_services, hours_ago=24 * 8)
+    _meta_now_says(mock_services, 16.6)
+
+    _run(client, optimization_jobs.settle_paused_campaigns)
+
+    assert len(_run(client, _metric_rows, campaign_id)) == 1
+
+
+def test_a_live_campaign_is_not_settled(
+    client: TestClient, mock_services: dict[str, AsyncMock]
+) -> None:
+    _, campaign_id = _live_campaign(client)
+    _meta_now_says(mock_services, 16.6)
+
+    _run(client, optimization_jobs.settle_paused_campaigns)
+
+    assert _run(client, _metric_rows, campaign_id) == []
+
+
+def test_a_campaign_published_paused_never_ran_so_is_not_settled(
+    client: TestClient, mock_services: dict[str, AsyncMock]
+) -> None:
+    campaign_id = _paused_campaign(client, mock_services, hours_ago=3)
+    seeder_clear = _clear_paused_at
+    _run(client, seeder_clear, campaign_id)
+    _meta_now_says(mock_services, 16.6)
+
+    _run(client, optimization_jobs.settle_paused_campaigns)
+
+    assert len(_run(client, _metric_rows, campaign_id)) == 1
+
+
+async def _clear_paused_at(campaign_id: str) -> None:
+    seeder = Prisma()
+    await seeder.connect()
+    try:
+        await seeder.campaign.update(where={"id": campaign_id}, data={"pausedAt": None})
+    finally:
+        await seeder.disconnect()
+
+
+# --- spend reconciliation: Meta's account total against what the app recorded -------
+#
+# The account's own lifetime spend (amount_spent) is read outside the Insights windows,
+# so it is an independent check on the numbers the collector stores. A campaign whose
+# snapshots read $0 while Meta had billed about $16.60 (Snake-Ring) must raise a flag.
+
+
+async def _metrics_warning(campaign_id: str) -> str | None:
+    return (await _fetch_campaign(campaign_id)).metricsWarning
+
+
+def _account_says(monkeypatch: pytest.MonkeyPatch, spent: float | None) -> AsyncMock:
+    mock = AsyncMock(return_value=spent)
+    monkeypatch.setattr(optimization_jobs, "fetch_ad_account_amount_spent", mock)
+    return mock
+
+
+def _snake_ring(client: TestClient, mock_services: dict[str, AsyncMock]) -> str:
+    """A campaign paused with every snapshot at $0."""
+    return _paused_campaign(client, mock_services, hours_ago=3)
+
+
+def test_meta_spend_the_app_never_recorded_raises_a_warning(
+    client: TestClient,
+    mock_services: dict[str, AsyncMock],
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    campaign_id = _snake_ring(client, mock_services)
+    _account_says(monkeypatch, 16.6)
+
+    with caplog.at_level("WARNING"):
+        _run(client, optimization_jobs.reconcile_account_spend)
+
+    warning = _run(client, _metrics_warning, campaign_id)
+    assert warning is not None
+    assert "$16.60" in warning
+    assert "$0.00" in warning
+    assert any(
+        "16.60" in r.getMessage() and r.levelname == "WARNING" for r in caplog.records
+    )
+
+
+def test_agreeing_numbers_raise_nothing(
+    client: TestClient,
+    mock_services: dict[str, AsyncMock],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    campaign_id = _snake_ring(client, mock_services)
+    _run(
+        client,
+        lambda: _seed_metric(campaign_id, fetched_at=datetime.now(UTC), spend=16.6),
+    )
+    _account_says(monkeypatch, 16.6)
+
+    _run(client, optimization_jobs.reconcile_account_spend)
+
+    assert _run(client, _metrics_warning, campaign_id) is None
+
+
+def test_a_small_difference_is_within_tolerance(
+    client: TestClient,
+    mock_services: dict[str, AsyncMock],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Meta's account total and the Insights spend settle at different times."""
+    campaign_id = _snake_ring(client, mock_services)
+    _run(
+        client,
+        lambda: _seed_metric(campaign_id, fetched_at=datetime.now(UTC), spend=16.0),
+    )
+    _account_says(monkeypatch, 16.6)
+
+    _run(client, optimization_jobs.reconcile_account_spend)
+
+    assert _run(client, _metrics_warning, campaign_id) is None
+
+
+def test_the_warning_clears_once_the_numbers_agree(
+    client: TestClient,
+    mock_services: dict[str, AsyncMock],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    campaign_id = _snake_ring(client, mock_services)
+    _account_says(monkeypatch, 16.6)
+    _run(client, optimization_jobs.reconcile_account_spend)
+    assert _run(client, _metrics_warning, campaign_id) is not None
+
+    _run(
+        client,
+        lambda: _seed_metric(campaign_id, fetched_at=datetime.now(UTC), spend=16.6),
+    )
+    _run(client, optimization_jobs.reconcile_account_spend)
+
+    assert _run(client, _metrics_warning, campaign_id) is None
+
+
+def test_a_live_campaign_is_checked_too(
+    client: TestClient,
+    mock_services: dict[str, AsyncMock],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _, campaign_id = _live_campaign(client)
+    _account_says(monkeypatch, 40.0)
+
+    _run(client, optimization_jobs.reconcile_account_spend)
+
+    assert _run(client, _metrics_warning, campaign_id) is not None
+
+
+def test_an_archived_campaign_carries_no_warning(
+    client: TestClient,
+    mock_services: dict[str, AsyncMock],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    campaign_id = _snake_ring(client, mock_services)
+    _account_says(monkeypatch, 16.6)
+    _run(client, optimization_jobs.reconcile_account_spend)
+    seeder_archive = _archive_campaign
+    _run(client, seeder_archive, campaign_id)
+
+    _run(client, optimization_jobs.reconcile_account_spend)
+
+    assert _run(client, _metrics_warning, campaign_id) is None
+
+
+async def _archive_campaign(campaign_id: str) -> None:
+    seeder = Prisma()
+    await seeder.connect()
+    try:
+        await seeder.campaign.update(
+            where={"id": campaign_id}, data={"status": "ARCHIVED"}
+        )
+    finally:
+        await seeder.disconnect()
+
+
+def test_an_unreadable_account_leaves_the_warning_as_it_was(
+    client: TestClient,
+    mock_services: dict[str, AsyncMock],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    campaign_id = _snake_ring(client, mock_services)
+    _account_says(monkeypatch, 16.6)
+    _run(client, optimization_jobs.reconcile_account_spend)
+    before = _run(client, _metrics_warning, campaign_id)
+
+    monkeypatch.setattr(
+        optimization_jobs,
+        "fetch_ad_account_amount_spent",
+        AsyncMock(side_effect=MetaConnectionError("Meta is down")),
+    )
+    _run(client, optimization_jobs.reconcile_account_spend)
+    assert _run(client, _metrics_warning, campaign_id) == before
+
+    _account_says(monkeypatch, None)
+    _run(client, optimization_jobs.reconcile_account_spend)
+    assert _run(client, _metrics_warning, campaign_id) == before
+
+
+def test_a_draft_that_never_went_to_meta_is_not_checked(
+    client: TestClient,
+    mock_services: dict[str, AsyncMock],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _, campaign_id = _live_campaign(client)
+    _run(client, _forget_meta_campaign, campaign_id)
+    mock = _account_says(monkeypatch, 16.6)
+
+    _run(client, optimization_jobs.reconcile_account_spend)
+
+    mock.assert_not_awaited()
+    assert _run(client, _metrics_warning, campaign_id) is None
+
+
+async def _forget_meta_campaign(campaign_id: str) -> None:
+    seeder = Prisma()
+    await seeder.connect()
+    try:
+        await seeder.campaign.update(
+            where={"id": campaign_id},
+            data={"metaCampaignId": None, "status": "DRAFT"},
+        )
+    finally:
+        await seeder.disconnect()

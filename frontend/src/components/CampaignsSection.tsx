@@ -2606,6 +2606,9 @@ export function CampaignsSection({
                     {campaign.pixelWarning && (
                       <p role="alert">⚠ {campaign.pixelWarning}</p>
                     )}
+                    {campaign.metricsWarning && (
+                      <p role="alert">⚠ {campaign.metricsWarning}</p>
+                    )}
                     {campaign.saturationWarning && (
                       <p role="alert">⚠ {campaign.saturationWarning}</p>
                     )}
