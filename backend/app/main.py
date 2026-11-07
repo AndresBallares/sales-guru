@@ -23,6 +23,7 @@ from app.api.meta import router as meta_router
 from app.api.metric import router as metric_router
 from app.api.optimization import router as optimization_router
 from app.api.options import router as options_router
+from app.api.performance import router as performance_router
 from app.api.product import router as product_router
 from app.api.product_image import router as product_image_router
 from app.api.product_image import serve_router as product_image_serve_router
@@ -92,6 +93,7 @@ app.include_router(meta_router)
 app.include_router(meta_callback_router)
 app.include_router(metric_router)
 app.include_router(dashboard_router)
+app.include_router(performance_router)
 app.include_router(optimization_router)
 app.include_router(test_evaluation_router)
 app.include_router(options_router)

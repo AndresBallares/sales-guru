@@ -5,13 +5,14 @@ import { analyzeWhenReady } from './support/axe'
 // Same fully-faked backend as the other fake-meta specs (FAKE_META + FAKE_LLM,
 // see playwright.config.ts): no real Meta or Anthropic call anywhere here.
 
-test('the results dashboard sits above the campaigns and has an empty state until data arrives', async ({
+test('the performance dashboard sits above the campaigns and has an empty state until data arrives', async ({
   page,
 }) => {
   await signUpAndReachFakeMetaConnectedBusiness(page)
 
   // Onboarding is finished and nothing is published yet.
-  await expect(page.getByRole('heading', { name: 'Results', exact: true })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Advertising Performance' })).toBeVisible()
+  await expect(page.getByText(/No results yet/)).toBeVisible()
   await expect(page.getByText(/No published campaigns yet/)).toBeVisible()
   await expect(page.getByLabel('All campaigns')).toHaveCount(0)
 
@@ -32,27 +33,31 @@ test('the results dashboard sits above the campaigns and has an empty state unti
 
   await page.getByRole('button', { name: 'Back to ad choices' }).click()
 
-  // Published paused (the default), so it has never run: the stat strip is
-  // there, the panel says why there are no numbers, and nothing shows a fake zero.
-  await expect(page.getByRole('heading', { name: 'Results', exact: true })).toBeVisible()
-  const strip = page.getByLabel('All campaigns')
-  await expect(strip).toBeVisible()
-  await expect(strip.getByRole('article', { name: 'Purchases' })).toContainText('—')
+  // Published paused (the default), so it has never run: the performance dashboard
+  // says there are no results yet and the sync says nothing has arrived (it does not
+  // claim a sync), the campaign panel says why there are no numbers, and nothing
+  // shows a fake zero.
+  await expect(page.getByRole('heading', { name: 'Advertising Performance' })).toBeVisible()
+  await expect(page.getByText(/No results yet/)).toBeVisible()
+  await expect(page.getByRole('status', { name: 'Meta data sync' })).toContainText(
+    'Waiting for the first sync',
+  )
+  await expect(page.getByRole('region', { name: 'Performance overview' })).toHaveCount(0)
+  await expect(page.getByLabel('All campaigns')).toHaveCount(0)
   await expect(page.getByLabel('Campaign', { exact: true })).toBeVisible()
   await expect(
     page.getByText(/This campaign is paused and hasn.t run yet, so there are no results/),
   ).toBeVisible()
   await expect(page.getByText('Published — no results yet.')).toHaveCount(0)
   await expect(page.getByLabel('Campaign results')).toHaveCount(0)
-  await expect(strip.getByRole('article', { name: 'Spent so far' })).toContainText('—')
 
   // The empty state and its confidence flag meet the accessibility rules
   // (the "Early data" tag once failed the colour-contrast check).
   const results = await analyzeWhenReady(page)
   expect(results.violations).toEqual([])
 
-  // Results come before the campaign list.
-  const resultsBox = await page.getByRole('heading', { name: 'Results', exact: true }).boundingBox()
+  // Performance comes before the campaign list.
+  const resultsBox = await page.getByRole('heading', { name: 'Advertising Performance' }).boundingBox()
   const campaignsBox = await page.getByRole('heading', { name: 'Campaigns', exact: true }).boundingBox()
   expect(resultsBox).not.toBeNull()
   expect(campaignsBox).not.toBeNull()

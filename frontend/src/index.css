@@ -7270,3 +7270,568 @@ main > section.campaigns-overview {
   border-bottom: 1px solid var(--border);
   text-align: left;
 }
+
+/* ==========================================================================
+   Advertising Performance (components/performance/)
+   Built on the existing surface/border/text tokens; the gold of the primary
+   actions (.btn-gold) marks the ROAS card, the one number that answers
+   "is this paying for itself". Cards share one layout and size.
+   ========================================================================== */
+
+.perf {
+  display: grid;
+  /* minmax(0, ...) so a wide child (the no-wrap table) scrolls inside its own
+     wrapper instead of stretching the whole page sideways on a phone. */
+  grid-template-columns: minmax(0, 1fr);
+  gap: 2rem;
+  margin-bottom: 2.5rem;
+}
+
+.perf-header {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 1rem 2rem;
+  align-items: start;
+}
+
+.perf-title h2 {
+  margin: 0 0 0.35rem;
+  font-size: 1.6rem;
+  letter-spacing: -0.01em;
+}
+
+.perf-title p {
+  margin: 0;
+  max-width: 40rem;
+  color: var(--text-secondary);
+}
+
+.perf-controls {
+  display: flex;
+  align-items: flex-end;
+  gap: 0.75rem;
+}
+
+.perf-range {
+  display: grid;
+  gap: 0.25rem;
+}
+
+.perf-range label {
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+}
+
+.perf-range select {
+  width: auto;
+  min-width: 9.5rem;
+}
+
+.perf-sync {
+  display: grid;
+  gap: 0.15rem;
+  grid-column: 1 / -1;
+  justify-items: start;
+  font-size: 0.9rem;
+}
+
+.perf-sync p {
+  margin: 0;
+}
+
+.perf-sync-main {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-weight: 600;
+}
+
+.perf-sync-sub {
+  color: var(--text-secondary);
+  font-size: 0.85rem;
+  padding-left: 1.1rem;
+}
+
+.perf-sync-dot {
+  width: 0.6rem;
+  height: 0.6rem;
+  border-radius: 50%;
+  background: var(--text-tertiary);
+}
+
+.perf-sync-ok .perf-sync-dot {
+  background: var(--success);
+}
+
+.perf-sync-stale .perf-sync-dot {
+  background: var(--warning);
+}
+
+.perf-sync-stale .perf-sync-main {
+  color: var(--warning);
+}
+
+.perf-overview,
+.perf-grid {
+  display: grid;
+  gap: 1rem;
+}
+
+.perf-overview {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.perf-grid {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  margin-top: 1rem;
+}
+
+.perf-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  min-height: 9.5rem;
+  padding: 1.1rem 1.2rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card);
+  box-shadow: var(--shadow-card);
+}
+
+.perf-card-primary {
+  padding: 1.35rem 1.4rem;
+  min-height: 12rem;
+}
+
+.perf-card-primary .perf-value {
+  font-size: 2.35rem;
+}
+
+.perf-overview > .perf-card:nth-child(4) {
+  border-color: var(--create-bg);
+  box-shadow: 0 0 0 1px var(--create-bg), var(--shadow-card);
+}
+
+.perf-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.perf-card h3,
+.perf-funnel-stage h4 {
+  margin: 0;
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.perf-value {
+  margin: 0;
+  font-size: 1.75rem;
+  font-weight: 700;
+  line-height: 1.15;
+  letter-spacing: -0.01em;
+  font-variant-numeric: tabular-nums;
+}
+
+.perf-note {
+  margin: auto 0 0;
+  color: var(--text-secondary);
+  font-size: 0.85rem;
+  line-height: 1.4;
+}
+
+.perf-delta {
+  margin: 0;
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+
+.perf-delta-good {
+  color: var(--success);
+}
+
+.perf-delta-bad {
+  color: var(--error);
+}
+
+.perf-delta-neutral {
+  color: var(--text-secondary);
+}
+
+.perf-section-title {
+  margin: 0;
+  font-size: 1.2rem;
+}
+
+.perf-section-sub {
+  margin: 0.2rem 0 0;
+  color: var(--text-secondary);
+}
+
+.perf-empty {
+  margin: 1rem 0 0;
+  padding: 1rem 1.2rem;
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius-card);
+  color: var(--text-secondary);
+}
+
+/* Info tooltip */
+.perf-tip {
+  position: relative;
+  display: inline-flex;
+}
+
+.perf-tip-button {
+  display: inline-flex;
+  padding: 0.25rem;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--text-tertiary);
+  cursor: help;
+}
+
+.perf-tip-button:hover,
+.perf-tip-button[aria-expanded='true'] {
+  color: var(--text);
+}
+
+.perf-tip-button:focus-visible {
+  outline: 2px solid var(--border-focus);
+  outline-offset: 1px;
+}
+
+.perf-tip-body {
+  position: absolute;
+  top: calc(100% + 0.35rem);
+  right: 0;
+  z-index: 20;
+  display: grid;
+  gap: 0.2rem;
+  width: min(19rem, 80vw);
+  padding: 0.85rem 1rem;
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: 0.75rem;
+  box-shadow: var(--shadow-card);
+  color: var(--text);
+  font-size: 0.85rem;
+  line-height: 1.4;
+  text-align: left;
+}
+
+/* Surfaces are translucent in dark mode; the tooltip must stay readable. */
+:root[data-theme='dark'] .perf-tip-body {
+  background: #1b1b22;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) .perf-tip-body {
+    background: #1b1b22;
+  }
+}
+
+.perf-tip-label {
+  margin-top: 0.4rem;
+  color: var(--text-secondary);
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+/* Funnel */
+.perf-funnel {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 0;
+  margin: 1rem 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.perf-funnel-stage {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  min-height: 11rem;
+  padding: 1rem 1.1rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-left-width: 0;
+}
+
+.perf-funnel-stage:first-child {
+  border-left-width: 1px;
+  border-radius: var(--radius-card) 0 0 var(--radius-card);
+}
+
+.perf-funnel-stage:last-child {
+  border-radius: 0 var(--radius-card) var(--radius-card) 0;
+}
+
+/* A chevron between the stages shows the direction of travel. */
+.perf-funnel-stage:not(:last-child)::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  right: -0.5rem;
+  z-index: 1;
+  width: 0.9rem;
+  height: 0.9rem;
+  background: var(--surface);
+  border-top: 1px solid var(--border-strong);
+  border-right: 1px solid var(--border-strong);
+  transform: translateY(-50%) rotate(45deg);
+}
+
+.perf-funnel-rate {
+  margin: 0;
+  color: var(--primary-soft-text);
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+
+.perf-funnel-drop {
+  margin: 0.9rem 0 0;
+  color: var(--text-secondary);
+}
+
+/* Trend chart */
+.perf-trend-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.6rem;
+  margin: 1rem 0 0.5rem;
+}
+
+.perf-trend-controls select {
+  width: auto;
+}
+
+.perf-trend-range {
+  color: var(--text-secondary);
+  font-size: 0.85rem;
+}
+
+.perf-chart {
+  /* On a narrow screen the plot keeps a readable width and scrolls inside this box,
+     instead of shrinking its labels to a few pixels. */
+  overflow-x: auto;
+  padding: 0.75rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card);
+}
+
+.perf-chart-plot {
+  position: relative;
+  min-width: 34rem;
+}
+
+.perf-chart svg {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+.perf-chart-grid {
+  stroke: var(--border);
+  stroke-width: 1;
+}
+
+.perf-chart-axis {
+  fill: var(--text-tertiary);
+  font-size: 11px;
+}
+
+.perf-chart-line {
+  fill: none;
+  stroke: var(--primary);
+  stroke-width: 2.5;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+}
+
+.perf-chart-dot {
+  fill: var(--primary);
+  stroke: var(--surface);
+  stroke-width: 1.5;
+}
+
+/* Invisible, focusable targets laid over the dots for hover, touch and keyboard. */
+.perf-chart-hit {
+  position: absolute;
+  width: 1.5rem;
+  height: 1.5rem;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  transform: translate(-50%, -50%);
+  cursor: pointer;
+}
+
+.perf-chart-hit:focus-visible {
+  outline: 2px solid var(--border-focus);
+}
+
+.perf-chart-tip {
+  position: absolute;
+  z-index: 10;
+  display: grid;
+  gap: 0.1rem;
+  padding: 0.4rem 0.65rem;
+  background: var(--text);
+  color: var(--bg);
+  border-radius: 0.5rem;
+  font-size: 0.8rem;
+  pointer-events: none;
+  transform: translate(-50%, calc(-100% - 0.8rem));
+  white-space: nowrap;
+}
+
+.perf-chart-gaps {
+  margin: 0.6rem 0 0;
+  color: var(--text-secondary);
+  font-size: 0.85rem;
+}
+
+/* Campaign table */
+.perf-table-wrap {
+  margin-top: 1rem;
+  overflow-x: auto;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card);
+}
+
+.perf-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.perf-table th,
+.perf-table td {
+  padding: 0.7rem 0.9rem;
+  border-bottom: 1px solid var(--border);
+  text-align: right;
+  white-space: nowrap;
+}
+
+.perf-table th:first-child,
+.perf-table td:first-child,
+.perf-table th:nth-child(2),
+.perf-table td:nth-child(2) {
+  text-align: left;
+}
+
+.perf-table tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.perf-sort {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--text-secondary);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.perf-sort:hover,
+.perf-sort:focus-visible {
+  color: var(--text);
+}
+
+.perf-sort[data-direction='asc']::after {
+  content: ' \25B2';
+  font-size: 0.65em;
+}
+
+.perf-sort[data-direction='desc']::after {
+  content: ' \25BC';
+  font-size: 0.65em;
+}
+
+.perf-badge {
+  display: inline-block;
+  padding: 0.1rem 0.55rem;
+  border-radius: 999px;
+  background: var(--pill-bg);
+  color: var(--pill-text);
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+
+.perf-badge-live {
+  background: var(--success-bg);
+  color: var(--success);
+}
+
+.perf-badge-paused,
+.perf-badge-pending_approval {
+  background: var(--warning-bg);
+  /* --warning alone is 4.49:1 on its own tint; darkened (lightened in dark mode) to pass 4.5:1. */
+  color: color-mix(in srgb, var(--warning) 75%, var(--text));
+}
+
+/* Tablet: two cards across; the funnel starts stacking. */
+@media (max-width: 1024px) {
+  .perf-overview,
+  .perf-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .perf-funnel {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 0.75rem;
+  }
+
+  .perf-funnel-stage,
+  .perf-funnel-stage:first-child,
+  .perf-funnel-stage:last-child {
+    border-width: 1px;
+    border-radius: var(--radius-card);
+  }
+
+  .perf-funnel-stage:not(:last-child)::after {
+    display: none;
+  }
+}
+
+/* Phone: single column, a vertical funnel, and a lighter table. */
+@media (max-width: 640px) {
+  .perf-header {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .perf-controls {
+    flex-wrap: wrap;
+  }
+
+  .perf-overview,
+  .perf-grid,
+  .perf-funnel {
+    grid-template-columns: 1fr;
+  }
+
+  .perf-card,
+  .perf-card-primary,
+  .perf-funnel-stage {
+    min-height: 0;
+  }
+
+  .perf-col-secondary {
+    display: none;
+  }
+}

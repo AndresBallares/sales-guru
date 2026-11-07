@@ -135,6 +135,12 @@ Once enough campaigns have run, aggregate results by `hookType` (with a minimum-
 batch. (`Creative.hookType` is stored and returned since the `creative-hook` PR, and nothing reads it yet; see
 `docs/creative-learning-review.md`.)
 
+### Campaigns list heading overlaps on a phone
+At 390px wide the "Campaigns" heading, its subtitle and the "Create campaign" button overlap in the Results and
+campaigns tab (seen in the dark-mode phone screenshot of `e2e/performance-dashboard.spec.ts`, 2026-11-07). It predates
+the Advertising Performance dashboard. Fix in a small PR: stack the heading row on narrow screens, and add a phone-width
+e2e check (no overlap, button reachable) like `split-card.spec.ts` does for the strategy card.
+
 ## Done
 
 - **Dashboard tests leaked a `scrollIntoView` stub.** Tests assigned a stub to

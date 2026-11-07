@@ -5,6 +5,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { BusinessDetailPage } from './BusinessDetailPage'
 import { AuthProvider } from '../context/AuthContext'
 import * as api from '../lib/api'
+import { makePerformance } from '../test/performanceFixtures'
 
 vi.mock('../lib/api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../lib/api')>()
@@ -30,6 +31,7 @@ vi.mock('../lib/api', async (importOriginal) => {
     getBusinessDashboard: vi.fn<typeof actual.getBusinessDashboard>(),
     listAvatars: vi.fn<typeof actual.listAvatars>(),
     getCampaignDashboard: vi.fn<typeof actual.getCampaignDashboard>(),
+    getPerformance: vi.fn<typeof actual.getPerformance>(),
   }
 })
 const mockedApi = vi.mocked(api)
@@ -169,6 +171,7 @@ beforeEach(() => {
   )
   mockedApi.getBrandProfile.mockResolvedValue(brandProfile)
   mockedApi.listAvatars.mockResolvedValue([])
+  mockedApi.getPerformance.mockResolvedValue(makePerformance())
   mockedApi.getBusinessDashboard.mockResolvedValue({
     activeCampaigns: 0,
     totalSpend: 0,
@@ -234,7 +237,7 @@ describe('BusinessDetailPage', () => {
       expect(screen.queryByRole('heading', { name: 'Create a campaign' })).not.toBeInTheDocument()
       expect(screen.queryByRole('heading', { name: 'Campaigns' })).not.toBeInTheDocument()
       expect(screen.queryByRole('heading', { name: 'Meta Ads' })).not.toBeInTheDocument()
-      expect(screen.queryByRole('heading', { name: 'Results' })).not.toBeInTheDocument()
+      expect(screen.queryByRole('heading', { name: 'Advertising Performance' })).not.toBeInTheDocument()
     })
 
     it('gates even a business that already has campaigns', async () => {
@@ -609,7 +612,7 @@ describe('BusinessDetailPage', () => {
       observer.observe(document.body, { childList: true, subtree: true, characterData: true })
 
       renderPage()
-      await screen.findByRole('heading', { name: 'Results' })
+      await screen.findByRole('heading', { name: 'Advertising Performance' })
       await screen.findByRole('heading', { name: 'Sales' })
       record()
       observer.disconnect()
@@ -700,7 +703,7 @@ describe('BusinessDetailPage', () => {
     expect(screen.queryByRole('button', { name: 'Edit brand profile' })).not.toBeInTheDocument()
     // The results dashboard sits above the campaign list (an unpublished
     // campaign has no results, so it shows its empty state).
-    const results = screen.getByRole('heading', { name: 'Results' })
+    const results = screen.getByRole('heading', { name: 'Advertising Performance' })
     expect(await screen.findByText(/No published campaigns yet/)).toBeInTheDocument()
     expect(
       results.compareDocumentPosition(screen.getByRole('heading', { name: 'Sales' })) &
@@ -715,8 +718,8 @@ describe('BusinessDetailPage', () => {
     renderPage()
 
     await screen.findByRole('heading', { name: 'Create a campaign' })
-    expect(screen.queryByRole('heading', { name: 'Results' })).not.toBeInTheDocument()
-    expect(mockedApi.getBusinessDashboard).not.toHaveBeenCalled()
+    expect(screen.queryByRole('heading', { name: 'Advertising Performance' })).not.toBeInTheDocument()
+    expect(mockedApi.getPerformance).not.toHaveBeenCalled()
   })
 
   it('shows the reconnect confirmation after Meta setup has stripped ?meta= from the URL', async () => {
