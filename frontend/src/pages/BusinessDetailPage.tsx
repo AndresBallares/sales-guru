@@ -305,6 +305,7 @@ export function BusinessDetailPage() {
                             <DashboardSection
                               businessId={businessId}
                               refreshKey={resultsRevision}
+                              onConnectMeta={() => setMetaLater(false)}
                             />
                             <CampaignsSection
                               businessId={businessId}

@@ -1839,6 +1839,96 @@ export function getBusinessDashboard(
   )
 }
 
+// --- Advertising Performance (one period of Meta's numbers for the business) ---
+// null = Meta has not reported it (or it cannot be worked out reliably), never zero.
+// Percent fields are percentages (3.8 means 3.8%).
+
+export interface PerformanceMetrics {
+  spend: number | null
+  impressions: number | null
+  clicks: number | null
+  linkClicks: number | null
+  landingPageViews: number | null
+  addToCart: number | null
+  initiatedCheckout: number | null
+  purchases: number | null
+  purchaseValue: number | null
+  cpm: number | null
+  ctr: number | null
+  cpc: number | null
+  costPerAddToCart: number | null
+  addToCartRate: number | null
+  costPerSale: number | null
+  roas: number | null
+}
+
+export type PerformanceFunnelKey =
+  | 'landing_page_views'
+  | 'add_to_cart'
+  | 'initiated_checkout'
+  | 'purchases'
+  | 'revenue'
+
+export interface PerformanceFunnelStage {
+  key: PerformanceFunnelKey
+  count: number | null
+  rateFromPrevious: number | null
+}
+
+export interface PerformanceDailyPoint {
+  date: string
+  spend: number | null
+  purchases: number | null
+  revenue: number | null
+  costPerSale: number | null
+  roas: number | null
+  addToCart: number | null
+  linkClicks: number | null
+}
+
+export interface PerformanceCampaignRow {
+  campaignId: string
+  name: string | null
+  status: string
+  spend: number | null
+  impressions: number | null
+  linkClicks: number | null
+  addToCart: number | null
+  purchases: number | null
+  costPerSale: number | null
+  revenue: number | null
+  roas: number | null
+}
+
+export type PerformanceSyncStatus = 'not_connected' | 'waiting' | 'ok' | 'stale'
+
+export interface PerformanceSync {
+  status: PerformanceSyncStatus
+  lastSyncedAt: string | null
+  intervalMinutes: number
+}
+
+// 0 = all time.
+export type PerformanceDays = 0 | 7 | 14 | 30 | 90
+
+export interface Performance {
+  days: number | null
+  start: string | null
+  end: string
+  current: PerformanceMetrics | null
+  previous: PerformanceMetrics | null
+  reach: number | null
+  frequency: number | null
+  funnel: PerformanceFunnelStage[]
+  daily: PerformanceDailyPoint[]
+  campaigns: PerformanceCampaignRow[]
+  sync: PerformanceSync
+}
+
+export function getPerformance(businessId: string, days: PerformanceDays): Promise<Performance> {
+  return request<Performance>(`/businesses/${businessId}/performance?days=${days}`)
+}
+
 // Buyer avatars. A draft is what the import reads out of a pasted research
 // document: the same fields as a saved avatar, with nothing saved yet.
 // Who an avatar buys for. The Strategist derives an angle's buyer type from it.

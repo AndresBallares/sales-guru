@@ -22,6 +22,11 @@ class Snapshot(NamedTuple):
     purchases: int | None
     purchase_value: float | None
     fetched_at: datetime
+    # Added for the performance dashboard; defaulted so older callers are unchanged.
+    # clicks counts every tap, link_clicks only clicks through to the destination.
+    clicks: int | None = None
+    reach: int | None = None
+    frequency: float | None = None
 
 
 class Totals(NamedTuple):
@@ -36,3 +41,4 @@ class Totals(NamedTuple):
     purchases: int | None
     purchase_value: float | None
     as_of: datetime
+    clicks: int | None = None

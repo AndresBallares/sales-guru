@@ -31,7 +31,7 @@ def _require_sample_allowed() -> None:
         )
 
 
-async def _campaign_snapshots(campaign: Campaign) -> list[dash.Snapshot]:
+async def campaign_snapshots(campaign: Campaign) -> list[dash.Snapshot]:
     """The campaign's stored rows, as the dashboard reads them.
 
     Under a campaign budget (CBO) the campaign-level rows are the whole
@@ -135,7 +135,7 @@ async def campaign_dashboard(
         campaign_id=campaign.id,
         name=campaign.name,
         status=campaign.status,
-        snapshots=await _campaign_snapshots(campaign),
+        snapshots=await campaign_snapshots(campaign),
         targets=targets,
         ads=await _ad_infos(campaign.businessId, ads),
         recommendations=[
@@ -188,6 +188,6 @@ async def business_dashboard(
         where={"businessId": business.id, "NOT": [{"metaCampaignId": None}]}
     )
     return dash.summarize_business(
-        [(c.id, c.name, c.status, await _campaign_snapshots(c)) for c in campaigns],
+        [(c.id, c.name, c.status, await campaign_snapshots(c)) for c in campaigns],
         is_sample=False,
     )

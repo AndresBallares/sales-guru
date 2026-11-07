@@ -23,6 +23,26 @@ vi.mock('../lib/api', async (importOriginal) => {
 })
 const mockedApi = vi.mocked(api)
 
+// The performance dashboard has its own tests; here it only has to be placed.
+vi.mock('./performance/PerformanceDashboard', () => ({
+  PerformanceDashboard: ({
+    businessId,
+    onConnectMeta,
+  }: {
+    businessId: string
+    onConnectMeta?: () => void
+  }) => (
+    <section aria-label="Advertising Performance stub">
+      {businessId}
+      {onConnectMeta && (
+        <button type="button" onClick={onConnectMeta}>
+          stub connect
+        </button>
+      )}
+    </section>
+  ),
+}))
+
 function campaign(id: string, overrides: Partial<api.Campaign> = {}): api.Campaign {
   return {
     id,
@@ -118,11 +138,43 @@ function renderSection() {
   return render(<DashboardSection businessId="biz-1" />)
 }
 
+// The all-campaigns strip is now only the local sample preview's; the real numbers
+// are on the performance dashboard above.
+async function renderSampleStrip() {
+  const user = userEvent.setup()
+  renderSection()
+  await user.click(await screen.findByLabelText(/Preview with sample data/))
+  return within(await screen.findByLabelText('All campaigns'))
+}
+
 describe('DashboardSection', () => {
-  it('shows the stat strip across all campaigns', async () => {
+  it('puts the performance dashboard above the campaign details, not the old strip', async () => {
     renderSection()
 
-    const strip = within(await screen.findByLabelText('All campaigns'))
+    expect(await screen.findByLabelText('Campaign results')).toBeInTheDocument()
+    expect(screen.getByLabelText('Advertising Performance stub')).toHaveTextContent('biz-1')
+    expect(screen.queryByLabelText('All campaigns')).not.toBeInTheDocument()
+    expect(mockedApi.getBusinessDashboard).not.toHaveBeenCalled()
+  })
+
+  it('hands the Connect Meta action to the performance dashboard', async () => {
+    const onConnectMeta = vi.fn<() => void>()
+    const user = userEvent.setup()
+    render(<DashboardSection businessId="biz-1" onConnectMeta={onConnectMeta} />)
+
+    await user.click(await screen.findByRole('button', { name: 'stub connect' }))
+
+    expect(onConnectMeta).toHaveBeenCalledTimes(1)
+  })
+
+  it('leaves the performance dashboard out of the sample preview', async () => {
+    await renderSampleStrip()
+
+    expect(screen.queryByLabelText('Advertising Performance stub')).not.toBeInTheDocument()
+  })
+
+  it('shows the stat strip across all campaigns in the sample preview', async () => {
+    const strip = await renderSampleStrip()
     expect(strip.getByRole('article', { name: 'Active campaigns' })).toHaveTextContent('2')
     expect(strip.getByRole('article', { name: 'Spent so far' })).toHaveTextContent('$200.00')
     expect(strip.getByRole('article', { name: 'Purchases' })).toHaveTextContent('3')
@@ -136,9 +188,7 @@ describe('DashboardSection', () => {
       summary({ purchases: null, costPerPurchase: null }),
     )
 
-    renderSection()
-
-    const strip = within(await screen.findByLabelText('All campaigns'))
+    const strip = await renderSampleStrip()
     expect(strip.getByRole('article', { name: 'Purchases' })).toHaveTextContent('—')
     expect(strip.getByRole('article', { name: 'Cost per sale' })).toHaveTextContent('—')
   })
@@ -148,9 +198,7 @@ describe('DashboardSection', () => {
       summary({ totalSpend: 0, campaigns: [], activeCampaigns: 0 }),
     )
 
-    renderSection()
-
-    const strip = within(await screen.findByLabelText('All campaigns'))
+    const strip = await renderSampleStrip()
     expect(strip.getByRole('article', { name: 'Spent so far' })).toHaveTextContent('—')
     expect(strip.getByRole('article', { name: 'Spent so far' })).not.toHaveTextContent('$0.00')
   })
@@ -271,9 +319,7 @@ describe('DashboardSection', () => {
   })
 
   it('uses the plain-language labels in the stat strip, with the technical term underneath', async () => {
-    renderSection()
-
-    const strip = within(await screen.findByLabelText('All campaigns'))
+    const strip = await renderSampleStrip()
     expect(strip.getByRole('article', { name: 'Spent so far' })).toHaveTextContent('Ad spend')
     const costPerSale = strip.getByRole('article', { name: 'Cost per sale' })
     expect(costPerSale).toHaveTextContent('Customer acquisition cost, CAC')
@@ -621,7 +667,7 @@ describe('DashboardSection', () => {
   })
 
   it('shows a load error', async () => {
-    mockedApi.getBusinessDashboard.mockRejectedValue(new api.ApiError(500, 'Server error'))
+    mockedApi.listCampaigns.mockRejectedValue(new api.ApiError(500, 'Server error'))
 
     renderSection()
 
@@ -674,7 +720,7 @@ describe('DashboardSection', () => {
 
       renderSection()
       await screen.findByLabelText('Campaign results')
-      expect(mockedApi.getBusinessDashboard).toHaveBeenCalledWith('biz-1', false)
+      expect(mockedApi.getBusinessDashboard).not.toHaveBeenCalled()
       expect(screen.queryByText(/not your real numbers/)).not.toBeInTheDocument()
 
       await user.click(screen.getByLabelText(/Preview with sample data/))

@@ -152,6 +152,7 @@ def combine(rows: Sequence[Snapshot]) -> Totals | None:
         purchases=_as_int(_sum_optional(rows, "purchases")),
         purchase_value=_sum_optional(rows, "purchase_value"),
         as_of=max(r.fetched_at for r in rows),
+        clicks=_as_int(_sum_optional(rows, "clicks")),
     )
 
 
@@ -560,6 +561,9 @@ def snapshot_from_metric(metric: Metric) -> Snapshot:
         purchases=metric.purchases,
         purchase_value=metric.purchaseValue,
         fetched_at=metric.fetchedAt,
+        clicks=metric.clicks,
+        reach=metric.reach,
+        frequency=metric.frequency,
     )
 
 

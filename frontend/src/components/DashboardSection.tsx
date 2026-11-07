@@ -13,6 +13,7 @@ import {
 import { UNAVAILABLE, formatAsOf, formatInteger, formatMoney } from '../lib/dashboardFormat'
 import { CardHeading } from './CardHeading'
 import { ConfidenceFlag } from './ConfidenceFlag'
+import { PerformanceDashboard } from './performance/PerformanceDashboard'
 import { Tier1Cards } from './Tier1Cards'
 import { Tier2Cards } from './Tier2Cards'
 import { Tier3Table } from './Tier3Table'
@@ -34,8 +35,11 @@ function errorMessage(err: unknown, fallback: string): string {
 export function DashboardSection({
   businessId,
   refreshKey,
+  onConnectMeta,
 }: {
   businessId: string
+  // Offered on the performance dashboard when Meta is not connected.
+  onConnectMeta?: () => void
   // Changes when the campaign list does (a delete, an archive, a new campaign), so the
   // picker and the numbers reload instead of showing a campaign that is gone.
   refreshKey?: number
@@ -60,7 +64,12 @@ export function DashboardSection({
 
   useEffect(() => {
     let current = true
-    Promise.all([listCampaigns(businessId), getBusinessDashboard(businessId, sample)])
+    // The business-wide numbers come from the performance dashboard; this older summary
+    // is only read for the local sample preview.
+    Promise.all([
+      listCampaigns(businessId),
+      sample ? getBusinessDashboard(businessId, true) : Promise.resolve(null),
+    ])
       .then(([list, strip]) => {
         if (!current) return
         setCampaigns(list)
@@ -111,8 +120,9 @@ export function DashboardSection({
 
   return (
     <section className="dashboard-section" aria-labelledby="dashboard-heading">
+      {!sample && <PerformanceDashboard businessId={businessId} onConnectMeta={onConnectMeta} />}
       <div className="dashboard-heading-row">
-        <h2 id="dashboard-heading">Results</h2>
+        <h2 id="dashboard-heading">Campaign details</h2>
         {SAMPLE_SWITCH_AVAILABLE && (
           <label className="dashboard-sample-switch">
             <input
@@ -147,7 +157,7 @@ export function DashboardSection({
         </p>
       )}
 
-      {summary && pickable.length > 0 && (
+      {sample && summary && pickable.length > 0 && (
         <div className="dash-strip" aria-label="All campaigns">
           <article className="dash-card" aria-labelledby="strip-active">
             <CardHeading id="strip-active" label="Active campaigns" />
