@@ -4775,6 +4775,31 @@ describe('CampaignsSection', () => {
     expect(await screen.findByText(/Audience saturation: reach has plateaued/)).toBeInTheDocument()
   })
 
+  it('shows the spend-mismatch warning on a live campaign', async () => {
+    mockedApi.listCampaigns.mockResolvedValue([
+      {
+        id: 'camp-1',
+        name: null,
+        objective: 'SALES',
+        status: 'LIVE',
+        productId: null,
+        audienceId: null,
+        metaCampaignId: 'meta_campaign_1',
+        eventVenueKey: null,
+        startDate: null,
+        endDate: null,
+        pausedReason: null,
+        dailySpendFlag: null,
+        metricsWarning: 'Meta shows $16.60 spent on this ad account, but Sales Guru has recorded $0.00.',
+        needsDestinationUrl: false,
+      },
+    ])
+
+    renderCampaigns(<CampaignsSection businessId="biz-1" />)
+
+    expect(await screen.findByText(/Meta shows \$16\.60 spent on this ad account/)).toBeInTheDocument()
+  })
+
   it('shows a retargeting proposal and surfaces the refusal when it cannot be created yet', async () => {
     mockedApi.getOptions.mockResolvedValue({
       ...ALL_OPTIONS,

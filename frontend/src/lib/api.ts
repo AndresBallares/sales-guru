@@ -275,6 +275,8 @@ export interface Campaign {
   pixelWarning?: string | null
   // Audience saturation, with the numbers behind it; set once the rule has held twice in a row.
   saturationWarning?: string | null
+  // Meta's account spend is above what Sales Guru recorded, so the results may read too low.
+  metricsWarning?: string | null
   // True when a product is attached but lacks a destination URL this
   // campaign's SALES/TRAFFIC objective requires — computed by the
   // backend (app/api/campaign.py's _needs_destination_url), never
@@ -1792,6 +1794,7 @@ export interface CampaignDashboard {
   isSample: boolean
   pixelWarning: string | null
   saturationWarning?: string | null
+  metricsWarning?: string | null
   proposals: DashboardProposal[]
   tier1: DashboardTier1 | null
   tier2: DashboardTier2 | null

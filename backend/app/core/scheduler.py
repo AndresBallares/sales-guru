@@ -14,13 +14,15 @@ from app.services.optimization_jobs import (
     collect_metrics_for_all_live_campaigns,
     evaluate_all_live_campaigns,
     pause_expired_campaigns,
+    reconcile_account_spend,
+    settle_paused_campaigns,
 )
 
 scheduler = AsyncIOScheduler()
 
 
 def start_scheduler() -> None:
-    """Register and start the three periodic jobs.
+    """Register and start the periodic jobs.
 
     Safe to call multiple times — replace_existing means re-registering
     an already-scheduled job id just updates it instead of duplicating.
@@ -44,6 +46,20 @@ def start_scheduler() -> None:
         "interval",
         minutes=60,
         id="pause_expired_campaigns",
+        replace_existing=True,
+    )
+    scheduler.add_job(
+        settle_paused_campaigns,
+        "interval",
+        minutes=15,
+        id="settle_paused_campaigns",
+        replace_existing=True,
+    )
+    scheduler.add_job(
+        reconcile_account_spend,
+        "interval",
+        minutes=15,
+        id="reconcile_account_spend",
         replace_existing=True,
     )
     if not scheduler.running:

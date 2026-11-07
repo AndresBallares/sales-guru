@@ -104,6 +104,7 @@ from app.services.campaign_status_sync import sync_campaign_statuses
 from app.services.meta import (
     CampaignInsights,
     MetaConnectionError,
+    fetch_ad_account_amount_spent,
     fetch_ad_insights,
     fetch_ad_set_insights,
     fetch_campaign_insights,
@@ -448,6 +449,159 @@ async def pause_campaign_and_capture(
     )
     await collect_final_snapshot(paused, connection.accessToken)
     return paused
+
+
+# A paused campaign is read again this long after the pause: Meta's figures for the
+# last hours of delivery keep landing afterwards (Snake-Ring's final snapshot read $0
+# while Meta had billed about $16.60).
+SETTLE_AFTER = (timedelta(hours=1), timedelta(hours=24))
+SETTLE_GIVE_UP_AFTER = timedelta(days=7)
+
+
+async def _settle_read_is_due(campaign: Campaign, now: datetime) -> bool:
+    """Whether a paused campaign still owes its one-hour or one-day re-read.
+
+    Stateless: the latest stage already reached is due until some snapshot has been
+    taken at or after that stage's time, so a failed read is retried on the next
+    cycle and a successful one is never repeated.
+
+    Args:
+        campaign: A PAUSED campaign with a pausedAt.
+        now: The current time.
+
+    Returns:
+        True when a re-read should be taken now.
+    """
+    if campaign.pausedAt is None:
+        return False
+    age = now - campaign.pausedAt
+    reached = [after for after in SETTLE_AFTER if age >= after]
+    if not reached:
+        return False
+    since = campaign.pausedAt + max(reached)
+    later = await db.metric.find_first(
+        where={"campaignId": campaign.id, "fetchedAt": {"gte": since}}
+    )
+    return later is None
+
+
+async def settle_paused_campaigns() -> None:
+    """Read each recently paused campaign's numbers again, about 1 hour and 1 day on.
+
+    Collection stops at the pause and the final snapshot is taken moments after it,
+    but Meta keeps filling in the last hours of delivery afterwards. Each re-read is
+    one more cumulative snapshot, so the stored spend ends up matching what Meta
+    billed. Best effort, one campaign never blocks the rest.
+    """
+    now = datetime.now(UTC)
+    campaigns = await db.campaign.find_many(
+        where={
+            "status": "PAUSED",
+            "pausedAt": {"gte": now - SETTLE_GIVE_UP_AFTER},
+            "business": {"is": {"deletedAt": None}},
+        }
+    )
+    for campaign in campaigns:
+        if campaign.metaCampaignId is None:
+            continue
+        try:
+            if not await _settle_read_is_due(campaign, now):
+                continue
+            connection = await get_meta_connection(campaign.businessId)
+            if connection is None:
+                continue
+            await collect_final_snapshot(campaign, connection.accessToken)
+        except Exception:
+            logger.exception("Settle read failed for campaign %s", campaign.id)
+
+
+# The account's spend may exceed the recorded spend by this much before it is flagged:
+# the two figures settle at slightly different times.
+RECONCILE_TOLERANCE_MIN = 1.0
+RECONCILE_TOLERANCE_SHARE = 0.05
+_RECONCILED_STATUSES = ("LIVE", "PAUSED")
+
+
+def _spend_mismatch_warning(account_spent: float, recorded: float) -> str | None:
+    """The warning text when Meta's account total is above the recorded spend.
+
+    Args:
+        account_spent: The ad account's lifetime spend, from Meta.
+        recorded: The latest recorded spend summed over the business's campaigns.
+
+    Returns:
+        The text, or None when the figures agree within the tolerance.
+    """
+    tolerance = max(RECONCILE_TOLERANCE_MIN, RECONCILE_TOLERANCE_SHARE * account_spent)
+    if account_spent - recorded <= tolerance:
+        return None
+    return (
+        f"Meta shows ${account_spent:,.2f} spent on this ad account, but Sales Guru "
+        f"has recorded ${recorded:,.2f}, so the results here may read too low. "
+        "Spend on ads made outside Sales Guru counts toward Meta's total too."
+    )
+
+
+async def reconcile_account_spend() -> None:
+    """Flag campaigns whose recorded spend is below what Meta says the account spent.
+
+    The collector reads Insights; the account object's ``amount_spent`` is read a
+    different way, so a collector fault (Snake-Ring read $0 while Meta billed about
+    $16.60) shows up as a gap between the two. Per business with a connection and at
+    least one campaign on Meta: when the account total is above the recorded spend of
+    all the business's campaigns by more than the tolerance, every LIVE or PAUSED
+    campaign gets ``Campaign.metricsWarning`` and a warning is logged; it clears when
+    the figures agree again. A failed or empty read leaves everything as it was.
+    """
+    connections = await db.metaconnection.find_many(
+        where={"business": {"is": {"deletedAt": None}}}
+    )
+    for connection in connections:
+        if connection.adAccountId is None:
+            continue
+        try:
+            await _reconcile_business(connection)
+        except Exception:
+            logger.exception(
+                "Spend reconciliation failed for business %s", connection.businessId
+            )
+
+
+async def _reconcile_business(connection: MetaConnection) -> None:
+    campaigns = [
+        c
+        for c in await db.campaign.find_many(
+            where={"businessId": connection.businessId}
+        )
+        if c.metaCampaignId is not None
+    ]
+    if not campaigns:
+        return
+    assert connection.adAccountId is not None  # checked by the caller
+    try:
+        account_spent = await fetch_ad_account_amount_spent(
+            access_token=connection.accessToken, ad_account_id=connection.adAccountId
+        )
+    except MetaConnectionError:
+        logger.warning("Spend reconciliation read failed for %s", connection.businessId)
+        return
+    if account_spent is None:
+        return
+    recorded = sum([await _latest_total_spend(c.id) for c in campaigns])
+    warning = _spend_mismatch_warning(account_spent, recorded)
+    if warning is not None:
+        logger.warning(
+            "Spend mismatch for business %s: Meta shows $%.2f, recorded $%.2f",
+            connection.businessId,
+            account_spent,
+            recorded,
+        )
+    for campaign in campaigns:
+        wanted = warning if campaign.status in _RECONCILED_STATUSES else None
+        if campaign.metricsWarning != wanted:
+            await db.campaign.update(
+                where={"id": campaign.id}, data={"metricsWarning": wanted}
+            )
 
 
 async def _spend_metric_rows(campaign_id: str) -> list[Metric]:

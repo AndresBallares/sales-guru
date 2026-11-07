@@ -577,6 +577,7 @@ def assemble_campaign(
     paused_at: datetime | None = None,
     paused_reason: str | None = None,
     saturation_warning: str | None = None,
+    metrics_warning: str | None = None,
     min_window_hours: float = DEFAULT_MIN_WINDOW_HOURS,
 ) -> CampaignDashboardResponse:
     """Build the whole campaign dashboard from rows already loaded.
@@ -616,6 +617,7 @@ def assemble_campaign(
         "is_sample": is_sample,
         "pixel_warning": pixel_warning,
         "saturation_warning": saturation_warning,
+        "metrics_warning": metrics_warning,
         "proposals": proposals,
         "paused_at": paused_at if is_paused else None,
         "paused_reason": paused_reason if is_paused else None,

@@ -572,6 +572,10 @@ model Campaign {
   deliverySignal          String?
   // A Pixel-health warning shown on the campaign (e.g. the Purchase event may not be firing); null = none.
   pixelWarning            String?
+  // Set when the ad account's own lifetime spend (Meta's amount_spent) is above what
+  // Sales Guru has recorded for the business's campaigns, i.e. the app may be reading
+  // low or zero; cleared when they agree again. Null = none.
+  metricsWarning          String?
   // Audience saturation (app/services/saturation.py): how many daily
   // evaluations in a row the rule has held, when it was last evaluated, and
   // the warning shown once it has held twice in a row. Cleared when it stops.
