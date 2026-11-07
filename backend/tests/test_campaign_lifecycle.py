@@ -440,6 +440,144 @@ async def test_a_campaign_that_never_ran_is_deleted_not_archived(
     assert row is not None and row.status == "PAUSED"
 
 
+# ---- Meta knows more than the snapshots (a $16 campaign whose snapshots said $0) ----
+
+
+@pytest.mark.asyncio
+async def test_a_campaign_meta_says_spent_money_is_archived_and_its_results_recorded(
+    client: TestClient,
+    meta_calls: dict[str, AsyncMock],
+    mock_services: dict[str, AsyncMock],  # noqa: F811
+) -> None:
+    """Delete refuses on Meta's numbers, so archive must accept on them too."""
+    business_id, campaign_id = _publish(client, paused=True)
+    meta_calls["insights"].return_value = CampaignInsights(
+        impressions=900, clicks=20, spend=16.0, conversions=1
+    )
+    metrics_before = (await _counts(campaign_id))["metrics"]
+
+    response = client.post(_url(business_id, campaign_id, "/archive"))
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "ARCHIVED"
+    row = await _campaign_row(campaign_id)
+    assert row is not None and row.status == "ARCHIVED"
+    meta_calls["delete"].assert_not_awaited()
+    # The $16 Meta reported is now in the app's own history.
+    assert (await _counts(campaign_id))["metrics"] == metrics_before + 1
+    seeder = Prisma()
+    await seeder.connect()
+    try:
+        latest = await seeder.metric.find_first(
+            where={"campaignId": campaign_id}, order={"fetchedAt": "desc"}
+        )
+    finally:
+        await seeder.disconnect()
+    assert latest is not None and latest.spend == 16.0
+
+
+@pytest.mark.asyncio
+async def test_a_purchase_alone_on_meta_is_enough_to_archive(
+    client: TestClient,
+    meta_calls: dict[str, AsyncMock],
+    mock_services: dict[str, AsyncMock],  # noqa: F811
+) -> None:
+    business_id, campaign_id = _publish(client, paused=True)
+    meta_calls["insights"].return_value = CampaignInsights(
+        impressions=0, clicks=0, spend=0.0, conversions=0, purchases=1
+    )
+
+    response = client.post(_url(business_id, campaign_id, "/archive"))
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "ARCHIVED"
+
+
+@pytest.mark.asyncio
+async def test_meta_showing_nothing_still_means_never_ran_and_records_nothing(
+    client: TestClient,
+    meta_calls: dict[str, AsyncMock],
+    mock_services: dict[str, AsyncMock],  # noqa: F811
+) -> None:
+    business_id, campaign_id = _publish(client, paused=True)
+    metrics_before = (await _counts(campaign_id))["metrics"]
+
+    response = client.post(_url(business_id, campaign_id, "/archive"))
+
+    assert response.status_code == 400
+    assert "delete it" in response.json()["detail"]
+    meta_calls["insights"].assert_awaited_once()
+    assert (await _counts(campaign_id))["metrics"] == metrics_before
+
+
+@pytest.mark.asyncio
+async def test_a_campaign_gone_from_meta_with_no_results_is_still_deleted_not_archived(
+    client: TestClient,
+    meta_calls: dict[str, AsyncMock],
+    mock_services: dict[str, AsyncMock],  # noqa: F811
+) -> None:
+    business_id, campaign_id = _publish(client, paused=True)
+    meta_calls["insights"].side_effect = MetaConnectionError(
+        "Object does not exist", error_subcode=NOT_FOUND
+    )
+
+    response = client.post(_url(business_id, campaign_id, "/archive"))
+
+    assert response.status_code == 400
+    assert "delete it" in response.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_an_unreadable_meta_answer_leaves_the_campaign_as_it_was(
+    client: TestClient,
+    meta_calls: dict[str, AsyncMock],
+    mock_services: dict[str, AsyncMock],  # noqa: F811
+) -> None:
+    business_id, campaign_id = _publish(client, paused=True)
+    meta_calls["insights"].side_effect = MetaConnectionError("Meta is down")
+    metrics_before = (await _counts(campaign_id))["metrics"]
+
+    response = client.post(_url(business_id, campaign_id, "/archive"))
+
+    assert response.status_code == 500
+    assert "not archived" in response.json()["detail"]
+    assert "pause" not in response.json()["detail"].lower()
+    row = await _campaign_row(campaign_id)
+    assert row is not None and row.status == "PAUSED"
+    assert (await _counts(campaign_id))["metrics"] == metrics_before
+
+
+@pytest.mark.asyncio
+async def test_without_a_meta_connection_the_snapshots_alone_decide(
+    client: TestClient,
+    meta_calls: dict[str, AsyncMock],
+    mock_services: dict[str, AsyncMock],  # noqa: F811
+) -> None:
+    business_id, campaign_id = _publish(client, paused=True)
+    assert client.delete(f"/businesses/{business_id}/meta").status_code == 204
+
+    response = client.post(_url(business_id, campaign_id, "/archive"))
+
+    assert response.status_code == 400
+    assert "delete it" in response.json()["detail"]
+    meta_calls["insights"].assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_a_campaign_with_snapshots_showing_spend_does_not_ask_meta_again(
+    client: TestClient,
+    meta_calls: dict[str, AsyncMock],
+    mock_services: dict[str, AsyncMock],  # noqa: F811
+) -> None:
+    business_id, campaign_id = _publish(client, paused=True)
+    await _seed_metric(campaign_id, spend=40.0)
+
+    response = client.post(_url(business_id, campaign_id, "/archive"))
+
+    assert response.status_code == 200
+    meta_calls["insights"].assert_not_awaited()
+
+
 @pytest.mark.asyncio
 async def test_a_campaign_that_was_never_published_cannot_be_archived(
     client: TestClient,

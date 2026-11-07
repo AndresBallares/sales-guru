@@ -14,7 +14,10 @@ from prisma.models import Campaign, MetaConnection
 
 from app.core.db import db
 from app.services import meta
-from app.services.optimization_jobs import pause_campaign_and_capture
+from app.services.optimization_jobs import (
+    metric_create_data,
+    pause_campaign_and_capture,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -107,6 +110,46 @@ async def _check_meta_has_no_results(
         raise CampaignHasDeliveredError
 
 
+async def _record_results_reported_by_meta(
+    campaign: Campaign, connection: MetaConnection | None
+) -> bool:
+    """Ask Meta whether a campaign the snapshots call "never ran" actually delivered.
+
+    Snapshots can trail Meta's own numbers: a campaign Meta billed $16 for had 403
+    snapshots that all read $0, so delete refused it (on Meta's numbers) while archive
+    refused it too (on the snapshots). When Meta reports spend or purchases, they are
+    stored as a snapshot, so the app's history has them from then on.
+
+    Args:
+        campaign: A published campaign whose snapshots show no spend or purchases.
+        connection: The business's Meta connection, if any.
+
+    Returns:
+        True if Meta reported spend or purchases (and they are now recorded); False if
+        it reported none, no longer has the campaign, or there is no connection to ask.
+
+    Raises:
+        meta.MetaConnectionError: Meta could not be read for any other reason.
+    """
+    if connection is None or campaign.metaCampaignId is None:
+        return False
+    try:
+        insights = await meta.fetch_campaign_insights(
+            access_token=connection.accessToken,
+            meta_campaign_id=campaign.metaCampaignId,
+        )
+    except meta.MetaConnectionError as exc:
+        if exc.error_subcode == meta.OBJECT_NOT_FOUND_SUBCODE:
+            return False
+        raise
+    if insights.spend <= 0 and (insights.purchases or 0) <= 0:
+        return False
+    await db.metric.create(
+        data=metric_create_data(campaign_id=campaign.id, insights=insights)
+    )
+    return True
+
+
 async def delete_campaign(
     campaign: Campaign, connection: MetaConnection | None
 ) -> None:
@@ -193,15 +236,19 @@ async def archive_campaign(
 
     Raises:
         CampaignNotPublishedError: It was never published.
-        CampaignNeverDeliveredError: It never ran, so delete it instead.
+        CampaignNeverDeliveredError: It never ran (no snapshot and nothing on Meta), so
+            delete it instead.
         MetaConnectionMissingError: It is live but there is no Meta connection.
-        meta.MetaConnectionError: Pausing on Meta failed; the campaign is unchanged.
+        meta.MetaConnectionError: Reading its results from Meta, or pausing it there,
+            failed; the campaign is unchanged.
     """
     if campaign.status == "ARCHIVED":
         return campaign
     if campaign.metaCampaignId is None:
         raise CampaignNotPublishedError
-    if not await has_delivered(campaign.id):
+    if not await has_delivered(campaign.id) and not (
+        await _record_results_reported_by_meta(campaign, connection)
+    ):
         raise CampaignNeverDeliveredError
 
     reason = campaign.pausedReason or ARCHIVED_REASON

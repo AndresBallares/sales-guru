@@ -505,7 +505,8 @@ async def archive_campaign(
 
     Raises:
         HTTPException: 400 if it was never published or never ran (delete it
-            instead), or is live with no Meta connection; 500 if pausing on Meta
+            instead; "ran" is the snapshots or, failing that, Meta's own numbers), or
+            is live with no Meta connection; 500 if Meta cannot be read or the pause
             fails (the campaign is unchanged).
     """
     connection = await get_meta_connection(campaign.businessId)
@@ -527,9 +528,7 @@ async def archive_campaign(
     except MetaConnectionError as exc:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=(
-                f"Could not pause the campaign on Meta, so it was not archived: {exc}"
-            ),
+            detail=f"Could not reach Meta, so the campaign was not archived: {exc}",
         ) from exc
     return await _to_response(archived)
 
