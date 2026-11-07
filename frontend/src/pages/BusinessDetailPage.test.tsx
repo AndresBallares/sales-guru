@@ -849,8 +849,25 @@ describe('BusinessDetailPage tabs', () => {
     expect(screen.getByTestId('location')).toHaveTextContent(/^\/businesses\/biz-1$/)
   })
 
-  it('the Products tab keeps its back button to the dashboard', async () => {
+  it('on the Products tab the back button returns to the business page (no #products), not the dashboard', async () => {
     renderWithLocation('/businesses/biz-1#products')
+
+    const back = await screen.findByRole('button', { name: 'Back to business page' })
+    expect(screen.queryByRole('button', { name: 'Back to dashboard' })).not.toBeInTheDocument()
+    expect(screen.getByRole('tab', { name: 'Products' })).toHaveAttribute('aria-selected', 'true')
+    await userEvent.click(back)
+
+    expect(screen.getByTestId('location')).toHaveTextContent(/^\/businesses\/biz-1$/)
+    expect(screen.getByRole('tab', { name: 'Results and campaigns' })).toHaveAttribute(
+      'aria-selected',
+      'true',
+    )
+    // Now on the first tab, the button goes back to the dashboard again.
+    expect(screen.getByRole('button', { name: 'Back to dashboard' })).toBeInTheDocument()
+  })
+
+  it('the first tab keeps its back button to the dashboard', async () => {
+    renderWithLocation('/businesses/biz-1')
 
     expect(await screen.findByRole('button', { name: 'Back to dashboard' })).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Back to business page' })).not.toBeInTheDocument()

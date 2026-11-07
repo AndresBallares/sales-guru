@@ -188,9 +188,10 @@ export function BusinessDetailPage() {
 
   return (
     <main className="business-detail">
-      {/* On the Avatars tab "back" goes up one level, to the business page itself (no #avatars,
-          no research view); everywhere else it still goes to the dashboard. */}
-      {selectedTab === AVATARS_TAB && businessId ? (
+      {/* On the Avatars and Products tabs "back" goes up one level, to the business page itself
+          (no #avatars or #products, no research view); on the first tab it still goes to the
+          dashboard. */}
+      {selectedTab !== RESULTS_TAB && businessId ? (
         <BackButton to={`/businesses/${businessId}`} label="Back to business page" />
       ) : (
         <BackButton to="/" label="Back to dashboard" />

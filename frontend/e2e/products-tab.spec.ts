@@ -123,6 +123,33 @@ test('add a product in the drawer, watch the mechanism counter, edit it, and kee
   await expect(page.getByRole('heading', { name: 'Hoops Large', level: 3 })).toBeVisible()
 })
 
+test('the back button on the Products tab returns to the business page without #products', async ({
+  page,
+}) => {
+  await createBusinessWithBrand(page)
+  const businessUrl = page.url().split('#')[0]
+  await page.getByRole('tab', { name: 'Products' }).click()
+  await expect(page).toHaveURL(/#products$/)
+  await expect(page.getByRole('heading', { name: 'Products', level: 2 })).toBeVisible()
+
+  await page.getByRole('button', { name: 'Back to business page' }).click()
+
+  await expect(page).toHaveURL(businessUrl)
+  await expect(page.getByRole('tab', { name: 'Results and campaigns' })).toHaveAttribute(
+    'aria-selected',
+    'true',
+  )
+  await expect(page.getByRole('heading', { name: 'Products', level: 2 })).toHaveCount(0)
+  // A refresh stays on the business page, and its back button goes to the dashboard again.
+  await page.reload()
+  await expect(page.getByRole('tab', { name: 'Results and campaigns' })).toHaveAttribute(
+    'aria-selected',
+    'true',
+  )
+  await page.getByRole('button', { name: 'Back to dashboard' }).click()
+  await expect(page).toHaveURL(/\/$/)
+})
+
 test('an edit that would make ads out of date asks first, and Go back changes nothing', async ({
   page,
 }) => {
