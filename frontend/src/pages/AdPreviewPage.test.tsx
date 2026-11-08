@@ -46,6 +46,7 @@ vi.mock('../lib/api', async (importOriginal) => {
     deselectCreative: vi.fn<typeof actual.deselectCreative>(),
     getStrategy: vi.fn<typeof actual.getStrategy>(),
     listRounds: vi.fn<typeof actual.listRounds>(),
+    getPixelHealth: vi.fn<typeof actual.getPixelHealth>(),
   }
 })
 const mockedApi = vi.mocked(api)
@@ -114,12 +115,27 @@ function renderPage() {
   )
 }
 
+function pixelHealth(status: api.PixelHealthStatus): api.PixelHealth {
+  return {
+    status,
+    pixelId: 'p1',
+    pixelName: 'venzi jewelry',
+    lastFiredAt: '2026-11-07T20:32:49Z',
+    checkedAt: '2026-11-08T02:10:00Z',
+    warning:
+      status === 'ok' ? null : 'This Pixel (venzi jewelry) received no website events in the last 30 days.',
+    otherPixels: [],
+    windowDays: 30,
+  }
+}
+
 beforeEach(() => {
   window.sessionStorage.clear()
   publishPolls.reset()
   vi.resetAllMocks()
   mockedApi.getBusiness.mockResolvedValue(business)
   mockedApi.listRounds.mockResolvedValue([])
+  mockedApi.getPixelHealth.mockResolvedValue(pixelHealth('ok'))
   mockedApi.getOptions.mockResolvedValue({
     industries: [],
     objectives: [],
@@ -374,6 +390,32 @@ describe('AdPreviewPage', () => {
       expect(within(bar).getByLabelText(/Publish paused/)).toBeChecked()
       // Not inside the details panel; the page decides where the bar sits.
       expect(screen.getByRole('complementary', { name: 'Preview details' })).not.toContainElement(button)
+    })
+
+    it('shows when the Pixel was last checked beside the publish button', async () => {
+      renderPage()
+
+      const button = await screen.findByRole('button', { name: 'Approve & Publish' })
+      const bar = button.closest('.ad-publish') as HTMLElement
+      expect(await within(bar).findByLabelText('Pixel health')).toHaveTextContent('Checked')
+      expect(button).toBeEnabled()
+    })
+
+    it('holds Approve & Publish until the owner confirms a Pixel that receives no events', async () => {
+      mockedApi.getPixelHealth.mockResolvedValue(pixelHealth('no_events'))
+      const user = userEvent.setup()
+      renderPage()
+
+      const button = await screen.findByRole('button', { name: 'Approve & Publish' })
+      const confirm = await screen.findByRole('checkbox', { name: /Publish anyway/ })
+      expect(button).toBeDisabled()
+      expect(
+        within(button.closest('.ad-publish') as HTMLElement).getByRole('alert'),
+      ).toHaveTextContent('received no website events')
+
+      await user.click(confirm)
+
+      expect(button).toBeEnabled()
     })
 
     it('says plainly that publishing live can spend, once paused is turned off', async () => {

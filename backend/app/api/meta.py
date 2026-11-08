@@ -48,6 +48,7 @@ from app.services.meta import (
     list_pages,
     validate_instagram_account,
 )
+from app.services.pixel_health import clear_cache as forget_pixel_health
 
 logger = logging.getLogger(__name__)
 
@@ -513,6 +514,42 @@ async def get_pixels(
         ) from exc
 
 
+async def _require_pixel_on_ad_account(
+    connection: MetaConnection, pixel_id: str
+) -> None:
+    """Refuse a Pixel id that is not one of the connected ad account's Pixels.
+
+    Args:
+        connection: The business's connection (ad account already chosen).
+        pixel_id: The id the user chose.
+
+    Raises:
+        HTTPException: 400 if the id is not on the ad account (or no ad account is
+            chosen); 409 if the ad account has not accepted Meta's Business Tools
+            Terms; 500 for any other failure reading the account's Pixels.
+    """
+    if connection.adAccountId is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=_AD_ACCOUNT_NOT_SET
+        )
+    try:
+        pixels = await list_ad_pixels(connection.accessToken, connection.adAccountId)
+    except MetaConnectionError as exc:
+        if is_business_tools_terms_error(exc):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=_BUSINESS_TOOLS_TERMS_NOT_ACCEPTED,
+            ) from exc
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)
+        ) from exc
+    if not any(p.id == pixel_id for p in pixels):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="That Pixel isn’t on the connected ad account.",
+        )
+
+
 @router.post("/pixel", response_model=MetaConnectionResponse)
 async def set_pixel(
     payload: MetaPixelRequest,
@@ -536,6 +573,8 @@ async def set_pixel(
         HTTPException: 404 if no connection exists yet.
     """
     connection = await _require_connection(business.id)
+    if payload.pixel_id != connection.pixelId:
+        await _require_pixel_on_ad_account(connection, payload.pixel_id)
     updated = await db.metaconnection.update(
         where={"id": connection.id},
         # Setting a real Pixel supersedes an earlier "skip" — a business
@@ -552,6 +591,7 @@ async def set_pixel(
         },
     )
     assert updated is not None  # just fetched above, can't vanish mid-request
+    forget_pixel_health(business.id)  # a new Pixel is never answered from the old look
     return _to_response(updated)
 
 

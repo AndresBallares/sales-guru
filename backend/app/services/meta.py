@@ -616,7 +616,7 @@ async def list_ad_pixels(access_token: str, ad_account_id: str) -> list[MetaPixe
             own "act_" prefix (see create_meta_campaign's docstring).
 
     Returns:
-        The ad account's Pixels.
+        The ad account's Pixels, each with when it last received an event.
 
     Raises:
         MetaConnectionError: If the call fails.
@@ -627,10 +627,21 @@ async def list_ad_pixels(access_token: str, ad_account_id: str) -> list[MetaPixe
                 "Meta API call to /adspixels failed: "
                 "Business has not accepted Pixel Terms of Service"
             )
-        return [MetaPixel(id="fake_pixel", name="Fake Pixel")]
+        return [
+            MetaPixel(
+                id="fake_pixel",
+                name="Fake Pixel",
+                last_fired_at=datetime.now(UTC) - timedelta(hours=2),
+            )
+        ]
     body = await _get_json(
         f"{_GRAPH_BASE_URL}/{ad_account_id}/adspixels",
-        {"fields": "id,name", "access_token": access_token},
+        # last_fired_time and is_unavailable checked against Meta 2026-11-08. Do not add
+        # owner_ad_account: Meta refuses it with error 200.
+        {
+            "fields": "id,name,last_fired_time,is_unavailable",
+            "access_token": access_token,
+        },
     )
     return [MetaPixel.model_validate(item) for item in body.get("data", [])]
 

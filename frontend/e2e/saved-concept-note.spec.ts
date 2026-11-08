@@ -17,7 +17,7 @@ const AVATARS = [
 
 async function reachCreativeCards(page: Page, withConcepts: boolean) {
   await reachMetaPixelStep(page)
-  await page.getByLabel('Meta Pixel').selectOption({ label: 'Fake Pixel' })
+  await page.getByLabel('Meta Pixel').selectOption({ value: 'fake_pixel' })
   await page.getByRole('button', { name: 'Save Pixel' }).click()
   await finishOnboarding(page, { objectiveLabel: 'Sales' })
 

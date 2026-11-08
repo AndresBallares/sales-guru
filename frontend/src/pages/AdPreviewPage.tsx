@@ -42,6 +42,8 @@ import {
 import { useAssetRatio } from '../lib/useAssetRatio'
 import { ExtraAssetSlot } from '../components/ExtraAssetSlot'
 import { InstagramNote } from '../components/InstagramNote'
+import { PixelPublishConfirm } from '../components/PixelPublishConfirm'
+import { usePixelHealth } from '../lib/usePixelHealth'
 import { CreativeRoundsPanel } from '../components/CreativeRoundsPanel'
 import { TestSettingsPanel } from '../components/TestSettingsPanel'
 import { clearPublishPaused, getPublishPaused, setPublishPaused } from '../lib/publishPaused'
@@ -53,6 +55,8 @@ export function AdPreviewPage() {
     businessId: string
     campaignId: string
   }>()
+  // Is the Pixel receiving the store's events? Checked when this screen opens.
+  const pixel = usePixelHealth(businessId)
 
   const [business, setBusiness] = useState<Business | null>(null)
   const [campaign, setCampaign] = useState<Campaign | null>(null)
@@ -604,11 +608,12 @@ export function AdPreviewPage() {
                         as Meta approves it.
                       </p>
                     )}
+                    <PixelPublishConfirm pixel={pixel} />
                     <button
                       type="button"
                       className="btn-outline btn-gold ad-publish-button"
                       onClick={() => void handleApproveAndPublish()}
-                      disabled={publishing || publishStatus !== null}
+                      disabled={publishing || publishStatus !== null || pixel.blocked}
                     >
                       {publishStatus
                         ? describePublishStatus(publishStatus)

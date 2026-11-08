@@ -4,6 +4,7 @@ import { MemoryRouter } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { MetaConnectionSection } from './MetaConnectionSection'
 import * as api from '../lib/api'
+import { formatAsOf } from '../lib/dashboardFormat'
 
 vi.mock('../lib/api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../lib/api')>()
@@ -184,6 +185,32 @@ describe('MetaConnectionSection', () => {
     expect(await screen.findByRole('option', { name: 'Acme Pixel' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Save Pixel' })).toBeDisabled()
     expect(screen.queryByText(/^Pixel:/)).not.toBeInTheDocument()
+  })
+
+  it('says in the Pixel picker which dataset last received events, most recent first', async () => {
+    mockedApi.getMetaConnection.mockResolvedValue(COMPLETE_CONNECTION)
+    mockedApi.listMetaPixels.mockResolvedValue([
+      { id: '1595307142179160', name: 'Sales Guru', lastFiredAt: null, isUnavailable: false },
+      {
+        id: '2024258651467538',
+        name: 'venzi jewelry',
+        lastFiredAt: '2026-11-07T20:32:49Z',
+        isUnavailable: false,
+      },
+      { id: '920564097324429', name: 'Marketing Guru', lastFiredAt: null, isUnavailable: true },
+    ])
+
+    renderSection()
+    await screen.findByText(/Connected/)
+
+    await screen.findByRole('option', { name: /venzi jewelry/ })
+    const options = screen.getAllByRole('option').map((o) => o.textContent)
+    expect(options).toEqual([
+      'Select a Pixel',
+      `venzi jewelry — last event ${formatAsOf('2026-11-07T20:32:49Z')}`,
+      'Sales Guru — no events received yet',
+      'Marketing Guru — unavailable',
+    ])
   })
 
   it('saves the chosen Pixel', async () => {

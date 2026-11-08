@@ -7,7 +7,7 @@ import { finishOnboarding, reachMetaPixelStep } from './support/fakeMetaFlow'
 // Anthropic call happens here.
 test('a published creative test adds a new round as Pack 2', async ({ page }) => {
   await reachMetaPixelStep(page)
-  await page.getByLabel('Meta Pixel').selectOption({ label: 'Fake Pixel' })
+  await page.getByLabel('Meta Pixel').selectOption({ value: 'fake_pixel' })
   await page.getByRole('button', { name: 'Save Pixel' }).click()
   await finishOnboarding(page, { objectiveLabel: 'Sales' })
 

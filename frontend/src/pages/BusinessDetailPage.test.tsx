@@ -32,6 +32,7 @@ vi.mock('../lib/api', async (importOriginal) => {
     listAvatars: vi.fn<typeof actual.listAvatars>(),
     getCampaignDashboard: vi.fn<typeof actual.getCampaignDashboard>(),
     getPerformance: vi.fn<typeof actual.getPerformance>(),
+    getPixelHealth: vi.fn<typeof actual.getPixelHealth>(),
   }
 })
 const mockedApi = vi.mocked(api)
@@ -174,6 +175,16 @@ beforeEach(() => {
   mockedApi.getBrandProfile.mockResolvedValue(brandProfile)
   mockedApi.listAvatars.mockResolvedValue([])
   mockedApi.getPerformance.mockResolvedValue(makePerformance())
+  mockedApi.getPixelHealth.mockResolvedValue({
+    status: 'none_selected',
+    pixelId: null,
+    pixelName: null,
+    lastFiredAt: null,
+    checkedAt: '2026-11-08T02:10:00Z',
+    warning: null,
+    otherPixels: [],
+    windowDays: 30,
+  })
   mockedApi.getBusinessDashboard.mockResolvedValue({
     activeCampaigns: 0,
     totalSpend: 0,
@@ -762,6 +773,41 @@ describe('BusinessDetailPage', () => {
     expect(
       (notice as HTMLElement).compareDocumentPosition(heading) & Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy()
+  })
+
+  it('shows the Pixel check above the results, stamped with when it was made', async () => {
+    setUpForResults(completeMeta)
+    mockedApi.getPixelHealth.mockResolvedValue({
+      status: 'no_events',
+      pixelId: 'pixel_1',
+      pixelName: 'Sales Guru',
+      lastFiredAt: null,
+      checkedAt: '2026-11-08T02:10:00Z',
+      warning:
+        'This Pixel (Sales Guru) received no website events in the last 30 days. Events from your store may be going to a different dataset.',
+      otherPixels: [],
+      windowDays: 30,
+    })
+
+    renderPage()
+
+    const heading = await screen.findByRole('heading', { name: 'Advertising Performance' })
+    const notice = await screen.findByLabelText('Pixel health')
+    expect(notice).toHaveTextContent('received no website events in the last 30 days')
+    expect(notice).toHaveTextContent('Checked')
+    expect(notice.compareDocumentPosition(heading) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(mockedApi.getPixelHealth).toHaveBeenCalledWith('biz-1', false)
+  })
+
+  it('shows nothing about the Pixel before onboarding is done', async () => {
+    mockedApi.listCampaigns.mockResolvedValue([])
+    mockedApi.getMetaConnection.mockResolvedValue(completeMeta)
+
+    renderPage()
+
+    await screen.findByRole('heading', { name: 'Create a campaign' })
+    expect(screen.queryByLabelText('Pixel health')).not.toBeInTheDocument()
+    expect(mockedApi.getPixelHealth).not.toHaveBeenCalled()
   })
 
   it('says the connection expired when it has', async () => {

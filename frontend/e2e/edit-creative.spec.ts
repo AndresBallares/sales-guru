@@ -5,7 +5,7 @@ import { analyzeWhenReady, WCAG_TAGS } from './support/axe'
 // A Sales creative test with generated ads; same fully-faked backend as creative-test-publish.spec.ts.
 async function reachTestAds(page: Page) {
   await reachMetaPixelStep(page)
-  await page.getByLabel('Meta Pixel').selectOption({ label: 'Fake Pixel' })
+  await page.getByLabel('Meta Pixel').selectOption({ value: 'fake_pixel' })
   await page.getByRole('button', { name: 'Save Pixel' }).click()
   await finishOnboarding(page, { objectiveLabel: 'Sales' })
   await page.getByRole('button', { name: 'Generate strategy' }).click()
