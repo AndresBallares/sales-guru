@@ -157,6 +157,100 @@ page sends once the owner has ticked the box. Tests first: refused without it, a
 refused for `no_purchase`, `unreadable` or `none_selected`, and a failed check never blocks. Update the
 two publish screens to send the flag, and PRD.md and docs/phase-7.md.
 
+### Shopify integration: product import and order reconciliation (planned feature)
+**Status:** planned, nothing built. **Sequence: after billing and plans** (see "Billing and plans for the Avatar
+Research Agent" and PRD.md §3), because the plan decides who gets this and how it is priced. Written 2026-11-08 with
+enough detail to plan from this entry alone.
+
+**Why.** Sales Guru only sees what Meta reports, and products are typed in by hand (VENZI's names and descriptions had
+to be fixed twice). Most small online stores run on Shopify, so a direct connection saves setup time and catches
+tracking problems (Meta counting about double, or far fewer, than the store's real orders).
+
+**Context already true today (so the plan does not re-derive it).**
+- VENZI's Pixel `2024258651467538` receives Shopify partner-integration events with event IDs (deduplication is set
+  up); a test order on Nov 6-7 confirmed Purchase reaches Meta. This feature is the standing check that it keeps working.
+- `Product` (schema.prisma): `name?`, `description` (required), `price?`, `margin?`, `features?`, `benefits?`,
+  `mechanism?`, `personalizable`, `personalizationOptions?`, `url?`; `ProductImage` stores the file bytes in the
+  database (`data Bytes`, `position`, media metadata and thumbnail) through the existing media intake. A Shopify image
+  import must go through the same intake and limits; it interacts with the open "Object storage for product images
+  (S3/R2)" item.
+- A creative is stale when the product's description or URL (or the business description) changed since it was written
+  (`is_creative_stale`, `app/services/creative.py`, from the `source*` snapshot stamped at generation). Editing a
+  product already asks first when it would make ads out of date (Products tab, `PATCH .../products/{id}`); a product
+  swap on a campaign is a different path (`PATCH .../campaigns/{id}` with `productId`). Never repurpose a product record
+  to describe a different item (CLAUDE.md).
+- Meta tokens are stored encrypted (`app/core/crypto.py`, read only through `get_meta_connection`); the connection
+  model, expiry warning (14 days), recorded failed syncs (`sync_health`) and the Pixel health check
+  (`pixel_health`, on demand and rate limited) are the patterns to copy.
+- The performance dashboard's days are UTC days derived from lifetime snapshots; Meta counts days in the **ad
+  account's** time zone. The open "Per-day ad metrics from Meta (`time_increment=1`)" item matters for Part 2.
+
+**Part 1: product import and sync.**
+- Connect a business's Shopify store with a read-only app (`read_products`; to confirm the exact scopes, and whether
+  a public app (install flow, Shopify app review, mandatory privacy webhooks) or a custom app (one store, created by
+  the owner in their admin) is needed; a custom app is quicker for the first stores, a public app is needed to scale).
+  One store per business; store the shop domain (`*.myshopify.com`) and the token encrypted like the Meta token.
+- Import: title -> `name`, description (Shopify sends HTML; convert to plain text, keep it non-empty because
+  `Product.description` is required) -> `description`, the product page -> `url` (through `validate_destination_url`,
+  never an ad-hoc regex; a store may use a custom domain), price (choose a rule for variants, for example the lowest
+  or default variant, and say which), photos -> `ProductImage` (respect the photo limits and ordering; do not remove
+  photos the owner added).
+- The owner chooses which products to import (a list with search and paging; a store can have thousands; cap one
+  import at a sensible number). Match existing products by normalized URL or handle (host, trailing slash, query
+  string) so nothing is duplicated; show "already in Sales Guru (matched)" versus "new". Store the Shopify product id,
+  handle and last-seen `updatedAt` on the product (a schema change: both Prisma schemas, both migrations, a
+  throwaway Postgres check).
+- Sales Guru owns `benefits`, `mechanism`, `features`, `margin`, `personalizable` and `personalizationOptions`: never
+  overwrite them from Shopify. (Later option: prefill `margin` from Shopify's item cost, which needs another scope.)
+- Sync later (product webhooks and/or a periodic refresh). A Shopify change to name, description, URL or photos must
+  never silently apply to a product a live or publishable campaign uses, and so must never silently mark its creatives
+  stale: record it as a pending change, show the owner what changed (old and new), and let them accept or dismiss it
+  per field. Accepting goes through the normal product edit, so the existing "ads will be out of date, continue?"
+  question and the stale-creative handling still happen. Track the value last imported so an owner edit and a Shopify
+  edit can be told apart (a three-way comparison). A product deleted or archived in Shopify is flagged, not removed.
+
+**Part 2: order reconciliation.**
+- Read orders (`read_orders`; Shopify limits the default history to about the last 60 days unless the app is granted
+  all-orders access, and order data may count as "protected customer data" for a public app: to confirm). Keep
+  **daily counts and revenue only**: aggregate while reading and store aggregates, never customer personal data. Count
+  paid orders only; exclude test, cancelled and draft orders, and decide how refunds count (say it on the page).
+  Store, per business and day: orders, gross revenue, currency, the day's time zone, when it was read. Compare revenue
+  only when the currencies match.
+- What to compare, and why. Meta's attributed purchases are only the orders it credits to ads, so they should be below
+  the store's total; comparing them with total orders would warn about a normal gap. For the tracking question
+  ("does the Purchase event reach Meta, and is it counted once?") compare Shopify's orders with the **Pixel's Purchase
+  event count** for the same days (all Purchase events, not ad-attributed; `fetch_pixel_event_counts` gives hourly
+  buckets), and show Meta's ad-attributed purchases beside them as a third line.
+- Same days on both sides: bucket Shopify orders in the **ad account's** time zone (the store's can differ; Shopify's
+  shop time zone and Meta's ad-account time zone are both readable), or compare whole rolling windows (7, 14, 30 days)
+  to cut boundary noise. Do not compare against the dashboard's UTC-day series until per-day Meta data exists.
+- Warn when they diverge significantly and there is enough data (a minimum number of orders in the window, the same
+  idea as the "too early to judge" flags): the Pixel counting about double the real orders (deduplication broken), or
+  far fewer (the Purchase event is not reaching Meta). Starting thresholds to calibrate with real stores: ratio above
+  about 1.5 or below about 0.5 over at least 10 orders. Plain-English wording and an "i" tooltip per metric, like the
+  rest of the dashboard.
+- Show it on the performance dashboard: an "Orders check" section with the three lines, the verdict, and when each
+  side was last read (a stale or failed Shopify read is recorded and shown with its reason, as for Meta).
+
+**Cross-cutting.**
+- Tokens: encrypted at rest, read through one decrypting helper; scrub tokens from logs and stored reasons.
+- Disconnect and deletion: disconnect removes the token and the stored link ids (imported products stay, now plain);
+  deleting a business deletes the connection and the order aggregates; handle the app-uninstalled webhook; if a public
+  app, the mandatory data-request and erasure webhooks. Update the privacy policy, terms and data-deletion pages.
+- Jobs: a daily order read plus an on-demand, rate-limited refresh (as the Pixel check does); respect Shopify's rate
+  limits; failures recorded with their reason. Whether Shopify's offline tokens expire (and need a refresh) is to
+  confirm.
+- Billing and plans: decide whether import and reconciliation are plan features (for example per store or per plan);
+  also any Shopify app listing requirements and fees.
+
+**Suggested slices (one PR each, tests first, docs shipped with each).** (1) Connection: OAuth or custom-app token,
+encrypted storage, disconnect, deletion, scopes. (2) Product import: list, match, select, images. (3) Sync and the
+change-review screen. (4) Order aggregates, the reconciliation rules and the dashboard section.
+
+**Open questions for planning.** Public or custom app first; exact scopes and the app-review path; order history
+depth; variant and price rule; how refunds and multi-currency are shown; thresholds; who sees what on each plan; whether
+one business can ever have two stores.
+
 ## Done
 
 - **Dashboard tests leaked a `scrollIntoView` stub.** Tests assigned a stub to
