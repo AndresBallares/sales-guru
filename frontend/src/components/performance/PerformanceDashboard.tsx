@@ -91,7 +91,9 @@ export function PerformanceDashboard({
             {busy && data !== null ? 'Refreshing…' : 'Refresh'}
           </button>
         </div>
-        {data && <SyncStatus sync={data.sync} onConnectMeta={onConnectMeta} />}
+        {data && (
+          <SyncStatus businessId={businessId} sync={data.sync} onConnectMeta={onConnectMeta} />
+        )}
       </header>
 
       {error && (

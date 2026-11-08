@@ -33,6 +33,7 @@ from app.schemas.meta import (
     MetaPixel,
     MetaPixelRequest,
 )
+from app.services.connection_expiry import connection_expiry
 from app.services.meta import (
     InvalidInstagramAccountError,
     MetaConnectionError,
@@ -79,6 +80,7 @@ def _to_response(connection: MetaConnection) -> MetaConnectionResponse:
     Returns:
         The public-facing representation (never includes accessToken).
     """
+    expiry = connection_expiry(connection.tokenExpiresAt, datetime.now(UTC))
     return MetaConnectionResponse(
         id=connection.id,
         business_id=connection.businessId,
@@ -91,6 +93,8 @@ def _to_response(connection: MetaConnection) -> MetaConnectionResponse:
         pixel_id=connection.pixelId,
         pixel_skipped=connection.pixelSkipped,
         token_expires_at=connection.tokenExpiresAt,
+        expiry_status=expiry.status,
+        days_until_expiry=expiry.days_until_expiry,
         created_at=connection.createdAt,
     )
 

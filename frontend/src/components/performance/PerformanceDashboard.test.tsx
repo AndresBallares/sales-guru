@@ -111,6 +111,85 @@ describe('sync indicator', () => {
     expect(sync).toHaveTextContent(`Last successful sync: ${formatAsOf('2026-11-07T09:00:00Z')}`)
   })
 
+  it('says the refresh failed, why, and offers to reconnect when the sign-in is the problem', async () => {
+    mockedApi.getPerformance.mockResolvedValue(
+      makePerformance({
+        sync: {
+          status: 'failed',
+          lastSyncedAt: '2026-11-07T09:00:00Z',
+          intervalMinutes: 15,
+          failure: {
+            source: 'collection',
+            failedAt: '2026-11-07T12:00:00Z',
+            code: 190,
+            reason: 'Meta no longer accepts your connection. Reconnect Meta to keep your results updating.',
+            needsReconnect: true,
+          },
+        },
+      }),
+    )
+    renderDashboard()
+    await loaded()
+
+    const sync = screen.getByRole('status', { name: 'Meta data sync' })
+    expect(sync).toHaveTextContent('The last refresh from Meta failed')
+    expect(sync).toHaveTextContent('Meta no longer accepts your connection')
+    expect(sync).toHaveTextContent(`Last successful sync: ${formatAsOf('2026-11-07T09:00:00Z')}`)
+    expect(within(sync).getByRole('button', { name: 'Reconnect Meta' })).toBeInTheDocument()
+  })
+
+  it('does not offer to reconnect for a failure that fixes itself', async () => {
+    mockedApi.getPerformance.mockResolvedValue(
+      makePerformance({
+        sync: {
+          status: 'failed',
+          lastSyncedAt: null,
+          intervalMinutes: 15,
+          failure: {
+            source: 'collection',
+            failedAt: '2026-11-07T12:00:00Z',
+            code: 4,
+            reason: 'Meta is limiting requests right now. Sales Guru will try again automatically.',
+            needsReconnect: false,
+          },
+        },
+      }),
+    )
+    renderDashboard()
+    await loaded()
+
+    const sync = screen.getByRole('status', { name: 'Meta data sync' })
+    expect(sync).toHaveTextContent('limiting requests')
+    expect(sync).not.toHaveTextContent('Last successful sync')
+    expect(within(sync).queryByRole('button', { name: 'Reconnect Meta' })).not.toBeInTheDocument()
+  })
+
+  it('shows a failed spend check under a healthy sync', async () => {
+    mockedApi.getPerformance.mockResolvedValue(
+      makePerformance({
+        sync: {
+          status: 'ok',
+          lastSyncedAt: '2026-11-07T15:45:00Z',
+          intervalMinutes: 15,
+          failure: {
+            source: 'reconcile',
+            failedAt: '2026-11-07T15:50:00Z',
+            code: 190,
+            reason: 'Meta no longer accepts your connection. Reconnect Meta to keep your results updating.',
+            needsReconnect: true,
+          },
+        },
+      }),
+    )
+    renderDashboard()
+    await loaded()
+
+    const sync = screen.getByRole('status', { name: 'Meta data sync' })
+    expect(sync).toHaveTextContent(`Last synced: ${formatAsOf('2026-11-07T15:45:00Z')}`)
+    expect(sync).toHaveTextContent('The spend check couldn’t run')
+    expect(sync).not.toHaveTextContent('The last refresh from Meta failed')
+  })
+
   it('offers the existing Meta connection action when Meta is not connected', async () => {
     const onConnectMeta = vi.fn<() => void>()
     mockedApi.getPerformance.mockResolvedValue(

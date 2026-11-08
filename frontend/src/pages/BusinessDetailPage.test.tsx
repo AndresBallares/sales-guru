@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react'
+import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
@@ -96,6 +96,8 @@ const completeMeta: api.MetaConnection = {
   pixelId: 'pixel_1',
   pixelSkipped: false,
   tokenExpiresAt: '2026-10-01T00:00:00Z',
+  expiryStatus: 'ok',
+  daysUntilExpiry: 45,
   createdAt: '2026-08-08T00:00:00Z',
 }
 
@@ -201,6 +203,37 @@ function renderPage(entry = '/businesses/biz-1') {
       </AuthProvider>
     </MemoryRouter>,
   )
+}
+
+// What the page needs to open on the results area: a product, an audience and a campaign.
+function setUpForResults(connection: api.MetaConnection) {
+  mockedApi.listProducts.mockResolvedValue([
+    {
+      id: 'prod-1',
+      description: 'Handmade leather wallets',
+      price: 49.99,
+      margin: null,
+      features: null,
+      benefits: null,
+      mechanism: null,
+      primaryImageUrl: null,
+      url: null,
+    },
+  ])
+  mockedApi.listAudiences.mockResolvedValue([
+    {
+      id: 'aud-1',
+      description: 'Busy professionals, 30-55',
+      ageMin: 30,
+      ageMax: 55,
+      location: null,
+      interests: null,
+      problem: null,
+      desire: null,
+    },
+  ])
+  mockedApi.listCampaigns.mockResolvedValue([draftCampaign])
+  mockedApi.getMetaConnection.mockResolvedValue(connection)
 }
 
 describe('BusinessDetailPage', () => {
@@ -590,6 +623,8 @@ describe('BusinessDetailPage', () => {
       pixelId: 'pixel_1',
       pixelSkipped: false,
       tokenExpiresAt: '2026-10-01T00:00:00Z',
+      expiryStatus: 'ok',
+      daysUntilExpiry: 45,
       createdAt: '2026-08-08T00:00:00Z',
     }
 
@@ -684,6 +719,8 @@ describe('BusinessDetailPage', () => {
       pixelId: 'pixel_1',
       pixelSkipped: false,
       tokenExpiresAt: '2026-10-01T00:00:00Z',
+      expiryStatus: 'ok',
+      daysUntilExpiry: 45,
       createdAt: '2026-08-08T00:00:00Z',
     })
 
@@ -709,6 +746,42 @@ describe('BusinessDetailPage', () => {
       results.compareDocumentPosition(screen.getByRole('heading', { name: 'Sales' })) &
         Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy()
+  })
+
+  it('warns above the results when the Meta connection is about to expire, with a reconnect button', async () => {
+    setUpForResults({ ...completeMeta, expiryStatus: 'expiring_soon', daysUntilExpiry: 9 })
+
+    renderPage()
+
+    const heading = await screen.findByRole('heading', { name: 'Advertising Performance' })
+    const notice = screen
+      .getAllByRole('alert')
+      .find((el) => /Your Meta connection expires in 9 days/.test(el.textContent ?? ''))
+    expect(notice).toBeDefined()
+    expect(within(notice as HTMLElement).getByRole('button', { name: 'Reconnect Meta' })).toBeInTheDocument()
+    expect(
+      (notice as HTMLElement).compareDocumentPosition(heading) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy()
+  })
+
+  it('says the connection expired when it has', async () => {
+    setUpForResults({ ...completeMeta, expiryStatus: 'expired', daysUntilExpiry: null })
+
+    renderPage()
+
+    await screen.findByRole('heading', { name: 'Advertising Performance' })
+    expect(
+      screen.getAllByRole('alert').some((el) => /Your Meta connection expired on/.test(el.textContent ?? '')),
+    ).toBe(true)
+  })
+
+  it('shows no expiry warning while the connection is good', async () => {
+    setUpForResults(completeMeta)
+
+    renderPage()
+
+    await screen.findByRole('heading', { name: 'Advertising Performance' })
+    expect(screen.queryByText(/Your Meta connection (expires|expired)/)).not.toBeInTheDocument()
   })
 
   it('does not show the results dashboard while onboarding is still in progress', async () => {
@@ -761,6 +834,8 @@ describe('BusinessDetailPage', () => {
       pixelId: 'pixel_1',
       pixelSkipped: false,
       tokenExpiresAt: '2026-10-01T00:00:00Z',
+      expiryStatus: 'ok',
+      daysUntilExpiry: 45,
       createdAt: '2026-08-08T00:00:00Z',
     })
 

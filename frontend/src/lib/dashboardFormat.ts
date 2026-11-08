@@ -33,3 +33,8 @@ export function formatAsOf(iso: string | null): string {
     minute: '2-digit',
   })
 }
+
+// A calendar day in the viewer's own time zone: "Dec 10".
+export function formatDay(iso: string): string {
+  return new Date(iso).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+}

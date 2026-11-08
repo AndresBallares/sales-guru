@@ -9,7 +9,7 @@ no snapshot is a gap, and nothing is divided by zero.
 from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
 
-from app.schemas.performance import PerformanceResponse
+from app.schemas.performance import PerformanceResponse, SyncFailureSource
 from app.services import performance as perf
 from app.services.metric_rows import Snapshot
 
@@ -56,9 +56,10 @@ def build(
     *,
     days: int | None = 7,
     connected: bool = True,
+    failure: perf.FailureRecord | None = None,
 ) -> PerformanceResponse:
     return perf.build_performance(
-        campaigns, days=days, now=NOW, meta_connected=connected
+        campaigns, days=days, now=NOW, meta_connected=connected, failure=failure
     )
 
 
@@ -472,3 +473,88 @@ def test_old_numbers_of_paused_campaigns_are_not_stale() -> None:
     result = one([snap(days_ago=2)], status="PAUSED")
 
     assert result.sync.status == "ok"
+
+
+# ---- recorded failures ------------------------------------------------------
+
+
+def failed(
+    source: SyncFailureSource = "collection",
+    *,
+    minutes_ago: float = 1,
+    code: int | None = 190,
+    reason: str = "Meta API call to /x failed: Invalid OAuth access token",
+) -> perf.FailureRecord:
+    return perf.FailureRecord(
+        source=source,
+        failed_at=NOW - timedelta(minutes=minutes_ago),
+        code=code,
+        reason=reason,
+    )
+
+
+def test_a_failed_collection_newer_than_the_last_numbers_is_a_failed_sync() -> None:
+    result = build(
+        [("c1", "A", "LIVE", [snap(days_ago=30 / 1440)])],
+        failure=failed(minutes_ago=1),
+    )
+
+    assert result.sync.status == "failed"
+    assert result.sync.last_synced_at == NOW - timedelta(minutes=30)
+    failure = result.sync.failure
+    assert failure is not None
+    assert failure.source == "collection"
+    assert failure.needs_reconnect is True
+    assert "no longer accepts your connection" in failure.reason
+    assert "Invalid OAuth" not in failure.reason
+
+
+def test_a_failed_collection_before_any_numbers_exist_is_still_failed() -> None:
+    result = build([("c1", "A", "LIVE", [])], failure=failed())
+
+    assert result.sync.status == "failed"
+    assert result.sync.last_synced_at is None
+
+
+def test_a_failure_older_than_the_latest_numbers_does_not_make_it_failed() -> None:
+    result = build(
+        [("c1", "A", "LIVE", [snap(days_ago=1 / 1440)])],
+        failure=failed(minutes_ago=20),
+    )
+
+    assert result.sync.status == "ok"
+    assert result.sync.failure is not None  # still reported
+
+
+def test_a_failed_spend_check_is_reported_without_calling_the_sync_failed() -> None:
+    result = build(
+        [("c1", "A", "LIVE", [snap(days_ago=5 / 1440)])],
+        failure=failed("reconcile"),
+    )
+
+    assert result.sync.status == "ok"
+    assert result.sync.failure is not None
+    assert result.sync.failure.source == "reconcile"
+
+
+def test_a_failure_that_is_not_about_the_token_needs_no_reconnect() -> None:
+    result = build(
+        [("c1", "A", "LIVE", [snap(days_ago=30 / 1440)])],
+        failure=failed(code=4, reason="Application request limit reached"),
+    )
+
+    assert result.sync.failure is not None
+    assert result.sync.failure.needs_reconnect is False
+    assert "limiting requests" in result.sync.failure.reason
+
+
+def test_not_connected_outranks_a_recorded_failure() -> None:
+    result = build([("c1", "A", "LIVE", [snap()])], connected=False, failure=failed())
+
+    assert result.sync.status == "not_connected"
+
+
+def test_no_failure_means_no_failure_field() -> None:
+    result = one([snap(days_ago=5 / 1440)])
+
+    assert result.sync.failure is None

@@ -479,6 +479,17 @@ model MetaConnection {
   // replacing an earlier localStorage-only fix that got this wrong).
   pixelSkipped   Boolean  @default(false)
   tokenExpiresAt DateTime
+  // The latest failed attempt to read this business's numbers from Meta, or all
+  // null when the last attempt worked (app/services/sync_health.py). Latest state
+  // only, no history. syncFailureSource: "collection" (the 15-minute metrics
+  // collector) or "reconcile" (the account-spend check); each clears only its own.
+  // syncFailureCode is Meta's own error code (190 = the access token is no longer
+  // valid); syncFailureReason is Meta's text with anything token-like removed,
+  // at most 300 characters.
+  syncFailedAt      DateTime?
+  syncFailureSource String?
+  syncFailureCode   Int?
+  syncFailureReason String?
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 }

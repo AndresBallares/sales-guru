@@ -45,6 +45,8 @@ const PENDING_CONNECTION: api.MetaConnection = {
   pixelId: null,
   pixelSkipped: false,
   tokenExpiresAt: '2026-10-01T00:00:00Z',
+  expiryStatus: 'ok',
+  daysUntilExpiry: 45,
   createdAt: '2026-08-08T00:00:00Z',
 }
 

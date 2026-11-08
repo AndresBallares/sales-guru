@@ -18,6 +18,7 @@ before the window started inside it, so its baseline is zero). Honest-gap rules:
 
 from collections.abc import Iterable, Sequence
 from datetime import UTC, date, datetime, timedelta
+from typing import NamedTuple
 
 from app.schemas.performance import (
     CampaignPerformance,
@@ -26,11 +27,14 @@ from app.schemas.performance import (
     FunnelStageKey,
     PerformanceResponse,
     PeriodMetrics,
+    SyncFailure,
+    SyncFailureSource,
     SyncInfo,
     SyncStatus,
 )
 from app.services.dashboard import combine, latest_per_group
 from app.services.metric_rows import Snapshot, Totals
+from app.services.sync_health import friendly_reason, is_token_problem
 
 SYNC_INTERVAL_MINUTES = 15
 # Two missed cycles plus a little slack before the dashboard calls the data stale.
@@ -49,6 +53,16 @@ _FIELDS = (
     "purchase_value",
 )
 _EPSILON = 1e-9
+
+
+class FailureRecord(NamedTuple):
+    """A business's stored failed sync (MetaConnection.syncFailure*)."""
+
+    source: SyncFailureSource
+    failed_at: datetime
+    code: int | None
+    reason: str
+
 
 CampaignInput = tuple[str, str | None, str, Sequence[Snapshot]]
 # One period's raw numbers by field name; None = unavailable.
@@ -292,13 +306,23 @@ def _campaign_rows(
 
 
 def _sync(
-    campaigns: Sequence[CampaignInput], now: datetime, *, meta_connected: bool
+    campaigns: Sequence[CampaignInput],
+    now: datetime,
+    *,
+    meta_connected: bool,
+    failure: FailureRecord | None,
 ) -> SyncInfo:
     times = [s.fetched_at for _, _, _, snaps in campaigns for s in snaps]
     last = max(times) if times else None
     status: SyncStatus
     if not meta_connected:
         status = "not_connected"
+    elif (
+        failure is not None
+        and failure.source == "collection"
+        and (last is None or failure.failed_at > last)
+    ):
+        status = "failed"
     elif last is None:
         status = "waiting"
     elif now - last > STALE_AFTER and any(c[2] == "LIVE" for c in campaigns):
@@ -306,7 +330,18 @@ def _sync(
     else:
         status = "ok"
     return SyncInfo(
-        status=status, last_synced_at=last, interval_minutes=SYNC_INTERVAL_MINUTES
+        status=status,
+        last_synced_at=last,
+        interval_minutes=SYNC_INTERVAL_MINUTES,
+        failure=None
+        if failure is None
+        else SyncFailure(
+            source=failure.source,
+            failed_at=failure.failed_at,
+            code=failure.code,
+            reason=friendly_reason(failure.code, failure.reason),
+            needs_reconnect=is_token_problem(failure.code),
+        ),
     )
 
 
@@ -335,6 +370,7 @@ def build_performance(
     days: int | None,
     now: datetime,
     meta_connected: bool,
+    failure: FailureRecord | None = None,
 ) -> PerformanceResponse:
     """The whole Advertising Performance payload for a set of campaigns.
 
@@ -343,6 +379,7 @@ def build_performance(
         days: Window length in days; None for all time.
         now: The moment the window ends (injected so tests are exact).
         meta_connected: Whether the business has a Meta connection.
+        failure: The business's stored failed sync, if any.
     """
     start = None if days is None else now - timedelta(days=days)
     current_delta = _period(campaigns, start, now)
@@ -368,5 +405,5 @@ def build_performance(
         funnel=[] if current is None else _funnel(current),
         daily=_daily(campaigns, days, now),
         campaigns=_campaign_rows(campaigns, start, now),
-        sync=_sync(campaigns, now, meta_connected=meta_connected),
+        sync=_sync(campaigns, now, meta_connected=meta_connected, failure=failure),
     )

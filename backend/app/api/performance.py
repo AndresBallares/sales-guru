@@ -50,9 +50,24 @@ async def business_performance(
         where={"businessId": business.id, "NOT": [{"metaCampaignId": None}]}
     )
     connection = await db.metaconnection.find_unique(where={"businessId": business.id})
+    failure = None
+    if (
+        connection is not None
+        and connection.syncFailedAt is not None
+        and connection.syncFailureSource in ("collection", "reconcile")
+    ):
+        failure = perf.FailureRecord(
+            source="collection"
+            if connection.syncFailureSource == "collection"
+            else "reconcile",
+            failed_at=connection.syncFailedAt,
+            code=connection.syncFailureCode,
+            reason=connection.syncFailureReason or "Unknown error",
+        )
     return perf.build_performance(
         [(c.id, c.name, c.status, await campaign_snapshots(c)) for c in campaigns],
         days=int(days) or None,
         now=datetime.now(UTC),
         meta_connected=connection is not None,
+        failure=failure,
     )

@@ -7341,7 +7341,7 @@ main > section.campaigns-overview {
 
 .perf-sync-main {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 0.5rem;
   font-weight: 600;
 }
@@ -7353,6 +7353,8 @@ main > section.campaigns-overview {
 }
 
 .perf-sync-dot {
+  flex: none;
+  margin-top: 0.4em;
   width: 0.6rem;
   height: 0.6rem;
   border-radius: 50%;
@@ -7367,8 +7369,21 @@ main > section.campaigns-overview {
   background: var(--warning);
 }
 
-.perf-sync-stale .perf-sync-main {
+.perf-sync-stale .perf-sync-main,
+.perf-sync-failed .perf-sync-main {
   color: var(--warning);
+}
+
+.perf-sync-failed .perf-sync-dot {
+  background: var(--error);
+}
+
+.perf-sync-warning {
+  color: var(--warning);
+}
+
+.meta-expiry {
+  margin-bottom: 1.25rem;
 }
 
 .perf-overview,

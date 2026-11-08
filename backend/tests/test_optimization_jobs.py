@@ -15,7 +15,8 @@ convention as test_metric.py / test_publish.py, since those are
 self-contained (connect, use, disconnect on one loop) regardless of which
 loop that is.
 
-optimization_jobs.py does `from app.services import optimizer` (module
+optimization_jobs.py does `from app.services import sync_health
+from app.services import optimizer` (module
 import) so optimizer.generate_recommendation is mocked on that module, but
 `from app.services.meta import ... fetch_campaign_insights` (direct
 import) so fetch_campaign_insights must be mocked on optimization_jobs
@@ -51,7 +52,7 @@ from app.schemas.strategy import (
 )
 from app.schemas.test_evaluation import GeneratedTestEvaluation
 from app.services import meta as meta_service_module
-from app.services import optimization_jobs
+from app.services import optimization_jobs, sync_health
 from app.services import optimizer as optimizer_module
 from app.services import strategist as strategist_module
 from app.services.benchmarks import JEWELRY_META_BENCHMARKS
@@ -485,6 +486,87 @@ def test_collect_metrics_skips_a_campaign_whose_meta_call_fails(
     ).json()
     assert failed == []
     assert len(succeeded) == 1
+
+
+async def _sync_failure(business_id: str) -> tuple[str | None, int | None, str | None]:
+    seeder = Prisma()
+    await seeder.connect()
+    try:
+        row = await seeder.metaconnection.find_unique(where={"businessId": business_id})
+        assert row is not None
+        return row.syncFailureSource, row.syncFailureCode, row.syncFailureReason
+    finally:
+        await seeder.disconnect()
+
+
+def test_a_failed_collection_is_recorded_with_its_reason(
+    client: TestClient, mock_services: dict[str, AsyncMock]
+) -> None:
+    business_id, _ = _live_campaign(client)
+    mock_services["insights"].side_effect = MetaConnectionError(
+        "Meta API call to /meta_campaign_1/insights failed: Invalid OAuth access token",
+        code=190,
+    )
+
+    _run(client, optimization_jobs.collect_metrics_for_all_live_campaigns)
+
+    source, code, reason = _run(client, _sync_failure, business_id)
+    assert (source, code) == ("collection", 190)
+    assert reason is not None
+    assert "Invalid OAuth access token" in reason
+
+
+def test_a_cycle_that_reads_everything_clears_the_recorded_failure(
+    client: TestClient, mock_services: dict[str, AsyncMock]
+) -> None:
+    business_id, _ = _live_campaign(client)
+    mock_services["insights"].side_effect = MetaConnectionError("down", code=190)
+    _run(client, optimization_jobs.collect_metrics_for_all_live_campaigns)
+    assert _run(client, _sync_failure, business_id)[0] == "collection"
+
+    mock_services["insights"].side_effect = None
+    mock_services["insights"].return_value = CampaignInsights(
+        impressions=500, clicks=20, spend=5.0, conversions=1
+    )
+    _run(client, optimization_jobs.collect_metrics_for_all_live_campaigns)
+
+    assert _run(client, _sync_failure, business_id) == (None, None, None)
+
+
+@pytest.mark.parametrize("failing_first", [True, False])
+def test_one_campaign_failing_is_a_failed_sync_even_if_another_worked(
+    client: TestClient, mock_services: dict[str, AsyncMock], failing_first: bool
+) -> None:
+    business_id, _ = _live_campaign(client)
+    _publish_campaign(client, business_id)
+    results: list[object] = [
+        MetaConnectionError("Invalid OAuth access token", code=190),
+        CampaignInsights(impressions=500, clicks=20, spend=5.0, conversions=1),
+    ]
+    mock_services["insights"].side_effect = results if failing_first else results[::-1]
+
+    _run(client, optimization_jobs.collect_metrics_for_all_live_campaigns)
+
+    assert _run(client, _sync_failure, business_id)[:2] == ("collection", 190)
+
+
+def test_a_cycle_does_not_clear_the_spend_checks_failure(
+    client: TestClient, mock_services: dict[str, AsyncMock]
+) -> None:
+    business_id, _ = _live_campaign(client)
+    _run(
+        client,
+        lambda: sync_health.record_sync_failure(
+            business_id, "reconcile", MetaConnectionError("check down", code=190)
+        ),
+    )
+    mock_services["insights"].return_value = CampaignInsights(
+        impressions=500, clicks=20, spend=5.0, conversions=1
+    )
+
+    _run(client, optimization_jobs.collect_metrics_for_all_live_campaigns)
+
+    assert _run(client, _sync_failure, business_id)[0] == "reconcile"
 
 
 @pytest.mark.asyncio
@@ -5245,6 +5327,185 @@ def test_an_unreadable_account_leaves_the_warning_as_it_was(
     _account_says(monkeypatch, None)
     _run(client, optimization_jobs.reconcile_account_spend)
     assert _run(client, _metrics_warning, campaign_id) == before
+
+
+async def _business_id_of(campaign_id: str) -> str:
+    seeder = Prisma()
+    await seeder.connect()
+    try:
+        row = await seeder.campaign.find_unique(where={"id": campaign_id})
+        assert row is not None
+        return row.businessId
+    finally:
+        await seeder.disconnect()
+
+
+async def _stored_token_and_plaintext(business_id: str) -> tuple[str, str]:
+    """The stored (encrypted) accessToken, and the plaintext Meta must receive."""
+    from app.core.crypto import decrypt_token
+
+    seeder = Prisma()
+    await seeder.connect()
+    try:
+        row = await seeder.metaconnection.find_unique(where={"businessId": business_id})
+        assert row is not None
+        return row.accessToken, decrypt_token(row.accessToken)
+    finally:
+        await seeder.disconnect()
+
+
+def test_meta_is_sent_the_decrypted_token_not_the_stored_ciphertext(
+    client: TestClient,
+    mock_services: dict[str, AsyncMock],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Production: every account read failed because the job sent Meta ciphertext.
+
+    The tokens are stored encrypted, so a read that skips get_meta_connection hands
+    Meta an unusable string and fails on every cycle (VENZI, 2026-11-07). The fetch
+    is mocked in these tests, so what it was given has to be asserted.
+    """
+    campaign_id = _snake_ring(client, mock_services)
+    business_id = _run(client, _business_id_of, campaign_id)
+    stored, plaintext = _run(client, _stored_token_and_plaintext, business_id)
+    assert stored != plaintext  # the seed really is encrypted
+    mock = _account_says(monkeypatch, 16.6)
+
+    _run(client, optimization_jobs.reconcile_account_spend)
+
+    mock.assert_awaited_once()
+    assert mock.await_args is not None
+    sent = mock.await_args.kwargs["access_token"]
+    assert sent == plaintext
+    assert sent != stored
+
+
+def test_a_failed_account_read_logs_why_it_failed(
+    client: TestClient,
+    mock_services: dict[str, AsyncMock],
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The log said only "read failed", so the cause took a code reading to find."""
+    campaign_id = _snake_ring(client, mock_services)
+    business_id = _run(client, _business_id_of, campaign_id)
+    monkeypatch.setattr(
+        optimization_jobs,
+        "fetch_ad_account_amount_spent",
+        AsyncMock(side_effect=MetaConnectionError("Invalid OAuth access token")),
+    )
+
+    with caplog.at_level("WARNING"):
+        _run(client, optimization_jobs.reconcile_account_spend)
+
+    line = next(
+        r.getMessage() for r in caplog.records if "read failed" in r.getMessage()
+    )
+    assert business_id in line
+    assert "Invalid OAuth access token" in line
+
+
+async def _corrupt_token(business_id: str) -> None:
+    seeder = Prisma()
+    await seeder.connect()
+    try:
+        await seeder.metaconnection.update(
+            where={"businessId": business_id}, data={"accessToken": "not-a-token"}
+        )
+    finally:
+        await seeder.disconnect()
+
+
+def test_a_token_that_cannot_be_decrypted_is_logged_and_does_not_stop_the_job(
+    client: TestClient,
+    mock_services: dict[str, AsyncMock],
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    campaign_id = _snake_ring(client, mock_services)
+    business_id = _run(client, _business_id_of, campaign_id)
+    _run(client, _corrupt_token, business_id)
+    mock = _account_says(monkeypatch, 16.6)
+
+    with caplog.at_level("ERROR"):
+        _run(client, optimization_jobs.reconcile_account_spend)
+
+    mock.assert_not_awaited()
+    assert any(business_id in r.getMessage() for r in caplog.records)
+    source, code, reason = _run(client, _sync_failure, business_id)
+    assert (source, code) == ("reconcile", None)
+    assert reason is not None and reason != ""
+
+
+def test_a_failed_spend_check_is_recorded_and_a_good_one_clears_it(
+    client: TestClient,
+    mock_services: dict[str, AsyncMock],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A silently broken alarm is what hid the ciphertext bug for a day."""
+    campaign_id = _snake_ring(client, mock_services)
+    business_id = _run(client, _business_id_of, campaign_id)
+    monkeypatch.setattr(
+        optimization_jobs,
+        "fetch_ad_account_amount_spent",
+        AsyncMock(
+            side_effect=MetaConnectionError("Invalid OAuth access token", code=190)
+        ),
+    )
+
+    _run(client, optimization_jobs.reconcile_account_spend)
+
+    source, code, reason = _run(client, _sync_failure, business_id)
+    assert (source, code) == ("reconcile", 190)
+    assert reason is not None and "Invalid OAuth access token" in reason
+
+    _account_says(monkeypatch, 0.0)
+    _run(client, optimization_jobs.reconcile_account_spend)
+    assert _run(client, _sync_failure, business_id) == (None, None, None)
+
+
+def test_a_spend_check_that_reads_but_finds_no_figure_still_clears_its_failure(
+    client: TestClient,
+    mock_services: dict[str, AsyncMock],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    campaign_id = _snake_ring(client, mock_services)
+    business_id = _run(client, _business_id_of, campaign_id)
+    _run(
+        client,
+        lambda: sync_health.record_sync_failure(
+            business_id, "reconcile", MetaConnectionError("earlier", code=4)
+        ),
+    )
+    _account_says(monkeypatch, None)
+
+    _run(client, optimization_jobs.reconcile_account_spend)
+
+    assert _run(client, _sync_failure, business_id) == (None, None, None)
+
+
+def test_a_spend_check_failure_leaves_the_collectors_on_record(
+    client: TestClient,
+    mock_services: dict[str, AsyncMock],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    campaign_id = _snake_ring(client, mock_services)
+    business_id = _run(client, _business_id_of, campaign_id)
+    _run(
+        client,
+        lambda: sync_health.record_sync_failure(
+            business_id, "collection", MetaConnectionError("collector", code=190)
+        ),
+    )
+    monkeypatch.setattr(
+        optimization_jobs,
+        "fetch_ad_account_amount_spent",
+        AsyncMock(side_effect=MetaConnectionError("check", code=190)),
+    )
+
+    _run(client, optimization_jobs.reconcile_account_spend)
+
+    assert _run(client, _sync_failure, business_id)[0] == "collection"
 
 
 def test_a_draft_that_never_went_to_meta_is_not_checked(

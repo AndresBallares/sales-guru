@@ -221,3 +221,57 @@ async def _first_ad_set(campaign_id: str) -> str:
         return row.id
     finally:
         await seeder.disconnect()
+
+
+async def _record_failure(business_id: str, source: str, code: int | None) -> None:
+    seeder = Prisma()
+    await seeder.connect()
+    try:
+        await seeder.metaconnection.update(
+            where={"businessId": business_id},
+            data={
+                "syncFailedAt": datetime.now(UTC),
+                "syncFailureSource": source,
+                "syncFailureCode": code,
+                "syncFailureReason": "Meta API call to /x failed: Invalid OAuth",
+            },
+        )
+    finally:
+        await seeder.disconnect()
+
+
+def test_a_stored_collection_failure_makes_the_sync_failed_with_the_reason(
+    client: TestClient,
+) -> None:
+    business_id = _setup(client)
+    campaign_id = _run(client, lambda: _seed_campaign(business_id, status="LIVE"))
+    _run(client, lambda: _seed_snapshot(campaign_id, hours_ago=0.5, spend=100))
+    _run(client, lambda: _record_failure(business_id, "collection", 190))
+
+    sync = _get(client, business_id).json()["sync"]
+
+    assert sync["status"] == "failed"
+    assert sync["failure"]["source"] == "collection"
+    assert sync["failure"]["needsReconnect"] is True
+    assert "no longer accepts your connection" in sync["failure"]["reason"]
+    assert sync["lastSyncedAt"] is not None
+
+
+def test_a_stored_spend_check_failure_is_reported_but_not_a_failed_sync(
+    client: TestClient,
+) -> None:
+    business_id = _setup(client)
+    campaign_id = _run(client, lambda: _seed_campaign(business_id, status="LIVE"))
+    _run(client, lambda: _seed_snapshot(campaign_id, hours_ago=0.1, spend=100))
+    _run(client, lambda: _record_failure(business_id, "reconcile", 190))
+
+    sync = _get(client, business_id).json()["sync"]
+
+    assert sync["status"] == "ok"
+    assert sync["failure"]["source"] == "reconcile"
+
+
+def test_without_a_stored_failure_there_is_none(client: TestClient) -> None:
+    business_id = _setup(client)
+
+    assert _get(client, business_id).json()["sync"]["failure"] is None

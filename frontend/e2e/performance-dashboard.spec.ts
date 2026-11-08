@@ -1,8 +1,5 @@
-import { randomBytes } from 'node:crypto'
-import path from 'node:path'
-import { DatabaseSync } from 'node:sqlite'
-import { fileURLToPath } from 'node:url'
 import { test, expect, type Page } from '@playwright/test'
+import { DAY_MS, cuid, withE2eDb } from './support/e2eDb'
 import { signUpAndReachFakeMetaConnectedBusiness } from './support/fakeMetaFlow'
 import { analyzeWhenReady } from './support/axe'
 
@@ -11,23 +8,8 @@ import { analyzeWhenReady } from './support/axe'
 // e2e database (backend/prisma/e2e.db, the file the backend under test serves) the way the collector
 // would have stored them: lifetime-to-date rows, with a gap where a sync was down.
 
-const E2E_DB = path.resolve(
-  path.dirname(fileURLToPath(import.meta.url)),
-  '..',
-  '..',
-  'backend',
-  'prisma',
-  'e2e.db',
-)
-const DAY = 86_400_000
-
-function cuid(): string {
-  return `c${randomBytes(11).toString('hex')}`
-}
-
 function seedPerformance(businessId: string): void {
-  const db = new DatabaseSync(E2E_DB)
-  db.exec('PRAGMA busy_timeout = 5000')
+  withE2eDb((db) => {
   const now = Date.now()
   const campaign = db.prepare(
     `INSERT INTO Campaign (id, businessId, objective, name, status, metaCampaignId, updatedAt)
@@ -49,7 +31,7 @@ function seedPerformance(businessId: string): void {
     for (let ago = 16; ago >= 0; ago--) {
       if (ago === 9 || ago === 8) continue
       const growth = ((17 - ago) / 17) ** 1.3 * scale
-      const at = now - ago * DAY - (ago === 0 ? 5 * 60_000 : 3_600_000)
+      const at = now - ago * DAY_MS - (ago === 0 ? 5 * 60_000 : 3_600_000)
       metric.run(
         cuid(), id,
         Math.round(41_000 * growth), Math.round(2_100 * growth), Math.round(310 * growth * 100) / 100,
@@ -60,7 +42,7 @@ function seedPerformance(businessId: string): void {
       )
     }
   }
-  db.close()
+  })
 }
 
 async function openSeededDashboard(page: Page): Promise<void> {
