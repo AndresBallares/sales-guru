@@ -8,6 +8,7 @@ import { BrandRequiredNotice } from '../components/BrandRequiredNotice'
 import { ArrowRightIcon } from '../components/icons'
 import { CampaignsSection } from '../components/CampaignsSection'
 import { DashboardSection } from '../components/DashboardSection'
+import { MetaExpiryNotice } from '../components/MetaExpiryNotice'
 import { MetaConnectionSection } from '../components/MetaConnectionSection'
 import { MetaSettingsSection } from '../components/MetaSettingsSection'
 import { ProductsSection } from '../components/ProductsSection'
@@ -24,6 +25,7 @@ import {
   type Audience,
   type Business,
   type Campaign,
+  type MetaConnection,
   type Option,
   type Product,
 } from '../lib/api'
@@ -86,6 +88,8 @@ export function BusinessDetailPage() {
   const [products, setProducts] = useState<Product[] | null>(null)
   const [audiences, setAudiences] = useState<Audience[] | null>(null)
   const [metaSetupComplete, setMetaSetupComplete] = useState(false)
+  // The Meta connection as loaded with the page, for the expiry warning.
+  const [metaConnection, setMetaConnection] = useState<MetaConnection | null>(null)
   // What decides which onboarding step this page opens on, loaded once up front:
   //  1. no brand profile  -> the hard gate (nothing here can start a campaign);
   //  2. no campaign yet and Meta not fully set up -> the Meta connection step,
@@ -161,6 +165,7 @@ export function BusinessDetailPage() {
           connection.pageId !== null &&
           (connection.pixelId !== null || connection.pixelSkipped)
         setMetaSetupComplete(metaComplete)
+        setMetaConnection(connection)
         setGate({
           state: 'ready',
           hasBrand,
@@ -301,6 +306,9 @@ export function BusinessDetailPage() {
                                   <ArrowRightIcon />
                                 </button>
                               </div>
+                            )}
+                            {metaConnection && (
+                              <MetaExpiryNotice businessId={businessId} connection={metaConnection} />
                             )}
                             <DashboardSection
                               businessId={businessId}

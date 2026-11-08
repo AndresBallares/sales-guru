@@ -116,6 +116,7 @@ from app.services.meta import (
     update_meta_campaign_budget,
 )
 from app.services.publish import pause_campaign
+from app.services.sync_health import clear_sync_failure, record_sync_failure
 
 logger = logging.getLogger(__name__)
 
@@ -163,7 +164,9 @@ def metric_create_data(
     }
 
 
-async def _collect_ad_level_metrics(campaign: Campaign, access_token: str) -> None:
+async def _collect_ad_level_metrics(
+    campaign: Campaign, access_token: str
+) -> MetaConnectionError | None:
     """Store one ad-level snapshot per ad of a creative test (CREATIVE_TEST_PLAN).
 
     The ads in its one ad set compete, so each ad's own numbers (above all
@@ -175,13 +178,18 @@ async def _collect_ad_level_metrics(campaign: Campaign, access_token: str) -> No
     Args:
         campaign: The live campaign.
         access_token: The business's Meta access token.
+
+    Returns:
+        The first Meta failure, or None when every read worked (or there was nothing
+        to read).
     """
     strategy = await db.strategy.find_unique(where={"campaignId": campaign.id})
     if strategy is None:
-        return
+        return None
     content = StrategyContentAdapter.validate_json(strategy.content)
     if content.plan_type != "CREATIVE_TEST_PLAN":
-        return
+        return None
+    failure: MetaConnectionError | None = None
     for ad_set in await db.adset.find_many(where={"campaignId": campaign.id}):
         for ad in await db.ad.find_many(where={"adSetId": ad_set.id}):
             if ad.metaAdId is None:
@@ -190,12 +198,14 @@ async def _collect_ad_level_metrics(campaign: Campaign, access_token: str) -> No
                 insights = await fetch_ad_insights(
                     access_token=access_token, meta_ad_id=ad.metaAdId
                 )
-            except MetaConnectionError:
+            except MetaConnectionError as exc:
                 logger.warning(
-                    "Ad-level metrics collection failed for campaign %s ad %s",
+                    "Ad-level metrics collection failed for campaign %s ad %s: %s",
                     campaign.id,
                     ad.id,
+                    exc,
                 )
+                failure = failure or exc
                 continue
             await db.metric.create(
                 data=metric_create_data(
@@ -205,9 +215,12 @@ async def _collect_ad_level_metrics(campaign: Campaign, access_token: str) -> No
                     ad_id=ad.id,
                 )
             )
+    return failure
 
 
-async def _collect_metrics_for_campaign(campaign: Campaign, access_token: str) -> None:
+async def _collect_metrics_for_campaign(
+    campaign: Campaign, access_token: str
+) -> MetaConnectionError | None:
     """Collect and store this campaign's latest snapshot(s).
 
     A TEST_PLAN campaign with both real variant AdSets published
@@ -222,6 +235,9 @@ async def _collect_metrics_for_campaign(campaign: Campaign, access_token: str) -
     doesn't block the other's from being recorded, same "one bad
     campaign never blocks the batch" reasoning this function's caller
     already applies at the campaign level.
+
+    Returns:
+        The first Meta failure, or None when every read worked.
     """
     variant_ad_sets = [
         a
@@ -234,32 +250,38 @@ async def _collect_metrics_for_campaign(campaign: Campaign, access_token: str) -
             insights = await fetch_campaign_insights(
                 access_token=access_token, meta_campaign_id=campaign.metaCampaignId
             )
-        except MetaConnectionError:
-            logger.warning("Metrics collection failed for campaign %s", campaign.id)
-            return
+        except MetaConnectionError as exc:
+            logger.warning(
+                "Metrics collection failed for campaign %s: %s", campaign.id, exc
+            )
+            return exc
         await db.metric.create(
             data=metric_create_data(campaign_id=campaign.id, insights=insights)
         )
-        return
+        return None
 
+    failure: MetaConnectionError | None = None
     for ad_set in variant_ad_sets:
         assert ad_set.metaAdSetId is not None  # filtered above
         try:
             insights = await fetch_ad_set_insights(
                 access_token=access_token, meta_ad_set_id=ad_set.metaAdSetId
             )
-        except MetaConnectionError:
+        except MetaConnectionError as exc:
             logger.warning(
-                "Metrics collection failed for campaign %s adSet %s",
+                "Metrics collection failed for campaign %s adSet %s: %s",
                 campaign.id,
                 ad_set.id,
+                exc,
             )
+            failure = failure or exc
             continue
         await db.metric.create(
             data=metric_create_data(
                 campaign_id=campaign.id, insights=insights, ad_set_id=ad_set.id
             )
         )
+    return failure
 
 
 async def _is_past_creative_test(campaign: Campaign) -> bool:
@@ -283,7 +305,9 @@ async def _campaign_level_metrics(campaign_id: str) -> list[Metric]:
     )
 
 
-async def _collect_window_metrics(campaign: Campaign, access_token: str) -> None:
+async def _collect_window_metrics(
+    campaign: Campaign, access_token: str
+) -> MetaConnectionError | None:
     """Attach the last 7 days' unique reach and frequency to the newest snapshot.
 
     Unique reach isn't additive, so a window's frequency needs its own Insights
@@ -294,22 +318,25 @@ async def _collect_window_metrics(campaign: Campaign, access_token: str) -> None
     Args:
         campaign: The live campaign.
         access_token: The business's Meta access token.
+
+    Returns:
+        The Meta failure, or None when the read worked or was not due.
     """
     settings = get_settings()
     if campaign.metaCampaignId is None or not await _is_past_creative_test(campaign):
-        return
+        return None
     metrics = await _campaign_level_metrics(campaign.id)
     delivering = [m for m in metrics if m.spend > 0 and m.impressions > 0]
     now = datetime.now(UTC)
     if not delivering or now - delivering[0].fetchedAt < timedelta(
         days=settings.saturation_min_days
     ):
-        return
+        return None
     if any(
         m.frequency7d is not None and now - m.fetchedAt < timedelta(hours=20)
         for m in metrics
     ):
-        return
+        return None
     today = now.date()
     try:
         window = await fetch_campaign_window_insights(
@@ -318,15 +345,16 @@ async def _collect_window_metrics(campaign: Campaign, access_token: str) -> None
             since=today - timedelta(days=7),
             until=today - timedelta(days=1),
         )
-    except MetaConnectionError:
-        logger.warning("Windowed reach failed for campaign %s", campaign.id)
-        return
+    except MetaConnectionError as exc:
+        logger.warning("Windowed reach failed for campaign %s: %s", campaign.id, exc)
+        return exc
     if window is None or window.frequency is None:
-        return
+        return None
     await db.metric.update(
         where={"id": metrics[-1].id},
         data={"reach7d": window.reach, "frequency7d": window.frequency},
     )
+    return None
 
 
 async def _check_audience_saturation(campaign: Campaign) -> None:
@@ -556,15 +584,19 @@ async def reconcile_account_spend() -> None:
     connections = await db.metaconnection.find_many(
         where={"business": {"is": {"deletedAt": None}}}
     )
-    for connection in connections:
-        if connection.adAccountId is None:
+    for stored in connections:
+        if stored.adAccountId is None:
             continue
         try:
-            await _reconcile_business(connection)
-        except Exception:
+            # The list above holds the encrypted token; Meta needs the plaintext one.
+            connection = await get_meta_connection(stored.businessId)
+            if connection is not None:
+                await _reconcile_business(connection)
+        except Exception as exc:
             logger.exception(
-                "Spend reconciliation failed for business %s", connection.businessId
+                "Spend reconciliation failed for business %s", stored.businessId
             )
+            await record_sync_failure(stored.businessId, "reconcile", exc)
 
 
 async def _reconcile_business(connection: MetaConnection) -> None:
@@ -582,9 +614,13 @@ async def _reconcile_business(connection: MetaConnection) -> None:
         account_spent = await fetch_ad_account_amount_spent(
             access_token=connection.accessToken, ad_account_id=connection.adAccountId
         )
-    except MetaConnectionError:
-        logger.warning("Spend reconciliation read failed for %s", connection.businessId)
+    except MetaConnectionError as exc:
+        logger.warning(
+            "Spend reconciliation read failed for %s: %s", connection.businessId, exc
+        )
+        await record_sync_failure(connection.businessId, "reconcile", exc)
         return
+    await clear_sync_failure(connection.businessId, "reconcile")
     if account_spent is None:
         return
     recorded = sum([await _latest_total_spend(c.id) for c in campaigns])
@@ -1518,15 +1554,24 @@ async def collect_metrics_for_all_live_campaigns() -> None:
     campaigns = await db.campaign.find_many(
         where={"status": "LIVE", "business": {"is": {"deletedAt": None}}}
     )
+    # Per business: whether it was read this cycle, and the first Meta failure, so the
+    # failed (or recovered) sync can be recorded once for the business afterwards.
+    read: set[str] = set()
+    failures: dict[str, MetaConnectionError] = {}
     for campaign in campaigns:
         if campaign.metaCampaignId is None:
             continue
         connection = await get_meta_connection(campaign.businessId)
         if connection is None:
             continue
-        await _collect_metrics_for_campaign(campaign, connection.accessToken)
-        await _collect_ad_level_metrics(campaign, connection.accessToken)
-        await _collect_window_metrics(campaign, connection.accessToken)
+        read.add(campaign.businessId)
+        for failure in (
+            await _collect_metrics_for_campaign(campaign, connection.accessToken),
+            await _collect_ad_level_metrics(campaign, connection.accessToken),
+            await _collect_window_metrics(campaign, connection.accessToken),
+        ):
+            if failure is not None:
+                failures.setdefault(campaign.businessId, failure)
         try:
             await _enforce_spend_circuit_breaker(campaign, connection)
             # Re-fetch: the total-spend breaker above may have just paused
@@ -1545,6 +1590,16 @@ async def collect_metrics_for_all_live_campaigns() -> None:
                 await _check_audience_saturation(current)
         except MetaConnectionError:
             logger.warning("Circuit breaker pause failed for campaign %s", campaign.id)
+    for business_id in read:
+        try:
+            if business_id in failures:
+                await record_sync_failure(
+                    business_id, "collection", failures[business_id]
+                )
+            else:
+                await clear_sync_failure(business_id, "collection")
+        except Exception:
+            logger.exception("Could not record the sync outcome for %s", business_id)
 
 
 async def apply_recommendation(

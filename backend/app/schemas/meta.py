@@ -2,6 +2,7 @@
 
 import re
 from datetime import datetime
+from typing import Literal
 
 from pydantic import field_validator
 
@@ -101,4 +102,9 @@ class MetaConnectionResponse(CamelCaseModel):
     # lives on the connection, not the business.
     pixel_skipped: bool
     token_expires_at: datetime
+    # Worked out on the server (app/services/connection_expiry.py): "ok",
+    # "expiring_soon" (14 days or fewer left) or "expired", and the whole days
+    # left (None once expired).
+    expiry_status: Literal["ok", "expiring_soon", "expired"]
+    days_until_expiry: int | None
     created_at: datetime

@@ -10,7 +10,8 @@ from typing import Literal
 
 from app.schemas.base import CamelCaseModel
 
-SyncStatus = Literal["not_connected", "waiting", "ok", "stale"]
+SyncStatus = Literal["not_connected", "waiting", "ok", "stale", "failed"]
+SyncFailureSource = Literal["collection", "reconcile"]
 FunnelStageKey = Literal[
     "landing_page_views", "add_to_cart", "initiated_checkout", "purchases", "revenue"
 ]
@@ -78,12 +79,29 @@ class CampaignPerformance(CamelCaseModel):
     roas: float | None
 
 
+class SyncFailure(CamelCaseModel):
+    """The latest failed attempt to read from Meta, worded for the business owner."""
+
+    source: SyncFailureSource
+    failed_at: datetime
+    code: int | None
+    reason: str
+    # True when the connection has to be signed in to Meta again.
+    needs_reconnect: bool
+
+
 class SyncInfo(CamelCaseModel):
-    """When Meta's numbers were last stored, and whether that is recent enough."""
+    """When Meta's numbers were last stored, and whether that is recent enough.
+
+    status is "failed" when the metrics collector's latest attempt failed after the
+    last stored numbers; a failed spend check is reported in ``failure`` without
+    changing the status.
+    """
 
     status: SyncStatus
     last_synced_at: datetime | None
     interval_minutes: int
+    failure: SyncFailure | None = None
 
 
 class PerformanceResponse(CamelCaseModel):

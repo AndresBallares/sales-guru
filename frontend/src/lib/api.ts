@@ -1378,6 +1378,10 @@ export interface MetaConnection {
   // survives a remount instead of re-prompting every time.
   pixelSkipped: boolean
   tokenExpiresAt: string
+  // Worked out on the server: "expiring_soon" from 14 days before the token expires,
+  // "expired" after. daysUntilExpiry is whole days left (null once expired).
+  expiryStatus: 'ok' | 'expiring_soon' | 'expired'
+  daysUntilExpiry: number | null
   createdAt: string
 }
 
@@ -1900,12 +1904,24 @@ export interface PerformanceCampaignRow {
   roas: number | null
 }
 
-export type PerformanceSyncStatus = 'not_connected' | 'waiting' | 'ok' | 'stale'
+export type PerformanceSyncStatus = 'not_connected' | 'waiting' | 'ok' | 'stale' | 'failed'
+
+// The latest failed attempt to read from Meta, already worded for the owner.
+// "collection" is the 15-minute metrics read, "reconcile" the account-spend check.
+export interface PerformanceSyncFailure {
+  source: 'collection' | 'reconcile'
+  failedAt: string
+  code: number | null
+  reason: string
+  // True when the connection has to be signed in to Meta again.
+  needsReconnect: boolean
+}
 
 export interface PerformanceSync {
   status: PerformanceSyncStatus
   lastSyncedAt: string | null
   intervalMinutes: number
+  failure?: PerformanceSyncFailure | null
 }
 
 // 0 = all time.
