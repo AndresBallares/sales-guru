@@ -557,18 +557,19 @@ describe('DashboardSection', () => {
     })
   })
 
-  it('shows the pixel warning at the top of the panel', async () => {
+  it('does not repeat a stored Pixel warning: the fresh Pixel check above replaces it', async () => {
+    // The warning stored on the campaign is from the last time the live collector looked, so
+    // on a paused or archived campaign it can be days old. The Pixel health notice above the
+    // dashboard is checked on demand and stamped with when, so only that one is shown.
     mockedApi.getCampaignDashboard.mockResolvedValue(
       dashboard('c1', { pixelWarning: 'Purchase event may not be firing' }),
     )
 
     renderSection()
 
-    const alert = await screen.findByRole('alert')
-    expect(alert).toHaveTextContent('Purchase event may not be firing')
-    // Above the cards, not below them.
-    const cards = screen.getByLabelText('Campaign results')
-    expect(alert.compareDocumentPosition(cards) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    await screen.findByLabelText('Campaign results')
+    expect(screen.queryByText(/Purchase event may not be firing/)).not.toBeInTheDocument()
+    expect(screen.queryByText(/Check your Pixel/)).not.toBeInTheDocument()
   })
 
   it('shows the audience saturation warning with its numbers, above the cards', async () => {

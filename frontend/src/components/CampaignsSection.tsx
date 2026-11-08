@@ -46,7 +46,9 @@ import {
   VideoIcon,
   VoiceIcon,
 } from './icons'
+import { PixelPublishConfirm } from './PixelPublishConfirm'
 import { PublishFooter } from './PublishFooter'
+import { usePixelHealth } from '../lib/usePixelHealth'
 import { onlyPhotos, PHOTOS_ONLY_HINT } from '../lib/media'
 import { describePublishStatus, PublishJobError, waitForPublishJob } from '../lib/publishJob'
 import {
@@ -153,6 +155,15 @@ export function CampaignsSection({
   const [searchParams, setSearchParams] = useSearchParams()
   const openCampaignId = searchParams.get('campaign')
   const [campaigns, setCampaigns] = useState<Campaign[]>([])
+  // Is the Pixel receiving the store's events? Only asked once something here can be
+  // published; it then holds the Approve & Publish buttons below until confirmed.
+  const pixel = usePixelHealth(
+    businessId,
+    campaigns.some(
+      (c) =>
+        !isPublishedCampaign(c) && ['PENDING_APPROVAL', 'APPROVED', 'FAILED'].includes(c.status),
+    ),
+  )
   // Feeds the "add a business description" nudge on the create-campaign
   // step below, and the logo/name shown on a selected ad's
   // SocialPostPreview further down.
@@ -2587,10 +2598,11 @@ export function CampaignsSection({
                             ? 'Retry publish'
                             : 'Approve & Publish'
                     }
-                    buttonDisabled={isPublishing}
+                    buttonDisabled={isPublishing || pixel.blocked}
                     onPublish={() => handleApproveAndPublish(campaign.id, campaign.status)}
                     error={approveError}
                   >
+                    <PixelPublishConfirm pixel={pixel} />
                     <InstagramNote businessId={businessId} />
                   </PublishFooter>
                 )}

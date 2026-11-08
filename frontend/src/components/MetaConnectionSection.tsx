@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { ArrowRightIcon, SaveIcon } from './icons'
 import { InstagramAccountForm } from './InstagramAccountForm'
+import { formatAsOf } from '../lib/dashboardFormat'
 import { Link, useSearchParams } from 'react-router-dom'
 import {
   ApiError,
@@ -18,6 +19,20 @@ import {
   type MetaPage,
   type MetaPixel,
 } from '../lib/api'
+
+// The picker says which dataset last received events from a website, because the Pixel that
+// is chosen has to be the one the store actually sends to. Most recent first.
+function pixelsByRecentEvent(pixels: MetaPixel[]): MetaPixel[] {
+  const time = (pixel: MetaPixel) => (pixel.lastFiredAt ? Date.parse(pixel.lastFiredAt) : 0)
+  return [...pixels].sort((a, b) => time(b) - time(a))
+}
+
+function pixelLabel(pixel: MetaPixel): string {
+  if (pixel.isUnavailable) return `${pixel.name} — unavailable`
+  if (pixel.lastFiredAt) return `${pixel.name} — last event ${formatAsOf(pixel.lastFiredAt)}`
+  if (pixel.lastFiredAt === null) return `${pixel.name} — no events received yet`
+  return pixel.name
+}
 
 export function MetaConnectionSection({
   businessId,
@@ -368,9 +383,9 @@ export function MetaConnectionSection({
                     onChange={(event) => setSelectedPixelId(event.target.value)}
                   >
                     <option value="">Select a Pixel</option>
-                    {pixels.map((pixel) => (
+                    {pixelsByRecentEvent(pixels).map((pixel) => (
                       <option key={pixel.id} value={pixel.id}>
-                        {pixel.name}
+                        {pixelLabel(pixel)}
                       </option>
                     ))}
                   </select>

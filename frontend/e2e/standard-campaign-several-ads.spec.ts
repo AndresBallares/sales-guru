@@ -9,7 +9,7 @@ test('a standard SALES campaign publishes two chosen ads together, paused by def
   page,
 }) => {
   await reachMetaPixelStep(page)
-  await page.getByLabel('Meta Pixel').selectOption({ label: 'Fake Pixel' })
+  await page.getByLabel('Meta Pixel').selectOption({ value: 'fake_pixel' })
   await page.getByRole('button', { name: 'Save Pixel' }).click()
   await finishOnboarding(page, { objectiveLabel: 'Sales' })
 

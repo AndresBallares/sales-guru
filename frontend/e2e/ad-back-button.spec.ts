@@ -5,7 +5,7 @@ import { analyzeWhenReady, WCAG_TAGS } from './support/axe'
 // A Sales creative test: pick three ads, press Next, land on the ad preview.
 async function reachPreview(page: Page) {
   await reachMetaPixelStep(page)
-  await page.getByLabel('Meta Pixel').selectOption({ label: 'Fake Pixel' })
+  await page.getByLabel('Meta Pixel').selectOption({ value: 'fake_pixel' })
   await page.getByRole('button', { name: 'Save Pixel' }).click()
   await finishOnboarding(page, { objectiveLabel: 'Sales' })
   await page.getByRole('button', { name: 'Generate strategy' }).click()
