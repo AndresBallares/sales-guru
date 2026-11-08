@@ -158,3 +158,21 @@ Opening shapes in the current outputs: 2 contrast, 2 plain statement, 1 question
 address) in the cached system prompt, the assigned shape in the tail, `Creative.hookType` stored and returned and not yet
 read. Two additions from the owner: address and moment never assert or imply a personal attribute, and the starting shape
 comes from a hash of the campaign id plus the round number. See PRD.md and `docs/phase-7.md`. Phase 4 waits for data.
+
+## Proposal: two explicit creative test modes (2026-11-08, not built)
+
+The confounding noted above has a simple cause: the four ads share one image by accident. `create_creatives` preselects one
+Feed and Story pair and gives it to every variant, and `select_creative` attaches the product's first photo to any ad that has
+none, so a test labelled "creative test" varies avatar, concept, pillar and hook shape under one image, and a result by hook
+shape cannot be separated from the others. The proposal is to make the tested variable explicit and single:
+
+- **Copy test (`COPY`):** one chosen image for all four ads, only the copy varies. Four ads whatever the photo count.
+  This is today's behavior, labelled, and the only kind of test whose hook-shape results are clean enough for Phase 4.
+- **Visual test (`VISUAL`):** one copy set held constant, three or four distinct photos (or videos) of the product, enforced
+  distinct on the server; one Creative Agent call instead of four.
+- The "angle = image" test (each angle with its own visual) stays a later, deliberate third mode.
+
+Slots in the table above this changes: the "available assets" row (the vision input stays the primary photo; the visual test does
+not need the agent to see each image because the copy does not change with it) and the per-ad fields (a visual test fans one copy
+set out to several `Creative` rows, each with its own `productImageId`). Full plan, order of work, tests and open questions:
+`BACKLOG.md`, "Creative test modes".

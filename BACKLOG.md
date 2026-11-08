@@ -251,6 +251,70 @@ change-review screen. (4) Order aggregates, the reconciliation rules and the das
 depth; variant and price rule; how refunds and multi-currency are shown; thresholds; who sees what on each plan; whether
 one business can ever have two stores.
 
+### Creative test modes: a copy test (one shared image) and a visual test (one copy, different images)
+**Status:** planned, nothing built (proposed 2026-11-08; the owner decides before any code). Replaces the unchosen options
+A to D in the PRD entry "Why each ad in the first test needs its own image" if accepted.
+
+**Current behavior (read from the code, 2026-11-08).** In a creative test all four ads **share one photo** by default.
+`create_creatives` (`app/api/creative.py`) picks the product's feed, story and square assets once with `_pick_assets`
+(first 4:5 photo for Feed, first 9:16 for Story, first exact 1:1 for Square, by `position`) and, when the product has both a
+Feed and a Story photo, gives that same pair to every variant. Otherwise nothing is attached at generation, and
+`select_creative` attaches the product's first photo (position 0) to each ad as it is selected. A different photo for
+one ad only happens when the owner changes it by hand (`product_image_id` on select; "Change image" in Edit creative or the
+library picker on the ad preview page). Nothing assigns distinct photos, nothing checks that they differ (`publish.py`
+notes it does not check whether a photo is in use), and the Creative Agent's vision input is the primary photo only. The rule
+"four ads, or three without a fourth photo" (`required_test_ads`, `app/schemas/strategy.py`) assumes distinct photos, but
+only the ad count follows from it; carousels are exempt. So today's test is really four captions under one image
+(confounded: avatar, concept, pillar and hook shape vary while the image is held constant by accident).
+
+**Proposal: make the variable explicit, one per test (`test_variable`: `COPY` or `VISUAL`).**
+1. **Copy test: "same image, different copy".** The owner picks one test image (default: the feed photo that is
+   preselected today; Feed, Story and Square versions travel together as now). All four ads use it. What varies is the copy:
+   avatar, concept, pillar, hook shape (already varied). Always four ads, whatever the photo count (like a carousel); the
+   per-ad "Change image" is hidden or locked with a plain explanation. Result wording: "the winning copy angle was X".
+   This is today's behavior made honest and labelled, so it is the cheap one: mostly labels, one stored field, a test-image
+   picker and the ad-count rule.
+2. **Visual test: "same message, different image".** One copy set (headline, text, description, CTA, hook shape) is held
+   constant and the four ads differ only in the image (or video): four distinct photos of the same product (three when that
+   is all the product has, the existing `required_test_ads` rule, which then belongs to this mode only). Needs at least
+   three distinct photos or videos, so the choice is disabled with an "add photos" hint below that. The owner chooses which
+   copy angle to hold constant, and which photos (default by position, with a suggested shot per slot: close-up, on a
+   hand, the gift moment). The server rejects duplicate images at select or approve in this mode. Feed-shaped photos
+   only at first; Story and Square versions per ad can follow. The Creative Agent writes one copy set (one call, not four),
+   so it is cheaper than today; it does not need to see each image because the copy does not change with it.
+3. **Not now:** the confounded "angle = image" test (each angle gets its own visual), the owner's reasoning in the PRD. Do not
+   build it until 1 and 2 exist; then it is a third mode ("angle test") the owner can choose on purpose.
+
+**Order and stacking.** Offer the mode when the test starts. Suggested guidance, not a rule: with four good photos start
+with the visual test (the image does most of the work on Meta), otherwise the copy test, and for a product with one photo
+only the copy test, saying plainly that the lesson will be to get more visuals before test two. A second round
+("Add new round", creative rounds) stacks the winner: winning image with new copy angles, or winning copy with new images.
+
+**What changes, by area (for planning).**
+- **Plan:** `CreativeTestPlanContent.test_variable` (plans are stored as JSON in `Strategy.content`, so likely no Prisma
+  column and no migration; older plans read as `COPY`); the Strategist prompt and validators; `required_test_ads(mode,
+  media_count)`.
+- **Generation:** copy test, the chosen image to all four; visual test, one copy set fanned out to three or four `Creative`
+  rows, each with its own `productImageId` (rows and the publish path already support a photo per ad).
+- **Guards:** visual test, distinct images enforced on the server; copy test, a warning (the existing option D) if an ad's
+  image is changed ("this is no longer a copy test"); both, a clear message when the product cannot support the mode.
+- **UI:** a two-card mode choice with plain English (what stays the same, what you will learn, what you need); a test-image
+  picker for the copy test; a photo-to-slot step for the visual test; the results table says what was tested.
+- **Results and learning:** the leader message names the variable. The Phase 4 hook-shape learning should read only copy
+  tests (image constant), which removes the confounding noted in `docs/creative-learning-review.md`; visual tests later feed a
+  "which image style wins" view.
+- **Rounds:** copy round = new copy with the same image; visual round = the next photos.
+- **Cost:** copy test unchanged (four cached agent calls); visual test one call. Budget and bidding unchanged (four ads in one
+  ad set, lowest cost, no cap on the first test).
+
+**Tests to write first (when built).** Required ads per mode and photo count; the visual test refused below three distinct
+photos; duplicates rejected on select and approve; the copy test locks to one image; older plans behave as `COPY`; the
+mode choice and disabled states; the leader message; a round per mode; e2e at 390px and in dark mode.
+
+**Open questions for the owner.** The default mode; whether the visual test may use the winning copy from an earlier test;
+videos in a visual test; Story and Square versions per ad; whether to allow the "angle test" later; naming ("Visual – <photo
+label>" next to "<Avatar> – <Concept>").
+
 ## Done
 
 - **Dashboard tests leaked a `scrollIntoView` stub.** Tests assigned a stub to
