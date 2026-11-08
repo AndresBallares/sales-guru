@@ -315,6 +315,45 @@ mode choice and disabled states; the leader message; a round per mode; e2e at 39
 videos in a visual test; Story and Square versions per ad; whether to allow the "angle test" later; naming ("Visual – <photo
 label>" next to "<Avatar> – <Concept>").
 
+### Security: restrict the production database's IP allowlist (currently open to everyone)
+**Found 2026-11-08** (read through Render's API, nothing changed). The production Postgres "Sales-Guru"
+(`dpg-dabnq367bikc73dn9t00-a`, Ohio) accepts outside connections from **any address**: its inbound rule is
+`0.0.0.0/0` ("everywhere"). Anyone on the internet can try to connect; they still need the user, password and host
+(and the connection is TLS), so this is exposure, not a breach, but one leaked database URL becomes a working
+way in from anywhere. The web service `sales-guru-backend` (Oregon) shows `0.0.0.0/0` on its own list too:
+that one is for its public traffic and **must stay open**.
+
+**Why the database is reachable from outside at all.** The backend runs in **Oregon** and the database in
+**Ohio**. Render's private (internal) database address only works inside one region, so the backend very likely connects
+through the **external** address, which is the one the allowlist guards. (To confirm without reading secrets: in the Render
+dashboard the backend's `DATABASE_URL` host is either `dpg-...-a` with no domain, an internal address, or
+`dpg-...-a.ohio-postgres.render.com`, an external one.) That is why "just close it" would take the app down.
+
+**Plan, staged so nothing is cut off before it is proven.**
+1. Collect what needs access: (a) the backend service's **outbound IP addresses** (dashboard, `sales-guru-backend`,
+   Connect, Outbound; Render lists a small set of ranges per region, to confirm the exact labels); (b) your own public IP
+   for running scripts (`curl -s https://ifconfig.me`), as `x.x.x.x/32`.
+2. Dashboard, Databases, Sales-Guru, Access Control (inbound IP rules): **add** the outbound ranges and your `/32` with
+   descriptions, keeping `0.0.0.0/0` for now. Save.
+3. Prove them: the app answers (`GET /health`, a login, the Results tab), `research_access.py --show` works from your
+   machine, and a deploy to production succeeds (the build command runs `prisma migrate deploy`; to confirm whether the
+   build machines use the same outbound IPs as the running service, because if not the deploy's migrate step will be refused
+   and those addresses must be added too).
+4. At a quiet moment, **remove `0.0.0.0/0`**. Watch the backend logs and `GET /health` for ten minutes.
+5. Rollback is one step: re-add `0.0.0.0/0` (and say so here).
+
+**What could break.** The backend losing the database (everything down: login, results, the 15-minute jobs) if an outbound
+range is missing or Render changes them; production deploys failing at the migrate step (above); your scripts from a new
+address (home IP changes, travel, a different network: add the new `/32` first, or use a VPN with a fixed address); any
+tool that connects from elsewhere (Render's own MCP query tool and dashboard SQL viewer connect from Render's side and should
+be unaffected, to confirm by trying them after step 3). CI does not use the production database. **Do not edit the web service's
+list.**
+
+**Longer term (better than an allowlist).** Move the database to Oregon, next to the backend, switch the backend to the
+internal address and leave the external allowlist empty, so the database has no public door at all. It means a new database
+and a migration (a dump and restore with a short maintenance window), so it is its own project. Also consider rotating the
+database password once the allowlist is tightened, since the URL has been handled in terminals.
+
 ## Done
 
 - **Dashboard tests leaked a `scrollIntoView` stub.** Tests assigned a stub to
