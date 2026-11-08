@@ -19,6 +19,7 @@ import pytest
 from app.api import meta as meta_module
 from app.core.config import get_settings
 from app.schemas.meta import MetaAdAccount, MetaPage, MetaPixel
+from app.services.meta import MetaConnectionError
 from fastapi.testclient import TestClient
 from prisma import Prisma
 
@@ -875,7 +876,35 @@ def test_get_pixels_returns_the_list_once_an_ad_account_is_chosen(
     response = client.get(f"/businesses/{business_id}/meta/pixels")
 
     assert response.status_code == 200
-    assert response.json() == [{"id": "pixel_1", "name": "venzi jewelry"}]
+    assert response.json() == [
+        {
+            "id": "pixel_1",
+            "name": "venzi jewelry",
+            "lastFiredAt": None,
+            "isUnavailable": False,
+        }
+    ]
+
+
+def test_get_pixels_says_when_each_pixel_last_received_an_event(
+    client: TestClient, mock_meta_service: dict[str, AsyncMock | Mock]
+) -> None:
+    """So the owner can tell the dataset that receives their store's events."""
+    mock_meta_service["pixels"].return_value = [
+        MetaPixel(
+            id="2024258651467538",
+            name="venzi jewelry",
+            last_fired_at=datetime(2026, 11, 7, 20, 32, 49, tzinfo=UTC),
+        ),
+        MetaPixel(id="1595307142179160", name="Sales Guru", is_unavailable=True),
+    ]
+    business_id = _connected_and_finalized(client)
+
+    body = client.get(f"/businesses/{business_id}/meta/pixels").json()
+
+    assert body[0]["lastFiredAt"].startswith("2026-11-07T20:32:49")
+    assert body[1]["lastFiredAt"] is None
+    assert body[1]["isUnavailable"] is True
 
 
 def test_get_pixels_surfaces_agent_failures_as_500(
@@ -967,6 +996,72 @@ def test_set_pixel_stores_the_chosen_pixel(client: TestClient) -> None:
 
     assert response.status_code == 200
     assert response.json()["pixelId"] == "pixel_1"
+
+
+def test_set_pixel_refuses_a_pixel_that_is_not_on_the_ad_account(
+    client: TestClient, mock_meta_service: dict[str, AsyncMock | Mock]
+) -> None:
+    """The ID is checked against the ad account's own Pixels, not taken on trust."""
+    business_id = _connected_and_finalized(client)
+
+    response = client.post(
+        f"/businesses/{business_id}/meta/pixel", json={"pixelId": "pixel_9"}
+    )
+
+    assert response.status_code == 400
+    assert "isn’t on the connected ad account" in response.json()["detail"]
+    connection = client.get(f"/businesses/{business_id}/meta").json()
+    assert connection["pixelId"] is None
+
+
+def test_set_pixel_does_not_ask_meta_again_for_the_pixel_already_chosen(
+    client: TestClient, mock_meta_service: dict[str, AsyncMock | Mock]
+) -> None:
+    business_id = _connected_and_finalized(client)
+    client.post(f"/businesses/{business_id}/meta/pixel", json={"pixelId": "pixel_1"})
+    mock_meta_service["pixels"].reset_mock()
+
+    response = client.post(
+        f"/businesses/{business_id}/meta/pixel", json={"pixelId": "pixel_1"}
+    )
+
+    assert response.status_code == 200
+    mock_meta_service["pixels"].assert_not_awaited()
+
+
+def test_set_pixel_maps_a_failed_check_with_meta_to_500(
+    client: TestClient, mock_meta_service: dict[str, AsyncMock | Mock]
+) -> None:
+    business_id = _connected_and_finalized(client)
+    mock_meta_service["pixels"].side_effect = MetaConnectionError("down")
+
+    response = client.post(
+        f"/businesses/{business_id}/meta/pixel", json={"pixelId": "pixel_1"}
+    )
+
+    assert response.status_code == 500
+    connection = client.get(f"/businesses/{business_id}/meta").json()
+    assert connection["pixelId"] is None
+
+
+def test_set_pixel_forgets_the_old_pixels_health_check(
+    client: TestClient, mock_meta_service: dict[str, AsyncMock | Mock]
+) -> None:
+    """A new Pixel must never be answered from the old one's cached check."""
+    from app.services import pixel_health
+
+    business_id = _connected_and_finalized(client)
+    pixel_health.remember(
+        business_id,
+        pixel_health.assess(
+            pixel_id="old", pixels=[], counts={}, now=datetime.now(UTC)
+        ),
+    )
+    assert pixel_health.cached_for(business_id) is not None
+
+    client.post(f"/businesses/{business_id}/meta/pixel", json={"pixelId": "pixel_1"})
+
+    assert pixel_health.cached_for(business_id) is None
 
 
 def test_set_pixel_clears_a_previous_skip(client: TestClient) -> None:
@@ -1465,8 +1560,12 @@ def _set_pixel(client: TestClient, business_id: str, pixel_id: str) -> None:
 
 @pytest.mark.asyncio
 async def test_choosing_a_different_pixel_forgets_the_purchasers_audience(
-    client: TestClient,
+    client: TestClient, mock_meta_service: dict[str, AsyncMock | Mock]
 ) -> None:
+    mock_meta_service["pixels"].return_value = [
+        MetaPixel(id="pixel_1", name="One"),
+        MetaPixel(id="pixel_2", name="Two"),
+    ]
     business_id = _connected_and_finalized(client)
     _set_pixel(client, business_id, "pixel_1")
     await _remember_audience(business_id)

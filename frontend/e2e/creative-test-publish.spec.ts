@@ -10,7 +10,7 @@ test('a SALES campaign publishes a creative test of 3 ads, paused by default', a
 }) => {
   await reachMetaPixelStep(page)
   // SALES optimizes for conversions, which needs a Pixel.
-  await page.getByLabel('Meta Pixel').selectOption({ label: 'Fake Pixel' })
+  await page.getByLabel('Meta Pixel').selectOption({ value: 'fake_pixel' })
   await page.getByRole('button', { name: 'Save Pixel' }).click()
   await finishOnboarding(page, { objectiveLabel: 'Sales' })
 

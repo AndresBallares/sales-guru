@@ -245,6 +245,56 @@ async def test_list_pages_returns_parsed_pages(monkeypatch: pytest.MonkeyPatch) 
 
 
 @pytest.mark.asyncio
+async def test_list_ad_pixels_asks_for_when_each_pixel_last_received_an_event(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Checked against Meta 2026-11-08: these fields come back on the adspixels edge.
+
+    (Asking for owner_ad_account too is refused with error 200, so it is not asked.)
+    """
+    client = _mock_client_returning(monkeypatch, _FakeResponse({"data": []}))
+
+    await meta.list_ad_pixels("some-token", "act_1")
+
+    _, params = client.calls[0]
+    assert params["fields"] == "id,name,last_fired_time,is_unavailable"
+
+
+@pytest.mark.asyncio
+async def test_list_ad_pixels_reads_metas_offset_timestamp_and_availability(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Meta writes the time as 2026-11-07T15:32:49-0500 (an offset with no colon)."""
+    _mock_client_returning(
+        monkeypatch,
+        _FakeResponse(
+            {
+                "data": [
+                    {
+                        "id": "2024258651467538",
+                        "name": "venzi jewelry",
+                        "last_fired_time": "2026-11-07T15:32:49-0500",
+                        "is_unavailable": False,
+                    },
+                    {"id": "9", "name": "Old", "is_unavailable": True},
+                ]
+            }
+        ),
+    )
+
+    pixels = await meta.list_ad_pixels("some-token", "act_1")
+
+    assert pixels[0].last_fired_at is not None
+    assert pixels[0].last_fired_at.astimezone(UTC) == datetime(
+        2026, 11, 7, 20, 32, 49, tzinfo=UTC
+    )
+    assert pixels[0].is_unavailable is False
+    # a Pixel that never fired has no time
+    assert pixels[1].last_fired_at is None
+    assert pixels[1].is_unavailable is True
+
+
+@pytest.mark.asyncio
 async def test_list_ad_pixels_returns_parsed_pixels(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1936,10 +1986,11 @@ async def test_list_pages_returns_a_canned_page_in_fake_mode(
 async def test_list_ad_pixels_returns_a_canned_pixel_in_fake_mode(
     fake_meta_mode: None,
 ) -> None:
-    """Fake mode returns one canned Pixel, no real call."""
+    """Fake mode returns one canned, recently active Pixel; no real call."""
     pixels = await meta.list_ad_pixels("fake-token", "act_fake_account")
 
-    assert pixels == [MetaPixel(id="fake_pixel", name="Fake Pixel")]
+    assert [(p.id, p.name) for p in pixels] == [("fake_pixel", "Fake Pixel")]
+    assert pixels[0].last_fired_at is not None
 
 
 @pytest.mark.asyncio

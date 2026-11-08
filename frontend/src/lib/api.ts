@@ -1357,6 +1357,45 @@ export interface MetaPage {
 export interface MetaPixel {
   id: string
   name: string
+  // When the Pixel last received an event from a website (null: never), so the owner can
+  // tell which dataset their store sends events to; and Meta's own "unavailable" flag.
+  lastFiredAt?: string | null
+  isUnavailable?: boolean
+}
+
+// The selected Pixel's latest health check (app/services/pixel_health.py).
+export type PixelHealthStatus =
+  | 'none_selected'
+  | 'ok'
+  | 'no_purchase'
+  | 'no_events'
+  | 'unavailable'
+  | 'unreadable'
+
+export interface OtherPixel {
+  id: string
+  name: string
+  lastFiredAt: string
+}
+
+export interface PixelHealth {
+  status: PixelHealthStatus
+  pixelId: string | null
+  pixelName: string | null
+  lastFiredAt: string | null
+  // When the server last looked at Meta (not when the page loaded).
+  checkedAt: string
+  warning: string | null
+  otherPixels: OtherPixel[]
+  windowDays: number
+}
+
+// Looked at on demand and kept a few minutes by the server; refresh asks to check again
+// (still limited to once a minute there).
+export function getPixelHealth(businessId: string, refresh = false): Promise<PixelHealth> {
+  return request<PixelHealth>(
+    `/businesses/${businessId}/pixel-health${refresh ? '?refresh=true' : ''}`,
+  )
 }
 
 export interface MetaConnection {

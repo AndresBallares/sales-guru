@@ -210,12 +210,6 @@ export function DashboardSection({
 
           {shown && (
             <>
-              {shown.pixelWarning && (
-                <p className="dash-warning" role="alert">
-                  <strong>Check your Pixel:</strong> {shown.pixelWarning}
-                </p>
-              )}
-
               {shown.metricsWarning && (
                 <p className="dash-warning" role="alert">
                   <strong>Results may be incomplete:</strong> {shown.metricsWarning}

@@ -186,6 +186,26 @@ def _meta_offline(
 
 
 @pytest.fixture(autouse=True)
+def _ad_account_pixels(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Give every test's ad account one Pixel, "pixel_1".
+
+    Choosing a Pixel is checked against the ad account's own Pixels, and Meta is
+    offline in tests, so tests that choose "pixel_1" through the API need it listed.
+    A test that cares which Pixels exist mocks list_ad_pixels itself.
+    """
+    from unittest.mock import AsyncMock
+
+    from app.api import meta as meta_api
+    from app.schemas.meta import MetaPixel
+
+    monkeypatch.setattr(
+        meta_api,
+        "list_ad_pixels",
+        AsyncMock(return_value=[MetaPixel(id="pixel_1", name="Test Pixel")]),
+    )
+
+
+@pytest.fixture(autouse=True)
 def _clean_database() -> None:
     """Empty every table before each test, for isolation between tests.
 

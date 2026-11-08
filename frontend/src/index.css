@@ -7850,3 +7850,81 @@ main > section.campaigns-overview {
     display: none;
   }
 }
+
+/* Pixel health (components/PixelHealthNotice.tsx): is the Pixel receiving the store's events,
+   and when was that last checked. Quiet while healthy, tinted when it needs attention. */
+.pixel-health {
+  margin: 0 0 1.25rem;
+  padding: 0.75rem 1rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card);
+  font-size: 0.9rem;
+}
+
+.pixel-health p {
+  margin: 0;
+}
+
+.pixel-health-main {
+  color: var(--text);
+}
+
+.pixel-health-meta {
+  margin-top: 0.3rem !important;
+  color: var(--text-secondary);
+  font-size: 0.82rem;
+}
+
+.pixel-health-ok {
+  border-color: var(--success-border);
+  background: var(--success-bg);
+}
+
+.pixel-health-no_events,
+.pixel-health-unavailable {
+  border-color: var(--error-border);
+  background: var(--error-bg);
+}
+
+.pixel-health-no_purchase {
+  border-color: var(--warning);
+  background: var(--warning-bg);
+}
+
+.pixel-health-again {
+  margin-left: 0.75rem;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--text);
+  font: inherit;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.pixel-health-again:disabled {
+  color: var(--text-secondary);
+  cursor: default;
+  text-decoration: none;
+}
+
+.pixel-publish-confirm {
+  margin: 0.75rem 0;
+}
+
+.pixel-publish-confirm .pixel-health {
+  margin-bottom: 0.5rem;
+}
+
+.pixel-publish-confirm-label {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  font-size: 0.9rem;
+}
+
+.pixel-publish-confirm-label input[type='checkbox'] {
+  width: auto;
+  margin-top: 0.2rem;
+}

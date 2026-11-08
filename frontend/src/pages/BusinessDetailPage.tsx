@@ -9,6 +9,7 @@ import { ArrowRightIcon } from '../components/icons'
 import { CampaignsSection } from '../components/CampaignsSection'
 import { DashboardSection } from '../components/DashboardSection'
 import { MetaExpiryNotice } from '../components/MetaExpiryNotice'
+import { PixelHealthPanel } from '../components/PixelHealthPanel'
 import { MetaConnectionSection } from '../components/MetaConnectionSection'
 import { MetaSettingsSection } from '../components/MetaSettingsSection'
 import { ProductsSection } from '../components/ProductsSection'
@@ -310,6 +311,7 @@ export function BusinessDetailPage() {
                             {metaConnection && (
                               <MetaExpiryNotice businessId={businessId} connection={metaConnection} />
                             )}
+                            {metaSetupComplete && <PixelHealthPanel businessId={businessId} />}
                             <DashboardSection
                               businessId={businessId}
                               refreshKey={resultsRevision}

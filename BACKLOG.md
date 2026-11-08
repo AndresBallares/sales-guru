@@ -141,6 +141,22 @@ campaigns tab (seen in the dark-mode phone screenshot of `e2e/performance-dashbo
 the Advertising Performance dashboard. Fix in a small PR: stack the heading row on narrow screens, and add a phone-width
 e2e check (no overlap, button reachable) like `split-card.spec.ts` does for the strategy card.
 
+### Flaky e2e: two "Import from document" buttons on the Avatars tab
+`e2e/avatar-import.spec.ts` failed once in a full run (2026-11-08) with a strict-mode violation: for a moment the
+Avatars tab shows both the header's "Import from document" button and the empty state's, and the test's locator
+matches both. It passed on the retry. Fix the spec (scope the locator to the header, or wait for the list to
+settle) rather than raising retries. The full log is kept at the run's `e2e-full-pixel2.log` in the scratchpad.
+
+### Enforce the Pixel publish hold on the server
+The hold for a Pixel that receives no website events (or that Meta marks unavailable) is only on
+the page: the Approve & Publish buttons stay disabled until the owner ticks "Publish anyway"
+(`pixel-guard`, 2026-11-08), but the API still publishes if called directly. Make the server refuse:
+publish (and approve-and-publish) should look at `get_pixel_health` and answer 409 with the warning
+unless the request carries an explicit confirmation (for example `confirmPixelWarning: true`), which the
+page sends once the owner has ticked the box. Tests first: refused without it, accepted with it, never
+refused for `no_purchase`, `unreadable` or `none_selected`, and a failed check never blocks. Update the
+two publish screens to send the flag, and PRD.md and docs/phase-7.md.
+
 ## Done
 
 - **Dashboard tests leaked a `scrollIntoView` stub.** Tests assigned a stub to

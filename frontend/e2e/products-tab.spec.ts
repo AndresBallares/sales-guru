@@ -155,7 +155,7 @@ test('an edit that would make ads out of date asks first, and Go back changes no
 }) => {
   // A Sales creative test with generated ads (the same faked flow as edit-creative.spec.ts).
   await reachMetaPixelStep(page)
-  await page.getByLabel('Meta Pixel').selectOption({ label: 'Fake Pixel' })
+  await page.getByLabel('Meta Pixel').selectOption({ value: 'fake_pixel' })
   await page.getByRole('button', { name: 'Save Pixel' }).click()
   await finishOnboarding(page, { objectiveLabel: 'Sales' })
   await page.getByRole('button', { name: 'Generate strategy' }).click()
@@ -217,7 +217,7 @@ test('delete: a product no campaign uses goes after a question; one a campaign u
 }) => {
   // Onboarding leaves one campaign using one product (the wallets).
   await reachMetaPixelStep(page)
-  await page.getByLabel('Meta Pixel').selectOption({ label: 'Fake Pixel' })
+  await page.getByLabel('Meta Pixel').selectOption({ value: 'fake_pixel' })
   await page.getByRole('button', { name: 'Save Pixel' }).click()
   await finishOnboarding(page, { objectiveLabel: 'Sales' })
 

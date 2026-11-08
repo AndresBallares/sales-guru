@@ -4,7 +4,7 @@ import re
 from datetime import datetime
 from typing import Literal
 
-from pydantic import field_validator
+from pydantic import AliasChoices, Field, field_validator
 
 from app.schemas.base import CamelCaseModel
 
@@ -30,10 +30,34 @@ class MetaPage(CamelCaseModel):
 
 
 class MetaPixel(CamelCaseModel):
-    """One of the ad account's Meta Pixels, as offered for selection."""
+    """One of the ad account's Meta Pixels, as offered for selection.
+
+    ``last_fired_at`` is when the Pixel last received an event from a website
+    (Meta's ``last_fired_time``; None when it never has), so the owner can tell
+    which dataset their store actually sends events to. ``is_unavailable`` is Meta's
+    own flag for a Pixel that can no longer be used.
+    """
 
     id: str
     name: str
+    last_fired_at: datetime | None = Field(
+        default=None,
+        validation_alias=AliasChoices(
+            "last_fired_at", "lastFiredAt", "last_fired_time"
+        ),
+    )
+    is_unavailable: bool = False
+
+    @field_validator("last_fired_at", mode="before")
+    @classmethod
+    def _read_metas_timestamp(cls, value: object) -> object:
+        """Meta writes ``2026-11-07T15:32:49-0500``: an offset with no colon."""
+        if isinstance(value, str):
+            try:
+                return datetime.strptime(value, "%Y-%m-%dT%H:%M:%S%z")
+            except ValueError:
+                return value
+        return value
 
 
 class MetaFinalizeRequest(CamelCaseModel):

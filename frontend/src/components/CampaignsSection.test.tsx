@@ -59,6 +59,7 @@ vi.mock('../lib/api', async (importOriginal) => {
   return {
     ...actual,
     createCampaign: vi.fn<typeof actual.createCampaign>(),
+    getPixelHealth: vi.fn<typeof actual.getPixelHealth>(),
     updateCampaign: vi.fn<typeof actual.updateCampaign>(),
     regenerateCreativeCopy: vi.fn<typeof actual.regenerateCreativeCopy>(),
     getPublishStatus: vi.fn<typeof actual.getPublishStatus>(),
@@ -432,6 +433,16 @@ beforeEach(() => {
   window.sessionStorage.clear()
   publishPolls.reset()
   vi.resetAllMocks()
+  mockedApi.getPixelHealth.mockResolvedValue({
+    status: 'ok',
+    pixelId: 'p1',
+    pixelName: 'venzi jewelry',
+    lastFiredAt: '2026-11-07T20:32:49Z',
+    checkedAt: '2026-11-08T02:10:00Z',
+    warning: null,
+    otherPixels: [],
+    windowDays: 30,
+  })
   mockedApi.getOptions.mockResolvedValue(ALL_OPTIONS)
   mockedApi.getBusiness.mockResolvedValue({
     id: 'biz-1',
@@ -3627,6 +3638,78 @@ describe('CampaignsSection', () => {
 
     // The status pill and the paused-status block both say "Paused".
     expect((await screen.findAllByText('Paused')).length).toBeGreaterThan(0)
+  })
+
+  it('does not look at the Pixel while nothing here can be published', async () => {
+    mockedApi.listCampaigns.mockResolvedValue([
+      {
+        id: 'camp-1',
+        name: null,
+        objective: 'SALES',
+        status: 'LIVE',
+        productId: null,
+        audienceId: null,
+        metaCampaignId: 'meta_campaign_1',
+        eventVenueKey: null,
+        startDate: null,
+        endDate: null,
+        pausedReason: null,
+        dailySpendFlag: null,
+        needsDestinationUrl: false,
+      },
+    ])
+    mockedApi.getStrategy.mockResolvedValue(FAKE_STRATEGY)
+    mockedApi.listCreatives.mockResolvedValue([fakeCreative({ status: 'SELECTED' })])
+
+    renderCampaigns(<CampaignsSection businessId="biz-1" />)
+    await screen.findByRole('heading', { name: 'Sales' })
+
+    expect(mockedApi.getPixelHealth).not.toHaveBeenCalled()
+  })
+
+  it('holds Approve & Publish until the owner confirms a Pixel that receives no events', async () => {
+    mockedApi.listCampaigns.mockResolvedValue([
+      {
+        id: 'camp-1',
+        name: null,
+        objective: 'SALES',
+        status: 'PENDING_APPROVAL',
+        productId: null,
+        audienceId: null,
+        metaCampaignId: null,
+        eventVenueKey: null,
+        startDate: null,
+        endDate: null,
+        pausedReason: null,
+        dailySpendFlag: null,
+        needsDestinationUrl: false,
+      },
+    ])
+    mockedApi.getStrategy.mockResolvedValue(FAKE_STRATEGY)
+    mockedApi.listCreatives.mockResolvedValue([fakeCreative({ status: 'SELECTED' })])
+    mockedApi.getPixelHealth.mockResolvedValue({
+      status: 'no_events',
+      pixelId: 'p1',
+      pixelName: 'Sales Guru',
+      lastFiredAt: null,
+      checkedAt: '2026-11-08T02:10:00Z',
+      warning: 'This Pixel (Sales Guru) received no website events in the last 30 days.',
+      otherPixels: [],
+      windowDays: 30,
+    })
+    const user = userEvent.setup()
+
+    renderCampaigns(<CampaignsSection businessId="biz-1" />)
+    await screen.findByRole('heading', { name: 'Sales' })
+
+    const publish = screen.getByRole('button', { name: 'Approve & Publish' })
+    const confirm = await screen.findByRole('checkbox', { name: /Publish anyway/ })
+    expect(publish).toBeDisabled()
+    expect(mockedApi.approveCampaign).not.toHaveBeenCalled()
+
+    await user.click(confirm)
+
+    expect(publish).toBeEnabled()
   })
 
   it('publishes with paused=false when the "Publish paused" checkbox is unchecked', async () => {
