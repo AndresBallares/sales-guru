@@ -97,3 +97,49 @@ describe('TrendChart', () => {
     expect(screen.getAllByRole('button', { name: /on Nov 5/ })).toHaveLength(1)
   })
 })
+
+
+describe('TrendChart identity and accessibility', () => {
+  it('has a trending-up icon in a circle beside its heading', () => {
+    render(<TrendChart daily={daily} rangeLabel="Last 7 days" />)
+
+    const section = screen.getByRole('region', { name: 'Performance Over Time' })
+    const icon = section.querySelector('.metric-icon[data-metric="trend"]') as HTMLElement
+    expect(icon).not.toBeNull()
+    expect(icon).toHaveAttribute('aria-hidden', 'true')
+  })
+
+  it('names the series in a text legend with a marker in the series colour', async () => {
+    render(<TrendChart daily={daily} rangeLabel="Last 7 days" />)
+
+    const legend = screen.getByRole('list', { name: 'Chart legend' })
+    expect(within(legend).getByText('Advertising Spend')).toBeInTheDocument()
+    const marker = legend.querySelector('.perf-legend-marker') as HTMLElement
+    expect(marker).toHaveAttribute('aria-hidden', 'true')
+    expect(marker.style.getPropertyValue('--series')).toBe('#047857')
+
+    await userEvent.selectOptions(screen.getByLabelText('Metric'), 'purchases')
+    expect(within(legend).getByText('Purchases')).toBeInTheDocument()
+    // The purchases line is the darker amber, which holds 3:1 on a white card.
+    const amber = legend.querySelector('.perf-legend-marker') as HTMLElement
+    expect(amber.style.getPropertyValue('--series')).toBe('#B7791F')
+  })
+
+  it('draws the line and points in the same colour as the marker', () => {
+    render(<TrendChart daily={daily} rangeLabel="Last 7 days" />)
+
+    const plot = document.querySelector('.perf-chart-plot') as HTMLElement
+    expect(plot.style.getPropertyValue('--series')).toBe('#047857')
+    expect(plot.style.getPropertyValue('--series-dark')).toBe('#4ADE9E')
+  })
+
+  it('describes the chart in text for a screen reader', () => {
+    render(<TrendChart daily={daily} rangeLabel="Last 7 days" />)
+
+    const chart = screen.getByRole('img', { name: /Advertising Spend by day/ })
+    const description = document.getElementById(chart.getAttribute('aria-describedby') ?? '')
+    expect(description).not.toBeNull()
+    expect(description).toHaveTextContent('2 of 3 days have data')
+    expect(description).toHaveTextContent('from $100.00 to $150.00')
+  })
+})

@@ -6,6 +6,7 @@ import { FunnelSection } from './FunnelSection'
 import { Delta, MetricCard } from './MetricCard'
 import { SyncStatus } from './SyncStatus'
 import { TrendChart } from './TrendChart'
+import { WhatThisMeans } from './WhatThisMeans'
 
 const RANGES: { days: PerformanceDays; label: string }[] = [
   { days: 7, label: 'Last 7 days' },
@@ -62,12 +63,19 @@ export function PerformanceDashboard({
   return (
     <section className="perf" aria-labelledby="perf-heading" aria-busy={busy}>
       <header className="perf-header">
-        <div className="perf-title">
-          <h2 id="perf-heading">Advertising Performance</h2>
-          <p>
-            Understand how your ads are performing, what customers are doing, and how much revenue
-            your advertising generates.
-          </p>
+        <div className="perf-title-row">
+          <span className="perf-brand" aria-hidden="true">
+            <svg width="26" height="42" viewBox="0 0 320 512" fill="currentColor" focusable="false">
+              <path d="M279.14 288l14.22-92.66h-88.91v-60.13c0-25.35 12.42-50.06 52.24-50.06h40.42V6.26S260.43 0 225.36 0c-73.22 0-121.08 44.38-121.08 124.72v70.62H22.89V288h81.39v224h100.17V288z" />
+            </svg>
+          </span>
+          <div className="perf-title">
+            <h2 id="perf-heading">Advertising Performance</h2>
+            <p>
+              Understand how your ads are performing, what customers are doing, and how much
+              revenue your advertising generates.
+            </p>
+          </div>
         </div>
         <div className="perf-controls">
           <div className="perf-range">
@@ -214,6 +222,8 @@ export function PerformanceDashboard({
               <MetricCard metric="addToCartRate" value={formatPercent(m.addToCartRate)} />
             </div>
           </section>
+
+          <WhatThisMeans />
 
           <TrendChart
             daily={data.daily}
