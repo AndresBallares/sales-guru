@@ -354,6 +354,59 @@ internal address and leave the external allowlist empty, so the database has no 
 and a migration (a dump and restore with a short maintenance window), so it is its own project. Also consider rotating the
 database password once the allowlist is tightened, since the URL has been handled in terminals.
 
+### Recognize Anthropic billing and auth errors: tell the user plainly, alert the admin with the cause
+**Found 2026-11-08.** VENZI's first premium research run (Claude Fable 5.1, standard depth) failed after 3.5 minutes and
+$1.62 with Anthropic's own error "Your credit balance is too low to access the Anthropic API" (an
+`invalid_request_error` carried by `anthropic.APIStatusError`). The business user saw only "Something went wrong while
+researching. Please try again." (`_GENERIC_FAILURE`, `research_runner.py`), and the cause could only be found by reading
+Render's logs. Whether the account really was out of credit or the production key belongs to another organization was not
+visible from the app at all.
+
+**What happens today.** Five callers each catch `anthropic.AnthropicError` themselves and re-raise their own error with the
+provider's raw text in it (`AvatarImportError`, `CreativeAgentError`, `OptimizerError`, `StrategistError` as
+"Anthropic API call failed: <text>"); the research runner retries only rate limits, connection errors and 5xx
+(`RateLimitError`, `APIConnectionError`, `InternalServerError`) and turns anything else into the generic failure with
+`stopReason = system_error`. So: nothing separates "the account is out of credit" or "the key is invalid" (which only the
+owner can fix, and which stops *every* AI feature at once) from a one-off bug; the owner is told nothing; and, to verify, the
+raw provider text may reach the page in the endpoints that surface those errors.
+
+**Proposal.**
+1. **One classifier**, used by every Anthropic call site (the shared entry point is `app/services/llm_call.py`, with usage
+   logging in `llm_usage.py`): `classify_provider_error(exc)` returns a kind, whether it is retryable, the message for the
+   business user and the cause for the admin. Kinds to cover: **billing** (400 `invalid_request_error` whose message says the
+   credit balance is too low; also a spend or usage limit), **auth** (401 invalid key, 403 permission or an organization
+   disabled), **model** (404 or "model not found / not available to this key"), **rate limit** (429, retry), **overloaded or
+   server** (529 and 5xx, retry), **network** (retry), and everything else unchanged. Match on the structured error type, status
+   and code first and the message text only as a fallback, and keep a test per kind with the real shape of Anthropic's error
+   body (the credit one is captured above).
+2. **The business user** sees one calm line for billing, auth and model problems: "AI features are temporarily unavailable. We
+   have been told and are fixing it; nothing you entered is lost." (never the provider's text, never a key or an account id), and
+   the existing retry wording for the retryable kinds. A failed run still must not use a monthly run (`system_error`, as now).
+3. **The admin is alerted with the cause, without reading logs.** There is no admin role in the app (`research_access.py` is
+   shell-only), so the channel is a decision: (a) a stored provider-incident record (kind, first and last seen, count, the
+   request id, the model, which feature) plus an owner-only read, for example `scripts/provider_status.py` and/or a status
+   endpoint behind a secret; (b) a push to a webhook the owner chooses (Slack, Discord, ntfy), one URL in the environment;
+   (c) email once a sending domain exists (blocked today: `RESEND_API_KEY` is unset in production, see the forgot-password
+   email gap). Alerts are **deduplicated** (one per kind per few hours, with a count) and the incident **closes itself** when a
+   later call succeeds. Suggested start: (a) plus (b).
+4. **Say which key and account without exposing it.** The incident record carries the key's last 4 characters (from the
+   configured key, never the key) and the model, so "the production key ending 1234 has no credit" can be compared with the
+   Console in seconds. Never log or store the key, the request body or the user's data.
+5. **Cheap detection before spending.** Consider a once-a-day, near-free probe (Anthropic's token-counting endpoint, or one
+   tiny call) so a dead key or an empty balance is found before a customer's long run starts, and a start-of-run guard that
+   refuses to begin a premium run when the last probe failed, with the same plain message.
+6. **Cost note.** A run that spent money and then failed (this one: $1.62) is already recorded with its cost; the incident
+   should link to it, and the admin message should say what was spent.
+
+**Tests first (when built).** One per error kind with the real body shape; the user message never contains provider text;
+the research run still counts as failed, not as a used run; the incident is created once, counted, deduplicated, and closed by a
+later success; no key material in any message, log line or stored field; the five callers all route through the classifier;
+the webhook sender is mocked (no network in tests).
+
+**Open questions for the owner.** The alert channel (webhook now, email later?); who sees the status (only the owner); whether to
+add the daily probe and the start-of-run guard; the wording of the user message; whether a billing incident should also pause
+the 15-minute optimizer's Anthropic calls to avoid a flood of identical failures.
+
 ## Done
 
 - **Dashboard tests leaked a `scrollIntoView` stub.** Tests assigned a stub to
