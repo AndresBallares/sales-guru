@@ -362,6 +362,13 @@ researching. Please try again." (`_GENERIC_FAILURE`, `research_runner.py`), and 
 Render's logs. Whether the account really was out of credit or the production key belongs to another organization was not
 visible from the app at all.
 
+**Widened 2026-11-10: dropped connections too.** The second paid run (deep, Fable 5.1, $4.28) did not hit a billing error: its connection
+to Anthropic was cut in the middle of a streamed answer (`httpx.RemoteProtocolError`, "incomplete chunked read") and the user saw the
+same generic message. The research runner now retries those (branch `fix-avatar-research`), but the classifier below should treat
+"network" as a first-class kind for **every** Anthropic call site, not only research. The other four callers use non-streaming `messages.create`, where the SDK wraps transport errors as `APIConnectionError` (an
+`AnthropicError`, already caught), so only streaming code can leak a raw `httpx.TransportError`, as research did. The admin alert should also count dropped connections (a few are normal; a
+burst means a network or provider problem) and say so in plain words.
+
 **What happens today.** Five callers each catch `anthropic.AnthropicError` themselves and re-raise their own error with the
 provider's raw text in it (`AvatarImportError`, `CreativeAgentError`, `OptimizerError`, `StrategistError` as
 "Anthropic API call failed: <text>"); the research runner retries only rate limits, connection errors and 5xx
@@ -406,6 +413,17 @@ the webhook sender is mocked (no network in tests).
 **Open questions for the owner.** The alert channel (webhook now, email later?); who sees the status (only the owner); whether to
 add the daily probe and the start-of-run guard; the wording of the user message; whether a billing incident should also pause
 the 15-minute optimizer's Anthropic calls to avoid a flood of identical failures.
+
+### Resume a failed research run from its last completed phase
+**Found 2026-11-10.** A run that fails late (the dropped-connection failure: 30 searches, 37 pages, $4.28, lost in the findings step)
+has to be started again from nothing. See "Dropped connections during streaming" in `docs/phase-7.md` for the full plan: store the
+conversation, observed page text and counters after each phase (new column, both schemas, both migrations, throwaway Postgres check),
+`POST .../research-runs/{id}/resume` for `FAILED` runs with `stopReason` `provider`, `system_error` or `stale`, a Resume button; no extra
+monthly run (same row, a `FAILED` run never counts); about $3 instead of $4.90 for a deep Fable run that failed at findings. **Decided 2026-11-10:
+not now.** Build it if research failures continue after the retry fix. Agreed terms: the conversation column; fetched page text kept
+for 7 days after the run ends and deleted on review or discard (the runner stores none today); no extra monthly run; about $3 for a
+deep Fable run that failed at findings against about $4.90 to start over. Today's failed run cannot be resumed: nothing from its
+research was saved.
 
 ## Done
 
