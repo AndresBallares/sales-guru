@@ -31,6 +31,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any, cast
 
 import anthropic
+import httpx
 from prisma.models import Business, ResearchRun
 from prisma.types import ResearchRunUpdateInput
 
@@ -480,7 +481,7 @@ class _Run:
         await _sleep(wait)
 
     async def request(self, phase: Phase, tools: list[dict[str, Any]]) -> Turn:
-        """Run one request, retrying provider rate limits and outages with backoff."""
+        """Run one request, retrying rate limits, outages and dropped connections."""
         for attempt in range(API_RETRY_ATTEMPTS + 1):
             await self.gate()
             max_tokens = self.max_tokens_for(tools)
@@ -507,12 +508,16 @@ class _Run:
                 anthropic.RateLimitError,
                 anthropic.APIConnectionError,
                 anthropic.InternalServerError,
+                # A connection that drops or resets mid-stream surfaces as a raw
+                # httpx error, not an Anthropic one (the 2026-11-10 deep run).
+                httpx.TransportError,
             ) as exc:
                 if attempt >= API_RETRY_ATTEMPTS:
                     raise _Stop(
                         "provider",
-                        "The model provider kept rate limiting or failing requests; "
-                        "the run was stopped.",
+                        "The model provider kept failing or dropping requests "
+                        "(rate limits, outages or lost connections); the run was "
+                        "stopped.",
                     ) from exc
                 await self.backoff(attempt)
                 continue

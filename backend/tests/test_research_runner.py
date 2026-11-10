@@ -514,7 +514,46 @@ def test_a_persistent_provider_429_fails_the_run_without_crashing(rig: Rig) -> N
     assert run["status"] == "FAILED"
     assert run["stopReason"] == "provider"
     assert run["error"]
-    assert "rate" in run["error"].lower()
+    assert "provider" in run["error"].lower()
+
+
+_DROPS = [
+    pytest.param(
+        lambda: httpx.RemoteProtocolError(
+            "peer closed connection without sending complete message body "
+            "(incomplete chunked read)"
+        ),
+        id="dropped-mid-body",
+    ),
+    pytest.param(lambda: httpx.ReadError("connection reset"), id="read-error"),
+    pytest.param(lambda: httpx.ConnectError("connection refused"), id="connect-error"),
+    pytest.param(lambda: httpx.ReadTimeout("stalled"), id="read-timeout"),
+]
+
+
+@pytest.mark.parametrize("make_drop", _DROPS)
+def test_a_connection_dropped_while_streaming_is_retried_and_the_run_continues(
+    rig: Rig, make_drop: Callable[[], Exception]
+) -> None:
+    rig.play([brand_turn(), voice_turn(), make_drop(), findings_turn(), avatars_turn()])
+    run = rig.run()
+    assert run["status"] == "NEEDS_REVIEW"
+    assert run["stopReason"] is None
+    assert rig.sleeps == [research_runner.BACKOFF_SECONDS[0]]
+
+
+def test_a_connection_that_keeps_dropping_stops_with_the_provider_reason(
+    rig: Rig,
+) -> None:
+    drop = httpx.RemoteProtocolError("incomplete chunked read")
+    rig.play([drop] * (research_runner.API_RETRY_ATTEMPTS + 1))
+    run = rig.run()
+    assert run["status"] == "FAILED"
+    assert run["stopReason"] == "provider"
+    assert run["error"] != research_runner._GENERIC_FAILURE
+    assert "provider" in run["error"].lower()
+    assert "incomplete chunked read" not in run["error"]
+    assert rig.sleeps == list(research_runner.BACKOFF_SECONDS)
 
 
 def test_an_unexpected_error_fails_the_run_with_a_generic_message(rig: Rig) -> None:
