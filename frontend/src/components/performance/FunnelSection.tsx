@@ -2,6 +2,7 @@ import type { PerformanceFunnelKey, PerformanceFunnelStage } from '../../lib/api
 import { UNAVAILABLE, formatInteger, formatMoney, formatPercent } from '../../lib/dashboardFormat'
 import { METRIC_COPY, type MetricKey } from '../../lib/metricCopy'
 import { InfoTip } from './InfoTip'
+import { MetricIcon } from './MetricIcon'
 
 interface StageCopy {
   label: string
@@ -58,7 +59,10 @@ export function FunnelSection({ funnel }: { funnel: PerformanceFunnelStage[] }) 
           return (
             <li key={stage.key} className="perf-funnel-stage">
               <div className="perf-card-head">
-                <h4>{copy.label}</h4>
+                <div className="perf-funnel-title">
+                  <MetricIcon metric={copy.metric} size="funnel" />
+                  <h4>{copy.label}</h4>
+                </div>
                 <InfoTip metric={copy.metric} />
               </div>
               <p className="perf-value">{stage.count === null ? UNAVAILABLE : count(stage)}</p>

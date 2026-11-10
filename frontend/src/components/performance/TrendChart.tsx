@@ -1,17 +1,25 @@
-import { useId, useState } from 'react'
+import { useId, useState, type CSSProperties } from 'react'
 import type { PerformanceDailyPoint } from '../../lib/api'
 import { formatInteger, formatMoney, formatRatio } from '../../lib/dashboardFormat'
+import { METRIC_STYLE, type StyleKey } from '../../lib/metricStyle'
+import { MetricIcon } from './MetricIcon'
 
 type ChartMetric = 'spend' | 'purchases' | 'revenue' | 'costPerSale' | 'roas' | 'addToCart' | 'linkClicks'
 
-const METRICS: { key: ChartMetric; label: string; format: (v: number) => string }[] = [
-  { key: 'spend', label: 'Advertising Spend', format: formatMoney },
-  { key: 'purchases', label: 'Purchases', format: formatInteger },
-  { key: 'revenue', label: 'Revenue', format: formatMoney },
-  { key: 'costPerSale', label: 'Cost Per Sale', format: formatMoney },
-  { key: 'roas', label: 'ROAS', format: formatRatio },
-  { key: 'addToCart', label: 'Add-to-Carts', format: formatInteger },
-  { key: 'linkClicks', label: 'Link Clicks', format: formatInteger },
+const METRICS: {
+  key: ChartMetric
+  label: string
+  // Which metric's colours the line, the points and the legend marker are drawn in.
+  style: StyleKey
+  format: (v: number) => string
+}[] = [
+  { key: 'spend', style: 'spend', label: 'Advertising Spend', format: formatMoney },
+  { key: 'purchases', style: 'purchases', label: 'Purchases', format: formatInteger },
+  { key: 'revenue', style: 'purchaseRevenue', label: 'Revenue', format: formatMoney },
+  { key: 'costPerSale', style: 'cac', label: 'Cost Per Sale', format: formatMoney },
+  { key: 'roas', style: 'roas', label: 'ROAS', format: formatRatio },
+  { key: 'addToCart', style: 'addToCart', label: 'Add-to-Carts', format: formatInteger },
+  { key: 'linkClicks', style: 'linkClicks', label: 'Link Clicks', format: formatInteger },
 ]
 
 const WIDTH = 640
@@ -40,6 +48,7 @@ export function TrendChart({
   const [metricKey, setMetricKey] = useState<ChartMetric>('spend')
   const [active, setActive] = useState<number | null>(null)
   const selectId = useId()
+  const descriptionId = useId()
   const metric = METRICS.find((m) => m.key === metricKey) ?? METRICS[0]
 
   const values = daily.map((d) => d[metric.key])
@@ -68,12 +77,21 @@ export function TrendChart({
   if (run.length > 1) segments.push(run.join(' '))
 
   const activeValue = active === null ? null : values[active]
+  const tone = METRIC_STYLE[metric.style]
+  const seriesVars = { '--series': tone.light.fg, '--series-dark': tone.dark.fg } as CSSProperties
+  const description =
+    known.length === 0
+      ? ''
+      : `${metric.label} by day. ${known.length} of ${daily.length} days have data, from ${metric.format(Math.min(...known))} to ${metric.format(top)}.`
 
   return (
     <section className="perf-section" aria-labelledby="perf-trend-heading">
-      <h3 id="perf-trend-heading" className="perf-section-title">
-        Performance Over Time
-      </h3>
+      <div className="perf-section-heading">
+        <MetricIcon metric="trend" size="heading" />
+        <h3 id="perf-trend-heading" className="perf-section-title">
+          Performance Over Time
+        </h3>
+      </div>
       <p className="perf-section-sub">Understand how your advertising results change over time.</p>
       <div className="perf-trend-controls">
         <label htmlFor={selectId}>Metric</label>
@@ -92,6 +110,12 @@ export function TrendChart({
           ))}
         </select>
         <span className="perf-trend-range">Showing the {rangeLabel.toLowerCase()}</span>
+        <ul className="perf-legend" aria-label="Chart legend">
+          <li>
+            <span className="perf-legend-marker" aria-hidden="true" style={seriesVars} />
+            {metric.label}
+          </li>
+        </ul>
       </div>
 
       {known.length === 0 ? (
@@ -101,11 +125,15 @@ export function TrendChart({
         </p>
       ) : (
         <div className="perf-chart">
-          <div className="perf-chart-plot">
+          <div className="perf-chart-plot" style={seriesVars}>
+          <p id={descriptionId} className="visually-hidden">
+            {description}
+          </p>
           <svg
             viewBox={`0 0 ${WIDTH} ${HEIGHT}`}
             role="img"
             aria-label={`${metric.label} by day`}
+            aria-describedby={descriptionId}
             preserveAspectRatio="xMidYMid meet"
           >
             {[0, 0.5, 1].map((t) => (

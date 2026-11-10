@@ -7401,10 +7401,15 @@ main > section.campaigns-overview {
   margin-top: 1rem;
 }
 
+/* A card: the metric's icon in its circle at the left, and beside it (16-20px away) the name, the
+   number, the change and the note. The card is a size container so the number can be sized from its
+   own width: it stays the largest thing on the card and never runs out of its box. */
 .perf-card {
-  display: flex;
-  flex-direction: column;
-  gap: 0.35rem;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 1.1rem;
+  align-items: stretch;
+  container-type: inline-size;
   min-height: 9.5rem;
   padding: 1.1rem 1.2rem;
   background: var(--surface);
@@ -7413,13 +7418,48 @@ main > section.campaigns-overview {
   box-shadow: var(--shadow-card);
 }
 
+.perf-card > .metric-icon {
+  align-self: start;
+}
+
+.perf-card-body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  min-width: 0;
+}
+
 .perf-card-primary {
   padding: 1.35rem 1.4rem;
   min-height: 12rem;
 }
 
 .perf-card-primary .perf-value {
-  font-size: 2.35rem;
+  font-size: clamp(1.5rem, 9.5cqw, 2.35rem);
+}
+
+/* The metric icon: a tinted circle with the glyph centred in it. The colours come from
+   lib/metricStyle.ts through custom properties; dark mode swaps to the lighter tints. */
+.metric-icon {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  color: var(--m-fg);
+  background: var(--m-bg);
+}
+
+:root[data-theme='dark'] .metric-icon {
+  color: var(--m-fg-dark);
+  background: var(--m-bg-dark);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) .metric-icon {
+    color: var(--m-fg-dark);
+    background: var(--m-bg-dark);
+  }
 }
 
 .perf-overview > .perf-card:nth-child(4) {
@@ -7444,7 +7484,8 @@ main > section.campaigns-overview {
 
 .perf-value {
   margin: 0;
-  font-size: 1.75rem;
+  overflow-wrap: anywhere;
+  font-size: clamp(1.25rem, 8cqw, 1.75rem);
   font-weight: 700;
   line-height: 1.15;
   letter-spacing: -0.01em;
@@ -7668,14 +7709,14 @@ main > section.campaigns-overview {
 
 .perf-chart-line {
   fill: none;
-  stroke: var(--primary);
+  stroke: var(--series, var(--primary));
   stroke-width: 2.5;
   stroke-linejoin: round;
   stroke-linecap: round;
 }
 
 .perf-chart-dot {
-  fill: var(--primary);
+  fill: var(--series, var(--primary));
   stroke: var(--surface);
   stroke-width: 1.5;
 }
@@ -7927,4 +7968,139 @@ main > section.campaigns-overview {
 .pixel-publish-confirm-label input[type='checkbox'] {
   width: auto;
   margin-top: 0.2rem;
+}
+
+/* Chart series colours follow the metric (lib/metricStyle.ts); the dark theme uses the lighter tint. */
+:root[data-theme='dark'] .perf-chart-plot {
+  --series: var(--series-dark);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) .perf-chart-plot {
+    --series: var(--series-dark);
+  }
+}
+
+.perf-legend {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 0.4rem 1rem;
+  margin: 0 0 0 auto;
+  padding: 0;
+  list-style: none;
+  color: var(--text-secondary);
+  font-size: 0.85rem;
+}
+
+.perf-legend li {
+  display: inline-flex;
+  align-items: center;
+}
+
+.perf-legend-marker {
+  width: 0.7rem;
+  height: 0.7rem;
+  margin-right: 0.45rem;
+  border-radius: 50%;
+  background: var(--series);
+}
+
+:root[data-theme='dark'] .perf-legend-marker {
+  background: var(--series-dark);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) .perf-legend-marker {
+    background: var(--series-dark);
+  }
+}
+
+/* Period comparison: an arrow as well as words and colour. */
+.perf-delta {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.3rem;
+  line-height: 1.3;
+}
+
+/* Sits on the first line of the words when they wrap. */
+.perf-delta-arrow {
+  display: inline-flex;
+  margin-top: 0.1em;
+}
+
+/* Section headings with an icon circle. */
+.perf-section-heading {
+  display: flex;
+  align-items: center;
+  gap: 0.9rem;
+}
+
+.perf-funnel-title {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  min-width: 0;
+}
+
+/* The Facebook mark beside the page title. */
+.perf-title-row {
+  display: flex;
+  align-items: center;
+  gap: 1.25rem;
+  min-width: 0;
+}
+
+.perf-brand {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 76px;
+  height: 76px;
+  border-radius: 50%;
+  background: #1877f2;
+  color: #fff;
+}
+
+/* What this means: three terms in plain words, each with its metric's icon. */
+.perf-means-list {
+  margin: 1rem 0 0;
+  padding: 0;
+  list-style: none;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card);
+}
+
+.perf-means-row {
+  display: flex;
+  align-items: center;
+  gap: 1.1rem;
+  padding: 1rem 1.25rem;
+}
+
+.perf-means-row + .perf-means-row {
+  border-top: 1px solid var(--border);
+}
+
+.perf-means-row strong {
+  display: block;
+}
+
+.perf-means-row p {
+  margin: 0.15rem 0 0;
+  color: var(--text-secondary);
+  font-size: 0.9rem;
+}
+
+@media (max-width: 640px) {
+  .perf-brand {
+    width: 64px;
+    height: 64px;
+  }
+
+  .perf-brand svg {
+    width: 22px;
+  }
 }

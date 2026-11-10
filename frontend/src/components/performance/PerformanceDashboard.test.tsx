@@ -443,3 +443,53 @@ describe('cost and revenue efficiency', () => {
     }
   })
 })
+
+
+describe('icons and branding', () => {
+  it('gives every funnel step its icon', async () => {
+    renderDashboard()
+    await loaded()
+
+    const funnel = screen.getByRole('region', { name: 'From Click to Customer' })
+    const metrics = Array.from(funnel.querySelectorAll('.metric-icon')).map(
+      (el) => (el as HTMLElement).dataset.metric,
+    )
+    expect(metrics).toEqual([
+      'landingPageViews',
+      'addToCart',
+      'initiatedCheckout',
+      'purchases',
+      'purchaseRevenue',
+    ])
+  })
+
+  it('gives every metric card an icon, so no card is left bare', async () => {
+    renderDashboard()
+    await loaded()
+
+    const cards = screen.getAllByRole('article')
+    expect(cards.length).toBeGreaterThanOrEqual(16)
+    for (const card of cards) expect(card.firstElementChild).toHaveClass('metric-icon')
+  })
+
+  it('shows the Facebook mark beside the title, decorative, with the title text unchanged', async () => {
+    renderDashboard()
+    await loaded()
+
+    const brand = document.querySelector('.perf-brand') as HTMLElement
+    expect(brand).toHaveAttribute('aria-hidden', 'true')
+    expect(brand.querySelector('svg')).not.toBeNull()
+    expect(screen.getByRole('heading', { name: 'Advertising Performance' })).toBeInTheDocument()
+  })
+
+  it('has the What this means panel, after the costs and before the chart', async () => {
+    renderDashboard()
+    await loaded()
+
+    const panel = screen.getByRole('region', { name: 'What this means' })
+    const costs = screen.getByRole('region', { name: 'What Your Advertising Is Costing You' })
+    const chart = screen.getByRole('region', { name: 'Performance Over Time' })
+    expect(costs.compareDocumentPosition(panel) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(panel.compareDocumentPosition(chart) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
+})
