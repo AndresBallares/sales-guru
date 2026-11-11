@@ -4610,8 +4610,9 @@ describe('CampaignsSection', () => {
     renderCampaigns(<CampaignsSection businessId="biz-1" />)
 
     expect(await screen.findByText(/Live on Meta/)).toBeInTheDocument()
+    // The metrics are requested after the campaign is on screen, so wait for them.
+    expect(await screen.findByText(/1000/)).toBeInTheDocument()
     expect(mockedApi.listMetrics).toHaveBeenCalledWith('biz-1', 'camp-1')
-    expect(screen.getByText(/1000/)).toBeInTheDocument()
     expect(screen.getByText(/50/)).toBeInTheDocument()
   })
 

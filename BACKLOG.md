@@ -430,3 +430,14 @@ research was saved.
 - **Dashboard tests leaked a `scrollIntoView` stub.** Tests assigned a stub to
   `Element.prototype` that stayed for every later test, so one test passed in the full
   file and failed alone. Each test now gets its own stub (#128).
+- **Flaky vitest: a mock asserted right after waiting for something else (2026-11-10).** `BusinessDetailPage.test.tsx`
+  "opens the avatars tab straight from #avatars" failed on `main` after the #172 merge (0 calls to `listAvatars`; it passed
+  on the PR run and the run before): the test waited for the static "Buyer avatars" heading, then asserted at once that
+  the list had been requested, but the request is made by an effect that can run after the heading is on screen. Reproduced
+  deterministically by delaying that effect, then fixed with `waitFor`. A scan of every frontend test for the same shape
+  (awaiting an element, then asserting a mock call with no user action in between) found two more where the awaited
+  element does not depend on the mock's answer, both fixed: `MetaConnectionSection` "reports setup as incomplete" and
+  `CampaignsSection` "loads and shows previously fetched results for a live campaign". The other positive assertions wait
+  for an element that only appears once the mock has answered, so they cannot race. **Left as is:** about ten
+  `not.toHaveBeenCalled()` checks right after a `findBy` can only pass early, never fail, so they are not flaky, but they
+  prove less than they look (they could pass before a wrongly-made call happens).
