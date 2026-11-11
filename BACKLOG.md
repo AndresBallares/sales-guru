@@ -33,6 +33,13 @@ a run that reaches its dollar cap.
   hosts, and forum-looking hosts and paths. Review it against the sources a real run reaches.
 
 ### Research review follow-ups (found in 7c)
+- **Small polish on the Market Intelligence page (asked 2026-11-11).** (1) Clicking anywhere on an avatar card selects
+  it, keeping the checkbox as the accessible control (the card click must not fire from the links, buttons and form
+  fields inside it). (2) Closed runs (done, discarded) use the Market Intelligence view too, read-only, instead of the
+  older `ResearchFindingsView` screen.
+- **Give the results page what the brief wanted but the data lacks (found 2026-11-11).** Per-problem titles, categories and
+  severity; per-gap "why competitors miss it" and a business recommendation; avatar images. All need the research prompt and
+  stored findings to produce them first (a prompt and schema change), then the screen can show them.
 - **Keep review edits across a refresh.** Checkbox choices, avatar edits and the term list live in the browser only; the
   unsaved-edit warning is the only protection, and it cannot see the browser Back button. Store the draft per run (for
   example in `localStorage`) and offer to restore it.

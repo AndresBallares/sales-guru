@@ -99,7 +99,7 @@ describe('progress', () => {
     renderView()
     expect(await screen.findByText('Looking for what customers say')).toBeInTheDocument()
     expect(await screen.findByText('Drafting avatars')).toBeInTheDocument()
-    expect(await screen.findByRole('heading', { level: 2, name: 'Review the research' })).toBeInTheDocument()
+    expect(await screen.findByRole('heading', { level: 2, name: 'Market Intelligence' })).toBeInTheDocument()
     const calls = mockedApi.getResearchRun.mock.calls.length
     await new Promise((r) => setTimeout(r, 60))
     expect(mockedApi.getResearchRun.mock.calls.length).toBe(calls)
@@ -293,7 +293,7 @@ describe('after the run', () => {
       mockedApi.reopenResearchRun.mockResolvedValue({ ...closed, status: 'NEEDS_REVIEW', reviewedAt: null })
       renderView()
       await user.click(await screen.findByRole('button', { name: 'Reopen to save more' }))
-      expect(await screen.findByRole('heading', { level: 2, name: 'Review the research' })).toBeInTheDocument()
+      expect(await screen.findByRole('heading', { level: 2, name: 'Market Intelligence' })).toBeInTheDocument()
       expect(screen.getAllByRole('checkbox').length).toBeGreaterThan(0)
     })
   })
@@ -314,7 +314,7 @@ describe('after the run', () => {
     renderView()
     await user.click(await screen.findByRole('button', { name: 'Reopen to save more' }))
     expect(mockedApi.reopenResearchRun).toHaveBeenCalledWith('biz-1', 'run-1')
-    expect(await screen.findByRole('heading', { level: 2, name: 'Review the research' })).toBeInTheDocument()
+    expect(await screen.findByRole('heading', { level: 2, name: 'Market Intelligence' })).toBeInTheDocument()
     const saved = screen.getByRole('listitem', { name: 'The Plain-Gold Loyalist' })
     expect(within(saved).getByText('Saved')).toBeInTheDocument()
     expect(
@@ -357,7 +357,7 @@ describe('after the run', () => {
     mockedApi.listAvatars.mockResolvedValue([{ id: 'n1', name: 'The Plain-Gold Loyalist' } as api.BuyerAvatar])
     await user.click(screen.getByRole('button', { name: 'Save selected' }))
     await waitFor(() => expect(onLibraryChanged).toHaveBeenCalled())
-    expect(screen.getByRole('heading', { level: 2, name: 'Review the research' })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { level: 2, name: 'Market Intelligence' })).toBeInTheDocument()
     const item = screen.getByRole('listitem', { name: 'The Plain-Gold Loyalist' })
     expect(within(item).getByText('Saved')).toBeInTheDocument()
     expect(

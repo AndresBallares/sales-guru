@@ -108,12 +108,37 @@ describe('evidence', () => {
   })
 })
 
+describe('page order and the avatar count', () => {
+  it('puts the AI Customer Avatars before every research section', () => {
+    renderReview()
+    const avatars = screen.getByRole('heading', { name: 'AI Customer Avatars' })
+    for (const name of [/^Market Opportunities$/, /^Gaps Nobody Solves Yet$/, /^Problems identified/, /^Proposed solutions/, /^Evidence$/]) {
+      const later = screen.getByRole('heading', { name })
+      expect(avatars.compareDocumentPosition(later) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    }
+    // The summary cards come first, then the avatars.
+    const cards = screen.getByRole('list', { name: 'Research summary' })
+    expect(cards.compareDocumentPosition(avatars) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
+
+  it('shows the same avatar count on the fifth card and in the section', () => {
+    renderReview()
+    const drafts = within(screen.getByRole('list', { name: 'Avatar drafts' })).getAllByRole('listitem')
+    expect(screen.getByRole('button', { name: new RegExp(`^${drafts.length} AI Customer Avatars`) })).toBeInTheDocument()
+    expect(screen.getByText(`${drafts.length} customer ${drafts.length === 1 ? 'avatar' : 'avatars'}`)).toBeInTheDocument()
+  })
+})
+
 describe('problems, solutions and gaps', () => {
-  it('labels quotes verified or unverified, marks inferred items and links sources', () => {
+  it('labels quotes verified or unverified, marks inferred items and links sources', async () => {
+    const user = userEvent.setup()
     renderReview()
     const list = screen.getByRole('list', { name: 'Problems' })
     const first = within(list).getAllByRole('listitem')[0]
     expect(first).toHaveTextContent('Plated jewelry fades within weeks.')
+    // The proof is one click away, not on the page by default.
+    expect(within(first).queryByText('Unverified')).not.toBeInTheDocument()
+    await user.click(within(first).getByRole('button', { name: /View evidence/ }))
     expect(within(first).getByText('Verified')).toBeInTheDocument()
     expect(within(first).getByText('Unverified')).toBeInTheDocument()
     expect(within(first).getByText(/it turned my finger green/)).toBeInTheDocument()
@@ -128,7 +153,8 @@ describe('problems, solutions and gaps', () => {
     renderReview()
     const solutions = screen.getByRole('list', { name: 'Solutions' })
     expect(within(solutions).getAllByRole('listitem')[0]).toHaveTextContent('Solves problem 1')
-    expect(screen.getByText('Free resizing for life')).toBeInTheDocument()
+    const gaps = screen.getByRole('list', { name: 'Gaps' })
+    expect(within(gaps).getByText('Free resizing for life')).toBeInTheDocument()
   })
 })
 
@@ -451,7 +477,7 @@ describe('saving more than once from the same run', () => {
     const item = draft('The Plain-Gold Loyalist')
     expect(within(item).getByText('Saved')).toBeInTheDocument()
     expect(within(item).queryByRole('checkbox')).not.toBeInTheDocument()
-    expect(within(item).queryByText('Edit details')).not.toBeInTheDocument()
+    expect(within(item).queryByText('View persona details')).not.toBeInTheDocument()
     const link = within(item).getByRole('link', { name: /View The Plain-Gold Loyalist in your library/ })
     expect(link).toHaveAttribute('href', expect.stringContaining('avatar=lib-1'))
     await user.click(link)
@@ -462,7 +488,7 @@ describe('saving more than once from the same run', () => {
 
   it('counts only drafts still to save as selectable', () => {
     renderReview(savedFirst(), libraryWithFirst())
-    expect(screen.getByRole('region', { name: 'Avatar drafts' })).toHaveTextContent('1 saved from this research')
+    expect(screen.getByRole('region', { name: 'AI Customer Avatars' })).toHaveTextContent('1 saved from this research')
     expect(screen.getByText('0 selected')).toBeInTheDocument()
   })
 
@@ -587,7 +613,7 @@ describe('marking the review as done', () => {
 
 it('moves focus to the heading', async () => {
   renderReview()
-  const heading = screen.getByRole('heading', { level: 2, name: 'Review the research' })
+  const heading = screen.getByRole('heading', { level: 2, name: 'Market Intelligence' })
   await waitFor(() => expect(heading).toHaveFocus())
 })
 

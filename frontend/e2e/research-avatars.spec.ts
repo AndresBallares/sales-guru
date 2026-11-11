@@ -99,7 +99,7 @@ test('a research run started on the screen is watched, reviewed and saved to the
   await page.getByRole('button', { name: /Start Research|Research anyway/ }).click()
 
   // The canned run finishes quickly; the screen moves from progress to the review by itself.
-  await expect(page.getByRole('heading', { level: 2, name: 'Review the research' })).toBeVisible({
+  await expect(page.getByRole('heading', { level: 2, name: 'Market Intelligence' })).toBeVisible({
     timeout: 30_000,
   })
   await expect(page).toHaveURL(/\?research=[^#]+#avatars$/)
@@ -111,7 +111,7 @@ test('a research run started on the screen is watched, reviewed and saved to the
   await expect(drafts).toHaveCount(5)
   const first = drafts.first()
   await first.getByRole('checkbox', { name: /Save/ }).check()
-  await first.getByText('Edit details').click()
+  await first.getByText('View persona details').click()
   await first.getByLabel('Name', { exact: true }).fill('My Edited Avatar')
   await first.getByLabel('Who they buy for').selectOption('gift')
   await drafts.nth(1).getByRole('checkbox', { name: /Save/ }).check()
@@ -124,7 +124,7 @@ test('a research run started on the screen is watched, reviewed and saved to the
   await expect(drafts.nth(0).getByText('Saved')).toBeVisible()
   await expect(drafts.nth(1).getByText('Saved')).toBeVisible()
   await expect(drafts.nth(0).getByRole('checkbox')).toHaveCount(0)
-  await expect(page.getByRole('heading', { level: 2, name: 'Review the research' })).toBeVisible()
+  await expect(page.getByRole('heading', { level: 2, name: 'Market Intelligence' })).toBeVisible()
   await expect(page.getByRole('button', { name: 'Mark as done' })).toBeVisible()
   await expect(page.getByRole('button', { name: 'Discard' })).toHaveCount(0)
   await expectNoViolations(page)
@@ -187,7 +187,7 @@ test('a research run started on the screen is watched, reviewed and saved to the
   // Reopen it, and the rest can be picked again.
   await openAvatars(page, id, `?research=${runId}`)
   await page.getByRole('button', { name: 'Reopen to save more' }).click()
-  await expect(page.getByRole('heading', { level: 2, name: 'Review the research' })).toBeVisible()
+  await expect(page.getByRole('heading', { level: 2, name: 'Market Intelligence' })).toBeVisible()
   await expect(page.getByRole('button', { name: 'Mark as done' })).toBeVisible()
   await page.getByRole('button', { name: 'Mark as done' }).click()
   await page.getByRole('button', { name: 'Yes, mark as done' }).click()
@@ -237,7 +237,7 @@ test('review: low-evidence warning, competitor terms, unsaved-edit warning, disc
     document.body.append(link)
   })
   await page.getByRole('link', { name: 'Leave for home' }).click()
-  await expect(page.getByRole('heading', { level: 2, name: 'Review the research' })).toBeVisible()
+  await expect(page.getByRole('heading', { level: 2, name: 'Market Intelligence' })).toBeVisible()
 
   await page.getByRole('button', { name: 'Discard' }).click()
   await page.getByRole('button', { name: 'Yes, discard' }).click()
@@ -289,7 +289,7 @@ test('the past research runs section stays at the bottom of the Avatars tab, and
   await table.getByRole('button', { name: /^Open run from/ }).click()
   await expect(page).toHaveURL(new RegExp(`research=${run.id}`))
   await expect(page).toHaveURL(/metaLater=1/)
-  await expect(page.getByRole('heading', { level: 2, name: 'Review the research' })).toBeVisible()
+  await expect(page.getByRole('heading', { level: 2, name: 'Market Intelligence' })).toBeVisible()
   await expect(page.getByRole('list', { name: 'Problems' })).toBeVisible()
   await page.getByRole('button', { name: 'Back to avatars' }).click()
   await expect(page.getByRole('table', { name: 'Past research runs' })).toBeVisible()
