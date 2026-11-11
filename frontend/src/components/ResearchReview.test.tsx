@@ -108,6 +108,27 @@ describe('evidence', () => {
   })
 })
 
+describe('page order and the avatar count', () => {
+  it('puts the AI Customer Avatars before every research section', () => {
+    renderReview()
+    const avatars = screen.getByRole('heading', { name: 'AI Customer Avatars' })
+    for (const name of [/^Market Opportunities$/, /^Gaps Nobody Solves Yet$/, /^Problems identified/, /^Proposed solutions/, /^Evidence$/]) {
+      const later = screen.getByRole('heading', { name })
+      expect(avatars.compareDocumentPosition(later) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    }
+    // The summary cards come first, then the avatars.
+    const cards = screen.getByRole('list', { name: 'Research summary' })
+    expect(cards.compareDocumentPosition(avatars) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
+
+  it('shows the same avatar count on the fifth card and in the section', () => {
+    renderReview()
+    const drafts = within(screen.getByRole('list', { name: 'Avatar drafts' })).getAllByRole('listitem')
+    expect(screen.getByRole('button', { name: new RegExp(`^${drafts.length} AI Customer Avatars`) })).toBeInTheDocument()
+    expect(screen.getByText(`${drafts.length} customer ${drafts.length === 1 ? 'avatar' : 'avatars'}`)).toBeInTheDocument()
+  })
+})
+
 describe('problems, solutions and gaps', () => {
   it('labels quotes verified or unverified, marks inferred items and links sources', async () => {
     const user = userEvent.setup()

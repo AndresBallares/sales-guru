@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import type { ResearchFindings } from './api'
+import type { ReviewDraft } from './research'
 import {
+  avatarSummary,
   evidenceEntries,
   filterByQuery,
   hostOf,
@@ -58,11 +60,11 @@ describe('evidenceEntries', () => {
 
 describe('metricCounts', () => {
   it('counts the real records and never assumes 20', () => {
-    expect(metricCounts(findings)).toEqual({ evidence: 3, problems: 3, solutions: 3, gaps: 2 })
+    expect(metricCounts(findings, 5)).toEqual({ evidence: 3, problems: 3, solutions: 3, gaps: 2, avatars: 5 })
   })
 
   it('is all zeros for a run that stored nothing', () => {
-    expect(metricCounts({})).toEqual({ evidence: 0, problems: 0, solutions: 0, gaps: 0 })
+    expect(metricCounts({}, 0)).toEqual({ evidence: 0, problems: 0, solutions: 0, gaps: 0, avatars: 0 })
   })
 })
 
@@ -137,5 +139,51 @@ describe('initialsOf', () => {
   it('handles one word and empty names', () => {
     expect(initialsOf('Loyalist')).toBe('L')
     expect(initialsOf('  ')).toBe('?')
+  })
+})
+
+function draft(over: Partial<ReviewDraft> = {}, lists: Partial<ReviewDraft['lists']> = {}): ReviewDraft {
+  return {
+    keep: false,
+    name: 'The Chipped-Color Veteran',
+    who: 'Buys fine jewelry for daily wear.',
+    purchaseFor: 'self',
+    lists: {
+      primaryProblems: 'Color chips\nRepairs cost a lot',
+      unknownProblems: '',
+      mechanisms: 'Ceramic inlay\nSolid gold',
+      alternatives: '',
+      objections: 'Is it really chip proof?\nPrice',
+      hooks: '',
+      creativeAngles: '',
+      ...lists,
+    },
+    concepts: [
+      { name: 'a', pillar: 'offer', description: 'x' },
+      { name: 'b', pillar: 'emotion', description: 'y' },
+    ],
+    inferred: false,
+    ...over,
+  }
+}
+
+describe('avatarSummary', () => {
+  it('takes the first problem, objection and mechanism, and counts concepts', () => {
+    expect(avatarSummary(draft())).toEqual({
+      buyer: 'Self-purchaser',
+      problem: 'Color chips',
+      objection: 'Is it really chip proof?',
+      win: 'Ceramic inlay',
+      concepts: 2,
+    })
+  })
+
+  it('names a gift buyer', () => {
+    expect(avatarSummary(draft({ purchaseFor: 'gift' })).buyer).toBe('Gift-buyer')
+  })
+
+  it('leaves out what the avatar does not have, and invents nothing', () => {
+    const out = avatarSummary(draft({ concepts: [] }, { primaryProblems: '', objections: '  ', mechanisms: '' }))
+    expect(out).toEqual({ buyer: 'Self-purchaser', problem: null, objection: null, win: null, concepts: 0 })
   })
 })

@@ -1,3 +1,5 @@
+import { linesOf } from './avatarFields'
+import type { ReviewDraft } from './research'
 import type {
   ResearchFindings,
   ResearchGap,
@@ -45,8 +47,11 @@ export function evidenceEntries(problems: ResearchProblem[]): EvidenceEntry[] {
   )
 }
 
-export function metricCounts(findings: ResearchFindings) {
+// The avatar count is the number of drafts the avatar section itself lists, so the card and the
+// section cannot disagree.
+export function metricCounts(findings: ResearchFindings, avatars: number) {
   return {
+    avatars,
     evidence: evidenceEntries(findings.problems ?? []).length,
     problems: (findings.problems ?? []).length,
     solutions: (findings.solutions ?? []).length,
@@ -92,4 +97,25 @@ export function initialsOf(name: string): string {
   const meaningful = words[0]?.toLowerCase() === 'the' && words.length > 1 ? words.slice(1) : words
   const letters = meaningful.slice(0, 2).map((w) => w[0]?.toUpperCase() ?? '')
   return letters.join('') || '?'
+}
+
+export interface AvatarSummary {
+  buyer: 'Self-purchaser' | 'Gift-buyer'
+  problem: string | null
+  objection: string | null
+  // The first mechanism the research tied to this avatar: what would win them over.
+  win: string | null
+  concepts: number
+}
+
+// The few facts a card leads with. Each comes from the avatar's own lists; an empty list gives
+// null so the card leaves that line out instead of filling it.
+export function avatarSummary(draft: ReviewDraft): AvatarSummary {
+  return {
+    buyer: draft.purchaseFor === 'gift' ? 'Gift-buyer' : 'Self-purchaser',
+    problem: linesOf(draft.lists.primaryProblems)[0] ?? null,
+    objection: linesOf(draft.lists.objections)[0] ?? null,
+    win: linesOf(draft.lists.mechanisms)[0] ?? null,
+    concepts: draft.concepts.length,
+  }
 }

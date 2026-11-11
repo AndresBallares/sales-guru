@@ -64,9 +64,9 @@ test.describe('desktop', () => {
     const width = await dash.evaluate((el) => el.getBoundingClientRect().width)
     expect(width).toBeGreaterThan(1200)
 
-    // Four metric cards in one row.
+    // Five metric cards in one row.
     const cards = dash.getByRole('list', { name: 'Research summary' }).getByRole('button')
-    await expect(cards).toHaveCount(4)
+    await expect(cards).toHaveCount(5)
     const tops = await cards.evaluateAll((els) => els.map((el) => Math.round(el.getBoundingClientRect().top)))
     expect(new Set(tops).size).toBe(1)
 
@@ -77,13 +77,53 @@ test.describe('desktop', () => {
     await expect(dash.getByRole('button', { name: new RegExp(`^${problems} Problems identified`) })).toBeVisible()
     await expect(dash.getByRole('button', { name: new RegExp(`^${solutions} Solutions identified`) })).toBeVisible()
     await expect(dash.getByRole('button', { name: new RegExp(`^${gaps} Market opportunities`) })).toBeVisible()
+    // The avatar card counts the same drafts the avatar section lists.
+    const avatars = await dash.getByRole('list', { name: 'Avatar drafts' }).getByRole('listitem').count()
+    await expect(dash.getByRole('button', { name: new RegExp(`^${avatars} AI Customer Avatars`) })).toBeVisible()
+    await expect(dash.getByText(`${avatars} customer avatars`)).toBeVisible()
     await shot(page, 'review-desktop-light')
     await shotParts(page, 'desktop')
     await expectNoViolations(page)
   })
 
+  test('the avatars come right after the summary cards, before every research section', async ({ page }) => {
+    const dash = await openReview(page)
+    const top = async (selector: string) =>
+      dash.locator(selector).first().evaluate((el) => Math.round(el.getBoundingClientRect().top + window.scrollY))
+    const cards = await top('.dash-metrics')
+    const avatars = await top('#research-avatars')
+    const order = [
+      await top('.dash-opportunity'),
+      await top('#research-gaps'),
+      await top('#research-problems'),
+      await top('#research-solutions'),
+      await top('#research-evidence'),
+    ]
+    expect(avatars).toBeGreaterThan(cards)
+    expect(avatars).toBeLessThan(order[0])
+    expect([...order].sort((a, b) => a - b)).toEqual(order)
+  })
+
+  test('an avatar card says who they are, what wins them, the problem, the objection and the concepts', async ({ page }) => {
+    const dash = await openReview(page)
+    const first = dash.getByRole('list', { name: 'Avatar drafts' }).getByRole('listitem').first()
+    await expect(first.getByText('Self-purchaser')).toBeVisible()
+    await expect(first.getByText('What wins them')).toBeVisible()
+    await expect(first.getByText('Primary problem', { exact: true })).toBeVisible()
+    await expect(first.getByText(/Creative Concepts?/)).toBeVisible()
+    // The cards in a row are the same height.
+    const heights = await dash
+      .getByRole('list', { name: 'Avatar drafts' })
+      .getByRole('listitem')
+      .evaluateAll((els) => els.slice(0, 3).map((el) => Math.round(el.getBoundingClientRect().height)))
+    expect(new Set(heights).size).toBe(1)
+    await shot(page, 'review-avatars-featured')
+  })
+
   test('a metric card takes you to its section', async ({ page }) => {
     const dash = await openReview(page)
+    await dash.getByRole('button', { name: /AI Customer Avatars/ }).click()
+    await expect(page.locator('#research-drafts-heading')).toBeFocused()
     await dash.getByRole('button', { name: /Solutions identified/ }).click()
     await expect(page.locator('#research-solutions-heading')).toBeFocused()
     await dash.getByRole('button', { name: /Explore all opportunities/ }).click()
@@ -132,7 +172,7 @@ test.describe('desktop', () => {
 })
 
 test.describe('tablet and phone', () => {
-  test('tablet: two metric columns and two avatar columns', async ({ page }) => {
+  test('tablet: two metric columns (the fifth card full width) and two avatar columns', async ({ page }) => {
     await page.setViewportSize({ width: 820, height: 1100 })
     const dash = await openReview(page)
     const lefts = await dash

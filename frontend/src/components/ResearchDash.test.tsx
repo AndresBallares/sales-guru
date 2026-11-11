@@ -82,11 +82,13 @@ describe('metric cards and the opportunity panel', () => {
     target.id = 'research-solutions-heading'
     target.tabIndex = -1
     document.body.append(target)
-    render(<ResearchMetricCards run={makeRun()} />)
+    render(<ResearchMetricCards run={makeRun()} avatarCount={5} />)
     expect(screen.getByRole('button', { name: /^3 Evidence/ })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /^3 Problems identified/ })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /^2 Solutions identified/ })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /^2 Market opportunities/ })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /^5 AI Customer Avatars/ })).toBeInTheDocument()
+    expect(screen.getAllByRole('button')).toHaveLength(5)
     await user.click(screen.getByRole('button', { name: /Solutions identified/ }))
     expect(target).toHaveFocus()
     target.remove()
@@ -107,8 +109,8 @@ describe('metric cards and the opportunity panel', () => {
   })
 
   it('shows zero counts for a run that stored nothing', () => {
-    render(<ResearchMetricCards run={makeRun({ findings: {} })} />)
-    expect(screen.getAllByRole('button', { name: /^0 / })).toHaveLength(4)
+    render(<ResearchMetricCards run={makeRun({ findings: {} })} avatarCount={0} />)
+    expect(screen.getAllByRole('button', { name: /^0 / })).toHaveLength(5)
   })
 })
 

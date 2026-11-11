@@ -202,22 +202,7 @@ export function ResearchReview({
   return (
     <section className="research-review research-dash" aria-labelledby="research-review-heading">
       <ResearchDashHeader run={run} savedCount={savedCount} intro={intro} headingRef={headingRef} />
-      <ResearchMetricCards run={run} />
-      <MarketOpportunityPanel run={run} />
-
-      <ResearchDashEvidence run={run} />
-      <div className="dash-pair">
-        <ResearchDashProblems problems={problems} solutions={solutions} />
-        <ResearchDashSolutions solutions={solutions} />
-      </div>
-      <ResearchDashGaps gaps={findings.gaps ?? []} problems={problems} />
-
-      <ResearchDashCompetitors
-        terms={terms}
-        ignored={run.ignoredCompetitorTerms}
-        onRemove={(term) => setTerms(terms.filter((t) => t !== term))}
-        onAdd={addTerm}
-      />
+      <ResearchMetricCards run={run} avatarCount={drafts.length} />
 
       <ResearchDashAvatars
         drafts={drafts}
@@ -230,6 +215,21 @@ export function ResearchReview({
         slotsLeft={slotsLeft}
         onChange={update}
         onOpenAvatar={onOpenAvatar}
+      />
+
+      <MarketOpportunityPanel run={run} />
+      <ResearchDashGaps gaps={findings.gaps ?? []} problems={problems} />
+      <div className="dash-pair">
+        <ResearchDashProblems problems={problems} solutions={solutions} />
+        <ResearchDashSolutions solutions={solutions} />
+      </div>
+      <ResearchDashEvidence run={run} />
+
+      <ResearchDashCompetitors
+        terms={terms}
+        ignored={run.ignoredCompetitorTerms}
+        onRemove={(term) => setTerms(terms.filter((t) => t !== term))}
+        onAdd={addTerm}
       />
 
       {tooMany && (

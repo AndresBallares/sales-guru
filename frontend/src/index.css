@@ -9002,8 +9002,8 @@ main.business-detail:has(.research-dash) {
 
 .dash-metrics {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 1.1rem;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 1rem;
   margin: 0;
   padding: 0;
   list-style: none;
@@ -9690,6 +9690,8 @@ main.business-detail:has(.research-dash) {
 .dash-avatar {
   display: flex;
   flex-direction: column;
+  gap: 0.75rem;
+  padding: 1.15rem 1.2rem 0.6rem;
   overflow: hidden;
   border: 1px solid var(--d-line);
   border-radius: 20px;
@@ -9700,51 +9702,6 @@ main.business-detail:has(.research-dash) {
 .dash-avatar[data-state='selected'] {
   border: 2px solid var(--d-emerald);
   background: color-mix(in srgb, var(--d-green-soft) 45%, var(--d-card));
-}
-
-.dash-portrait {
-  display: grid;
-  place-items: center;
-  height: 150px;
-  background: linear-gradient(135deg, var(--d-champagne), color-mix(in srgb, var(--d-gold-light) 55%, var(--d-champagne)));
-}
-
-.dash-portrait[data-state='saved'],
-.dash-portrait[data-state='selected'] {
-  background: linear-gradient(135deg, var(--d-green-soft), color-mix(in srgb, var(--d-gold-light) 35%, var(--d-green-soft)));
-}
-
-.dash-portrait span {
-  display: grid;
-  place-items: center;
-  width: 76px;
-  height: 76px;
-  border: 2px solid var(--d-gold);
-  border-radius: 50%;
-  background: var(--d-card);
-  color: var(--d-gold-ink);
-  font-family: var(--d-serif);
-  font-size: 1.9rem;
-  font-weight: 600;
-}
-
-.dash-avatar-body {
-  display: flex;
-  flex-direction: column;
-  flex: 1;
-  gap: 0.5rem;
-  padding: 1rem 1.2rem 0.5rem;
-}
-
-.dash-avatar-body h4 {
-  margin: 0;
-  font-family: var(--d-serif);
-  font-size: 1.25rem;
-  font-weight: 600;
-}
-
-.dash-avatar-body p {
-  margin: 0;
 }
 
 .dash-avatar-badges {
@@ -9758,7 +9715,7 @@ main.business-detail:has(.research-dash) {
   align-items: center;
   gap: 0.7rem;
   min-height: 48px;
-  margin: 0.4rem 1.2rem;
+  margin: auto 0 0;
   padding: 0.4rem 0.9rem;
   border: 1px solid var(--d-line);
   border-radius: 12px;
@@ -9784,7 +9741,7 @@ main.business-detail:has(.research-dash) {
 }
 
 .dash-persona {
-  margin: 0 1.2rem 1.1rem;
+  margin: 0;
 }
 
 .dash-persona > summary {
@@ -9802,9 +9759,6 @@ main.business-detail:has(.research-dash) {
   outline-offset: 2px;
 }
 
-.dash-avatar[data-state='saved'] .dash-avatar-body {
-  padding-bottom: 1.2rem;
-}
 
 /* -- tablet and phone ------------------------------------------------------------------------------ */
 
@@ -9928,4 +9882,147 @@ main.business-detail:has(.research-dash) {
 
 .research-dash .dash-btn-quiet:disabled {
   color: var(--d-text);
+}
+
+
+/* -- featured avatars and the new card face ------------------------------------------------------ */
+
+/* The fifth summary card: the main deliverable, set apart by a deeper green edge. */
+.dash-metric[data-tone='featured'] {
+  border: 2px solid var(--d-emerald);
+  background: color-mix(in srgb, var(--d-green-soft) 55%, var(--d-card));
+}
+
+.research-dash .dash-metric[data-tone='featured']:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--d-green-soft) 55%, var(--d-card));
+  border-color: var(--d-emerald-deep);
+}
+
+.dash-featured {
+  border: 2px solid color-mix(in srgb, var(--d-emerald) 70%, var(--d-line));
+  background:
+    radial-gradient(110% 80% at 0% 0%, color-mix(in srgb, var(--d-green-soft) 70%, transparent), transparent 55%),
+    var(--d-card);
+}
+
+.dash-featured .dash-head h3 {
+  font-size: 1.85rem;
+}
+
+.dash-count-line {
+  margin: 0;
+  color: var(--d-emerald);
+  font-weight: 700;
+}
+
+.dash-avatar-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.8rem;
+}
+
+.dash-avatar-mark {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 48px;
+  height: 48px;
+  border: 2px solid var(--d-gold);
+  border-radius: 50%;
+  background: var(--d-champagne);
+  color: var(--d-gold-ink);
+  font-family: var(--d-serif);
+  font-size: 1.15rem;
+  font-weight: 600;
+}
+
+.dash-avatar-id {
+  flex: 1;
+  min-width: 0;
+}
+
+.dash-avatar-id h4 {
+  margin: 0 0 0.35rem;
+  font-family: var(--d-serif);
+  font-size: 1.3rem;
+  font-weight: 600;
+  line-height: 1.2;
+  overflow-wrap: anywhere;
+}
+
+.dash-avatar > p,
+.dash-avatar dl,
+.dash-avatar dd {
+  margin: 0;
+}
+
+.dash-who {
+  color: var(--d-muted);
+  -webkit-line-clamp: 3;
+}
+
+/* what the research says would win them: the second thing the eye should find */
+.dash-win {
+  padding: 0.75rem 0.9rem;
+  border-left: 4px solid var(--d-emerald);
+  border-radius: 10px;
+  background: var(--d-green-soft);
+}
+
+.dash-win p {
+  margin: 0.15rem 0 0;
+  color: var(--d-text);
+  font-weight: 600;
+  line-height: 1.4;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.dash-label,
+.dash-facts dt {
+  color: var(--d-muted);
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.dash-facts {
+  display: grid;
+  gap: 0.6rem;
+}
+
+.dash-clamp-2 {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  font-size: 0.95rem;
+}
+
+.dash-concepts {
+  color: var(--d-gold-ink);
+  font-weight: 700;
+  font-size: 0.9rem;
+}
+
+.dash-library-link {
+  margin-top: auto;
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
+  color: var(--d-emerald);
+  font-weight: 600;
+}
+
+.dash-view-all {
+  align-self: center;
+}
+
+@media (max-width: 1199px) {
+  .dash-metrics > li:last-child {
+    grid-column: 1 / -1;
+  }
 }

@@ -13,6 +13,7 @@ import {
   LightbulbIcon,
   TargetIcon,
   TriangleAlertIcon,
+  UsersIcon,
 } from './researchHubIcons'
 
 function dateLabel(run: ResearchRun): string | null {
@@ -64,12 +65,12 @@ export function ResearchDashHeader({
 }
 
 interface Metric {
-  key: 'evidence' | 'problems' | 'solutions' | 'gaps'
+  key: 'evidence' | 'problems' | 'solutions' | 'gaps' | 'avatars'
   label: string
   sub: string
   target: string
   icon: ReactNode
-  tone: 'gold' | 'amber' | 'emerald'
+  tone: 'gold' | 'amber' | 'emerald' | 'featured'
 }
 
 const METRICS: Metric[] = [
@@ -105,11 +106,20 @@ const METRICS: Metric[] = [
     icon: <TargetIcon size={24} />,
     tone: 'gold',
   },
+  {
+    key: 'avatars',
+    label: 'AI Customer Avatars',
+    sub: 'Profiles built from this research',
+    target: 'research-drafts-heading',
+    icon: <UsersIcon size={24} />,
+    tone: 'featured',
+  },
 ]
 
-// Four counts, each worked out from the records the run stored.
-export function ResearchMetricCards({ run }: { run: ResearchRun }) {
-  const counts = metricCounts(run.findings)
+// Five counts, each worked out from the records the run stored. The avatar count is the number
+// the avatar section lists, passed in so the two cannot differ.
+export function ResearchMetricCards({ run, avatarCount }: { run: ResearchRun; avatarCount: number }) {
+  const counts = metricCounts(run.findings, avatarCount)
   return (
     <ul className="dash-metrics" aria-label="Research summary">
       {METRICS.map((metric) => (
@@ -121,7 +131,11 @@ export function ResearchMetricCards({ run }: { run: ResearchRun }) {
             aria-label={`${counts[metric.key]} ${metric.label}. Go to this section.`}
             onClick={() => jumpTo(metric.target)}
           >
-            <span className="dash-ico" data-tone={metric.tone} aria-hidden="true">
+            <span
+              className="dash-ico"
+              data-tone={metric.tone === 'featured' ? 'emerald' : metric.tone}
+              aria-hidden="true"
+            >
               {metric.icon}
             </span>
             <span className="dash-metric-value" aria-hidden="true">
