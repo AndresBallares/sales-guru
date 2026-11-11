@@ -11,11 +11,10 @@ import {
 import {
   avatarHref,
   depthLabel,
-  elapsedLabel,
   formatUsd,
   modelLabel,
-  phaseLabel,
 } from '../lib/research'
+import { ResearchProgressHub } from './ResearchProgressHub'
 import { ResearchReadOnly } from './ResearchReadOnly'
 import { ResearchReview } from './ResearchReview'
 
@@ -164,47 +163,15 @@ export function ResearchRunView({
 
   if (active) {
     return (
-      <section className="research-progress" aria-labelledby="research-progress-heading">
-        <FocusHeading id="research-progress-heading">Research in progress</FocusHeading>
-        <p aria-live="polite" className="research-phase">
-          {phaseLabel(run.status, run.phase)}
-        </p>
-        <ul className="research-counts">
-          <li>
-            {run.searchesUsed} of {run.maxSearches} searches
-          </li>
-          <li>
-            {run.fetchesUsed} of {run.maxFetches} pages read
-          </li>
-          <li>{formatUsd(run.costUsd)} spent so far</li>
-          <li>Time so far: {elapsedLabel(run.startedAt, run.finishedAt, now)}</li>
-        </ul>
-        <p className="field-hint">
-          You can leave this page. The research keeps going, and this screen picks it up again
-          when you come back.
-        </p>
-        {(cancelError || null) && (
-          <p className="form-error" role="alert">
-            {cancelError}
-          </p>
-        )}
-        {run.cancelRequested && (
-          <p>Stopping after the current step. What it found so far is kept.</p>
-        )}
-        <div className="avatar-actions">
-          <button
-            type="button"
-            className="btn-outline"
-            disabled={canceling || run.cancelRequested}
-            onClick={() => void cancel()}
-          >
-            Cancel research
-          </button>
-          <button type="button" className="btn-outline" onClick={onBack}>
-            Back to avatars
-          </button>
-        </div>
-      </section>
+      <ResearchProgressHub
+        run={run}
+        now={now}
+        heading={<FocusHeading id="research-progress-heading">Research in progress</FocusHeading>}
+        canceling={canceling}
+        cancelError={cancelError}
+        onCancel={() => void cancel()}
+        onBack={onBack}
+      />
     )
   }
 
