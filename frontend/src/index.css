@@ -8264,39 +8264,29 @@ main > section.campaigns-overview {
   gap: 0.5rem;
   padding: 0.35rem 0.9rem 0.35rem 0.75rem;
   border-radius: 999px;
-  background: var(--hub-emerald-deep);
-  color: #fff;
+  background: var(--create-bg);
+  color: var(--create-text);
   font-size: 0.9rem;
   font-weight: 600;
   letter-spacing: 0.02em;
-}
-
-:root[data-theme='dark'] .hub-live {
-  background: #064b35;
-}
-
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme='light']) .hub-live {
-    background: #064b35;
-  }
 }
 
 .hub-live-dot {
   width: 9px;
   height: 9px;
   border-radius: 50%;
-  background: #4ade80;
-  box-shadow: 0 0 0 3px rgba(74, 222, 128, 0.28), 0 0 10px rgba(74, 222, 128, 0.9);
+  background: #0b6b4c;
+  box-shadow: 0 0 0 3px rgba(11, 107, 76, 0.28);
 }
 
 .hub-live[data-live='Waiting'] .hub-live-dot {
-  background: var(--hub-gold-light);
-  box-shadow: 0 0 0 3px rgba(231, 197, 141, 0.25);
+  background: #8a5a14;
+  box-shadow: 0 0 0 3px rgba(138, 90, 20, 0.28);
 }
 
 .hub-live[data-live='Stopping'] .hub-live-dot {
-  background: #fbbf24;
-  box-shadow: 0 0 0 3px rgba(251, 191, 36, 0.25);
+  background: #9a3412;
+  box-shadow: 0 0 0 3px rgba(154, 52, 18, 0.28);
 }
 
 /* -- the 3D picture ------------------------------------------------------ */
@@ -8730,14 +8720,19 @@ main > section.campaigns-overview {
 
 .hub-btn-primary {
   border: 1px solid transparent;
-  background: linear-gradient(180deg, #0b6b4c, #064b35);
-  color: #fff;
-  box-shadow: 0 10px 20px -10px rgba(6, 75, 53, 0.75);
+  background: var(--create-bg);
+  color: var(--create-text);
+  box-shadow: 0 10px 20px -12px rgba(23, 33, 29, 0.45);
 }
 
-.hub-btn-primary:hover {
+.hub-btn-primary:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--create-bg) 88%, #000);
   transform: translateY(-1px);
-  box-shadow: 0 14px 24px -10px rgba(6, 75, 53, 0.85);
+}
+
+.hub-btn-primary:active:not(:disabled) {
+  background: color-mix(in srgb, var(--create-bg) 80%, #000);
+  transform: none;
 }
 
 @media (prefers-reduced-motion: reduce) {

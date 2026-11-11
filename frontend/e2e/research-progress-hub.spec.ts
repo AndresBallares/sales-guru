@@ -83,6 +83,29 @@ test.describe('desktop', () => {
     expect(size).toBeLessThanOrEqual(76)
   })
 
+  for (const scheme of ['light', 'dark'] as const) {
+    test(`the Live pill and Back button use the Create campaign colour (${scheme})`, async ({ page }) => {
+      await page.emulateMedia({ colorScheme: scheme })
+      const hub = await openRunning(page)
+      const colours = await hub.evaluate((root) => {
+        const probe = document.createElement('div')
+        probe.style.background = 'var(--create-bg)'
+        probe.style.color = 'var(--create-text)'
+        document.body.append(probe)
+        const want = getComputedStyle(probe)
+        const wanted = { bg: want.backgroundColor, text: want.color }
+        probe.remove()
+        const read = (selector: string) => {
+          const style = getComputedStyle(root.querySelector(selector) as Element)
+          return { bg: style.backgroundColor, text: style.color }
+        }
+        return { wanted, live: read('.hub-live'), back: read('.hub-btn-primary') }
+      })
+      expect(colours.live).toEqual(colours.wanted)
+      expect(colours.back).toEqual(colours.wanted)
+    })
+  }
+
   test('with reduced motion nothing moves', async ({ page }) => {
     await page.emulateMedia({ reducedMotion: 'reduce' })
     const hub = await openRunning(page)
