@@ -397,7 +397,8 @@ describe('MetaConnectionSection', () => {
     renderSection('/businesses/biz-1', onSetupComplete)
     await screen.findByText(/Connected/)
 
-    expect(onSetupComplete).toHaveBeenCalledWith(false)
+    // The parent is told from an effect, after the connection is on screen.
+    await waitFor(() => expect(onSetupComplete).toHaveBeenCalledWith(false))
     expect(onSetupComplete).not.toHaveBeenCalledWith(true)
   })
 

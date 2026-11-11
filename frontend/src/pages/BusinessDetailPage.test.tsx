@@ -945,7 +945,8 @@ describe('BusinessDetailPage tabs', () => {
     expect(await screen.findByRole('heading', { name: 'Buyer avatars', level: 2 })).toBeInTheDocument()
     expect(screen.getByRole('tab', { name: 'Avatars' })).toHaveAttribute('aria-selected', 'true')
     expect(screen.getByRole('button', { name: 'Import from document' })).toBeInTheDocument()
-    expect(mockedApi.listAvatars).toHaveBeenCalledWith('biz-1')
+    // The list is requested by an effect after the heading is on screen, so wait for it.
+    await waitFor(() => expect(mockedApi.listAvatars).toHaveBeenCalledWith('biz-1'))
   })
 
   it('on the Avatars tab the back button returns to the business page (no #avatars), not the dashboard', async () => {
