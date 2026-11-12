@@ -6,12 +6,14 @@ import {
   updateCampaign,
   type Audience,
   type Campaign,
+  type CampaignType,
   type Objective,
   type Option,
   type Product,
 } from '../lib/api'
 import { requiresDestinationUrl } from '../lib/urlValidation'
 import { AudienceForm } from './AudienceForm'
+import { CampaignTypePicker } from './CampaignTypePicker'
 import { OptionsLoadError } from './OptionsLoadError'
 import { ProductForm } from './ProductForm'
 import { productLabel } from '../lib/productLabel'
@@ -77,6 +79,7 @@ export function NewCampaignFlow({
   const [generatingStrategy, setGeneratingStrategy] = useState(false)
   const [strategyError, setStrategyError] = useState<string | null>(null)
   const [needsAdExperienceAnswer, setNeedsAdExperienceAnswer] = useState(false)
+  const [campaignType, setCampaignType] = useState<CampaignType | undefined>(undefined)
 
   const urlRequired = requiresDestinationUrl(objective)
 
@@ -136,7 +139,7 @@ export function NewCampaignFlow({
     setGeneratingStrategy(true)
     setStrategyError(null)
     try {
-      await createStrategy(businessId, campaign.id, hasPriorAdvertisingExperience)
+      await createStrategy(businessId, campaign.id, hasPriorAdvertisingExperience, campaignType)
       setNeedsAdExperienceAnswer(false)
       onDone(campaign.id)
     } catch (err) {
@@ -255,11 +258,7 @@ export function NewCampaignFlow({
                 onCancel={onCancel}
               />
               {products.length > 0 && (
-                <button
-                  type="button"
-                  className="link-button"
-                  onClick={() => setReuseProduct(true)}
-                >
+                <button type="button" className="link-button" onClick={() => setReuseProduct(true)}>
                   Use an existing product instead
                 </button>
               )}
@@ -356,9 +355,22 @@ export function NewCampaignFlow({
       {step === 'strategy' && (
         <div aria-label="Generate a strategy for this campaign">
           <p>
-            Your campaign is ready — generate a strategy to see targeting, budget, and ad
-            copy recommendations.
+            Your campaign is ready — generate a strategy to see targeting, budget, and ad copy
+            recommendations.
           </p>
+          {campaign?.objective === 'SALES' && (
+            <div className="field">
+              <span className="field-label" aria-hidden="true">
+                Campaign type
+              </span>
+              <CampaignTypePicker
+                businessId={businessId}
+                campaignId={campaign.id}
+                value={campaignType}
+                onChange={setCampaignType}
+              />
+            </div>
+          )}
           <button
             type="button"
             onClick={() => void handleGenerateStrategy()}

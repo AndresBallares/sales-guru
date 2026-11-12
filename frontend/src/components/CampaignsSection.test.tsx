@@ -1016,9 +1016,18 @@ describe('CampaignsSection', () => {
     // Strategy step — reached without ever seeing the full campaigns list
     // again in between.
     expect(await screen.findByText(/Your campaign is ready/)).toBeInTheDocument()
+    // A Leads campaign gets no Campaign type dropdown, so no type is sent.
+    expect(screen.queryByRole('combobox', { name: 'Campaign type' })).not.toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: 'Generate strategy' }))
 
-    await waitFor(() => expect(mockedApi.createStrategy).toHaveBeenCalledWith('biz-1', 'camp-2', undefined))
+    await waitFor(() =>
+      expect(mockedApi.createStrategy).toHaveBeenCalledWith(
+        'biz-1',
+        'camp-2',
+        undefined,
+        undefined,
+      ),
+    )
     // The guided flow is gone, and the page carries on in the campaign just created —
     // no manual reload.
     expect(await screen.findByRole('button', { name: /back to campaigns/i })).toBeInTheDocument()
