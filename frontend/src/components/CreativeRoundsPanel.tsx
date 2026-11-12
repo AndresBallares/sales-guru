@@ -11,6 +11,7 @@ import {
   type CreativeRound,
 } from '../lib/api'
 import { angleLabel } from '../lib/creativeAngle'
+import { RoundPauseOffer } from './RoundPauseOffer'
 import { SavedConceptNote } from './SavedConceptNote'
 
 interface CreativeRoundsPanelProps {
@@ -130,6 +131,7 @@ export function CreativeRoundsPanel({
       {canAdd && hasOpenRound && (
         <p className="field-hint">Publish or delete the open round before adding another.</p>
       )}
+      {canAdd && <RoundPauseOffer businessId={businessId} campaignId={campaignId} />}
 
       {error && (
         <p className="form-error" role="alert">

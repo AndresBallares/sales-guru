@@ -35,7 +35,9 @@ _RECOMMENDATION_NOT_FOUND = "Recommendation not found"
 _NOT_PENDING = "This recommendation has already been acted on"
 
 
-def _to_response(rec: OptimizationRecommendation) -> RecommendationResponse:
+def to_recommendation_response(
+    rec: OptimizationRecommendation,
+) -> RecommendationResponse:
     """Map a Prisma OptimizationRecommendation record to its public response shape.
 
     Args:
@@ -125,7 +127,7 @@ async def create_recommendation(
             status_code=status.HTTP_400_BAD_REQUEST, detail=_NOT_ENOUGH_HISTORY
         )
 
-    return _to_response(rec)
+    return to_recommendation_response(rec)
 
 
 @router.get("", response_model=list[RecommendationResponse])
@@ -145,7 +147,7 @@ async def list_recommendations(
     recs = await db.optimizationrecommendation.find_many(
         where={"campaignId": campaign.id}, order={"createdAt": "desc"}
     )
-    return [_to_response(r) for r in recs]
+    return [to_recommendation_response(r) for r in recs]
 
 
 async def _get_pending_recommendation(
@@ -218,7 +220,7 @@ async def approve_recommendation(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)
         ) from exc
 
-    return _to_response(updated)
+    return to_recommendation_response(updated)
 
 
 @router.post("/{recommendation_id}/reject", response_model=RecommendationResponse)
@@ -245,4 +247,4 @@ async def reject_recommendation(
         where={"id": rec.id}, data={"status": "REJECTED"}
     )
     assert updated is not None  # just fetched above, can't vanish mid-request
-    return _to_response(updated)
+    return to_recommendation_response(updated)

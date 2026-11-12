@@ -154,6 +154,9 @@ class CampaignResponse(CamelCaseModel):
     # so the campaign can take a new round as a pack) or "AD_SET" (a campaign
     # published before that, whose budget sits on its single ad set).
     budget_level: str = "AD_SET"
+    # The structure the user chose (CREATIVE_TEST, DATA_DRIVEN, STANDARD, GEO or
+    # LEGACY_AUDIENCE_TEST); None until a strategy exists.
+    campaign_type: str | None = None
 
 
 class PublishStatusResponse(CamelCaseModel):

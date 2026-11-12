@@ -9,9 +9,7 @@ async function reachPreview(page: Page) {
   await page.getByRole('button', { name: 'Save Pixel' }).click()
   await finishOnboarding(page, { objectiveLabel: 'Sales' })
   await page.getByRole('button', { name: 'Generate strategy' }).click()
-  await expect(page.getByText('Has this business run advertising campaigns before?')).toBeVisible()
-  await page.getByRole('button', { name: 'No' }).click()
-  await expect(page.getByText(/Creative test/)).toBeVisible()
+  await expect(page.getByText(/Creative Test: round 1 of 3/)).toBeVisible()
   await page.getByRole('button', { name: 'Generate ads' }).click()
   for (let n = 1; n <= 3; n++) {
     await page.getByRole('button', { name: 'Add to test' }).first().click()

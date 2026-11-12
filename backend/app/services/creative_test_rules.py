@@ -6,10 +6,9 @@ one); CAC is secondary and only counts once an ad has enough purchases for it
 to mean anything. Nothing is judged before the test has run long enough, and
 no rule fires on thin data.
 
-This module only decides who *could* be paused. What actually happens
-automatically (at most one pause per campaign) and what needs the user's
-approval (every other pause, and any cost-cap change) is decided in
-app/services/optimization_jobs.py. Pure functions, no I/O, no LLM.
+This module only decides who *could* be paused. Nothing is ever paused
+automatically: every pause, and any cost-cap change, is a proposal the user
+approves (app/services/optimization_jobs.py). Pure functions, no I/O, no LLM.
 
 The plan's other written rules (keep testing, test new creative, investigate
 the offer or checkout) describe judgment calls, not pauses, and are not
@@ -35,8 +34,6 @@ MIN_ADD_TO_CARTS_TO_COMPARE = 5
 MIN_PURCHASES_FOR_CAC = 10
 # The test needs a comparison, so two ads always stay live.
 MIN_LIVE_ADS = 2
-# Only one pause per campaign is ever automatic; everything else needs approval.
-AUTO_PAUSE_LIMIT = 1
 # "Cost cap may be too tight" proposes raising the cap by this factor, and an
 # approved raise never takes the cap above this multiple of the plan's target.
 # A carousel is proposed as the next experiment only once the single-image test

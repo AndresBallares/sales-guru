@@ -10026,3 +10026,42 @@ main.business-detail:has(.research-dash) {
     grid-column: 1 / -1;
   }
 }
+
+/* Campaign type, pause review and the structure line (campaign-type change). */
+.campaign-type-picker select {
+  width: 100%;
+}
+.campaign-type-description,
+.campaign-type-warning {
+  margin: 0.4rem 0 0;
+  font-size: 0.875rem;
+}
+.campaign-type-warning {
+  color: var(--warning);
+}
+.strategy-structure {
+  display: block;
+  margin: 0.5rem 0;
+  font-weight: 600;
+}
+.review-badge,
+.review-banner {
+  display: block;
+  margin: 0.5rem 0;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--warning);
+  border-radius: 0.5rem;
+  background: var(--warning-bg);
+  color: var(--warning);
+  font-size: 0.875rem;
+}
+.review-badge {
+  font-weight: 600;
+}
+.review-banner ul {
+  margin: 0.4rem 0 0;
+  padding-left: 1.25rem;
+}
+.round-pause-offer {
+  margin: 1rem 0;
+}

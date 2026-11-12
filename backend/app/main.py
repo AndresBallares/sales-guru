@@ -30,6 +30,7 @@ from app.api.product_image import router as product_image_router
 from app.api.product_image import serve_router as product_image_serve_router
 from app.api.research_run import router as research_run_router
 from app.api.strategy import router as strategy_router
+from app.api.strategy import types_router as campaign_types_router
 from app.api.test_evaluation import router as test_evaluation_router
 from app.core.config import get_settings
 from app.core.db import db
@@ -88,6 +89,7 @@ app.include_router(product_image_serve_router)
 app.include_router(audience_router)
 app.include_router(campaign_router)
 app.include_router(strategy_router)
+app.include_router(campaign_types_router)
 app.include_router(creative_router)
 app.include_router(creative_round_router)
 app.include_router(meta_router)

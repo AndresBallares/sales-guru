@@ -29,22 +29,25 @@ from app.api.creative import (
     _to_response,
     generate_batch,
 )
+from app.api.optimization import to_recommendation_response
 from app.api.product_image import product_image_url
 from app.core.authz import get_owned_campaign
 from app.core.db import db
 from app.core.meta_connection import get_meta_connection
 from app.schemas.campaign import PublishCampaignRequest
 from app.schemas.creative_round import CreativeRoundResponse, CreativeRoundStatus
+from app.schemas.optimization import RecommendationResponse
 from app.schemas.strategy import (
     CAMPAIGN_BUDGET_LEVEL,
     MAX_CREATIVE_ANGLES,
     CreativeAngle,
     CreativeTestPlanContent,
+    DataDrivenStrategyContent,
     GeneratedCreativeAngle,
     StrategyContentAdapter,
     min_creative_test_daily_budget,
 )
-from app.services import publish_jobs
+from app.services import optimization_jobs, publish_jobs
 from app.services.brand_rules import banned_phrases_for
 from app.services.buyer_avatars import assignable_avatars, avatar_refs
 from app.services.creative import (
@@ -64,6 +67,10 @@ router = APIRouter(
 )
 
 _NEEDS_CREATIVE_TEST = "Creative rounds are only available for a creative test"
+_STANDARD_NO_ROUNDS = (
+    "Standard campaigns can't run rounds: their budget sits on the ad set. "
+    "Start a Creative Test or Data-Driven campaign to use rounds."
+)
 _NEEDS_FIRST_BATCH = "Generate the campaign's first ads before adding a round"
 _ROUND_ALREADY_OPEN = (
     "This campaign already has an open round; finish or delete it before "
@@ -154,6 +161,22 @@ async def _delete_round_rows(round_id: str) -> None:
     await db.creativeround.delete(where={"id": round_id})
 
 
+def _require_round_plan(plan: object) -> CreativeTestPlanContent:
+    """The plan of a campaign that can take rounds, or a 400 saying why not.
+
+    Creative Test and Data-Driven campaigns both store a creative-test plan, so
+    one check serves both. A Standard campaign gets its own message.
+    """
+    if isinstance(plan, CreativeTestPlanContent):
+        return plan
+    detail = (
+        _STANDARD_NO_ROUNDS
+        if isinstance(plan, DataDrivenStrategyContent)
+        else _NEEDS_CREATIVE_TEST
+    )
+    raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=detail)
+
+
 @router.post(
     "", response_model=CreativeRoundResponse, status_code=status.HTTP_201_CREATED
 )
@@ -182,10 +205,7 @@ async def create_round(
         if strategy is not None
         else None
     )
-    if not isinstance(plan, CreativeTestPlanContent):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, detail=_NEEDS_CREATIVE_TEST
-        )
+    plan = _require_round_plan(plan)
     if await db.creative.count(where={"campaignId": campaign.id, "roundId": None}) == 0:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST, detail=_NEEDS_FIRST_BATCH
@@ -256,6 +276,39 @@ async def create_round(
         await _delete_round_rows(round_.id)
         raise
     return await _round_response(campaign, round_)
+
+
+@router.post("/pause-offer", response_model=list[RecommendationResponse])
+async def offer_pauses_before_a_round(
+    campaign: Campaign = Depends(get_owned_campaign),
+) -> list[RecommendationResponse]:
+    """Offer to pause the earlier rounds' losing ads before a new round launches.
+
+    Nothing is paused here. Each loser becomes a pending proposal the user
+    approves (or rejects) through the usual recommendation endpoints; asking
+    again returns the same proposals.
+
+    Args:
+        campaign: The campaign, resolved and ownership-checked.
+
+    Returns:
+        The pending pause proposals; empty when no ad is a loser yet.
+
+    Raises:
+        HTTPException: 400 if the campaign is not published or cannot run rounds.
+    """
+    if campaign.metaCampaignId is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=_CAMPAIGN_NOT_PUBLISHED
+        )
+    strategy = await db.strategy.find_unique(where={"campaignId": campaign.id})
+    _require_round_plan(
+        StrategyContentAdapter.validate_json(strategy.content)
+        if strategy is not None
+        else None
+    )
+    offers = await optimization_jobs.offer_ad_pauses(campaign)
+    return [to_recommendation_response(offer) for offer in offers]
 
 
 @router.get("", response_model=list[CreativeRoundResponse])
@@ -422,10 +475,7 @@ async def publish_round(
         if strategy is not None
         else None
     )
-    if not isinstance(plan, CreativeTestPlanContent):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, detail=_NEEDS_CREATIVE_TEST
-        )
+    plan = _require_round_plan(plan)
     connection = await get_meta_connection(campaign.businessId)
     if (
         connection is None

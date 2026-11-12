@@ -10,7 +10,6 @@ test('the Publish paused choice follows the user between the ad page and the das
 }) => {
   await signUpAndReachFakeMetaConnectedBusiness(page)
   await page.getByRole('button', { name: 'Generate strategy' }).click()
-  await page.getByRole('button', { name: 'No' }).click()
   await expect(page.getByRole('heading', { name: 'Creative angles to test' })).toBeVisible()
   await page.getByRole('button', { name: 'Generate ads' }).click()
   await page.getByRole('button', { name: 'Continue with this creative' }).first().click()

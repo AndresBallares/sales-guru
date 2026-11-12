@@ -182,6 +182,68 @@ async def _resolve_locations(
     ]
 
 
+class _AdSetTargeting(NamedTuple):
+    """The audience fields a creative-test ad set is created with."""
+
+    age_min: int
+    age_max: int | None
+    interests: list[dict[str, str]] | None
+    advantage_audience: int
+    custom_location: CustomLocation | None
+    resolved_locations: list[ResolvedGeoLocation] | None
+
+
+async def _creative_test_targeting(
+    *,
+    strategy: CreativeTestPlanContent,
+    campaign: Campaign,
+    access_token: str,
+    suggest_interest: bool,
+) -> _AdSetTargeting:
+    """The targeting of a creative-test ad set: broad, or from the account's history.
+
+    A Creative Test targets a broad Advantage+ audience with hard constraints
+    only. A Data-Driven campaign (its plan carries an `audience_source`) targets
+    the audience chosen from the account's history instead, in its first ad set
+    and in every round, with Advantage+ audience off so the age range and
+    interests are real limits.
+
+    Args:
+        strategy: The campaign's CREATIVE_TEST_PLAN.
+        campaign: The campaign being published.
+        access_token: The business's Meta token, for the location lookup.
+        suggest_interest: Whether a broad audience also suggests the default
+            "Jewelry design" interest (a campaign-budget test does).
+
+    Returns:
+        The ad set's age range, interests, Advantage+ flag and locations.
+    """
+    source = strategy.audience_source
+    if source is None:
+        return _AdSetTargeting(
+            age_min=strategy.audience_constraints.age_min,
+            age_max=None,
+            interests=_suggested_interests() if suggest_interest else None,
+            advantage_audience=1,
+            custom_location=None,
+            resolved_locations=None,
+        )
+    audience = source.target_audience
+    custom_location = _resolve_custom_location(campaign)
+    return _AdSetTargeting(
+        age_min=audience.age_min or 18,
+        age_max=audience.age_max or 65,
+        interests=_resolve_interests(audience),
+        advantage_audience=0,
+        custom_location=custom_location,
+        resolved_locations=await _resolve_locations(
+            access_token=access_token,
+            audience=audience,
+            custom_location=custom_location,
+        ),
+    )
+
+
 async def _publish_single_variant(
     *,
     campaign: Campaign,
@@ -1439,6 +1501,12 @@ async def _publish_creative_test_plan(
         daily_budget_cents=daily_budget_cents if campaign_owns_budget else None,
     )
     created_campaign_ids.append(meta_campaign_id)
+    targeting = await _creative_test_targeting(
+        strategy=strategy,
+        campaign=campaign,
+        access_token=access_token,
+        suggest_interest=campaign_owns_budget,
+    )
     meta_ad_set_id = await meta.create_meta_ad_set(
         access_token=access_token,
         ad_account_id=ad_account_id,
@@ -1446,13 +1514,13 @@ async def _publish_creative_test_plan(
         meta_campaign_id=meta_campaign_id,
         daily_budget_cents=None if campaign_owns_budget else daily_budget_cents,
         optimization_goal=_OPTIMIZATION_GOAL_BY_OBJECTIVE[campaign.objective],
-        age_min=constraints.age_min,
-        age_max=None,
+        age_min=targeting.age_min,
+        age_max=targeting.age_max,
         pixel_id=pixel_id,
-        custom_location=None,
-        resolved_locations=None,
-        interests=_suggested_interests() if campaign_owns_budget else None,
-        advantage_audience=1,
+        custom_location=targeting.custom_location,
+        resolved_locations=targeting.resolved_locations,
+        interests=targeting.interests,
+        advantage_audience=targeting.advantage_audience,
         end_time=end_time,
         target_cac_cents=None if campaign_owns_budget else bid_cents,
         status=meta_status,
@@ -1595,6 +1663,12 @@ async def publish_round_to_meta(
     meta_ad_set_id: str | None = None
     ad_set: AdSet | None = None
     created_meta_creative_ids: list[str] = []
+    targeting = await _creative_test_targeting(
+        strategy=strategy,
+        campaign=campaign,
+        access_token=access_token,
+        suggest_interest=True,
+    )
     try:
         meta_ad_set_id = await meta.create_meta_ad_set(
             access_token=access_token,
@@ -1603,13 +1677,13 @@ async def publish_round_to_meta(
             meta_campaign_id=_require_meta_campaign_id(campaign),
             daily_budget_cents=None,
             optimization_goal=_OPTIMIZATION_GOAL_BY_OBJECTIVE[campaign.objective],
-            age_min=constraints.age_min,
-            age_max=None,
+            age_min=targeting.age_min,
+            age_max=targeting.age_max,
             pixel_id=pixel_id,
-            custom_location=None,
-            resolved_locations=None,
-            interests=_suggested_interests(),
-            advantage_audience=1,
+            custom_location=targeting.custom_location,
+            resolved_locations=targeting.resolved_locations,
+            interests=targeting.interests,
+            advantage_audience=targeting.advantage_audience,
             end_time=campaign.endDate,
             target_cac_cents=None,
             status=meta_status,

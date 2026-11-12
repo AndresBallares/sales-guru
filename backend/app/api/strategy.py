@@ -8,9 +8,10 @@ falls back to the business's one-time self-reported answer, asking for it
 (428) if it's never been given and no real history exists either.
 """
 
+from typing import cast
+
 from fastapi import APIRouter, Depends, HTTPException, status
 from prisma.models import Campaign, Strategy
-from prisma.types import CampaignWhereInput
 
 from app.core.authz import get_owned_campaign
 from app.core.config import get_settings
@@ -19,9 +20,12 @@ from app.core.meta_connection import get_meta_connection
 from app.core.published_guard import ALREADY_PUBLISHED, ensure_not_published
 from app.schemas.strategy import (
     CAMPAIGN_BUDGET_LEVEL,
+    CampaignTypeOption,
+    CampaignTypeOptions,
     CreateStrategyRequest,
     CreativeTestFormat,
     CreativeTestPlanContent,
+    StrategyContent,
     StrategyContentAdapter,
     StrategyResponse,
     TestSettingsResponse,
@@ -30,6 +34,20 @@ from app.schemas.strategy import (
 )
 from app.services.buyer_avatars import assignable_avatars
 from app.services.campaign_readiness import is_ready
+from app.services.campaign_type import (
+    DESCRIPTIONS as CAMPAIGN_TYPE_DESCRIPTIONS,
+)
+from app.services.campaign_type import (
+    GEO_COMING_SOON,
+    NOT_SALES,
+    STANDARD_WARNING,
+    CampaignType,
+    budget_level_for,
+    plan_type_for,
+    recommend_campaign_type,
+    structure_summary,
+)
+from app.services.campaign_type import label as campaign_type_label
 from app.services.creative import test_ads_required
 from app.services.creative_test_settings import PIXEL_WINDOW_DAYS, event_advice
 from app.services.meta import (
@@ -66,10 +84,6 @@ _ALREADY_PUBLISHED = (
 _CAMPAIGN_NOT_READY = (
     "Add a product and an audience to this campaign before generating a strategy"
 )
-_ANSWER_REQUIRED = (
-    "Has this business run advertising campaigns before? Answer required "
-    "before a strategy can be generated."
-)
 
 
 async def _to_response(strategy: Strategy, campaign: Campaign) -> StrategyResponse:
@@ -85,37 +99,124 @@ async def _to_response(strategy: Strategy, campaign: Campaign) -> StrategyRespon
         test it also says how many ads the test needs selected.
     """
     content = StrategyContentAdapter.validate_json(strategy.content)
+    required = (
+        await test_ads_required(campaign, content)
+        if content.plan_type == "CREATIVE_TEST_PLAN"
+        else None
+    )
+    stored_type = campaign.campaignType
+    summary = None
+    if stored_type is not None:
+        summary = structure_summary(
+            cast(CampaignType, stored_type),
+            ad_count=required or 1,
+            daily_budget=getattr(content, "daily_budget", None) or 0,
+        )
     return StrategyResponse(
         id=strategy.id,
         campaign_id=strategy.campaignId,
         content=content,
         created_at=strategy.createdAt,
-        required_test_ads=(
-            await test_ads_required(campaign, content)
-            if content.plan_type == "CREATIVE_TEST_PLAN"
-            else None
-        ),
+        required_test_ads=required,
+        campaign_type=stored_type,
+        structure_summary=summary,
     )
 
 
-async def _first_creative_test_published(business_id: str) -> bool:
-    """Whether this business has already published its controlled Test #1.
+async def _account_history(business_id: str) -> list[AccountCampaignInsights]:
+    """The ad account's per-campaign history; empty without Meta or on a failure.
+
+    Degrades to "no history" rather than blocking strategy generation on a Meta
+    Insights outage.
+    """
+    meta_connection = await get_meta_connection(business_id)
+    if meta_connection is None or meta_connection.adAccountId is None:
+        return []
+    try:
+        return await fetch_account_historical_performance(
+            access_token=meta_connection.accessToken,
+            ad_account_id=meta_connection.adAccountId,
+        )
+    except MetaConnectionError:
+        return []
+
+
+def _budget_level(campaign_type: CampaignType, content: StrategyContent) -> str:
+    """Where this plan's daily budget sits.
+
+    The type decides, except that a creative-test plan still bidding with a cost
+    cap (a plan stored before lowest-cost bidding) keeps its budget on the ad set,
+    where its cap lives.
+    """
+    level = budget_level_for(campaign_type)
+    if (
+        level == CAMPAIGN_BUDGET_LEVEL
+        and isinstance(content, CreativeTestPlanContent)
+        and content.bid_strategy != "LOWEST_COST"
+    ):
+        return "AD_SET"
+    return level
+
+
+def _type_problem(campaign_type: CampaignType, objective: str) -> str | None:
+    """Why a type can't be used for this campaign, or None when it can."""
+    if campaign_type == "GEO":
+        return GEO_COMING_SOON
+    if objective != "SALES" and campaign_type != "LEGACY_AUDIENCE_TEST":
+        return NOT_SALES
+    if objective == "SALES" and campaign_type == "LEGACY_AUDIENCE_TEST":
+        return "The audience test is only for objectives other than Sales."
+    return None
+
+
+types_router = APIRouter(
+    prefix="/businesses/{business_id}/campaigns/{campaign_id}/campaign-types",
+    tags=["strategy"],
+)
+
+
+@types_router.get("", response_model=CampaignTypeOptions)
+async def campaign_type_options(
+    campaign: Campaign = Depends(get_owned_campaign),
+) -> CampaignTypeOptions:
+    """The campaign-type dropdown for this campaign.
 
     Args:
-        business_id: The business to check.
+        campaign: The campaign, resolved and ownership-checked.
 
     Returns:
-        True when any of its campaigns has been published to Meta and its
-        strategy is a CREATIVE_TEST_PLAN. An unpublished test doesn't count:
-        it hasn't produced anything to learn from yet.
+        The recommended (preselected) type and every type with its description,
+        whether it can be picked and why not. The user can always pick another
+        available type; the recommendation never routes anything.
     """
-    where: CampaignWhereInput = {
-        "businessId": business_id,
-        "NOT": [{"metaCampaignId": None}],
-        "strategy": {"is": {"content": {"contains": '"CREATIVE_TEST_PLAN"'}}},
-    }
-    published = await db.campaign.find_many(where=where, take=1)
-    return len(published) > 0
+    has_history = has_meaningful_history(await _account_history(campaign.businessId))
+    options: list[CampaignTypeOption] = []
+    for type_ in (
+        "CREATIVE_TEST",
+        "DATA_DRIVEN",
+        "STANDARD",
+        "GEO",
+        "LEGACY_AUDIENCE_TEST",
+    ):
+        problem = _type_problem(type_, campaign.objective)
+        if type_ == "LEGACY_AUDIENCE_TEST" and problem is not None:
+            continue  # only shown to the objectives that use it
+        options.append(
+            CampaignTypeOption(
+                type=type_,
+                label=campaign_type_label(type_),
+                description=CAMPAIGN_TYPE_DESCRIPTIONS[type_],
+                available=problem is None,
+                reason=problem,
+                warning=STANDARD_WARNING if type_ == "STANDARD" else None,
+            )
+        )
+    return CampaignTypeOptions(
+        recommended=recommend_campaign_type(
+            objective=campaign.objective, has_history=has_history
+        ),
+        options=options,
+    )
 
 
 @router.post("", response_model=StrategyResponse, status_code=status.HTTP_201_CREATED)
@@ -176,53 +277,33 @@ async def create_strategy(
     )
     brand_profile = await db.brandprofile.find_unique(where={"businessId": business.id})
 
-    meta_connection = await get_meta_connection(business.id)
-    account_history: list[AccountCampaignInsights] = []
-    if meta_connection is not None and meta_connection.adAccountId is not None:
-        try:
-            account_history = await fetch_account_historical_performance(
-                access_token=meta_connection.accessToken,
-                ad_account_id=meta_connection.adAccountId,
-            )
-        except MetaConnectionError:
-            # Degrade to the self-report path rather than blocking strategy
-            # generation on a Meta Insights outage.
-            account_history = []
+    account_history = await _account_history(business.id)
+    has_history = has_meaningful_history(account_history)
+    if (
+        business.hasPriorAdvertisingExperience is None
+        and body is not None
+        and body.has_prior_advertising_experience is not None
+    ):
+        # Still recorded when a client sends it, but it no longer routes anything.
+        await db.business.update(
+            where={"id": business.id},
+            data={
+                "hasPriorAdvertisingExperience": body.has_prior_advertising_experience
+            },
+        )
 
-    plan_type: PlanType
-    if has_meaningful_history(account_history):
-        plan_type = "DATA_DRIVEN_STRATEGY"
-    else:
-        prior_experience = business.hasPriorAdvertisingExperience
-        if prior_experience is None:
-            prior_experience = (
-                body.has_prior_advertising_experience if body is not None else None
-            )
-            if prior_experience is None:
-                raise HTTPException(
-                    status_code=status.HTTP_428_PRECONDITION_REQUIRED,
-                    detail=_ANSWER_REQUIRED,
-                )
-            business = await db.business.update(
-                where={"id": business.id},
-                data={"hasPriorAdvertisingExperience": prior_experience},
-            )
-            assert business is not None  # just fetched above, can't vanish mid-request
-        if prior_experience:
-            plan_type = "DATA_DRIVEN_STRATEGY"
-        elif campaign.objective == "SALES":
-            # Cold-start SALES campaigns test creative angles in one broad
-            # ad set; every other objective keeps the audience TEST_PLAN.
-            # The test is Test #1 only: the user can opt out for a standard
-            # campaign (which allows carousel), and once a creative test has
-            # been published for this business later campaigns are standard.
-            wants_standard = body is not None and body.strategy_mode == "STANDARD"
-            if wants_standard or await _first_creative_test_published(business.id):
-                plan_type = "DATA_DRIVEN_STRATEGY"
-            else:
-                plan_type = "CREATIVE_TEST_PLAN"
-        else:
-            plan_type = "TEST_PLAN"
+    chosen: CampaignType | None = None
+    if body is not None:
+        chosen = body.campaign_type or (
+            "STANDARD" if body.strategy_mode == "STANDARD" else None
+        )
+    campaign_type: CampaignType = chosen or recommend_campaign_type(
+        objective=campaign.objective, has_history=has_history
+    )
+    problem = _type_problem(campaign_type, campaign.objective)
+    if problem is not None:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=problem)
+    plan_type: PlanType = plan_type_for(campaign_type)
 
     try:
         content = await generate_strategy(
@@ -239,6 +320,7 @@ async def create_strategy(
             ),
             campaign_id=campaign.id,
             buyer_avatars=await assignable_avatars(business.id),
+            campaign_type=campaign_type,
         )
     except StrategistError as exc:
         raise HTTPException(
@@ -252,20 +334,20 @@ async def create_strategy(
             "content": content.model_dump_json(by_alias=True),
         }
     )
-    # A creative test that bids for the lowest cost is one CBO campaign: it owns
-    # the budget and the bid strategy. Every other plan keeps its budget on the
-    # ad set (a cost cap lives there only).
-    is_campaign_budget = (
-        content.plan_type == "CREATIVE_TEST_PLAN"
-        and content.bid_strategy == "LOWEST_COST"
-    )
-    await db.campaign.update(
+    # The chosen type decides where the budget sits: the round-based types keep
+    # one campaign budget the winning ads draw from; the rest keep it per ad set.
+    # A creative test that still bids with a cost cap (an older plan) keeps the
+    # budget on the ad set, so nothing already stored changes meaning.
+    updated = await db.campaign.update(
         where={"id": campaign.id},
         data={
             "status": "STRATEGY_GENERATED",
-            "budgetLevel": CAMPAIGN_BUDGET_LEVEL if is_campaign_budget else "AD_SET",
+            "budgetLevel": _budget_level(campaign_type, content),
+            "campaignType": campaign_type,
         },
     )
+    if updated is not None:
+        campaign = updated
 
     return await _to_response(strategy, campaign)
 

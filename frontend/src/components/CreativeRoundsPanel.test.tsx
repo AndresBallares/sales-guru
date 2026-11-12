@@ -13,6 +13,7 @@ vi.mock('../lib/api', async (importOriginal) => {
     deleteRound: vi.fn<typeof actual.deleteRound>(),
     setRoundCreativeSelected: vi.fn<typeof actual.setRoundCreativeSelected>(),
     publishRound: vi.fn<typeof actual.publishRound>(),
+    offerRoundPauses: vi.fn<typeof actual.offerRoundPauses>(),
     getPublishStatus: vi.fn<typeof actual.getPublishStatus>(),
   }
 })
@@ -88,6 +89,20 @@ describe('CreativeRoundsPanel', () => {
     const add = await screen.findByRole('button', { name: 'Add new round' })
     await waitFor(() => expect(add).toBeEnabled())
     expect(screen.queryByText(/published before campaigns had one budget/i)).not.toBeInTheDocument()
+  })
+
+  it('offers to free up budget before a new round, without pausing anything itself', async () => {
+    renderPanel()
+
+    expect(await screen.findByRole('button', { name: 'See which ads to pause' })).toBeEnabled()
+    expect(mockedApi.offerRoundPauses).not.toHaveBeenCalled()
+  })
+
+  it('shows no pause offer for a campaign that cannot take rounds', async () => {
+    renderPanel('AD_SET')
+
+    await screen.findByText(/published before campaigns had one budget/i)
+    expect(screen.queryByRole('button', { name: 'See which ads to pause' })).not.toBeInTheDocument()
   })
 
   it('explains why a campaign published before campaign budgets gets no new round', async () => {

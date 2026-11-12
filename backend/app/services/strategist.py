@@ -65,6 +65,7 @@ from app.schemas.strategy import (
     PRIMARY_HYPOTHESIS_METRIC,
     SECONDARY_HYPOTHESIS_METRICS,
     AudienceConstraints,
+    AudienceSource,
     AudienceVariant,
     BenchmarkContext,
     BudgetRecommendation,
@@ -1434,6 +1435,51 @@ async def _call_agent(
     return result
 
 
+async def _generate_history_audience(
+    *,
+    business: Business,
+    product: Product | None,
+    audience: Audience | None,
+    objective: str,
+    unit_economics: UnitEconomicsFields | None,
+    account_history: list[AccountCampaignInsights],
+    brand_profile: BrandProfile | None,
+    campaign_id: str | None,
+) -> GeneratedDataDrivenStrategyFields:
+    """Ask the data-driven prompt for an audience grounded in the account's history.
+
+    Shared by a Standard campaign (which keeps the whole result) and a
+    Data-Driven campaign (which keeps only the audience and learnings, see
+    AudienceSource).
+
+    Raises:
+        StrategistError: If the model's audience has no usable interests left.
+    """
+    prompt = _build_data_driven_strategy_prompt(
+        business,
+        product,
+        audience,
+        objective,
+        unit_economics,
+        account_history,
+        brand_profile,
+    )
+    raw = await _call_agent(
+        tool_name=_DATA_DRIVEN_STRATEGY_TOOL_NAME,
+        tool_schema=tool_input_schema(GeneratedDataDrivenStrategyFields),
+        prompt=prompt,
+        campaign_id=campaign_id,
+    )
+    try:
+        return parse_tool_input(raw, GeneratedDataDrivenStrategyFields)
+    except ToolInputRecoveryError as exc:
+        raise StrategistError(
+            "The model recommended a target audience with no usable "
+            "interests (every suggested value was invalid) — please try "
+            "generating the strategy again."
+        ) from exc
+
+
 async def generate_strategy(
     *,
     business: Business,
@@ -1446,6 +1492,7 @@ async def generate_strategy(
     creative_format: CreativeTestFormat = "SINGLE_IMAGE",
     campaign_id: str | None = None,
     buyer_avatars: Sequence[BuyerAvatar] | None = None,
+    campaign_type: str | None = None,
 ) -> StrategyContent:
     """Call the Marketing Strategist Agent and return a structured plan.
 
@@ -1474,6 +1521,9 @@ async def generate_strategy(
             CREATIVE_TEST_PLAN, when there are any, each angle names one
             (buyer_avatar_id) and its fixed avatar is derived from that avatar's
             purchase_for; with none the plan is written as before.
+        campaign_type: The user's chosen campaign type. DATA_DRIVEN makes a
+            CREATIVE_TEST_PLAN carry an `audience_source` chosen from
+            `account_history`; every other value changes nothing.
 
     Returns:
         The generated plan, with every backend-computed field (see
@@ -1574,6 +1624,23 @@ async def generate_strategy(
                     f"{exc}. Fix it and submit again."
                 )
         benchmark_context = _build_benchmark_context()
+        audience_source: AudienceSource | None = None
+        if campaign_type == "DATA_DRIVEN":
+            history_audience = await _generate_history_audience(
+                business=business,
+                product=product,
+                audience=audience,
+                objective=objective,
+                unit_economics=unit_economics,
+                account_history=account_history or [],
+                brand_profile=brand_profile,
+                campaign_id=campaign_id,
+            )
+            audience_source = AudienceSource(
+                target_audience=history_audience.target_audience,
+                key_learnings=history_audience.key_learnings,
+                recommended_adjustments=history_audience.recommended_adjustments,
+            )
         return CreativeTestPlanContent.model_validate(
             {
                 "objective": objective,
@@ -1581,6 +1648,7 @@ async def generate_strategy(
                 "audience_constraints": AudienceConstraints(
                     languages=_ad_languages(brand_profile)
                 ),
+                "audience_source": audience_source,
                 "creative_persona": generated_creative.creative_persona,
                 "hypotheses": [
                     _build_creative_hypothesis(generated_creative.hypothesis_statement)
@@ -1673,29 +1741,16 @@ async def generate_strategy(
             }
         )
 
-    prompt = _build_data_driven_strategy_prompt(
-        business,
-        product,
-        audience,
-        objective,
-        unit_economics,
-        account_history or [],
-        brand_profile,
-    )
-    raw = await _call_agent(
-        tool_name=_DATA_DRIVEN_STRATEGY_TOOL_NAME,
-        tool_schema=tool_input_schema(GeneratedDataDrivenStrategyFields),
-        prompt=prompt,
+    generated_opt = await _generate_history_audience(
+        business=business,
+        product=product,
+        audience=audience,
+        objective=objective,
+        unit_economics=unit_economics,
+        account_history=account_history or [],
+        brand_profile=brand_profile,
         campaign_id=campaign_id,
     )
-    try:
-        generated_opt = parse_tool_input(raw, GeneratedDataDrivenStrategyFields)
-    except ToolInputRecoveryError as exc:
-        raise StrategistError(
-            "The model recommended a target audience with no usable "
-            "interests (every suggested value was invalid) — please try "
-            "generating the strategy again."
-        ) from exc
     # model_validate, not the constructor — same objective-is-plain-str
     # reasoning as the TEST_PLAN branch above.
     return DataDrivenStrategyContent.model_validate(
