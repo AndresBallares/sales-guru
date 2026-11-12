@@ -954,6 +954,12 @@ export interface CreativeTestPlanContent {
   optimizationEvent: 'PURCHASE' | 'ADD_TO_CART'
   // A first test bids for the lowest cost with no cap; an older one has a cap.
   bidStrategy?: 'LOWEST_COST' | 'COST_CAP'
+  // Where the budget sits. 'AD_SET' (plans written since ad-set rounds): every round's
+  // ad set owns its budget and runs for durationDays, and a later round adds a winners
+  // ad set. 'CAMPAIGN' (or absent): one campaign budget shared by a pack per round.
+  roundsBudget?: 'CAMPAIGN' | 'AD_SET'
+  winnersDailyBudget?: number
+  maxWinners?: number
   targetCostPerAddToCart: number | null
   successCriteria: SuccessCriteria
   decisionRules: DecisionRule[]
@@ -1203,16 +1209,123 @@ export function setRoundCreativeSelected(
 
 // Publishes the round's selected ads as a new pack. A video round answers while
 // the publish still runs in the background: poll getPublishStatus, then listRounds.
+// An ad-set round publishes live; confirmRestart is the user's yes to restarting a
+// campaign that was paused between rounds.
 export function publishRound(
   businessId: string,
   campaignId: string,
   roundId: string,
-  options?: { paused?: boolean },
+  options?: { paused?: boolean; confirmRestart?: boolean },
 ): Promise<CreativeRound> {
   return request<CreativeRound>(`${roundsPath(businessId, campaignId)}/${roundId}/publish`, {
     method: 'POST',
-    body: JSON.stringify({ paused: options?.paused ?? false }),
+    body: JSON.stringify({
+      paused: options?.paused ?? false,
+      ...(options?.confirmRestart ? { confirmRestart: true } : {}),
+    }),
   })
+}
+
+// --- ad-set rounds: the round screen -----------------------------------------------
+
+export interface RoundAd {
+  adId: string
+  name: string
+  status: string
+  creativeId: string | null
+  headline: string | null
+  // Set on an ad carried into a winners ad set: the round it first ran in.
+  carriedFromRound: number | null
+  spend: number
+}
+
+export interface RoundAdSet {
+  id: string
+  name: string
+  isWinners: boolean
+  dailyBudget: number
+  startDate: string | null
+  endDate: string | null
+  spend: number
+  ads: RoundAd[]
+}
+
+export interface PublishedRound {
+  number: number
+  startsAt: string | null
+  endsAt: string | null
+  adSets: RoundAdSet[]
+}
+
+export interface RoundsOverview {
+  maxRounds: number
+  // Why the next round can't start yet, or null when it can.
+  nextRoundProblem: string | null
+  rounds: PublishedRound[]
+}
+
+export interface WinnerCandidate {
+  creativeId: string
+  adName: string
+  headline: string
+  avatar: string | null
+  concept: string | null
+  // The round the ad first ran in ("carried from round N").
+  firstRound: number
+  chosen: boolean
+}
+
+export interface RoundLaunchSummary {
+  restartsCampaign: boolean
+  newAdSet: { dailyBudget: number; adCount: number }
+  winnersAdSet: { dailyBudget: number; adCount: number } | null
+  winnerCandidates: WinnerCandidate[]
+  maxWinners: number
+  // More ads are active than a round can carry and none has been chosen yet.
+  needsChoice: boolean
+  dailyTotal: number
+  plannedMax: number
+  durationDays: number
+}
+
+export function getRoundsOverview(
+  businessId: string,
+  campaignId: string,
+): Promise<RoundsOverview> {
+  return request<RoundsOverview>(`${roundsPath(businessId, campaignId)}/overview`)
+}
+
+export function getRoundLaunchSummary(
+  businessId: string,
+  campaignId: string,
+  roundId: string,
+): Promise<RoundLaunchSummary> {
+  return request<RoundLaunchSummary>(
+    `${roundsPath(businessId, campaignId)}/${roundId}/launch-summary`,
+  )
+}
+
+export function chooseRoundWinners(
+  businessId: string,
+  campaignId: string,
+  roundId: string,
+  creativeIds: string[],
+): Promise<RoundLaunchSummary> {
+  return request<RoundLaunchSummary>(`${roundsPath(businessId, campaignId)}/${roundId}/winners`, {
+    method: 'PUT',
+    body: JSON.stringify({ creativeIds }),
+  })
+}
+
+// Stops the current round now so the next can start; the backend wants confirmed: true.
+export function endRoundEarly(
+  businessId: string,
+  campaignId: string,
+): Promise<{ roundNumber: number; endedAt: string }> {
+  return request<{ roundNumber: number; endedAt: string }>(
+    `${roundsPath(businessId, campaignId)}/end-early`,
+    { method: 'POST', body: JSON.stringify({ confirmed: true }) },
+  )
 }
 
 // Asks which earlier ads the pause rules call losers, before a new round launches.

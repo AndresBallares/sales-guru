@@ -8,10 +8,11 @@ changes the campaign's status or touches a live ad, and nothing here publishes.
 
 import json
 from collections.abc import Callable
+from datetime import UTC, datetime
 from typing import cast
 
 from fastapi import APIRouter, Depends, HTTPException, Response, status
-from prisma.models import Campaign, CreativeRound
+from prisma.models import Campaign, Creative, CreativeRound, MetaConnection
 from prisma.types import CreativeUpdateInput, CreativeWhereInput
 
 from app.api.campaign import (
@@ -32,10 +33,24 @@ from app.api.creative import (
 from app.api.optimization import to_recommendation_response
 from app.api.product_image import product_image_url
 from app.core.authz import get_owned_campaign
+from app.core.config import get_settings
 from app.core.db import db
 from app.core.meta_connection import get_meta_connection
 from app.schemas.campaign import PublishCampaignRequest
-from app.schemas.creative_round import CreativeRoundResponse, CreativeRoundStatus
+from app.schemas.creative_round import (
+    AdSetPlanResponse,
+    ChooseWinnersRequest,
+    CreativeRoundResponse,
+    CreativeRoundStatus,
+    EndRoundEarlyRequest,
+    EndRoundEarlyResponse,
+    PublishedRoundResponse,
+    RoundAdResponse,
+    RoundAdSetResponse,
+    RoundLaunchSummary,
+    RoundsOverviewResponse,
+    WinnerCandidateResponse,
+)
 from app.schemas.optimization import RecommendationResponse
 from app.schemas.strategy import (
     CAMPAIGN_BUDGET_LEVEL,
@@ -47,7 +62,16 @@ from app.schemas.strategy import (
     StrategyContentAdapter,
     min_creative_test_daily_budget,
 )
-from app.services import optimization_jobs, publish_jobs
+from app.services import meta, optimization_jobs, publish_jobs
+from app.services.ad_set_rounds import (
+    RoundPublishError,
+    WinnerCandidate,
+    chosen_winners,
+    latest_round,
+    next_round_problem,
+    uses_ad_set_rounds,
+    winner_candidates,
+)
 from app.services.brand_rules import banned_phrases_for
 from app.services.buyer_avatars import assignable_avatars, avatar_refs
 from app.services.creative import (
@@ -57,9 +81,13 @@ from app.services.creative import (
     test_ads_required,
 )
 from app.services.meta import MetaConnectionError
-from app.services.publish import publish_round_to_meta, requires_pixel
+from app.services.publish import (
+    publish_ad_set_round,
+    publish_round_to_meta,
+    requires_pixel,
+)
 from app.services.round_results import load_round_results
-from app.services.strategist import StrategistError, generate_round_angles
+from app.services.strategist import CarriedAd, StrategistError, generate_round_angles
 
 router = APIRouter(
     prefix="/businesses/{business_id}/campaigns/{campaign_id}/rounds",
@@ -177,6 +205,32 @@ def _require_round_plan(plan: object) -> CreativeTestPlanContent:
     raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=detail)
 
 
+async def _ads_staying_live(campaign: Campaign) -> list[CarriedAd]:
+    """The earlier ads still active, which a new round's ads should complement.
+
+    Read from Meta (an ad's own status), so a loser the user paused is left out.
+    When Meta can't be asked the new ads are made without this guidance rather
+    than blocking the round.
+    """
+    connection = await get_meta_connection(campaign.businessId)
+    if connection is None:
+        return []
+    try:
+        found = await winner_candidates(campaign, access_token=connection.accessToken)
+    except MetaConnectionError:
+        return []
+    return [
+        CarriedAd(
+            avatar=w.creative.avatar,
+            concept=w.creative.concept,
+            pillar=w.creative.pillar,
+            hook_type=w.creative.hookType,
+            headline=w.creative.headline,
+        )
+        for w in found
+    ]
+
+
 @router.post(
     "", response_model=CreativeRoundResponse, status_code=status.HTTP_201_CREATED
 )
@@ -218,6 +272,12 @@ async def create_round(
             status_code=status.HTTP_409_CONFLICT, detail=_ROUND_ALREADY_OPEN
         )
 
+    carried: list[CarriedAd] = []
+    if uses_ad_set_rounds(plan):
+        problem = await next_round_problem(campaign.id)
+        if problem is not None:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=problem)
+        carried = await _ads_staying_live(campaign)
     count = await test_ads_required(campaign, plan)
     excluded = list(plan.creative_angles)
     for r in earlier:
@@ -243,6 +303,7 @@ async def create_round(
             campaign_id=campaign.id,
             buyer_avatars=await assignable_avatars(business.id),
             previous_results=await load_round_results(campaign.id),
+            carried=carried,
         )
     except StrategistError as exc:
         raise HTTPException(
@@ -269,6 +330,7 @@ async def create_round(
             round_id=round_.id,
             batch_size=count,
             round_number=round_.number,
+            avoid_hook_types=[c.hook_type for c in carried if c.hook_type],
         )
     except HTTPException:
         # generate_batch raised (including its own 500 for a Creative Agent
@@ -309,6 +371,311 @@ async def offer_pauses_before_a_round(
     )
     offers = await optimization_jobs.offer_ad_pauses(campaign)
     return [to_recommendation_response(offer) for offer in offers]
+
+
+async def _require_published_ad_set_plan(campaign: Campaign) -> CreativeTestPlanContent:
+    """The campaign's plan, when it runs ad-set rounds and has been published."""
+    strategy = await db.strategy.find_unique(where={"campaignId": campaign.id})
+    plan = _require_round_plan(
+        StrategyContentAdapter.validate_json(strategy.content)
+        if strategy is not None
+        else None
+    )
+    if not uses_ad_set_rounds(plan):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=_NOT_AD_SET_ROUNDS
+        )
+    if campaign.metaCampaignId is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=_CAMPAIGN_NOT_PUBLISHED
+        )
+    return plan
+
+
+@router.get("/overview", response_model=RoundsOverviewResponse)
+async def rounds_overview(
+    campaign: Campaign = Depends(get_owned_campaign),
+) -> RoundsOverviewResponse:
+    """Every published round with its ad sets, dates, budgets, ads and spend so far.
+
+    Args:
+        campaign: The campaign, resolved and ownership-checked.
+
+    Returns:
+        The rounds, oldest first, and why the next round can't start yet (if so).
+
+    Raises:
+        HTTPException: 400 if the campaign does not run ad-set rounds or is not
+            published.
+    """
+    await _require_published_ad_set_plan(campaign)
+    ad_sets = [
+        a
+        for a in await db.adset.find_many(
+            where={"campaignId": campaign.id}, order={"createdAt": "asc"}
+        )
+        if a.packNumber is not None
+    ]
+    ads = await db.ad.find_many(
+        where={"adSetId": {"in": [a.id for a in ad_sets]}},
+        order={"createdAt": "asc"},
+    )
+    creatives = {
+        c.adId: c
+        for c in await db.creative.find_many(where={"campaignId": campaign.id})
+        if c.adId is not None
+    }
+    spend: dict[str, float] = {}
+    for metric in await db.metric.find_many(
+        where={"campaignId": campaign.id}, order={"fetchedAt": "desc"}
+    ):
+        if metric.adId is not None and metric.adId not in spend:
+            spend[metric.adId] = metric.spend
+    rounds: dict[int, list[RoundAdSetResponse]] = {}
+    for ad_set in ad_sets:
+        ad_rows = [
+            RoundAdResponse(
+                ad_id=ad.id,
+                name=ad.name,
+                status=ad.status,
+                creative_id=creatives[ad.id].id if ad.id in creatives else None,
+                headline=creatives[ad.id].headline if ad.id in creatives else None,
+                carried_from_round=(
+                    creatives[ad.id].carriedFromRound if ad.id in creatives else None
+                ),
+                spend=spend.get(ad.id, 0.0),
+            )
+            for ad in ads
+            if ad.adSetId == ad_set.id
+        ]
+        rounds.setdefault(ad_set.packNumber or 1, []).append(
+            RoundAdSetResponse(
+                id=ad_set.id,
+                name=ad_set.name,
+                is_winners=ad_set.isWinners,
+                daily_budget=ad_set.budget,
+                start_date=ad_set.startDate,
+                end_date=ad_set.endDate,
+                spend=sum(a.spend for a in ad_rows),
+                ads=ad_rows,
+            )
+        )
+    published = [
+        PublishedRoundResponse(
+            number=number,
+            starts_at=min((a.start_date for a in sets if a.start_date), default=None),
+            ends_at=max((a.end_date for a in sets if a.end_date), default=None),
+            ad_sets=sets,
+        )
+        for number, sets in sorted(rounds.items())
+    ]
+    return RoundsOverviewResponse(
+        max_rounds=get_settings().creative_test_max_rounds,
+        next_round_problem=await next_round_problem(campaign.id),
+        rounds=published,
+    )
+
+
+@router.post("/end-early", response_model=EndRoundEarlyResponse)
+async def end_round_early(
+    body: EndRoundEarlyRequest,
+    campaign: Campaign = Depends(get_owned_campaign),
+) -> EndRoundEarlyResponse:
+    """Stop the current round now, so the next one can start.
+
+    Pauses every ad set on Meta and the campaign (reason "Round N ended early"), and
+    moves the round's ad sets' end date to now. Needs the user's confirmation.
+
+    Args:
+        body: `confirmed` must be true.
+        campaign: The campaign, resolved and ownership-checked.
+
+    Returns:
+        The round that was ended and when.
+
+    Raises:
+        HTTPException: 400 without confirmation or when Meta is not connected; 409
+            when no round is running; 500 if pausing on Meta fails.
+    """
+    await _require_published_ad_set_plan(campaign)
+    window = await latest_round(campaign.id)
+    now = datetime.now(UTC)
+    if window is None or window.ends_at <= now:
+        number = window.number if window is not None else 1
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Round {number} has already finished.",
+        )
+    if not body.confirmed:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=_CONFIRM_END_EARLY
+        )
+    connection = await get_meta_connection(campaign.businessId)
+    if connection is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=_META_NOT_CONNECTED
+        )
+    reason = f"Round {window.number} ended early"
+    try:
+        if campaign.status == "LIVE":
+            await optimization_jobs.pause_campaign_and_capture(
+                campaign=campaign, connection=connection, reason=reason
+            )
+        else:
+            for ad_set in window.ad_sets:
+                if ad_set.metaAdSetId is not None:
+                    await meta.pause_meta_ad_set(
+                        access_token=connection.accessToken,
+                        meta_ad_set_id=ad_set.metaAdSetId,
+                    )
+    except MetaConnectionError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)
+        ) from exc
+    await db.adset.update_many(
+        where={"id": {"in": [a.id for a in window.ad_sets]}}, data={"endDate": now}
+    )
+    return EndRoundEarlyResponse(round_number=window.number, ended_at=now)
+
+
+async def _launch_summary(
+    campaign: Campaign, round_: CreativeRound, plan: CreativeTestPlanContent
+) -> RoundLaunchSummary:
+    """What publishing this open round would do, for the user to confirm."""
+    connection = await get_meta_connection(campaign.businessId)
+    if connection is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=_META_NOT_CONNECTED
+        )
+    new_ads = await db.creative.count(
+        where={"roundId": round_.id, "status": "SELECTED", "adId": None}
+    )
+    chosen_ids = (
+        json.loads(round_.winnerCreativeIds) if round_.winnerCreativeIds else None
+    )
+    try:
+        candidates = await winner_candidates(
+            campaign, access_token=connection.accessToken
+        )
+    except MetaConnectionError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)
+        ) from exc
+    needs_choice = chosen_ids is None and len(candidates) > plan.max_winners
+    if needs_choice:
+        carried: set[str] = set()
+    elif chosen_ids is None:
+        carried = {c.creative.id for c in candidates}
+    else:
+        carried = set(chosen_ids)
+    winners_budget = plan.winners_daily_budget if carried else 0.0
+    daily_total = plan.daily_budget + winners_budget
+    return RoundLaunchSummary(
+        restarts_campaign=campaign.status != "LIVE",
+        new_ad_set=AdSetPlanResponse(daily_budget=plan.daily_budget, ad_count=new_ads),
+        winners_ad_set=(
+            AdSetPlanResponse(
+                daily_budget=plan.winners_daily_budget, ad_count=len(carried)
+            )
+            if carried
+            else None
+        ),
+        winner_candidates=[
+            WinnerCandidateResponse(
+                creative_id=c.creative.id,
+                ad_name=c.ad.name,
+                headline=c.creative.headline,
+                avatar=c.creative.avatar,
+                concept=c.creative.concept,
+                first_round=c.first_round,
+                chosen=c.creative.id in carried,
+            )
+            for c in candidates
+        ],
+        max_winners=plan.max_winners,
+        needs_choice=needs_choice,
+        daily_total=daily_total,
+        planned_max=daily_total * plan.duration_days,
+        duration_days=plan.duration_days,
+    )
+
+
+@router.get("/{round_id}/launch-summary", response_model=RoundLaunchSummary)
+async def round_launch_summary(
+    round_id: str, campaign: Campaign = Depends(get_owned_campaign)
+) -> RoundLaunchSummary:
+    """Both budgets, the winners and whether a restart is needed, before publishing.
+
+    Args:
+        round_id: The open round.
+        campaign: The campaign, resolved and ownership-checked.
+
+    Returns:
+        The summary the user confirms.
+
+    Raises:
+        HTTPException: 400/404/409 as for publishing (not published, not this
+            campaign's round, round already published).
+    """
+    plan = await _require_published_ad_set_plan(campaign)
+    round_ = await _owned_round(round_id, campaign)
+    if round_.status != "OPEN":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail=_ROUND_NOT_OPEN
+        )
+    return await _launch_summary(campaign, round_, plan)
+
+
+@router.put("/{round_id}/winners", response_model=RoundLaunchSummary)
+async def choose_round_winners(
+    round_id: str,
+    body: ChooseWinnersRequest,
+    campaign: Campaign = Depends(get_owned_campaign),
+) -> RoundLaunchSummary:
+    """Pick which earlier ads this round carries into its winners ad set.
+
+    Args:
+        round_id: The open round.
+        body: The Creative ids to carry (at most the plan's `max_winners`, each an
+            ad that is still active).
+        campaign: The campaign, resolved and ownership-checked.
+
+    Returns:
+        The updated launch summary.
+
+    Raises:
+        HTTPException: 400 for too many ads or one that is not active; 404/409 as
+            for the summary.
+    """
+    plan = await _require_published_ad_set_plan(campaign)
+    round_ = await _owned_round(round_id, campaign)
+    if round_.status != "OPEN":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail=_ROUND_NOT_OPEN
+        )
+    connection = await get_meta_connection(campaign.businessId)
+    if connection is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=_META_NOT_CONNECTED
+        )
+    try:
+        candidates = await winner_candidates(
+            campaign, access_token=connection.accessToken
+        )
+        chosen_winners(candidates, body.creative_ids, limit=plan.max_winners)
+    except RoundPublishError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
+        ) from exc
+    except MetaConnectionError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)
+        ) from exc
+    updated = await db.creativeround.update(
+        where={"id": round_.id},
+        data={"winnerCreativeIds": json.dumps(body.creative_ids)},
+    )
+    return await _launch_summary(campaign, updated or round_, plan)
 
 
 @router.get("", response_model=list[CreativeRoundResponse])
@@ -410,6 +777,82 @@ async def deselect_round_creative(
     return await _change_selection(round_id, creative_id, campaign, select=False)
 
 
+_NOT_AD_SET_ROUNDS = "This campaign's rounds don't run on separate ad-set budgets"
+_CONFIRM_END_EARLY = "Ending a round early stops its ads now. Confirm to go ahead."
+_ROUNDS_LIVE_ONLY = (
+    "A round of this kind publishes live, because it replaces the round before it. "
+    "Publish it without the paused option."
+)
+_RESTART = (
+    "Publishing this round restarts the paused campaign: ${new:g}/day for the new "
+    "ads{winners}. That is about ${total:g}/day, and up to ${cap:,.0f} over the "
+    "{days} days. Confirm to go ahead."
+)
+
+
+async def _winners_for_publish(
+    campaign: Campaign,
+    connection: MetaConnection,
+    round_: CreativeRound,
+    plan: CreativeTestPlanContent,
+    creatives: list[Creative],
+    payload: PublishCampaignRequest | None,
+) -> list[WinnerCandidate]:
+    """The earlier ads this ad-set round carries, after the checks that precede it.
+
+    Raises:
+        HTTPException: 400 when the round is asked to publish paused, when more
+            ads are active than a round may carry, or when the winners' budget is
+            too low for them; 409 when the campaign is paused and the user has not
+            confirmed the restart; 500 when Meta can't be asked about an ad.
+    """
+    if payload is not None and payload.paused:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=_ROUNDS_LIVE_ONLY
+        )
+    chosen = json.loads(round_.winnerCreativeIds) if round_.winnerCreativeIds else None
+    try:
+        candidates = await winner_candidates(
+            campaign, access_token=connection.accessToken
+        )
+        winners = chosen_winners(candidates, chosen, limit=plan.max_winners)
+    except RoundPublishError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
+        ) from exc
+    except MetaConnectionError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)
+        ) from exc
+    if winners and plan.winners_daily_budget < min_creative_test_daily_budget(
+        len(winners)
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=_ROUND_BUDGET_TOO_LOW.format(
+                minimum=min_creative_test_daily_budget(len(winners)),
+                count=len(winners),
+            ),
+        )
+    if campaign.status != "LIVE" and not (payload and payload.confirm_restart):
+        total = plan.daily_budget + (plan.winners_daily_budget if winners else 0)
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=_RESTART.format(
+                new=plan.daily_budget,
+                winners=(
+                    f" and ${plan.winners_daily_budget:g}/day for the winners"
+                    if winners
+                    else ""
+                ),
+                total=total,
+                cap=total * plan.duration_days,
+                days=plan.duration_days,
+            ),
+        )
+    return winners
+
+
 @router.post("/{round_id}/publish", response_model=CreativeRoundResponse)
 async def publish_round(
     round_id: str,
@@ -451,10 +894,6 @@ async def publish_round(
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST, detail=_CAMPAIGN_NOT_PUBLISHED
         )
-    if campaign.budgetLevel != CAMPAIGN_BUDGET_LEVEL:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, detail=_NEEDS_CAMPAIGN_BUDGET
-        )
     if round_.status != "OPEN":
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT, detail=_ROUND_NOT_OPEN
@@ -476,6 +915,11 @@ async def publish_round(
         else None
     )
     plan = _require_round_plan(plan)
+    ad_set_mode = uses_ad_set_rounds(plan)
+    if not ad_set_mode and campaign.budgetLevel != CAMPAIGN_BUDGET_LEVEL:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=_NEEDS_CAMPAIGN_BUDGET
+        )
     connection = await get_meta_connection(campaign.businessId)
     if (
         connection is None
@@ -527,24 +971,43 @@ async def publish_round(
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST, detail=_NO_DESTINATION_URL
         )
+    if ad_set_mode:
+        winners = await _winners_for_publish(
+            campaign, connection, round_, plan, creatives, payload
+        )
     ad_set_ids = [
         a.id for a in await db.adset.find_many(where={"campaignId": campaign.id})
     ]
     live_ads = (
         await db.ad.count(where={"adSetId": {"in": ad_set_ids}}) if ad_set_ids else 0
     )
-    minimum = min_creative_test_daily_budget(live_ads + len(creatives))
+    # An ad-set round's new ad set carries only its own ads; a pack shares the
+    # campaign budget with every ad already running.
+    ads_sharing_budget = len(creatives) if ad_set_mode else live_ads + len(creatives)
+    minimum = min_creative_test_daily_budget(ads_sharing_budget)
     if plan.daily_budget < minimum:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=_ROUND_BUDGET_TOO_LOW.format(
-                minimum=minimum, count=live_ads + len(creatives)
+                minimum=minimum, count=ads_sharing_budget
             ),
         )
 
     paused = payload.paused if payload is not None else False
 
     async def publish(report: Callable[[str, int | None], None] | None) -> None:
+        if ad_set_mode:
+            await publish_ad_set_round(
+                campaign=campaign,
+                connection=connection,
+                round_=round_,
+                creatives=creatives,
+                strategy=plan,
+                destination_url=destination_url,
+                winners=winners,
+                report=report,
+            )
+            return
         await publish_round_to_meta(
             campaign=campaign,
             connection=connection,
@@ -568,6 +1031,10 @@ async def publish_round(
     else:
         try:
             await publish(None)
+        except RoundPublishError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
+            ) from exc
         except MetaConnectionError as exc:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)

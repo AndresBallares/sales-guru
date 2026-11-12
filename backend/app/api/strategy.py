@@ -36,14 +36,12 @@ from app.schemas.strategy import (
 from app.services.buyer_avatars import assignable_avatars
 from app.services.campaign_readiness import is_ready
 from app.services.campaign_type import (
-    DESCRIPTIONS as CAMPAIGN_TYPE_DESCRIPTIONS,
-)
-from app.services.campaign_type import (
     GEO_COMING_SOON,
     NOT_SALES,
     STANDARD_WARNING,
     CampaignType,
     budget_level_for,
+    describe,
     plan_type_for,
     recommend_campaign_type,
     structure_summary,
@@ -112,6 +110,8 @@ async def _to_response(strategy: Strategy, campaign: Campaign) -> StrategyRespon
             cast(CampaignType, stored_type),
             ad_count=required or 1,
             daily_budget=getattr(content, "daily_budget", None) or 0,
+            budget_level=campaign.budgetLevel,
+            duration_days=getattr(content, "duration_days", None) or 10,
         )
     return StrategyResponse(
         id=strategy.id,
@@ -145,15 +145,17 @@ async def _account_history(business_id: str) -> list[AccountCampaignInsights]:
 def _budget_level(campaign_type: CampaignType, content: StrategyContent) -> str:
     """Where this plan's daily budget sits.
 
-    The type decides, except that a creative-test plan still bidding with a cost
-    cap (a plan stored before lowest-cost bidding) keeps its budget on the ad set,
-    where its cap lives.
+    The type decides, except that a creative-test plan keeps its budget on the ad
+    set when it says so (`rounds_budget`, plans written since ad-set rounds) or when
+    it still bids with a cost cap (stored before lowest-cost bidding).
     """
     level = budget_level_for(campaign_type)
+    # A plan written since ad-set rounds keeps each round's budget on its ad set;
+    # so does an older plan still bidding with a cost cap.
     if (
         level == CAMPAIGN_BUDGET_LEVEL
         and isinstance(content, CreativeTestPlanContent)
-        and content.bid_strategy != "LOWEST_COST"
+        and (content.rounds_budget == "AD_SET" or content.bid_strategy != "LOWEST_COST")
     ):
         return "AD_SET"
     return level
@@ -194,7 +196,7 @@ async def _type_options(business_id: str, objective: str) -> CampaignTypeOptions
             CampaignTypeOption(
                 type=type_,
                 label=campaign_type_label(type_),
-                description=CAMPAIGN_TYPE_DESCRIPTIONS[type_],
+                description=describe(type_),
                 available=problem is None,
                 reason=problem,
                 warning=STANDARD_WARNING if type_ == "STANDARD" else None,
@@ -435,9 +437,9 @@ async def _creative_test_for_settings(
             status_code=status.HTTP_404_NOT_FOUND, detail=_STRATEGY_NOT_FOUND
         )
     content = StrategyContentAdapter.validate_json(strategy.content)
-    if (
-        content.plan_type != "CREATIVE_TEST_PLAN"
-        or campaign.budgetLevel != CAMPAIGN_BUDGET_LEVEL
+    if content.plan_type != "CREATIVE_TEST_PLAN" or (
+        campaign.budgetLevel != CAMPAIGN_BUDGET_LEVEL
+        and content.rounds_budget != "AD_SET"
     ):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST, detail=_NO_TEST_SETTINGS

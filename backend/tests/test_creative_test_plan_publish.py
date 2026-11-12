@@ -316,7 +316,7 @@ def test_a_first_test_is_planned_and_published_at_100_dollars_a_day(
     monkeypatch: pytest.MonkeyPatch,
     mock_services: dict[str, AsyncMock],  # noqa: F811
 ) -> None:
-    """From the real strategy generation to Meta: $100/day on the campaign."""
+    """From the real strategy generation to Meta: $100/day on the first ad set."""
     monkeypatch.setattr(
         strategist_module, "_call_agent", AsyncMock(return_value=_VALID_PLAN_INPUT)
     )
@@ -339,8 +339,9 @@ def test_a_first_test_is_planned_and_published_at_100_dollars_a_day(
     response = client.post(f"/businesses/{business_id}/campaigns/{campaign_id}/publish")
 
     assert response.status_code == 200
-    assert _kwargs(mock_services["create_campaign"])["daily_budget_cents"] == 10000
-    assert _kwargs(mock_services["create_ad_set"])["daily_budget_cents"] is None
+    # Ad-set rounds (2026-11-12): the campaign has no budget, its ad set owns it.
+    assert _kwargs(mock_services["create_campaign"])["daily_budget_cents"] is None
+    assert _kwargs(mock_services["create_ad_set"])["daily_budget_cents"] == 10000
 
 
 def test_the_carousel_choice_reaches_the_strategist(

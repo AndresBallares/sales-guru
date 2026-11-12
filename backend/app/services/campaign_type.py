@@ -15,6 +15,7 @@ the ad account's history instead of a broad Advantage+ audience.
 
 from typing import Literal, get_args
 
+from app.core.config import get_settings
 from app.services.strategist import PlanType
 
 CampaignType = Literal[
@@ -24,7 +25,6 @@ CAMPAIGN_TYPES: tuple[str, ...] = get_args(CampaignType)
 
 # Types a SALES campaign can choose. GEO is listed but not available yet.
 SALES_CHOICES: tuple[CampaignType, ...] = ("CREATIVE_TEST", "DATA_DRIVEN", "STANDARD")
-ROUND_COUNT = 3
 GEO_COMING_SOON = "Geo Targeting is coming soon."
 NOT_SALES = "This campaign type is only available for the Sales objective."
 
@@ -35,12 +35,7 @@ _LABELS: dict[CampaignType, str] = {
     "GEO": "Geo Targeting",
     "LEGACY_AUDIENCE_TEST": "Audience test",
 }
-DESCRIPTIONS: dict[CampaignType, str] = {
-    "CREATIVE_TEST": "4 ads per round, up to 3 rounds, budget moves to the winners.",
-    "DATA_DRIVEN": (
-        "Uses your account history to choose audiences; 4 ads per round, "
-        "up to 3 rounds, budget moves to the winners."
-    ),
+_STATIC_DESCRIPTIONS: dict[CampaignType, str] = {
     "STANDARD": "One ad set with its own budget. Allows 1 to 4 ads and no rounds.",
     "GEO": "Reach people at one venue or event with a small radius.",
     "LEGACY_AUDIENCE_TEST": "Compares a broad audience with an interest audience.",
@@ -128,24 +123,38 @@ def supports_rounds(campaign_type: str | None) -> bool:
 
 
 def structure_summary(
-    campaign_type: CampaignType, *, ad_count: int, daily_budget: float
+    campaign_type: CampaignType,
+    *,
+    ad_count: int,
+    daily_budget: float,
+    budget_level: str = "CAMPAIGN",
+    duration_days: int = 10,
 ) -> str:
     """One line saying exactly what will be published.
 
     Args:
         campaign_type: The type.
         ad_count: How many ads the first round publishes.
-        daily_budget: The campaign's daily budget, in dollars.
+        daily_budget: The daily budget, in dollars.
+        budget_level: Where the round budget sits: "AD_SET" for plans written
+            since ad-set rounds, "CAMPAIGN" for older ones.
+        duration_days: How long a round's ad set runs (ad-set budgets only).
 
     Returns:
-        For example "Creative Test: round 1 of 3, 4 ads, $100/day on the
-        campaign", or "Standard: budget on the ad set, no rounds".
+        For example "Creative Test: round 1 of 3, 4 ads, $100/day for 10 days on
+        its own ad set", or "Standard: budget on the ad set, no rounds".
     """
     if campaign_type in ("CREATIVE_TEST", "DATA_DRIVEN"):
         ads = f"{ad_count} ad{'' if ad_count == 1 else 's'}"
+        rounds = get_settings().creative_test_max_rounds
+        where = (
+            f"for {duration_days} days on its own ad set"
+            if budget_level == "AD_SET"
+            else "on the campaign"
+        )
         return (
-            f"{label(campaign_type)}: round 1 of {ROUND_COUNT}, {ads}, "
-            f"${daily_budget:g}/day on the campaign"
+            f"{label(campaign_type)}: round 1 of {rounds}, {ads}, "
+            f"${daily_budget:g}/day {where}"
         )
     if campaign_type == "STANDARD":
         return "Standard: budget on the ad set, no rounds"
@@ -173,3 +182,28 @@ def backfill_campaign_type(
     if plan_type == "DATA_DRIVEN_STRATEGY":
         return "DATA_DRIVEN" if budget_level == "CAMPAIGN" else "STANDARD"
     return "LEGACY_AUDIENCE_TEST"
+
+
+def describe(campaign_type: CampaignType) -> str:
+    """The one-line description shown under the Campaign type dropdown.
+
+    Args:
+        campaign_type: The type.
+
+    Returns:
+        What the type does. The round types name the round limit setting.
+    """
+    rounds = get_settings().creative_test_max_rounds
+    plural = "" if rounds == 1 else "s"
+    if campaign_type == "CREATIVE_TEST":
+        return (
+            f"4 new ads per round at $100/day for 10 days, up to {rounds} round"
+            f"{plural}. The ads you keep active carry on in a $50/day winners ad set."
+        )
+    if campaign_type == "DATA_DRIVEN":
+        return (
+            "Uses your account history to choose audiences. "
+            f"4 new ads per round at $100/day for 10 days, up to {rounds} round"
+            f"{plural}. The ads you keep active carry on in a $50/day winners ad set."
+        )
+    return _STATIC_DESCRIPTIONS[campaign_type]

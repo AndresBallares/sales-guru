@@ -15,6 +15,10 @@ vi.mock('../lib/api', async (importOriginal) => {
     publishRound: vi.fn<typeof actual.publishRound>(),
     offerRoundPauses: vi.fn<typeof actual.offerRoundPauses>(),
     getPublishStatus: vi.fn<typeof actual.getPublishStatus>(),
+    getRoundsOverview: vi.fn<typeof actual.getRoundsOverview>(),
+    endRoundEarly: vi.fn<typeof actual.endRoundEarly>(),
+    getRoundLaunchSummary: vi.fn<typeof actual.getRoundLaunchSummary>(),
+    chooseRoundWinners: vi.fn<typeof actual.chooseRoundWinners>(),
   }
 })
 const mockedApi = vi.mocked(api)
@@ -206,9 +210,26 @@ describe('CreativeRoundsPanel', () => {
   it('marks a round angle that reused a saved concept with "From your avatar"', async () => {
     const open = makeRound({
       angles: [
-        { avatar: 'self_purchaser', concept: 'nobody-chose-this-for', pillar: 'emotion', description: 'Saved.', fromSavedConcept: true },
-        { avatar: 'gift_buyer', concept: 'easy-returns', pillar: 'offer', description: 'Invented.', fromSavedConcept: false },
-        { avatar: 'gift_buyer', concept: 'daily-ritual', pillar: 'emotion', description: 'Older plan.' },
+        {
+          avatar: 'self_purchaser',
+          concept: 'nobody-chose-this-for',
+          pillar: 'emotion',
+          description: 'Saved.',
+          fromSavedConcept: true,
+        },
+        {
+          avatar: 'gift_buyer',
+          concept: 'easy-returns',
+          pillar: 'offer',
+          description: 'Invented.',
+          fromSavedConcept: false,
+        },
+        {
+          avatar: 'gift_buyer',
+          concept: 'daily-ritual',
+          pillar: 'emotion',
+          description: 'Older plan.',
+        },
       ],
     })
     mockedApi.listRounds.mockResolvedValue([open])
@@ -323,5 +344,145 @@ describe('CreativeRoundsPanel', () => {
     ])
     renderPanel()
     expect(await screen.findByText('Craftsmanship')).toBeVisible()
+  })
+})
+
+describe('CreativeRoundsPanel with ad-set budgets', () => {
+  const overview = (overrides: Partial<api.RoundsOverview> = {}): api.RoundsOverview => ({
+    maxRounds: 3,
+    nextRoundProblem: null,
+    rounds: [],
+    ...overrides,
+  })
+  const runningRound: api.PublishedRound = {
+    number: 1,
+    startsAt: '2026-11-12T12:00:00Z',
+    endsAt: '2099-11-22T12:00:00Z',
+    adSets: [
+      {
+        id: 's1',
+        name: 'Rings — Round 1',
+        isWinners: false,
+        dailyBudget: 100,
+        startDate: '2026-11-12T12:00:00Z',
+        endDate: '2099-11-22T12:00:00Z',
+        spend: 0,
+        ads: [],
+      },
+    ],
+  }
+  const launchSummary: api.RoundLaunchSummary = {
+    restartsCampaign: false,
+    newAdSet: { dailyBudget: 100, adCount: 1 },
+    winnersAdSet: null,
+    winnerCandidates: [],
+    maxWinners: 4,
+    needsChoice: false,
+    dailyTotal: 100,
+    plannedMax: 1000,
+    durationDays: 10,
+  }
+
+  function renderAdSetPanel() {
+    render(
+      <CreativeRoundsPanel
+        businessId="biz-1"
+        campaignId="camp-1"
+        budgetLevel="AD_SET"
+        roundsBudget="AD_SET"
+        pollMs={1}
+      />,
+    )
+  }
+
+  beforeEach(() => {
+    vi.resetAllMocks()
+    mockedApi.listRounds.mockResolvedValue([])
+    mockedApi.getRoundsOverview.mockResolvedValue(overview())
+    mockedApi.getRoundLaunchSummary.mockResolvedValue(launchSummary)
+  })
+
+  it('takes new rounds, not the old campaign-budget message', async () => {
+    renderAdSetPanel()
+
+    const add = await screen.findByRole('button', { name: 'Add new round' })
+    await waitFor(() => expect(add).toBeEnabled())
+    expect(screen.queryByText(/published before campaigns had one budget/i)).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'See which ads to pause' })).toBeInTheDocument()
+  })
+
+  it('locks the next round while the current one runs, and says why', async () => {
+    mockedApi.getRoundsOverview.mockResolvedValue(
+      overview({
+        nextRoundProblem: 'Round 1 is still running until Nov 22. You can add round 2 then.',
+        rounds: [runningRound],
+      }),
+    )
+
+    renderAdSetPanel()
+
+    expect(await screen.findByText(/Round 1 is still running until Nov 22/)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Add new round' })).toBeDisabled()
+    expect(screen.getByRole('article', { name: 'Published round 1' })).toBeInTheDocument()
+  })
+
+  it('ends the running round early, after a confirmation, and refreshes', async () => {
+    mockedApi.getRoundsOverview.mockResolvedValue(overview({ rounds: [runningRound] }))
+    mockedApi.endRoundEarly.mockResolvedValue({
+      roundNumber: 1,
+      endedAt: '2026-11-14T00:00:00Z',
+    })
+    renderAdSetPanel()
+    const user = userEvent.setup()
+
+    await user.click(await screen.findByRole('button', { name: 'End round early' }))
+    await user.click(screen.getByRole('button', { name: 'End round 1 now' }))
+
+    await waitFor(() => expect(mockedApi.endRoundEarly).toHaveBeenCalledWith('biz-1', 'camp-1'))
+    await waitFor(() => expect(mockedApi.getRoundsOverview).toHaveBeenCalledTimes(2))
+  })
+
+  it('publishes an open round from its launch summary, with no paused option', async () => {
+    mockedApi.listRounds.mockResolvedValue([
+      makeRound({
+        selectedCount: 1,
+        creatives: [makeCreative('a', { status: 'SELECTED' }), makeCreative('b')],
+      }),
+    ])
+    mockedApi.publishRound.mockResolvedValue(makeRound({ status: 'CLOSED' }))
+    mockedApi.getPublishStatus.mockResolvedValue({ state: 'IDLE' } as api.PublishStatus)
+    renderAdSetPanel()
+    const user = userEvent.setup()
+
+    await user.click(await screen.findByRole('button', { name: 'Publish round 2' }))
+
+    await waitFor(() =>
+      expect(mockedApi.publishRound).toHaveBeenCalledWith('biz-1', 'camp-1', 'round-2', {
+        confirmRestart: false,
+      }),
+    )
+    expect(screen.queryByLabelText('Publish paused')).not.toBeInTheDocument()
+    await waitFor(() => expect(mockedApi.getRoundsOverview).toHaveBeenCalledTimes(2))
+  })
+
+  it('shows a published round without calling it a pack', async () => {
+    mockedApi.listRounds.mockResolvedValue([makeRound({ status: 'CLOSED' })])
+
+    renderAdSetPanel()
+
+    expect(await screen.findByText('Published')).toBeInTheDocument()
+    expect(screen.queryByText(/Pack 2/)).not.toBeInTheDocument()
+  })
+
+  it('shows the error when ending the round fails', async () => {
+    mockedApi.getRoundsOverview.mockResolvedValue(overview({ rounds: [runningRound] }))
+    mockedApi.endRoundEarly.mockRejectedValue(new api.ApiError(500, 'Meta refused'))
+    renderAdSetPanel()
+    const user = userEvent.setup()
+
+    await user.click(await screen.findByRole('button', { name: 'End round early' }))
+    await user.click(screen.getByRole('button', { name: 'End round 1 now' }))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Meta refused')
   })
 })

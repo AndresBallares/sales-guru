@@ -67,6 +67,8 @@ export function AdPreviewPage() {
   // test or a standard campaign) or alone (an audience test). Null until known, or
   // when the campaign has no strategy.
   const [planType, setPlanType] = useState<string | null>(null)
+  // Where a creative test keeps its budget ('AD_SET' rounds, or the older campaign budget).
+  const [roundsBudget, setRoundsBudget] = useState<'CAMPAIGN' | 'AD_SET' | undefined>(undefined)
   // Which of them is being previewed. Moving it never selects or changes an ad.
   const [activeIndex, setActiveIndex] = useState(0)
   const creative: Creative | null = selectedCreatives[activeIndex] ?? null
@@ -122,16 +124,23 @@ export function AdPreviewPage() {
     if (!businessId || !campaignId) return
     setLoading(true)
     try {
-      const [loadedBusiness, campaigns, creatives, loadedPlanType] = await Promise.all([
+      const [loadedBusiness, campaigns, creatives, loadedStrategy] = await Promise.all([
         getBusiness(businessId),
         listCampaigns(businessId),
         listCreatives(businessId, campaignId),
         getStrategy(businessId, campaignId).then(
-          (strategy) => strategy.content.planType as string,
+          (strategy) => ({
+            planType: strategy.content.planType as string,
+            roundsBudget:
+              strategy.content.planType === 'CREATIVE_TEST_PLAN'
+                ? strategy.content.roundsBudget
+                : undefined,
+          }),
           () => null,
         ),
       ])
-      setPlanType(loadedPlanType)
+      setPlanType(loadedStrategy?.planType ?? null)
+      setRoundsBudget(loadedStrategy?.roundsBudget)
       setBusiness(loadedBusiness)
       setCampaign(campaigns.find((c) => c.id === campaignId) ?? null)
       const selected = creatives.filter((c) => c.status === 'SELECTED')
@@ -581,6 +590,7 @@ export function AdPreviewPage() {
                       businessId={businessId}
                       campaignId={campaignId}
                       budgetLevel={campaign?.budgetLevel}
+                      roundsBudget={roundsBudget}
                     />
                   </section>
                 )}

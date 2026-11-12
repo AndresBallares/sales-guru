@@ -80,17 +80,25 @@ def is_hook_type(value: object) -> TypeGuard[HookType]:
     return isinstance(value, str) and value in HOOK_TYPES
 
 
-def assign_shapes(campaign_id: str, round_number: int, count: int) -> list[HookType]:
+def assign_shapes(
+    campaign_id: str,
+    round_number: int,
+    count: int,
+    avoid: Sequence[str] = (),
+) -> list[HookType]:
     """The shape each variant of a batch gets, in order.
 
     The start is ``sha256(campaign_id) % 5`` moved on by one for every round after the
     first, and the variants take the next shapes in the list, so a batch never repeats a
-    shape.
+    shape. Shapes in ``avoid`` (the ones ads staying live from earlier rounds already
+    use) go last: every other shape is used before any of them, so the new ads open
+    differently from the winners beside them when there are enough shapes to do so.
 
     Args:
         campaign_id: The campaign; its hash is the starting point.
         round_number: 1 for the campaign's first batch, then 2, 3 and so on.
         count: How many variants the batch has.
+        avoid: Shapes to use only when the others run out.
 
     Returns:
         One shape per variant.
@@ -102,7 +110,10 @@ def assign_shapes(campaign_id: str, round_number: int, count: int) -> list[HookT
         raise ValueError(f"a batch has at most {_SHAPE_COUNT} variants, got {count}")
     start = int(hashlib.sha256(campaign_id.encode()).hexdigest(), 16) % _SHAPE_COUNT
     start = (start + round_number - 1) % _SHAPE_COUNT
-    return [HOOK_TYPES[(start + i) % _SHAPE_COUNT] for i in range(count)]
+    order = [HOOK_TYPES[(start + i) % _SHAPE_COUNT] for i in range(_SHAPE_COUNT)]
+    fresh = [shape for shape in order if shape not in avoid]
+    used = [shape for shape in order if shape in avoid]
+    return (fresh + used)[:count]
 
 
 def system_lines() -> list[str]:
