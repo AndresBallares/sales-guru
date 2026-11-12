@@ -13,12 +13,8 @@ test('a standard SALES campaign publishes two chosen ads together, paused by def
   await page.getByRole('button', { name: 'Save Pixel' }).click()
   await finishOnboarding(page, { objectiveLabel: 'Sales' })
 
-  await page.getByLabel('Standard campaign (allows carousel)').check()
+  await page.getByLabel('Campaign type').selectOption('STANDARD')
   await page.getByRole('button', { name: 'Generate strategy' }).click()
-  await expect(
-    page.getByText('Has this business run advertising campaigns before?'),
-  ).toBeVisible()
-  await page.getByRole('button', { name: 'No' }).click()
 
   await page.getByRole('button', { name: 'Generate ads' }).click()
   await expect(page.getByRole('heading', { name: 'Choose your ads' })).toBeVisible()

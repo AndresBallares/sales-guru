@@ -13,6 +13,7 @@ vi.mock('../lib/api', async (importOriginal) => {
     createProduct: vi.fn<typeof actual.createProduct>(),
     createAudience: vi.fn<typeof actual.createAudience>(),
     createStrategy: vi.fn<typeof actual.createStrategy>(),
+    getCampaignTypesForObjective: vi.fn<typeof actual.getCampaignTypesForObjective>(),
   }
 })
 const mockedApi = vi.mocked(api)
@@ -24,6 +25,44 @@ const OBJECTIVE_OPTIONS: api.Option[] = [
 const EVENT_VENUE_OPTIONS: api.Option[] = [
   { value: 'jck_las_vegas', label: 'JCK Las Vegas — Las Vegas Convention Center, NV' },
 ]
+
+const TYPE_OPTIONS: api.CampaignTypeOptions = {
+  recommended: 'CREATIVE_TEST',
+  options: [
+    {
+      type: 'CREATIVE_TEST',
+      label: 'Creative Test',
+      description: '4 ads per round, up to 3 rounds, budget moves to the winners.',
+      available: true,
+      reason: null,
+      warning: null,
+    },
+    {
+      type: 'DATA_DRIVEN',
+      label: 'Data-Driven',
+      description: 'Uses your account history to choose audiences.',
+      available: true,
+      reason: null,
+      warning: null,
+    },
+    {
+      type: 'STANDARD',
+      label: 'Standard',
+      description: 'One ad set with its own budget. Allows 1 to 4 ads and no rounds.',
+      available: true,
+      reason: null,
+      warning: 'A standard campaign keeps its budget on the ad set and cannot run rounds.',
+    },
+    {
+      type: 'GEO',
+      label: 'Geo Targeting',
+      description: 'Reach people at one venue or event with a small radius.',
+      available: false,
+      reason: 'Geo Targeting is coming soon.',
+      warning: null,
+    },
+  ],
+}
 
 const draftCampaign: api.Campaign = {
   id: 'camp-2',
@@ -91,6 +130,7 @@ function renderFlow({
 
 beforeEach(() => {
   vi.resetAllMocks()
+  mockedApi.getCampaignTypesForObjective.mockResolvedValue(TYPE_OPTIONS)
 })
 
 describe('NewCampaignFlow, when the option lists could not load', () => {
@@ -273,7 +313,12 @@ describe('NewCampaignFlow', () => {
     await user.click(screen.getByRole('button', { name: 'Generate strategy' }))
 
     await waitFor(() =>
-      expect(mockedApi.createStrategy).toHaveBeenCalledWith('biz-1', 'camp-2', undefined),
+      expect(mockedApi.createStrategy).toHaveBeenCalledWith(
+        'biz-1',
+        'camp-2',
+        undefined,
+        'CREATIVE_TEST',
+      ),
     )
     // The page opens the new campaign, so it is told which one this was.
     expect(onDone).toHaveBeenCalledWith('camp-2')
@@ -315,7 +360,13 @@ describe('NewCampaignFlow', () => {
     await user.click(screen.getByRole('button', { name: 'No' }))
 
     await waitFor(() =>
-      expect(mockedApi.createStrategy).toHaveBeenNthCalledWith(2, 'biz-1', 'camp-2', false),
+      expect(mockedApi.createStrategy).toHaveBeenNthCalledWith(
+        2,
+        'biz-1',
+        'camp-2',
+        false,
+        'CREATIVE_TEST',
+      ),
     )
     expect(onDone).toHaveBeenCalled()
   })
@@ -496,7 +547,13 @@ describe('NewCampaignFlow', () => {
     await user.click(screen.getByRole('button', { name: 'Yes' }))
 
     await waitFor(() =>
-      expect(mockedApi.createStrategy).toHaveBeenNthCalledWith(2, 'biz-1', 'camp-2', true),
+      expect(mockedApi.createStrategy).toHaveBeenNthCalledWith(
+        2,
+        'biz-1',
+        'camp-2',
+        true,
+        'CREATIVE_TEST',
+      ),
     )
     expect(onDone).toHaveBeenCalled()
   })
@@ -545,5 +602,98 @@ describe('NewCampaignFlow — product names in the picker', () => {
     expect(within(picker).getByRole('option', { name: 'Geo Ring' })).toBeInTheDocument()
     expect(within(picker).getByRole('option', { name: 'Plain earrings' })).toBeInTheDocument()
     expect(within(picker).queryByRole('option', { name: 'A long description' })).toBeNull()
+  })
+})
+
+async function reachStrategyStep(
+  user: ReturnType<typeof userEvent.setup>,
+  campaign: api.Campaign = draftCampaign,
+) {
+  mockedApi.createCampaign.mockResolvedValue(campaign)
+  mockedApi.createProduct.mockResolvedValue(existingProduct)
+  mockedApi.createAudience.mockResolvedValue(existingAudience)
+  mockedApi.updateCampaign
+    .mockResolvedValueOnce({ ...campaign, productId: existingProduct.id })
+    .mockResolvedValueOnce({
+      ...campaign,
+      productId: existingProduct.id,
+      audienceId: existingAudience.id,
+    })
+  await user.click(screen.getByRole('button', { name: 'Next' }))
+  await user.type(await screen.findByLabelText('What do you sell?'), 'Necklaces')
+  await user.click(screen.getByRole('button', { name: 'Add product' }))
+  await user.type(await screen.findByLabelText('Who buys?'), 'Necklace shoppers')
+  await user.click(screen.getByRole('button', { name: 'Add audience' }))
+  await screen.findByRole('button', { name: 'Generate strategy' })
+}
+
+describe('NewCampaignFlow — campaign type on the first screen', () => {
+  it('puts the Campaign type dropdown between Objective and Event venue', async () => {
+    renderFlow()
+
+    const picker = await screen.findByRole('combobox', { name: 'Campaign type' })
+
+    expect(picker).toHaveValue('CREATIVE_TEST')
+    expect(screen.getByRole('option', { name: 'Creative Test (recommended)' })).toBeInTheDocument()
+    expect(screen.getByRole('option', { name: /Geo Targeting/ })).toBeDisabled()
+    expect(mockedApi.getCampaignTypesForObjective).toHaveBeenCalledWith('biz-1', 'SALES')
+    const objective = screen.getByLabelText('Objective')
+    const venue = screen.getByLabelText('Event venue')
+    expect(objective.compareDocumentPosition(picker) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(picker.compareDocumentPosition(venue) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
+
+  it('hides the dropdown for an objective that is not Sales, and brings it back', async () => {
+    renderFlow()
+    const user = userEvent.setup()
+    await screen.findByRole('combobox', { name: 'Campaign type' })
+
+    await user.selectOptions(screen.getByLabelText('Objective'), 'LEADS')
+    expect(screen.queryByRole('combobox', { name: 'Campaign type' })).not.toBeInTheDocument()
+
+    await user.selectOptions(screen.getByLabelText('Objective'), 'SALES')
+    expect(await screen.findByRole('combobox', { name: 'Campaign type' })).toBeInTheDocument()
+  })
+
+  it('does not ask again on the last step', async () => {
+    renderFlow()
+    const user = userEvent.setup()
+    await screen.findByRole('combobox', { name: 'Campaign type' })
+
+    await reachStrategyStep(user)
+
+    expect(screen.queryByRole('combobox', { name: 'Campaign type' })).not.toBeInTheDocument()
+  })
+
+  it('generates the strategy with the type chosen on the first screen', async () => {
+    mockedApi.createStrategy.mockResolvedValue({} as api.Strategy)
+    const { onDone } = renderFlow()
+    const user = userEvent.setup()
+    await user.selectOptions(
+      await screen.findByRole('combobox', { name: 'Campaign type' }),
+      'STANDARD',
+    )
+    await reachStrategyStep(user)
+
+    await user.click(screen.getByRole('button', { name: 'Generate strategy' }))
+
+    await waitFor(() =>
+      expect(mockedApi.createStrategy).toHaveBeenCalledWith('biz-1', 'camp-2', undefined, 'STANDARD'),
+    )
+    expect(onDone).toHaveBeenCalledWith('camp-2')
+  })
+
+  it('sends no type for a campaign that is not about sales', async () => {
+    mockedApi.createStrategy.mockResolvedValue({} as api.Strategy)
+    renderFlow()
+    const user = userEvent.setup()
+    await user.selectOptions(screen.getByLabelText('Objective'), 'LEADS')
+
+    await reachStrategyStep(user, { ...draftCampaign, objective: 'LEADS' })
+    await user.click(screen.getByRole('button', { name: 'Generate strategy' }))
+
+    await waitFor(() =>
+      expect(mockedApi.createStrategy).toHaveBeenCalledWith('biz-1', 'camp-2', undefined, undefined),
+    )
   })
 })

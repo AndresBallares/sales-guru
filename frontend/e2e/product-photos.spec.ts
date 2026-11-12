@@ -77,8 +77,6 @@ test('blocks selecting an ad to publish until the product has a photo', async ({
   await signUpAndReachFakeMetaConnectedBusiness(page, { withProductPhoto: false })
 
   await page.getByRole('button', { name: 'Generate strategy' }).click()
-  await expect(page.getByText('Has this business run advertising campaigns before?')).toBeVisible()
-  await page.getByRole('button', { name: 'No' }).click()
   await expect(page.getByRole('heading', { name: 'Creative angles to test' })).toBeVisible()
 
   await page.getByRole('button', { name: 'Generate ads' }).click()

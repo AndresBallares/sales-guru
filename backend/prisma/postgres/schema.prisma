@@ -600,6 +600,11 @@ model Campaign {
   // with several ad sets is judged against its one real budget and its
   // per-ad-set rows are never summed on top of the campaign-level ones.
   budgetLevel         String    @default("AD_SET")
+  // The structure the user chose (app/services/campaign_type.py):
+  // CREATIVE_TEST, DATA_DRIVEN, STANDARD, GEO or LEGACY_AUDIENCE_TEST. Null
+  // until a strategy exists. Decides the plan shape, where the budget sits
+  // and whether the campaign can take follow-up rounds.
+  campaignType        String?
   createdAt               DateTime                     @default(now())
   updatedAt               DateTime                     @updatedAt
 }

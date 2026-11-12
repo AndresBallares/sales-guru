@@ -6,12 +6,14 @@ import {
   updateCampaign,
   type Audience,
   type Campaign,
+  type CampaignType,
   type Objective,
   type Option,
   type Product,
 } from '../lib/api'
 import { requiresDestinationUrl } from '../lib/urlValidation'
 import { AudienceForm } from './AudienceForm'
+import { CampaignTypePicker } from './CampaignTypePicker'
 import { OptionsLoadError } from './OptionsLoadError'
 import { ProductForm } from './ProductForm'
 import { productLabel } from '../lib/productLabel'
@@ -77,6 +79,7 @@ export function NewCampaignFlow({
   const [generatingStrategy, setGeneratingStrategy] = useState(false)
   const [strategyError, setStrategyError] = useState<string | null>(null)
   const [needsAdExperienceAnswer, setNeedsAdExperienceAnswer] = useState(false)
+  const [campaignType, setCampaignType] = useState<CampaignType | undefined>(undefined)
 
   const urlRequired = requiresDestinationUrl(objective)
 
@@ -136,7 +139,7 @@ export function NewCampaignFlow({
     setGeneratingStrategy(true)
     setStrategyError(null)
     try {
-      await createStrategy(businessId, campaign.id, hasPriorAdvertisingExperience)
+      await createStrategy(businessId, campaign.id, hasPriorAdvertisingExperience, campaignType)
       setNeedsAdExperienceAnswer(false)
       onDone(campaign.id)
     } catch (err) {
@@ -153,7 +156,7 @@ export function NewCampaignFlow({
   }
 
   return (
-    <section aria-label="New campaign">
+    <section aria-label="New campaign" className="new-campaign-flow">
       <h2>New campaign</h2>
 
       {step === 'details' && (
@@ -171,7 +174,10 @@ export function NewCampaignFlow({
             <select
               id="new-campaign-objective"
               value={objective}
-              onChange={(event) => setObjective(event.target.value as Objective)}
+              onChange={(event) => {
+                setObjective(event.target.value as Objective)
+                setCampaignType(undefined)
+              }}
             >
               {objectiveOptions.map((option) => (
                 <option key={option.value} value={option.value}>
@@ -183,6 +189,18 @@ export function NewCampaignFlow({
               <OptionsLoadError message={optionsError} onRetry={onRetryOptions} />
             )}
           </div>
+          {objective === 'SALES' && (
+            <div className="field">
+              <CampaignTypePicker
+                key={objective}
+                businessId={businessId}
+                objective={objective}
+                showLabel
+                value={campaignType}
+                onChange={setCampaignType}
+              />
+            </div>
+          )}
           <div className="field">
             <label htmlFor="new-campaign-event-venue">Event venue</label>
             <select
@@ -255,11 +273,7 @@ export function NewCampaignFlow({
                 onCancel={onCancel}
               />
               {products.length > 0 && (
-                <button
-                  type="button"
-                  className="link-button"
-                  onClick={() => setReuseProduct(true)}
-                >
+                <button type="button" className="link-button" onClick={() => setReuseProduct(true)}>
                   Use an existing product instead
                 </button>
               )}
@@ -356,8 +370,8 @@ export function NewCampaignFlow({
       {step === 'strategy' && (
         <div aria-label="Generate a strategy for this campaign">
           <p>
-            Your campaign is ready — generate a strategy to see targeting, budget, and ad
-            copy recommendations.
+            Your campaign is ready — generate a strategy to see targeting, budget, and ad copy
+            recommendations.
           </p>
           <button
             type="button"

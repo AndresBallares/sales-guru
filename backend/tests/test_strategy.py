@@ -395,11 +395,13 @@ def test_create_strategy_428s_without_a_product_and_audience(
     assert "audience" in response.json()["detail"].lower()
 
 
-def test_create_strategy_without_meta_or_answer_requires_an_answer(
-    client: TestClient,
+def test_create_strategy_without_meta_or_answer_uses_the_recommended_creative_test(
+    client: TestClient, mock_generate_strategy: AsyncMock
 ) -> None:
-    """No Meta connection and no self-report yet -> 428, asking the frontend
-    to prompt for the one-time question."""
+    """The type is chosen (or recommended), not inferred from a question, so no
+    Meta connection and no self-report is not a gate: a SALES campaign gets the
+    recommended Creative Test."""
+    mock_generate_strategy.return_value = _FAKE_CREATIVE_TEST_PLAN
     _signed_up_client(client)
     business_id = _create_business(client)
     campaign_id = _create_campaign(client, business_id)
@@ -408,7 +410,9 @@ def test_create_strategy_without_meta_or_answer_requires_an_answer(
         f"/businesses/{business_id}/campaigns/{campaign_id}/strategy"
     )
 
-    assert response.status_code == 428
+    assert response.status_code == 201
+    assert mock_generate_strategy.call_args.kwargs["plan_type"] == "CREATIVE_TEST_PLAN"
+    assert response.json()["campaignType"] == "CREATIVE_TEST"
 
 
 def test_create_strategy_answering_no_generates_a_creative_test_plan_for_sales(
@@ -450,11 +454,12 @@ def test_create_strategy_answering_no_keeps_the_audience_test_plan_for_other_obj
     assert mock_generate_strategy.call_args.kwargs["plan_type"] == "TEST_PLAN"
 
 
-def test_create_strategy_answering_yes_generates_a_data_driven_strategy_plan(
+def test_create_strategy_answering_yes_is_recorded_but_does_not_route(
     client: TestClient, mock_generate_strategy: AsyncMock
 ) -> None:
-    """Answering "yes" resolves to DATA_DRIVEN_STRATEGY even with no real
-    numeric history available."""
+    """The old self-report answer is still stored, but only the user's choice
+    or the history-based recommendation picks the campaign type."""
+    mock_generate_strategy.return_value = _FAKE_CREATIVE_TEST_PLAN
     _signed_up_client(client)
     business_id = _create_business(client)
     campaign_id = _create_campaign(client, business_id)
@@ -465,10 +470,8 @@ def test_create_strategy_answering_yes_generates_a_data_driven_strategy_plan(
     )
 
     assert response.status_code == 201
-    assert response.json()["content"]["planType"] == "DATA_DRIVEN_STRATEGY"
-    assert (
-        mock_generate_strategy.call_args.kwargs["plan_type"] == "DATA_DRIVEN_STRATEGY"
-    )
+    assert response.json()["content"]["planType"] == "CREATIVE_TEST_PLAN"
+    assert mock_generate_strategy.call_args.kwargs["plan_type"] == "CREATIVE_TEST_PLAN"
 
 
 def test_create_strategy_only_asks_the_question_once(
@@ -494,13 +497,15 @@ def test_create_strategy_only_asks_the_question_once(
     assert mock_generate_strategy.call_args.kwargs["plan_type"] == "CREATIVE_TEST_PLAN"
 
 
-def test_create_strategy_uses_real_meta_history_over_a_no_answer(
+def test_create_strategy_recommends_data_driven_from_real_meta_history(
     client: TestClient,
     mock_generate_strategy: AsyncMock,
     mock_real_account_history: AsyncMock,
 ) -> None:
-    """Real Meta ad-account spend overrides even a "no" self-report — never
-    trust self-report over real evidence."""
+    """Real Meta ad-account spend makes Data-Driven the recommendation whatever
+    the self-report says — never trust self-report over real evidence. It is
+    the same round-based plan shape as a Creative Test."""
+    mock_generate_strategy.return_value = _FAKE_CREATIVE_TEST_PLAN
     _signed_up_client(client)
     business_id = _create_business(client)
     campaign_id = _create_campaign(client, business_id)
@@ -513,18 +518,20 @@ def test_create_strategy_uses_real_meta_history_over_a_no_answer(
 
     assert response.status_code == 201
     call_kwargs = mock_generate_strategy.call_args.kwargs
-    assert call_kwargs["plan_type"] == "DATA_DRIVEN_STRATEGY"
+    assert call_kwargs["plan_type"] == "CREATIVE_TEST_PLAN"
+    assert call_kwargs["campaign_type"] == "DATA_DRIVEN"
     assert len(call_kwargs["account_history"]) == 1
     assert call_kwargs["account_history"][0].campaign_name == "Spring Sale"
 
 
-def test_create_strategy_with_meta_connected_but_no_history_still_needs_an_answer(
+def test_create_strategy_with_meta_connected_but_no_history_recommends_a_creative_test(
     client: TestClient,
     mock_generate_strategy: AsyncMock,
     mock_no_account_history: AsyncMock,
 ) -> None:
-    """A connected Meta account with zero historical spend falls back to the
-    self-report question, same as no connection at all."""
+    """A connected Meta account with zero historical spend is recommended a
+    Creative Test, same as no connection at all."""
+    mock_generate_strategy.return_value = _FAKE_CREATIVE_TEST_PLAN
     _signed_up_client(client)
     business_id = _create_business(client)
     campaign_id = _create_campaign(client, business_id)
@@ -534,7 +541,8 @@ def test_create_strategy_with_meta_connected_but_no_history_still_needs_an_answe
         f"/businesses/{business_id}/campaigns/{campaign_id}/strategy"
     )
 
-    assert response.status_code == 428
+    assert response.status_code == 201
+    assert response.json()["campaignType"] == "CREATIVE_TEST"
 
 
 def test_create_strategy_degrades_gracefully_when_the_insights_call_fails(
@@ -542,8 +550,9 @@ def test_create_strategy_degrades_gracefully_when_the_insights_call_fails(
     mock_generate_strategy: AsyncMock,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A Meta Insights outage falls back to the self-report path rather than
-    failing strategy generation outright."""
+    """A Meta Insights outage counts as "no history" (so a Creative Test is
+    recommended) rather than failing strategy generation outright."""
+    mock_generate_strategy.return_value = _FAKE_CREATIVE_TEST_PLAN
     monkeypatch.setattr(
         strategy_module,
         "fetch_account_historical_performance",
@@ -560,9 +569,7 @@ def test_create_strategy_degrades_gracefully_when_the_insights_call_fails(
     )
 
     assert response.status_code == 201
-    assert (
-        mock_generate_strategy.call_args.kwargs["plan_type"] == "DATA_DRIVEN_STRATEGY"
-    )
+    assert mock_generate_strategy.call_args.kwargs["plan_type"] == "CREATIVE_TEST_PLAN"
 
 
 def test_create_strategy_stores_and_returns_the_strategy(
@@ -780,15 +787,16 @@ def test_a_standard_campaign_skips_the_creative_test(
     )
 
 
-def test_the_standard_choice_is_ignored_for_other_objectives(
+def test_the_standard_choice_is_refused_for_other_objectives(
     client: TestClient, mock_generate_strategy: AsyncMock
 ) -> None:
+    """Standard is a Sales choice; other objectives keep the audience test."""
     mock_generate_strategy.return_value = _FAKE_TEST_PLAN
     _signed_up_client(client)
     business_id = _create_business(client)
     campaign_id = _create_campaign(client, business_id, objective="TRAFFIC")
 
-    _post_strategy(
+    response = _post_strategy(
         client,
         business_id,
         campaign_id,
@@ -796,7 +804,8 @@ def test_the_standard_choice_is_ignored_for_other_objectives(
         strategyMode="STANDARD",
     )
 
-    assert mock_generate_strategy.call_args.kwargs["plan_type"] == "TEST_PLAN"
+    assert response.status_code == 400
+    mock_generate_strategy.assert_not_called()
 
 
 def test_a_tiny_amount_of_spend_no_longer_counts_as_history(
@@ -844,11 +853,11 @@ async def _publish_marker(campaign_id: str, meta_campaign_id: str | None) -> Non
 
 
 @pytest.mark.asyncio
-async def test_once_the_first_creative_test_is_published_later_campaigns_are_not_tests(
+async def test_a_published_creative_test_does_not_change_later_campaigns(
     client: TestClient, mock_generate_strategy: AsyncMock
 ) -> None:
-    """Test #1 happens once per business. After it is published, new SALES
-    campaigns are standard ones (carousel allowed), spend or no spend."""
+    """There is no 'Test #1 once per business' rule any more: after a creative
+    test is published, a new SALES campaign is still recommended one."""
     mock_generate_strategy.return_value = _FAKE_CREATIVE_TEST_PLAN
     _signed_up_client(client)
     business_id = _create_business(client)
@@ -859,9 +868,7 @@ async def test_once_the_first_creative_test_is_published_later_campaigns_are_not
 
     _post_strategy(client, business_id, second)
 
-    assert (
-        mock_generate_strategy.call_args.kwargs["plan_type"] == "DATA_DRIVEN_STRATEGY"
-    )
+    assert mock_generate_strategy.call_args.kwargs["plan_type"] == "CREATIVE_TEST_PLAN"
 
 
 @pytest.mark.asyncio

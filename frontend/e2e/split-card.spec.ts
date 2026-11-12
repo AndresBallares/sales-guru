@@ -60,8 +60,6 @@ for (const width of [320, 375, 768]) {
 test('generating a strategy still leaves the split card for the strategy view', async ({ page }) => {
   await signUpAndReachFakeMetaConnectedBusiness(page)
   await page.getByRole('button', { name: 'Generate strategy' }).click()
-  await expect(page.getByText('Has this business run advertising campaigns before?')).toBeVisible()
-  await page.getByRole('button', { name: 'No' }).click()
   await expect(page.getByRole('heading', { name: 'Creative angles to test' })).toBeVisible()
   await expect(page.locator('.config-card')).toHaveCount(0)
 })

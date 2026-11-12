@@ -5601,8 +5601,15 @@ main > section.campaigns-overview {
   padding: 0;
 }
 
+.new-campaign-flow {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem; /* title to first field, same as field to field */
+  margin-bottom: 1.5rem; /* room before the campaign cards below it */
+}
+
 .section-subtitle {
-  margin: -0.5rem 0 0;
+  margin: 0; /* the section's 1rem gap spaces it */
   color: var(--text-secondary);
 }
 
@@ -10025,4 +10032,48 @@ main.business-detail:has(.research-dash) {
   .dash-metrics > li:last-child {
     grid-column: 1 / -1;
   }
+}
+
+/* Campaign type, pause review and the structure line (campaign-type change). */
+.campaign-type-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem; /* same label-to-field spacing as .field */
+}
+.campaign-type-picker select {
+  width: 100%;
+}
+.campaign-type-description,
+.campaign-type-warning {
+  margin: 0; /* the picker's gap spaces it */
+  font-size: 0.875rem;
+}
+.campaign-type-warning {
+  color: var(--warning);
+}
+.strategy-structure {
+  display: block;
+  margin: 0.5rem 0;
+  font-weight: 600;
+}
+.review-badge,
+.review-banner {
+  display: block;
+  margin: 0.5rem 0;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--warning);
+  border-radius: 0.5rem;
+  background: var(--warning-bg);
+  color: var(--warning);
+  font-size: 0.875rem;
+}
+.review-badge {
+  font-weight: 600;
+}
+.review-banner ul {
+  margin: 0.4rem 0 0;
+  padding-left: 1.25rem;
+}
+.round-pause-offer {
+  margin: 1rem 0;
 }

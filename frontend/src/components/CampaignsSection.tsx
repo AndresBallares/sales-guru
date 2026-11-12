@@ -61,7 +61,7 @@ import {
   createRecommendation,
   createStrategy,
   type PublishStatus,
-  type StrategyMode,
+  type CampaignType,
   type TestFormat,
   archiveCampaign,
   createTestEvaluation,
@@ -109,6 +109,8 @@ import { AudienceForm } from './AudienceForm'
 import { OptionsLoadError } from './OptionsLoadError'
 import { useOptions } from '../lib/useOptions'
 import { NewCampaignFlow } from './NewCampaignFlow'
+import { CampaignTypePicker } from './CampaignTypePicker'
+import { PauseReviewBadge } from './PauseReviewBadge'
 import { StrategyOverview } from './StrategyOverview'
 import { ProductForm } from './ProductForm'
 import { SocialPostPreview } from './SocialPostPreview'
@@ -253,7 +255,10 @@ export function CampaignsSection({
   // SINGLE_IMAGE (the pre-existing behavior) until the user picks
   // Carousel. Never inferred from anything else, per the design decision
   // to keep format an explicit, deliberate choice.
-  const [strategyMode, setStrategyMode] = useState<Record<string, StrategyMode>>({})
+  // The Campaign type picked per campaign (preselected from the backend's recommendation).
+  const [campaignType, setCampaignType] = useState<Record<string, CampaignType>>({})
+  // One line per campaign saying what will be published, from the stored strategy.
+  const [structureSummaries, setStructureSummaries] = useState<Record<string, string>>({})
   const [testFormat, setTestFormat] = useState<Record<string, TestFormat>>({})
   // A background (video) publish in flight, by campaign: what the button shows.
   const [publishStatuses, setPublishStatuses] = useState<Record<string, PublishStatus>>({})
@@ -365,7 +370,15 @@ export function CampaignsSection({
       const fetched = await Promise.all(
         generated.map((c) =>
           getStrategy(businessId, c.id)
-            .then((strategy) => [c.id, strategy.content, strategy.requiredTestAds] as const)
+            .then(
+              (strategy) =>
+                [
+                  c.id,
+                  strategy.content,
+                  strategy.requiredTestAds,
+                  strategy.structureSummary,
+                ] as const,
+            )
             .catch(() => null),
         ),
       )
@@ -380,6 +393,13 @@ export function CampaignsSection({
         const next = { ...prev }
         for (const entry of fetched) {
           if (entry?.[2]) next[entry[0]] = entry[2]
+        }
+        return next
+      })
+      setStructureSummaries((prev) => {
+        const next = { ...prev }
+        for (const entry of fetched) {
+          if (entry?.[3]) next[entry[0]] = entry[3]
         }
         return next
       })
@@ -561,11 +581,13 @@ export function CampaignsSection({
         businessId,
         campaignId,
         hasPriorAdvertisingExperience,
-        strategyMode[campaignId],
-        // The test format only means something for a creative test.
-        strategyMode[campaignId] === 'STANDARD' ? undefined : testFormat[campaignId],
+        campaignType[campaignId],
+        // The test format only means something for the round-based types.
+        campaignType[campaignId] === 'STANDARD' ? undefined : testFormat[campaignId],
       )
       setStrategies((prev) => ({ ...prev, [campaignId]: strategy.content }))
+      const summary = strategy.structureSummary
+      if (summary) setStructureSummaries((prev) => ({ ...prev, [campaignId]: summary }))
       if (strategy.requiredTestAds) {
         const needed = strategy.requiredTestAds
         setRequiredAds((prev) => ({ ...prev, [campaignId]: needed }))
@@ -1280,6 +1302,7 @@ export function CampaignsSection({
         primary={primary}
         menuItems={menuItems}
       >
+        <PauseReviewBadge recommendations={recommendations[campaign.id] ?? []} />
         {renderRemovalPanel(campaign)}
         {activateErrors[campaign.id] && <p role="alert">{activateErrors[campaign.id]}</p>}
         {restoreErrors[campaign.id] && <p role="alert">{restoreErrors[campaign.id]}</p>}
@@ -1727,7 +1750,7 @@ export function CampaignsSection({
             // Ready to generate a strategy: no strategy yet and nothing published to Meta.
             const preStrategy = !isDraft && !strategy && campaign.metaCampaignId === null
             const isSalesCampaign = campaign.objective === 'SALES'
-            const standardMode = strategyMode[campaign.id] === 'STANDARD'
+            const standardMode = campaignType[campaign.id] === 'STANDARD'
             const statusPill = (
               <span className="status-pill" data-status={campaign.status}>
                 <StatusIcon status={campaign.status} />
@@ -1754,43 +1777,28 @@ export function CampaignsSection({
                       <span className="config-row-icon" aria-hidden="true">
                         <TargetIcon />
                       </span>
-                      <span className="config-row-label">Campaign type</span>
+                      <span className="config-row-label">Objective</span>
                       <div className="config-row-value">{objectiveLabel}</div>
                     </div>
                     {isSalesCampaign && (
-                      <fieldset className="config-row">
-                        <legend className="visually-hidden">Test format</legend>
+                      <div className="config-row">
                         <span className="config-row-icon" aria-hidden="true">
                           <FlaskIcon />
                         </span>
                         <span className="config-row-label" aria-hidden="true">
-                          Test format
+                          Campaign type
                         </span>
-                        <div className="config-row-value config-choices">
-                          <label>
-                            <input
-                              type="radio"
-                              name={`strategy-mode-${campaign.id}`}
-                              checked={(strategyMode[campaign.id] ?? 'CREATIVE_TEST') === 'CREATIVE_TEST'}
-                              onChange={() =>
-                                setStrategyMode((prev) => ({ ...prev, [campaign.id]: 'CREATIVE_TEST' }))
-                              }
-                            />
-                            Creative test (recommended for a first campaign)
-                          </label>
-                          <label>
-                            <input
-                              type="radio"
-                              name={`strategy-mode-${campaign.id}`}
-                              checked={standardMode}
-                              onChange={() =>
-                                setStrategyMode((prev) => ({ ...prev, [campaign.id]: 'STANDARD' }))
-                              }
-                            />
-                            Standard campaign (allows carousel)
-                          </label>
+                        <div className="config-row-value">
+                          <CampaignTypePicker
+                            businessId={businessId}
+                            campaignId={campaign.id}
+                            value={campaignType[campaign.id]}
+                            onChange={(type) =>
+                              setCampaignType((prev) => ({ ...prev, [campaign.id]: type }))
+                            }
+                          />
                         </div>
-                      </fieldset>
+                      </div>
                     )}
                     {isSalesCampaign &&
                       (standardMode ? (
@@ -1944,35 +1952,21 @@ export function CampaignsSection({
                     {!preStrategy && (
                       <>
                     {campaign.objective === 'SALES' && !strategy && (
-                      <fieldset className="strategy-mode-picker">
-                        <legend>Campaign type</legend>
-                        <label>
-                          <input
-                            type="radio"
-                            name={`strategy-mode-${campaign.id}`}
-                            checked={(strategyMode[campaign.id] ?? 'CREATIVE_TEST') === 'CREATIVE_TEST'}
-                            onChange={() =>
-                              setStrategyMode((prev) => ({ ...prev, [campaign.id]: 'CREATIVE_TEST' }))
-                            }
-                          />
-                          Creative test (recommended for a first campaign)
-                        </label>
-                        <label>
-                          <input
-                            type="radio"
-                            name={`strategy-mode-${campaign.id}`}
-                            checked={strategyMode[campaign.id] === 'STANDARD'}
-                            onChange={() =>
-                              setStrategyMode((prev) => ({ ...prev, [campaign.id]: 'STANDARD' }))
-                            }
-                          />
-                          Standard campaign (allows carousel)
-                        </label>
-                      </fieldset>
+                      <div className="strategy-mode-picker">
+                        <p className="field-label">Campaign type</p>
+                        <CampaignTypePicker
+                          businessId={businessId}
+                          campaignId={campaign.id}
+                          value={campaignType[campaign.id]}
+                          onChange={(type) =>
+                            setCampaignType((prev) => ({ ...prev, [campaign.id]: type }))
+                          }
+                        />
+                      </div>
                     )}
                     {campaign.objective === 'SALES' &&
                       !strategy &&
-                      strategyMode[campaign.id] !== 'STANDARD' && (
+                      campaignType[campaign.id] !== 'STANDARD' && (
                         <fieldset className="strategy-mode-picker">
                           <legend>Test format</legend>
                           <label>
@@ -2027,6 +2021,7 @@ export function CampaignsSection({
                   <StrategyOverview
                     strategy={strategy}
                     campaignName={campaign.name ?? campaign.id}
+                    structureSummary={structureSummaries[campaign.id]}
                     onGenerateAds={
                       isPublished ? undefined : () => void handleGenerateCreatives(campaign.id)
                     }
@@ -2627,6 +2622,7 @@ export function CampaignsSection({
                     {campaign.dailySpendFlag && (
                       <p role="alert">⚠ {campaign.dailySpendFlag}</p>
                     )}
+                    <PauseReviewBadge recommendations={campaignRecommendations} variant="detail" />
                     <button
                       type="button"
                       className="btn-outline"

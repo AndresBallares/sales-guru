@@ -264,7 +264,7 @@ def _publish_campaign(
     ).json()["id"]
     client.post(
         f"/businesses/{business_id}/campaigns/{campaign_id}/strategy",
-        json={"hasPriorAdvertisingExperience": True},
+        json={"campaignType": "STANDARD"},
     )
     creatives = client.post(
         f"/businesses/{business_id}/campaigns/{campaign_id}/creatives"
@@ -2816,8 +2816,7 @@ async def _run_rules(client: TestClient, campaign_id: str) -> None:
         assert campaign is not None
     finally:
         await seeder.disconnect()
-    connection = _run(client, get_meta_connection, campaign.businessId)
-    _run(client, optimization_jobs._enforce_creative_test_rules, campaign, connection)
+    _run(client, optimization_jobs._enforce_creative_test_rules, campaign)
 
 
 async def _recommendations(campaign_id: str) -> list[Any]:
@@ -2852,12 +2851,14 @@ def pause_ad_mock(monkeypatch: pytest.MonkeyPatch) -> AsyncMock:
 
 
 @pytest.mark.asyncio
-async def test_a_no_result_ad_is_paused_automatically_and_logged_with_its_numbers(
+async def test_a_no_result_ad_is_proposed_for_pausing_with_its_numbers_and_never_paused(
     client: TestClient,
     mock_services: dict[str, AsyncMock],
     pause_ad_mock: AsyncMock,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
+    """The daily check no longer pauses an ad on its own: the clean-out happens
+    before the next round, as a proposal the user approves."""
     campaign_id, ads = await _atc_test_with_ads(client)
     await _age_the_test(campaign_id, ads)
     await _seed_ad_metric(campaign_id, ads[0], spend=60.0)  # 3x target, no add-to-cart
@@ -2867,23 +2868,21 @@ async def test_a_no_result_ad_is_paused_automatically_and_logged_with_its_number
     with caplog.at_level("INFO"):
         await _run_rules(client, campaign_id)
 
-    pause_ad_mock.assert_awaited_once()
-    assert pause_ad_mock.await_args is not None
-    assert pause_ad_mock.await_args.kwargs["meta_ad_id"] == "meta_ad_0"
-    assert await _ad_status(ads[0]) == "PAUSED"
-    assert await _ad_status(ads[1]) == "LIVE"
+    pause_ad_mock.assert_not_awaited()
+    assert await _ad_status(ads[0]) == "LIVE"
     recs = await _recommendations(campaign_id)
     assert len(recs) == 1
     rec = recs[0]
     assert (rec.actionType, rec.status, rec.targetAdId) == (
         "PAUSE_AD",
-        "APPLIED",
+        "PENDING",
         ads[0],
     )
-    assert rec.requiresApproval is False
+    assert rec.requiresApproval is True
     assert "$60.00" in rec.reasoning
     assert "$20.00" in rec.reasoning
-    assert "Automatic pause" in rec.reasoning
+    assert "Proposed pause" in rec.reasoning
+    assert "Needs your approval" in rec.reasoning
     assert "$60.00" in caplog.text  # the log line carries the numbers too
 
 
@@ -2917,13 +2916,13 @@ async def test_nothing_happens_without_ad_level_data(
 
 
 @pytest.mark.asyncio
-async def test_only_one_pause_is_automatic_the_rest_wait_for_approval(
+async def test_every_pause_waits_for_approval(
     client: TestClient,
     mock_services: dict[str, AsyncMock],
     pause_ad_mock: AsyncMock,
 ) -> None:
-    """Two ads qualify in the same cycle: the worst is paused, the other is a
-    proposal. Anything beyond pausing one ad needs the user's approval."""
+    """Two ads qualify in the same cycle: both become proposals, nothing is
+    paused on Meta until the user approves."""
     campaign_id, ads = await _atc_test_with_ads(client)
     await _age_the_test(campaign_id, ads)
     await _seed_ad_metric(campaign_id, ads[0], spend=200.0)
@@ -2933,39 +2932,14 @@ async def test_only_one_pause_is_automatic_the_rest_wait_for_approval(
 
     await _run_rules(client, campaign_id)
 
-    assert pause_ad_mock.await_count == 1
-    assert await _ad_status(ads[0]) == "PAUSED"
+    pause_ad_mock.assert_not_awaited()
+    assert await _ad_status(ads[0]) == "LIVE"
     assert await _ad_status(ads[1]) == "LIVE"
     recs = {r.targetAdId: r for r in await _recommendations(campaign_id)}
-    assert recs[ads[0]].status == "APPLIED"
-    assert recs[ads[0]].requiresApproval is False
-    assert recs[ads[1]].status == "PENDING"
-    assert recs[ads[1]].requiresApproval is True
+    for ad in (ads[0], ads[1]):
+        assert recs[ad].status == "PENDING"
+        assert recs[ad].requiresApproval is True
     assert "$90.00" in recs[ads[1]].reasoning
-
-
-@pytest.mark.asyncio
-async def test_after_the_one_automatic_pause_every_later_pause_is_a_proposal(
-    client: TestClient,
-    mock_services: dict[str, AsyncMock],
-    pause_ad_mock: AsyncMock,
-) -> None:
-    campaign_id, ads = await _atc_test_with_ads(client)
-    await _age_the_test(campaign_id, ads)
-    await _seed_ad_metric(campaign_id, ads[0], spend=200.0)
-    for other in ads[1:]:
-        await _seed_ad_metric(campaign_id, other, spend=40.0, add_to_cart=4)
-    await _run_rules(client, campaign_id)
-    assert pause_ad_mock.await_count == 1
-    # A second ad later runs up spend with nothing to show for it.
-    await _seed_ad_metric(campaign_id, ads[1], spend=130.0, add_to_cart=0)
-
-    await _run_rules(client, campaign_id)
-
-    assert pause_ad_mock.await_count == 1  # no further automatic pause
-    assert await _ad_status(ads[1]) == "LIVE"
-    pending = [r for r in await _recommendations(campaign_id) if r.status == "PENDING"]
-    assert [r.targetAdId for r in pending] == [ads[1]]
 
 
 @pytest.mark.asyncio
@@ -2984,27 +2958,8 @@ async def test_running_the_rules_twice_does_not_duplicate_anything(
     await _run_rules(client, campaign_id)
     await _run_rules(client, campaign_id)
 
-    assert pause_ad_mock.await_count == 1
+    pause_ad_mock.assert_not_awaited()
     assert len(await _recommendations(campaign_id)) == 2
-
-
-@pytest.mark.asyncio
-async def test_a_failed_meta_pause_leaves_the_ad_live_and_records_nothing(
-    client: TestClient,
-    mock_services: dict[str, AsyncMock],
-    pause_ad_mock: AsyncMock,
-) -> None:
-    pause_ad_mock.side_effect = MetaConnectionError("Meta is down")
-    campaign_id, ads = await _atc_test_with_ads(client)
-    await _age_the_test(campaign_id, ads)
-    await _seed_ad_metric(campaign_id, ads[0], spend=200.0)
-    for other in ads[1:]:
-        await _seed_ad_metric(campaign_id, other, spend=40.0, add_to_cart=4)
-
-    await _run_rules(client, campaign_id)
-
-    assert await _ad_status(ads[0]) == "LIVE"
-    assert await _recommendations(campaign_id) == []
 
 
 @pytest.mark.asyncio
@@ -3071,8 +3026,15 @@ async def test_the_collection_job_runs_the_rules(
 
     _run(client, optimization_jobs.collect_metrics_for_all_live_campaigns)
 
-    assert await _ad_status(ads[0]) == "PAUSED"
-    pause_ad_mock.assert_awaited_once()
+    # The job collects, then enforces: the loser is proposed, never paused.
+    assert await _ad_status(ads[0]) == "LIVE"
+    pause_ad_mock.assert_not_awaited()
+    [rec] = await _recommendations(campaign_id)
+    assert (rec.actionType, rec.status, rec.targetAdId) == (
+        "PAUSE_AD",
+        "PENDING",
+        ads[0],
+    )
 
 
 # --- "Cost cap may be too tight": a proposal, never an action ----------------
@@ -4938,9 +4900,7 @@ async def test_the_worse_than_best_rule_judges_ads_over_the_shared_period(
 
     await _run_rules(client, campaign_id)
 
-    pause_ad_mock.assert_awaited_once()
-    assert pause_ad_mock.await_args is not None
-    assert pause_ad_mock.await_args.kwargs["meta_ad_id"] == "meta_ad_0"
+    pause_ad_mock.assert_not_awaited()
     [rec] = await _recommendations(campaign_id)
     assert (rec.actionType, rec.targetAdId) == ("PAUSE_AD", ads[0])
     assert "shared period" in rec.reasoning

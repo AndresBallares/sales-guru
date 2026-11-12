@@ -292,6 +292,8 @@ export interface Campaign {
   // so the campaign can take a new round as a pack) or 'AD_SET' (published
   // before that, with the budget on its single ad set).
   budgetLevel?: 'CAMPAIGN' | 'AD_SET'
+  // The structure the user chose; null until a strategy exists.
+  campaignType?: CampaignType | null
 }
 
 export interface CampaignCreateInput {
@@ -990,31 +992,72 @@ export interface Strategy {
   createdAt: string
   // A creative test only: how many ads must be selected before it can be approved.
   requiredTestAds?: number | null
+  // The structure the user chose, and one line saying what will be published
+  // ("Creative Test: round 1 of 3, 4 ads, $100/day on the campaign").
+  campaignType?: CampaignType | null
+  structureSummary?: string | null
 }
 
-// hasPriorAdvertisingExperience answers the one-time "has this business
-// run ad campaigns before?" question — only needed the first time a
-// business generates a strategy and only when Meta has no real ad-account
-// history either; omitting it when the backend doesn't need it is fine.
-// A 428 response (ApiError with status 428) means the backend does need
-// it and this call should be retried with an answer.
-// SALES with no real ad history defaults to the controlled first creative test
-// (single-image only); STANDARD opts out for a normal campaign that allows carousel.
-export type StrategyMode = 'CREATIVE_TEST' | 'STANDARD'
+// hasPriorAdvertisingExperience is still accepted (and stored) but no longer routes
+// anything; the backend has no 428 question any more.
+//
+// campaignType is the structure the user picked in the Campaign type dropdown
+// (see getCampaignTypes). Left undefined, the backend uses its recommendation.
+export type CampaignType =
+  | 'CREATIVE_TEST'
+  | 'DATA_DRIVEN'
+  | 'STANDARD'
+  | 'GEO'
+  | 'LEGACY_AUDIENCE_TEST'
 
 // A creative test's format, chosen up front: every ad is an image or every ad a video.
 export type TestFormat = 'IMAGE' | 'VIDEO' | 'CAROUSEL'
+
+export interface CampaignTypeOption {
+  type: CampaignType
+  label: string
+  description: string
+  available: boolean
+  // Why it cannot be picked (coming soon, wrong objective); null when it can.
+  reason: string | null
+  // A caution to show when it is picked (a standard campaign cannot run rounds).
+  warning: string | null
+}
+
+export interface CampaignTypeOptions {
+  recommended: CampaignType
+  options: CampaignTypeOption[]
+}
+
+// The dropdown for a campaign that isn't saved yet (the create form), by objective.
+export function getCampaignTypesForObjective(
+  businessId: string,
+  objective: Objective,
+): Promise<CampaignTypeOptions> {
+  return request<CampaignTypeOptions>(
+    `/businesses/${businessId}/campaign-types?objective=${encodeURIComponent(objective)}`,
+  )
+}
+
+export function getCampaignTypes(
+  businessId: string,
+  campaignId: string,
+): Promise<CampaignTypeOptions> {
+  return request<CampaignTypeOptions>(
+    `/businesses/${businessId}/campaigns/${campaignId}/campaign-types`,
+  )
+}
 
 export function createStrategy(
   businessId: string,
   campaignId: string,
   hasPriorAdvertisingExperience?: boolean,
-  strategyMode?: StrategyMode,
+  campaignType?: CampaignType,
   testFormat?: TestFormat,
 ): Promise<Strategy> {
   const body = {
     ...(hasPriorAdvertisingExperience === undefined ? {} : { hasPriorAdvertisingExperience }),
-    ...(strategyMode === undefined ? {} : { strategyMode }),
+    ...(campaignType === undefined ? {} : { campaignType }),
     ...(testFormat === undefined ? {} : { testFormat }),
   }
   return request<Strategy>(`/businesses/${businessId}/campaigns/${campaignId}/strategy`, {
@@ -1169,6 +1212,18 @@ export function publishRound(
   return request<CreativeRound>(`${roundsPath(businessId, campaignId)}/${roundId}/publish`, {
     method: 'POST',
     body: JSON.stringify({ paused: options?.paused ?? false }),
+  })
+}
+
+// Asks which earlier ads the pause rules call losers, before a new round launches.
+// Nothing is paused: each loser comes back as a PENDING proposal to approve or reject
+// with approveRecommendation / rejectRecommendation. Asking again returns the same ones.
+export function offerRoundPauses(
+  businessId: string,
+  campaignId: string,
+): Promise<Recommendation[]> {
+  return request<Recommendation[]>(`${roundsPath(businessId, campaignId)}/pause-offer`, {
+    method: 'POST',
   })
 }
 

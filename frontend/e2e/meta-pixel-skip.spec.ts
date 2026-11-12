@@ -98,9 +98,7 @@ test('skipping Meta after saving the audience opens the campaigns without Meta',
   await expect(page.getByText("Meta isn't connected yet.")).toBeVisible()
   await openFirstCampaign(page)
   await page.getByRole('button', { name: 'Generate strategy' }).click()
-  await expect(
-    page.getByText('Has this business run advertising campaigns before?'),
-  ).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Strategy at a glance' })).toBeVisible()
 
   await page.reload()
   await expect(page.getByRole('heading', { name: 'Campaigns' })).toBeVisible()

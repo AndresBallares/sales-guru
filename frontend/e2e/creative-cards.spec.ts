@@ -7,8 +7,6 @@ import { analyzeWhenReady, WCAG_TAGS } from './support/axe'
 async function reachCreativeChoices(page: Page) {
   await signUpAndReachFakeMetaConnectedBusiness(page)
   await page.getByRole('button', { name: 'Generate strategy' }).click()
-  await expect(page.getByText('Has this business run advertising campaigns before?')).toBeVisible()
-  await page.getByRole('button', { name: 'No' }).click()
   await expect(page.getByRole('heading', { name: 'Creative angles to test' })).toBeVisible()
   await page.getByRole('button', { name: 'Generate ads' }).click()
   await expect(page.getByRole('heading', { name: 'Choose your ad creative' })).toBeVisible()

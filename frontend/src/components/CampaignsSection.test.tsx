@@ -78,6 +78,8 @@ vi.mock('../lib/api', async (importOriginal) => {
     uploadProductImage: vi.fn<typeof actual.uploadProductImage>(),
     listProductImages: vi.fn<typeof actual.listProductImages>(),
     createStrategy: vi.fn<typeof actual.createStrategy>(),
+    getCampaignTypes: vi.fn<typeof actual.getCampaignTypes>(),
+    offerRoundPauses: vi.fn<typeof actual.offerRoundPauses>(),
     getStrategy: vi.fn<typeof actual.getStrategy>(),
     createCreatives: vi.fn<typeof actual.createCreatives>(),
     listCreatives: vi.fn<typeof actual.listCreatives>(),
@@ -429,10 +431,50 @@ const ALL_OPTIONS: api.OptionsResponse = {
   pricePositionings: [],
 }
 
+const SALES_TYPE_OPTIONS: api.CampaignTypeOptions = {
+  recommended: 'CREATIVE_TEST',
+  options: [
+    {
+      type: 'CREATIVE_TEST',
+      label: 'Creative Test',
+      description: '4 ads per round, up to 3 rounds, budget moves to the winners.',
+      available: true,
+      reason: null,
+      warning: null,
+    },
+    {
+      type: 'DATA_DRIVEN',
+      label: 'Data-Driven',
+      description:
+        'Uses your account history to choose audiences; 4 ads per round, up to 3 rounds, budget moves to the winners.',
+      available: true,
+      reason: null,
+      warning: null,
+    },
+    {
+      type: 'STANDARD',
+      label: 'Standard',
+      description: 'One ad set with its own budget. Allows 1 to 4 ads and no rounds.',
+      available: true,
+      reason: null,
+      warning: 'A standard campaign keeps its budget on the ad set and cannot run rounds.',
+    },
+    {
+      type: 'GEO',
+      label: 'Geo Targeting',
+      description: 'Reach people at one venue or event with a small radius.',
+      available: false,
+      reason: 'Geo Targeting is coming soon.',
+      warning: null,
+    },
+  ],
+}
+
 beforeEach(() => {
   window.sessionStorage.clear()
   publishPolls.reset()
   vi.resetAllMocks()
+  mockedApi.getCampaignTypes.mockResolvedValue(SALES_TYPE_OPTIONS)
   mockedApi.getPixelHealth.mockResolvedValue({
     status: 'ok',
     pixelId: 'p1',
@@ -974,9 +1016,18 @@ describe('CampaignsSection', () => {
     // Strategy step — reached without ever seeing the full campaigns list
     // again in between.
     expect(await screen.findByText(/Your campaign is ready/)).toBeInTheDocument()
+    // A Leads campaign gets no Campaign type dropdown, so no type is sent.
+    expect(screen.queryByRole('combobox', { name: 'Campaign type' })).not.toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: 'Generate strategy' }))
 
-    await waitFor(() => expect(mockedApi.createStrategy).toHaveBeenCalledWith('biz-1', 'camp-2', undefined))
+    await waitFor(() =>
+      expect(mockedApi.createStrategy).toHaveBeenCalledWith(
+        'biz-1',
+        'camp-2',
+        undefined,
+        undefined,
+      ),
+    )
     // The guided flow is gone, and the page carries on in the campaign just created —
     // no manual reload.
     expect(await screen.findByRole('button', { name: /back to campaigns/i })).toBeInTheDocument()
@@ -1786,12 +1837,14 @@ describe('CampaignsSection', () => {
         'https://img.example/ring.jpg',
       )
       const card = container.querySelector('.config-card') as HTMLElement
-      // Objective as a badge and as the Campaign type row, in readable form.
+      // Objective as a badge and as the Objective row, in readable form.
       expect(card.querySelector('.config-badge')).toHaveTextContent('Sales')
+      expect(card).toHaveTextContent('Objective')
       expect(card).toHaveTextContent('Campaign type')
-      expect(card).toHaveTextContent('Test format')
       expect(card).toHaveTextContent('Media')
-      expect(screen.getByRole('radio', { name: /Creative test/ })).toBeChecked()
+      expect(await screen.findByRole('combobox', { name: 'Campaign type' })).toHaveValue(
+        'CREATIVE_TEST',
+      )
       expect(screen.getByRole('radio', { name: 'Images' })).toBeChecked()
       // The panel: heading, explanation, and the gold primary action.
       expect(
@@ -1834,11 +1887,12 @@ describe('CampaignsSection', () => {
 
       renderCampaigns(<CampaignsSection businessId="biz-1" />)
       await screen.findByRole('heading', { name: 'Bombshell Ring' })
+      await screen.findByRole('combobox', { name: 'Campaign type' })
 
       await user.click(screen.getByRole('radio', { name: 'Videos' }))
       expect(screen.getByRole('radio', { name: 'Videos' })).toBeChecked()
 
-      await user.click(screen.getByRole('radio', { name: /Standard campaign/ }))
+      await user.selectOptions(screen.getByRole('combobox', { name: 'Campaign type' }), 'STANDARD')
       expect(screen.queryByRole('radio', { name: 'Videos' })).not.toBeInTheDocument()
       expect(screen.getByText(/chosen per ad after the strategy/)).toBeInTheDocument()
     })
@@ -1851,10 +1905,12 @@ describe('CampaignsSection', () => {
 
       await screen.findByRole('heading', { name: 'Bombshell Ring' })
       const card = container.querySelector('.config-card') as HTMLElement
-      expect(card).toHaveTextContent('Campaign type')
+      expect(card).toHaveTextContent('Objective')
       expect(card).toHaveTextContent('Traffic')
       expect(card).not.toHaveTextContent('Test format')
       expect(screen.queryByRole('radio')).not.toBeInTheDocument()
+      expect(screen.queryByRole('combobox', { name: 'Campaign type' })).not.toBeInTheDocument()
+      expect(mockedApi.getCampaignTypes).not.toHaveBeenCalled()
     })
 
     it('keeps the loading state and blocks a second click while generating', async () => {
@@ -1924,6 +1980,7 @@ describe('CampaignsSection', () => {
 
     renderCampaigns(<CampaignsSection businessId="biz-1" />)
     await screen.findByRole('heading', { name: 'Sales' })
+    await screen.findByRole('combobox', { name: 'Campaign type' })
 
     await user.click(screen.getByRole('button', { name: 'Generate strategy' }))
 
@@ -1933,7 +1990,13 @@ describe('CampaignsSection', () => {
     expect(screen.getByText('Luxury')).toBeInTheDocument()
     expect(screen.getByText(/Lead with the story/)).toBeInTheDocument()
     expect(screen.getByText(/\$25\/day/)).toBeInTheDocument()
-    expect(mockedApi.createStrategy).toHaveBeenCalledWith('biz-1', 'camp-1', undefined, undefined, undefined)
+    expect(mockedApi.createStrategy).toHaveBeenCalledWith(
+      'biz-1',
+      'camp-1',
+      undefined,
+      'CREATIVE_TEST',
+      undefined,
+    )
     expect(
       screen.getByRole('button', { name: 'Regenerate strategy' }),
     ).toBeInTheDocument()
@@ -1997,6 +2060,7 @@ describe('CampaignsSection', () => {
 
     renderCampaigns(<CampaignsSection businessId="biz-1" />)
     await screen.findByRole('heading', { name: 'Sales' })
+    await screen.findByRole('combobox', { name: 'Campaign type' })
 
     await user.click(screen.getByRole('button', { name: 'Generate strategy' }))
     await screen.findByText('Has this business run advertising campaigns before?')
@@ -2004,7 +2068,14 @@ describe('CampaignsSection', () => {
     await user.click(screen.getByRole('button', { name: 'Yes' }))
 
     expect(await screen.findByText(/Custom emerald rings/)).toBeInTheDocument()
-    expect(mockedApi.createStrategy).toHaveBeenNthCalledWith(2, 'biz-1', 'camp-1', true, undefined, undefined)
+    expect(mockedApi.createStrategy).toHaveBeenNthCalledWith(
+      2,
+      'biz-1',
+      'camp-1',
+      true,
+      'CREATIVE_TEST',
+      undefined,
+    )
     expect(
       screen.queryByText('Has this business run advertising campaigns before?'),
     ).not.toBeInTheDocument()
@@ -5210,6 +5281,106 @@ describe('CampaignsSection', () => {
     expect(screen.queryByText(/Applied automatically/)).not.toBeInTheDocument()
   })
 
+  it('flags a suggested ad pause on the campaign card and in the detail view', async () => {
+    mockedApi.listCampaigns.mockResolvedValue([
+      {
+        id: 'camp-1',
+        name: null,
+        objective: 'SALES',
+        status: 'LIVE',
+        productId: null,
+        audienceId: null,
+        metaCampaignId: 'meta_campaign_1',
+        eventVenueKey: null,
+        startDate: null,
+        endDate: null,
+        pausedReason: null,
+        dailySpendFlag: null,
+        needsDestinationUrl: false,
+      },
+    ])
+    mockedApi.listRecommendations.mockResolvedValue([
+      fakeRecommendation({
+        actionType: 'PAUSE_AD',
+        targetAdId: 'ad-1',
+        status: 'PENDING',
+        requiresApproval: true,
+        reasoning: "Proposed pause (rule NO_RESULT): Ad 'Solid 18K Gold' spent $90 with no result.",
+      }),
+    ])
+
+    renderCampaigns(<CampaignsSection businessId="biz-1" />, '/')
+
+    // The overview card carries a badge, so a losing ad does not run unnoticed.
+    const badge = await screen.findByRole('status', { name: 'Ads to review' })
+    expect(badge).toHaveTextContent('1 ad to review')
+  })
+
+  it('shows the reasons and the approve and reject buttons for a suggested pause', async () => {
+    mockedApi.listCampaigns.mockResolvedValue([
+      {
+        id: 'camp-1',
+        name: null,
+        objective: 'SALES',
+        status: 'LIVE',
+        productId: null,
+        audienceId: null,
+        metaCampaignId: 'meta_campaign_1',
+        eventVenueKey: null,
+        startDate: null,
+        endDate: null,
+        pausedReason: null,
+        dailySpendFlag: null,
+        needsDestinationUrl: false,
+      },
+    ])
+    mockedApi.listRecommendations.mockResolvedValue([
+      fakeRecommendation({
+        actionType: 'PAUSE_AD',
+        targetAdId: 'ad-1',
+        status: 'PENDING',
+        requiresApproval: true,
+        reasoning: "Proposed pause (rule NO_RESULT): Ad 'Solid 18K Gold' spent $90 with no result.",
+      }),
+    ])
+
+    renderCampaigns(<CampaignsSection businessId="biz-1" />)
+
+    const banner = await screen.findByRole('status', { name: 'Ads to review' })
+    expect(banner).toHaveTextContent('Pause it or keep it running below')
+    expect(banner).toHaveTextContent('Solid 18K Gold')
+    expect(screen.getByRole('button', { name: 'Approve' })).toBeEnabled()
+    expect(screen.getByRole('button', { name: 'Reject' })).toBeEnabled()
+  })
+
+  it('shows no review badge when nothing is waiting', async () => {
+    mockedApi.listCampaigns.mockResolvedValue([
+      {
+        id: 'camp-1',
+        name: null,
+        objective: 'SALES',
+        status: 'LIVE',
+        productId: null,
+        audienceId: null,
+        metaCampaignId: 'meta_campaign_1',
+        eventVenueKey: null,
+        startDate: null,
+        endDate: null,
+        pausedReason: null,
+        dailySpendFlag: null,
+        needsDestinationUrl: false,
+      },
+    ])
+    mockedApi.listRecommendations.mockResolvedValue([
+      fakeRecommendation({ actionType: 'PAUSE_AD', status: 'APPLIED' }),
+    ])
+
+    renderCampaigns(<CampaignsSection businessId="biz-1" />)
+
+    await screen.findByText(/Live on Meta/)
+    expect(screen.queryByRole('status', { name: 'Ads to review' })).not.toBeInTheDocument()
+  })
+
   it('does not show a recommendations block for a campaign that is not live', async () => {
     mockedApi.listCampaigns.mockResolvedValue([
       {
@@ -5790,25 +5961,58 @@ describe('CampaignsSection campaign type (creative test vs standard)', () => {
     needsDestinationUrl: false,
   }
 
-  it('defaults a SALES campaign to the creative test and sends no mode', async () => {
+  it('preselects the recommended type and sends it with the strategy request', async () => {
     mockedApi.listCampaigns.mockResolvedValue([SALES_CAMPAIGN])
     mockedApi.createStrategy.mockResolvedValue(FAKE_STRATEGY)
     const user = userEvent.setup()
 
     renderCampaigns(<CampaignsSection businessId="biz-1" />)
     await screen.findByRole('heading', { name: 'Sales' })
-    expect(
-      screen.getByRole('radio', { name: /Creative test \(recommended for a first campaign\)/ }),
-    ).toBeChecked()
+    expect(await screen.findByRole('combobox', { name: 'Campaign type' })).toHaveValue(
+      'CREATIVE_TEST',
+    )
 
     await user.click(screen.getByRole('button', { name: 'Generate strategy' }))
 
     await waitFor(() =>
-      expect(mockedApi.createStrategy).toHaveBeenCalledWith('biz-1', 'camp-1', undefined, undefined, undefined),
+      expect(mockedApi.createStrategy).toHaveBeenCalledWith(
+        'biz-1',
+        'camp-1',
+        undefined,
+        'CREATIVE_TEST',
+        undefined,
+      ),
     )
   })
 
-  it('lets the user choose a standard campaign, which allows carousel', async () => {
+  it('preselects Data-Driven when the account has history, and the user can still change it', async () => {
+    mockedApi.getCampaignTypes.mockResolvedValue({
+      ...SALES_TYPE_OPTIONS,
+      recommended: 'DATA_DRIVEN',
+    })
+    mockedApi.listCampaigns.mockResolvedValue([SALES_CAMPAIGN])
+    mockedApi.createStrategy.mockResolvedValue(FAKE_STRATEGY)
+    const user = userEvent.setup()
+
+    renderCampaigns(<CampaignsSection businessId="biz-1" />)
+    const select = await screen.findByRole('combobox', { name: 'Campaign type' })
+    await waitFor(() => expect(select).toHaveValue('DATA_DRIVEN'))
+
+    await user.selectOptions(select, 'CREATIVE_TEST')
+    await user.click(screen.getByRole('button', { name: 'Generate strategy' }))
+
+    await waitFor(() =>
+      expect(mockedApi.createStrategy).toHaveBeenCalledWith(
+        'biz-1',
+        'camp-1',
+        undefined,
+        'CREATIVE_TEST',
+        undefined,
+      ),
+    )
+  })
+
+  it('lets the user choose a standard campaign, with a warning that it cannot run rounds', async () => {
     mockedApi.listCampaigns.mockResolvedValue([SALES_CAMPAIGN])
     mockedApi.createStrategy.mockResolvedValue(FAKE_STRATEGY)
     const user = userEvent.setup()
@@ -5816,9 +6020,11 @@ describe('CampaignsSection campaign type (creative test vs standard)', () => {
     renderCampaigns(<CampaignsSection businessId="biz-1" />)
     await screen.findByRole('heading', { name: 'Sales' })
 
-    await user.click(screen.getByRole('radio', { name: /Standard campaign/ }))
-    await user.click(screen.getByRole('radio', { name: /Creative test/ }))
-    await user.click(screen.getByRole('radio', { name: /Standard campaign/ }))
+    await user.selectOptions(
+      await screen.findByRole('combobox', { name: 'Campaign type' }),
+      'STANDARD',
+    )
+    expect(screen.getByRole('note')).toHaveTextContent(/cannot run rounds/i)
     await user.click(screen.getByRole('button', { name: 'Generate strategy' }))
 
     await waitFor(() =>
@@ -5830,7 +6036,19 @@ describe('CampaignsSection campaign type (creative test vs standard)', () => {
         undefined,
       ),
     )
-    expect(await screen.findByRole('radio', { name: 'Carousel' })).toBeEnabled()
+  })
+
+  it('allows carousel in a Creative Test and in Data-Driven, but not the standard-only note', async () => {
+    mockedApi.listCampaigns.mockResolvedValue([SALES_CAMPAIGN])
+    const user = userEvent.setup()
+
+    renderCampaigns(<CampaignsSection businessId="biz-1" />)
+    const select = await screen.findByRole('combobox', { name: 'Campaign type' })
+
+    expect(screen.getByRole('radio', { name: 'Carousel' })).toBeEnabled()
+    await user.selectOptions(select, 'DATA_DRIVEN')
+    expect(screen.getByRole('radio', { name: 'Carousel' })).toBeEnabled()
+    expect(screen.queryByText(/Carousel isn't part of Test #1/)).not.toBeInTheDocument()
   })
 
   it('does not ask for a campaign type outside SALES', async () => {
@@ -5839,7 +6057,7 @@ describe('CampaignsSection campaign type (creative test vs standard)', () => {
     renderCampaigns(<CampaignsSection businessId="biz-1" />)
     await screen.findByRole('heading', { name: 'Traffic' })
 
-    expect(screen.queryByRole('radio', { name: /Standard campaign/ })).not.toBeInTheDocument()
+    expect(screen.queryByRole('combobox', { name: 'Campaign type' })).not.toBeInTheDocument()
   })
 })
 
@@ -5880,6 +6098,9 @@ describe('CampaignsSection video ads and the creative test format', () => {
 
     renderCampaigns(<CampaignsSection businessId="biz-1" />)
     await screen.findByRole('heading', { name: 'Sales' })
+    await waitFor(() =>
+      expect(screen.getByRole('combobox', { name: 'Campaign type' })).toHaveValue('CREATIVE_TEST'),
+    )
     expect(screen.getByRole('radio', { name: 'Images' })).toBeChecked()
 
     await user.click(screen.getByRole('button', { name: 'Generate strategy' }))
@@ -5889,7 +6110,7 @@ describe('CampaignsSection video ads and the creative test format', () => {
         'biz-1',
         'camp-1',
         undefined,
-        undefined,
+        'CREATIVE_TEST',
         undefined,
       ),
     )
@@ -5902,6 +6123,9 @@ describe('CampaignsSection video ads and the creative test format', () => {
 
     renderCampaigns(<CampaignsSection businessId="biz-1" />)
     await screen.findByRole('heading', { name: 'Sales' })
+    await waitFor(() =>
+      expect(screen.getByRole('combobox', { name: 'Campaign type' })).toHaveValue('CREATIVE_TEST'),
+    )
     await user.click(screen.getByRole('radio', { name: 'Videos' }))
     await user.click(screen.getByRole('button', { name: 'Generate strategy' }))
 
@@ -5910,7 +6134,7 @@ describe('CampaignsSection video ads and the creative test format', () => {
         'biz-1',
         'camp-1',
         undefined,
-        undefined,
+        'CREATIVE_TEST',
         'VIDEO',
       ),
     )
@@ -5923,6 +6147,9 @@ describe('CampaignsSection video ads and the creative test format', () => {
 
     renderCampaigns(<CampaignsSection businessId="biz-1" />)
     await screen.findByRole('heading', { name: 'Sales' })
+    await waitFor(() =>
+      expect(screen.getByRole('combobox', { name: 'Campaign type' })).toHaveValue('CREATIVE_TEST'),
+    )
     await user.click(screen.getByRole('radio', { name: 'Carousel' }))
     await user.click(screen.getByRole('button', { name: 'Generate strategy' }))
 
@@ -5931,7 +6158,7 @@ describe('CampaignsSection video ads and the creative test format', () => {
         'biz-1',
         'camp-1',
         undefined,
-        undefined,
+        'CREATIVE_TEST',
         'CAROUSEL',
       ),
     )
@@ -5945,7 +6172,10 @@ describe('CampaignsSection video ads and the creative test format', () => {
     await screen.findByRole('heading', { name: 'Sales' })
     expect(screen.getByRole('radio', { name: 'Videos' })).toBeInTheDocument()
 
-    await user.click(screen.getByRole('radio', { name: /Standard campaign/ }))
+    await user.selectOptions(
+      await screen.findByRole('combobox', { name: 'Campaign type' }),
+      'STANDARD',
+    )
 
     expect(screen.queryByRole('radio', { name: 'Videos' })).not.toBeInTheDocument()
   })

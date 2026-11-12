@@ -1074,6 +1074,23 @@ class GeneratedLibraryRoundAngles(GeneratedRoundAngles):
         return self
 
 
+class AudienceSource(CamelCaseModel):
+    """Where a Data-Driven campaign's targeting comes from: the account's history.
+
+    Data-Driven reuses the creative-test plan shape (CREATIVE_TEST_PLAN) so the
+    round, optimizer and pause code serve it unchanged. This block is the only
+    difference: the first round and every later round target `target_audience`
+    (chosen from the ad account's history by the same prompt a standard
+    campaign uses) instead of a broad Advantage+ audience. A Creative Test has
+    no such block.
+    """
+
+    kind: Literal["ACCOUNT_HISTORY"] = "ACCOUNT_HISTORY"
+    target_audience: TargetAudience
+    key_learnings: list[str] = Field(default_factory=list)
+    recommended_adjustments: list[str] = Field(default_factory=list)
+
+
 class CreativeTestPlanContent(CamelCaseModel):
     """The full structured CREATIVE_TEST_PLAN — what gets stored and returned.
 
@@ -1096,6 +1113,8 @@ class CreativeTestPlanContent(CamelCaseModel):
     creative_format: CreativeTestFormat = "SINGLE_IMAGE"
     objective: Literal["SALES"]
     audience_constraints: AudienceConstraints
+    # Set only for a Data-Driven campaign (see AudienceSource).
+    audience_source: AudienceSource | None = None
     creative_persona: CreativePersona
     hypotheses: list[CreativeTestHypothesis]
     offer: str
@@ -1236,6 +1255,9 @@ class StrategyResponse(CamelCaseModel):
     # For a creative test only: how many ads must be selected before it can be
     # approved (four, or three for a product without a fourth photo or video).
     required_test_ads: int | None = None
+    # The structure the user chose, and one line saying what will be published.
+    campaign_type: str | None = None
+    structure_summary: str | None = None
 
 
 class CreateStrategyRequest(CamelCaseModel):
@@ -1253,6 +1275,14 @@ class CreateStrategyRequest(CamelCaseModel):
     # allows carousel. Ignored when real history exists and for other
     # objectives.
     strategy_mode: Literal["CREATIVE_TEST", "STANDARD"] | None = None
+    # The structure the user picked. Wins over strategy_mode (kept as an alias);
+    # when absent the recommendation is used. See app/services/campaign_type.py.
+    campaign_type: (
+        Literal[
+            "CREATIVE_TEST", "DATA_DRIVEN", "STANDARD", "GEO", "LEGACY_AUDIENCE_TEST"
+        ]
+        | None
+    ) = None
     # A creative test's format: IMAGE (default), VIDEO or CAROUSEL. Ignored
     # outside a creative test.
     test_format: Literal["IMAGE", "VIDEO", "CAROUSEL"] | None = None
@@ -1290,3 +1320,23 @@ class UpdateTestSettingsRequest(CamelCaseModel):
 
     daily_budget: float | None = Field(default=None, gt=0)
     optimization_event: OptimizationEvent | None = None
+
+
+class CampaignTypeOption(CamelCaseModel):
+    """One entry of the campaign-type dropdown."""
+
+    type: str
+    label: str
+    description: str
+    available: bool
+    # Why it can't be picked (coming soon, wrong objective); None when available.
+    reason: str | None = None
+    # A caution to show when it is picked (Standard cannot run rounds).
+    warning: str | None = None
+
+
+class CampaignTypeOptions(CamelCaseModel):
+    """The dropdown: the preselected type and every type with its description."""
+
+    recommended: str
+    options: list[CampaignTypeOption]

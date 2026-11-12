@@ -210,7 +210,7 @@ def _live_campaign(client: TestClient) -> tuple[str, str]:
     campaign_id = _create_campaign(client, business_id)
     client.post(
         f"/businesses/{business_id}/campaigns/{campaign_id}/strategy",
-        json={"hasPriorAdvertisingExperience": True},
+        json={"campaignType": "STANDARD"},
     )
     creatives = client.post(
         f"/businesses/{business_id}/campaigns/{campaign_id}/creatives"

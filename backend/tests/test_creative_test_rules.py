@@ -103,7 +103,7 @@ def test_the_thresholds_are_the_documented_ones() -> None:
     assert rules.MIN_ADD_TO_CARTS_TO_COMPARE == 5
     assert rules.MIN_PURCHASES_FOR_CAC == 10
     assert rules.MIN_LIVE_ADS == 2
-    assert rules.AUTO_PAUSE_LIMIT == 1
+    assert not hasattr(rules, "AUTO_PAUSE_LIMIT")  # no ad is ever paused automatically
 
 
 def test_nothing_is_judged_before_the_minimum_running_time() -> None:

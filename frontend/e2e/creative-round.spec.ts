@@ -12,8 +12,7 @@ test('a published creative test adds a new round as Pack 2', async ({ page }) =>
   await finishOnboarding(page, { objectiveLabel: 'Sales' })
 
   await page.getByRole('button', { name: 'Generate strategy' }).click()
-  await page.getByRole('button', { name: 'No' }).click()
-  await expect(page.getByText(/Creative test/)).toBeVisible()
+  await expect(page.getByText(/Creative Test: round 1 of 3/)).toBeVisible()
   await page.getByRole('button', { name: 'Generate ads' }).click()
   for (let n = 1; n <= 3; n++) {
     await page.getByRole('button', { name: 'Add to test' }).first().click()

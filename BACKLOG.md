@@ -13,6 +13,15 @@ into the two per-business settings the research agent adds in 7b (`docs/phase-7.
 should also decide what a run costs a customer against the actual cost stored on each run, and what happens to
 a run that reaches its dollar cap.
 
+### Give the test suite its own database (found 2026-11-11)
+The backend tests and the local dev servers must not need the same machine to be quiet. Today the suite recreates
+`backend/prisma/test.db` (through `scripts/db-reset.sh`) and uses one lock file, so a run collides with a second run,
+with a pre-commit hook, or with a dev server that has the same file open, and `CLAUDE.md` has to say "stop the dev
+servers first". Make each test run use its own throwaway database (for example one file per run in a temp directory,
+named after the process, removed afterwards), keep refusing any `DATABASE_URL` that is not a test database, and then
+drop the "one suite at a time" rules from `CLAUDE.md` and `README.md`. Check CI (it runs the same script) and the e2e
+runs (`e2e.db`) at the same time.
+
 ### Research runner follow-ups (found in 7b)
 - **Newer web tool versions.** `web_search_20260318` / `web_fetch_20260318` accept `response_inclusion: "excluded"`, which
   drops the nested result blocks from the response and "reduces output token costs". 7b uses `_20260209`. Using the

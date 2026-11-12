@@ -17,10 +17,6 @@ test('a fake Meta connection carries a campaign from creation to a live publish 
   // The one-time "has this business advertised before?" question — always
   // asked the first time a business generates a strategy, which this
   // fresh signup always is.
-  await expect(
-    page.getByText('Has this business run advertising campaigns before?'),
-  ).toBeVisible()
-  await page.getByRole('button', { name: 'No' }).click()
   await expect(page.getByRole('heading', { name: 'Creative angles to test' })).toBeVisible()
 
   await page.getByRole('button', { name: 'Generate ads' }).click()

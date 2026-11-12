@@ -30,9 +30,7 @@ async function reachCreativeCards(page: Page, avatars: typeof AVATARS) {
   }
 
   await page.getByRole('button', { name: 'Generate strategy' }).click()
-  await expect(page.getByText('Has this business run advertising campaigns before?')).toBeVisible()
-  await page.getByRole('button', { name: 'No' }).click()
-  await expect(page.getByText(/Creative test/)).toBeVisible()
+  await expect(page.getByText(/Creative Test: round 1 of 3/)).toBeVisible()
   await page.getByRole('button', { name: 'Generate ads' }).click()
   await expect(page.getByText('0 of 3–4 ads selected')).toBeVisible()
   const lines = page.locator('.creative-card-angle')

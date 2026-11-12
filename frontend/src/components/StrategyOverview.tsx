@@ -7,6 +7,8 @@ import { SavedConceptNote } from './SavedConceptNote'
 interface Props {
   strategy: StrategyContent
   campaignName: string
+  // One line saying exactly what will be published (campaign type, rounds, ads, budget).
+  structureSummary?: string | null
   // Undefined hides the Generate Ads call to action (e.g. a published campaign's ads are locked).
   onGenerateAds?: () => void
   generating?: boolean
@@ -16,6 +18,7 @@ interface Props {
 export function StrategyOverview({
   strategy,
   campaignName,
+  structureSummary,
   onGenerateAds,
   generating = false,
   error,
@@ -29,6 +32,11 @@ export function StrategyOverview({
       <section className="strategy-panel" aria-labelledby={`${detailsId}-glance`}>
         <h4 id={`${detailsId}-glance`}>Strategy at a glance</h4>
         <p className="strategy-subtitle">Your campaign strategy, summarized.</p>
+        {structureSummary && (
+          <output aria-label="What will be published" className="strategy-structure">
+            {structureSummary}
+          </output>
+        )}
         {view.summary && <p className="strategy-summary">{view.summary}</p>}
         {view.glance.length > 0 && (
           <dl className="strategy-glance">

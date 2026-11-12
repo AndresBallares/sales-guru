@@ -199,3 +199,27 @@ describe('StrategyOverview', () => {
     })
   })
 })
+
+describe('StrategyOverview structure line', () => {
+  it('states exactly what will be published, above the glance', () => {
+    renderOverview(creativeTest, {
+      structureSummary: 'Creative Test: round 1 of 3, 4 ads, $100/day on the campaign',
+    })
+    const line = screen.getByRole('status', { name: 'What will be published' })
+    expect(line).toHaveTextContent('Creative Test: round 1 of 3, 4 ads, $100/day on the campaign')
+  })
+
+  it('says a standard campaign has no rounds', () => {
+    renderOverview(dataDriven, {
+      structureSummary: 'Standard: budget on the ad set, no rounds',
+    })
+    expect(screen.getByRole('status', { name: 'What will be published' })).toHaveTextContent(
+      'Standard: budget on the ad set, no rounds',
+    )
+  })
+
+  it('shows nothing extra for a strategy stored before campaign types', () => {
+    renderOverview(dataDriven)
+    expect(screen.queryByRole('status', { name: 'What will be published' })).not.toBeInTheDocument()
+  })
+})

@@ -184,6 +184,7 @@ async def _to_response(campaign: Campaign) -> CampaignResponse:
         needs_destination_url=await _needs_destination_url(campaign),
         has_delivered=await campaign_lifecycle.has_delivered(campaign.id),
         budget_level=campaign.budgetLevel,
+        campaign_type=campaign.campaignType,
     )
 
 
