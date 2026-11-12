@@ -4957,3 +4957,80 @@ async def test_an_account_reply_without_amount_spent_reads_as_unknown(
         )
         is None
     )
+
+
+# --- reusing an existing ad's Facebook post (ad-set rounds, 2026-11-12) ---------
+
+
+@pytest.mark.asyncio
+async def test_fetch_ad_post_id_reads_the_posts_id_off_the_ads_creative(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Checked live 2026-11-12: the creative's effective_object_story_id is the post."""
+    client = _mock_client_returning(
+        monkeypatch,
+        _FakeResponse(
+            {
+                "id": "ad_1",
+                "creative": {"id": "c_1", "effective_object_story_id": "page_1_post_9"},
+            }
+        ),
+    )
+
+    post_id = await meta.fetch_ad_post_id(access_token="token", meta_ad_id="ad_1")
+
+    assert post_id == "page_1_post_9"
+    url, params = client.calls[0]
+    assert url == "https://graph.facebook.com/v21.0/ad_1"
+    assert params["fields"] == "creative{effective_object_story_id}"
+
+
+@pytest.mark.asyncio
+async def test_fetch_ad_post_id_is_none_when_meta_has_no_post_yet(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _mock_client_returning(
+        monkeypatch, _FakeResponse({"id": "ad_1", "creative": {"id": "c_1"}})
+    )
+
+    assert await meta.fetch_ad_post_id(access_token="token", meta_ad_id="ad_1") is None
+
+
+@pytest.mark.asyncio
+async def test_create_meta_post_ad_creative_builds_the_creative_from_the_post(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = _mock_client_returning(monkeypatch, _FakeResponse({"id": "creative_77"}))
+
+    creative_id = await meta.create_meta_post_ad_creative(
+        access_token="token",
+        ad_account_id="act_1",
+        name="Ring — carried from round 1",
+        object_story_id="page_1_post_9",
+    )
+
+    assert creative_id == "creative_77"
+    url, data = client.calls[0]
+    assert url == "https://graph.facebook.com/v21.0/act_1/adcreatives"
+    assert data["object_story_id"] == "page_1_post_9"
+    assert data["name"] == "Ring — carried from round 1"
+    # The post carries the copy, image and link; nothing else describes the ad.
+    assert "object_story_spec" not in data
+
+
+@pytest.mark.asyncio
+async def test_post_reuse_helpers_answer_without_meta_in_fake_mode(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("FAKE_META", "true")
+    get_settings.cache_clear()
+    try:
+        post = await meta.fetch_ad_post_id(access_token="t", meta_ad_id="fake_ad_1")
+        creative = await meta.create_meta_post_ad_creative(
+            access_token="t", ad_account_id="act_1", name="n", object_story_id="p_1"
+        )
+    finally:
+        get_settings.cache_clear()
+
+    assert post == "fake_page_fake_ad_1"
+    assert creative.startswith("fake_creative_")

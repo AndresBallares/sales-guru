@@ -415,6 +415,7 @@ async def generate_batch(
     round_id: str | None = None,
     batch_size: int = CREATIVE_TEST_AD_COUNT,
     round_number: int = 1,
+    avoid_hook_types: Sequence[str] = (),
 ) -> list[str]:
     """Generate a batch of creatives for a campaign and store it.
 
@@ -432,6 +433,8 @@ async def generate_batch(
         batch_size: How many ads to generate (four unless a round says three).
         round_number: 1 for the campaign's first batch, the round's own number for a
             follow-up round; with the campaign it decides the hook shapes assigned.
+        avoid_hook_types: Hook shapes of ads staying live beside this batch; the new
+            ads take other shapes first.
 
     Returns:
         The ids of the newly created creatives, in creation order.
@@ -533,7 +536,9 @@ async def generate_batch(
     )
     # The code, not the model, picks each ad's hook shape: four different ones, started
     # from the campaign and moved on by one per round (app/services/hook_shapes.py).
-    shapes = assign_shapes(campaign.id, round_number, batch_size)
+    shapes = assign_shapes(
+        campaign.id, round_number, batch_size, avoid=avoid_hook_types
+    )
     try:
         variants = await generate_creatives(
             business=business,

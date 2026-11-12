@@ -526,6 +526,10 @@ SWITCH_TO_PURCHASE_MIN_PURCHASES = 25
 # for each ad in the test ($40 for four), so every ad can buy enough
 # add-to-carts inside the 10-day test.
 CREATIVE_TEST_DEFAULT_DAILY_BUDGET = 100.0
+# The "winners" ad set of a round after the first: a flat daily budget however many
+# winners it holds, and at most this many of them (2026-11-12).
+CREATIVE_TEST_WINNERS_DAILY_BUDGET = 50.0
+CREATIVE_TEST_MAX_WINNERS = 4
 MIN_DAILY_BUDGET_PER_AD = 10.0
 
 
@@ -1124,9 +1128,17 @@ class CreativeTestPlanContent(CamelCaseModel):
         Field(min_length=MIN_CREATIVE_ANGLES, max_length=MAX_CREATIVE_ANGLES),
     ]
     copy_strategy: str
+    # Each new ad set's daily budget (round 1 and every later round).
     daily_budget: float
     duration_days: int
     total_budget: float
+    # Where the budget sits. "AD_SET" (plans written from 2026-11-12): every round's
+    # ad set owns its budget and runs for `duration_days`, and a round after the
+    # first adds a winners ad set. "CAMPAIGN" (any plan stored before): one campaign
+    # budget shared by a pack per round. A stored plan without the field is the latter.
+    rounds_budget: Literal["CAMPAIGN", "AD_SET"] = "CAMPAIGN"
+    winners_daily_budget: float = CREATIVE_TEST_WINNERS_DAILY_BUDGET
+    max_winners: int = CREATIVE_TEST_MAX_WINNERS
     optimization_event: OptimizationEvent
     # How the ad set bids. A new first test bids for the lowest cost with no
     # cap (nothing yet says what a result should cost); a plan stored before

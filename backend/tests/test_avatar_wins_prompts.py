@@ -124,3 +124,48 @@ def test_the_offer_rule_matches_the_worry_not_just_any_perk() -> None:
 
 def test_the_guidance_is_written_once_however_many_blocks_there_are() -> None:
     assert _tail().count("avatar block wins") == 1
+
+
+# ---- winners carried into the round --------------------------------------------
+
+
+def _carried_prompt(carried: list[strategist.CarriedAd] | None) -> str:
+    return strategist._build_round_angles_prompt(  # noqa: SLF001
+        _business(),
+        _product(),
+        None,
+        _creative_plan(),
+        [CreativeAngle(avatar="self_purchaser", concept="x", description="d")],
+        4,
+        None,
+        None,
+        carried=carried,
+    )
+
+
+def test_the_round_prompt_lists_the_ads_that_stay_live_and_asks_for_complements() -> (
+    None
+):
+    prompt = _carried_prompt(
+        [
+            strategist.CarriedAd(
+                avatar="gift_buyer",
+                concept="made-to-last",
+                pillar="mechanism",
+                hook_type="question",
+                headline="Built to be handed down",
+            )
+        ]
+    )
+
+    assert "staying live" in prompt
+    assert "gift_buyer / made-to-last" in prompt
+    assert "pillar mechanism" in prompt
+    assert "hook question" in prompt
+    assert "Built to be handed down" in prompt
+    assert "complement" in prompt
+
+
+def test_without_carried_ads_the_round_prompt_has_no_such_block() -> None:
+    assert "staying live" not in _carried_prompt(None)
+    assert "staying live" not in _carried_prompt([])

@@ -46,6 +46,7 @@ vi.mock('../lib/api', async (importOriginal) => {
     deselectCreative: vi.fn<typeof actual.deselectCreative>(),
     getStrategy: vi.fn<typeof actual.getStrategy>(),
     listRounds: vi.fn<typeof actual.listRounds>(),
+    getRoundsOverview: vi.fn<typeof actual.getRoundsOverview>(),
     getPixelHealth: vi.fn<typeof actual.getPixelHealth>(),
   }
 })
@@ -358,6 +359,33 @@ describe('AdPreviewPage', () => {
       await waitFor(() =>
         expect(mockedApi.listRounds).toHaveBeenCalledWith('biz-1', 'camp-1'),
       )
+    })
+
+    it('runs the rounds of a test whose budget sits on its ad sets', async () => {
+      mockedApi.listCreatives.mockResolvedValue(three)
+      mockedApi.getStrategy.mockResolvedValue({
+        ...strategyOf('CREATIVE_TEST_PLAN'),
+        content: {
+          planType: 'CREATIVE_TEST_PLAN',
+          roundsBudget: 'AD_SET',
+        } as api.Strategy['content'],
+      })
+      mockedApi.getRoundsOverview.mockResolvedValue({
+        maxRounds: 3,
+        nextRoundProblem: null,
+        rounds: [],
+      })
+      mockedApi.listCampaigns.mockResolvedValue([
+        makeCampaign({ status: 'LIVE', metaCampaignId: 'meta-1', budgetLevel: 'AD_SET' }),
+      ])
+
+      renderPage()
+
+      expect(await screen.findByRole('button', { name: 'Add new round' })).toBeInTheDocument()
+      await waitFor(() =>
+        expect(mockedApi.getRoundsOverview).toHaveBeenCalledWith('biz-1', 'camp-1'),
+      )
+      expect(screen.queryByText(/start a new creative test/i)).not.toBeInTheDocument()
     })
 
     it('explains why a test published before campaign budgets gets no new round', async () => {

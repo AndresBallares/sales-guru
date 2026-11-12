@@ -99,6 +99,12 @@ from app.services import (
     saturation,
     switch_to_purchase,
 )
+from app.services.ad_set_rounds import (
+    campaign_uses_ad_set_rounds,
+    latest_round,
+    planned_rounds_budget,
+    uses_ad_set_rounds,
+)
 from app.services.ad_window import CommonWindow, compare_ads
 from app.services.campaign_status_sync import sync_campaign_statuses
 from app.services.meta import (
@@ -258,10 +264,55 @@ async def _collect_metrics_for_campaign(
         await db.metric.create(
             data=metric_create_data(campaign_id=campaign.id, insights=insights)
         )
+        if await campaign_uses_ad_set_rounds(campaign.id):
+            return await _collect_round_ad_sets(campaign, access_token)
         return None
 
     failure: MetaConnectionError | None = None
     for ad_set in variant_ad_sets:
+        assert ad_set.metaAdSetId is not None  # filtered above
+        try:
+            insights = await fetch_ad_set_insights(
+                access_token=access_token, meta_ad_set_id=ad_set.metaAdSetId
+            )
+        except MetaConnectionError as exc:
+            logger.warning(
+                "Metrics collection failed for campaign %s adSet %s: %s",
+                campaign.id,
+                ad_set.id,
+                exc,
+            )
+            failure = failure or exc
+            continue
+        await db.metric.create(
+            data=metric_create_data(
+                campaign_id=campaign.id, insights=insights, ad_set_id=ad_set.id
+            )
+        )
+    return failure
+
+
+async def _collect_round_ad_sets(
+    campaign: Campaign, access_token: str
+) -> MetaConnectionError | None:
+    """Each ad set's own snapshot, for an ad-set-round campaign with several.
+
+    Beside the campaign-level snapshot (which holds the campaign's whole spend),
+    so the daily flag can judge each ad set against its own budget. With one ad
+    set the campaign-level snapshot is that ad set, so nothing more is read.
+
+    Returns:
+        The first Meta failure, or None when every read worked.
+    """
+    ad_sets = [
+        a
+        for a in await db.adset.find_many(where={"campaignId": campaign.id})
+        if a.metaAdSetId is not None
+    ]
+    if len(ad_sets) < 2:
+        return None
+    failure: MetaConnectionError | None = None
+    for ad_set in ad_sets:
         assert ad_set.metaAdSetId is not None  # filtered above
         try:
             insights = await fetch_ad_set_insights(
@@ -640,7 +691,9 @@ async def _reconcile_business(connection: MetaConnection) -> None:
             )
 
 
-async def _spend_metric_rows(campaign_id: str) -> list[Metric]:
+async def _spend_metric_rows(
+    campaign_id: str, *, per_ad_set: bool = False
+) -> list[Metric]:
     """The campaign- and ad-set-level Metric rows that make up its spend, oldest first.
 
     A campaign whose budget lives on its ad sets (Campaign.budgetLevel
@@ -652,12 +705,20 @@ async def _spend_metric_rows(campaign_id: str) -> list[Metric]:
 
     Args:
         campaign_id: The campaign to read.
+        per_ad_set: Keep an ad-set-round campaign's per-ad-set rows too (the daily
+            flag reads them; totals never do).
 
     Returns:
         Ad-level rows are always excluded.
     """
     campaign = await db.campaign.find_unique(where={"id": campaign_id})
-    if campaign is not None and campaign.budgetLevel == CAMPAIGN_BUDGET_LEVEL:
+    # An ad-set-round campaign's campaign-level figure already is the spend of
+    # all its rounds; the per-ad-set rows beside it are a breakdown (read only by
+    # the daily flag, with per_ad_set=True), not something to add on top.
+    if campaign is not None and (
+        campaign.budgetLevel == CAMPAIGN_BUDGET_LEVEL
+        or (not per_ad_set and await campaign_uses_ad_set_rounds(campaign_id))
+    ):
         return await db.metric.find_many(
             where={"campaignId": campaign_id, "adId": None, "adSetId": None},
             order={"fetchedAt": "asc"},
@@ -818,10 +879,17 @@ async def _enforce_spend_circuit_breaker(
     # Ad sets under one campaign budget share it, so they don't each add a
     # daily budget to the ceiling.
     real_ad_set_count = 1
+    real_ad_sets = []
     if not is_campaign_budget:
         ad_sets = await db.adset.find_many(where={"campaignId": campaign.id})
-        real_ad_set_count = sum(1 for a in ad_sets if a.metaAdSetId is not None)
-    planned_budget = planned_total_budget(content, real_ad_set_count)
+        real_ad_sets = [a for a in ad_sets if a.metaAdSetId is not None]
+        real_ad_set_count = len(real_ad_sets)
+    if uses_ad_set_rounds(content):
+        # Each round's ad sets carry their own budgets; the limit is their sum.
+        assert isinstance(content, CreativeTestPlanContent)
+        planned_budget = planned_rounds_budget(content, real_ad_sets)
+    else:
+        planned_budget = planned_total_budget(content, real_ad_set_count)
     total_spend = await _latest_total_spend(campaign.id)
     if total_spend <= planned_budget:
         return
@@ -892,14 +960,16 @@ async def _enforce_weekly_budget_ceiling(
     )
 
 
-async def _grouped_metrics(campaign_id: str) -> dict[str | None, list[Metric]]:
+async def _grouped_metrics(
+    campaign_id: str, *, per_ad_set: bool = False
+) -> dict[str | None, list[Metric]]:
     """Every spend Metric snapshot for a campaign, grouped by adSetId.
 
     None is the group key for the campaign-level aggregate stream. A campaign
     budget (CBO) only has that group (see _spend_metric_rows).
     """
     groups: dict[str | None, list[Metric]] = {}
-    for metric in await _spend_metric_rows(campaign_id):
+    for metric in await _spend_metric_rows(campaign_id, per_ad_set=per_ad_set):
         groups.setdefault(metric.adSetId, []).append(metric)
     return groups
 
@@ -1058,7 +1128,7 @@ async def _enforce_daily_spend_flag(campaign: Campaign) -> None:
     Args:
         campaign: The live campaign to check.
     """
-    groups = await _grouped_metrics(campaign.id)
+    groups = await _grouped_metrics(campaign.id, per_ad_set=True)
     cutoff = datetime.now(UTC) - _DAILY_SPEND_WINDOW
 
     overspending: list[str] = []
@@ -1143,16 +1213,24 @@ async def _check_add_to_cart_delivery(campaign: Campaign) -> None:
         )
 
 
-async def _ad_level_window(campaign_id: str) -> tuple[list[Metric], CommonWindow]:
+async def _ad_level_window(
+    campaign_id: str, *, ad_ids: set[str] | None = None
+) -> tuple[list[Metric], CommonWindow]:
     """The campaign's ad-level rows (oldest first) and the window all its ads ran.
 
     The comparisons between ads use that window, so an ad that went live earlier
     gets no credit for its extra days (app/services/ad_window.py).
+
+    Args:
+        campaign_id: The campaign.
+        ad_ids: Only these ads' rows (the current round's ads), or None for all.
     """
     metrics = await db.metric.find_many(
         where={"campaignId": campaign_id, "NOT": [{"adId": None}]},
         order={"fetchedAt": "asc"},
     )
+    if ad_ids is not None:
+        metrics = [m for m in metrics if m.adId in ad_ids]
     window = compare_ads(
         (dashboard.snapshot_from_metric(m) for m in metrics),
         min_hours=get_settings().common_window_min_hours,
@@ -1181,12 +1259,22 @@ async def _creative_test_ads(
         collected (None if none has been yet), and what the shared period is
         called (None while there is none).
     """
-    metrics, window = await _ad_level_window(campaign.id)
+    ad_sets = await db.adset.find_many(where={"campaignId": campaign.id})
+    ads_by_set = {a.id: await db.ad.find_many(where={"adSetId": a.id}) for a in ad_sets}
+    # Ad-set rounds are judged one at a time: only the latest round's ads, in both
+    # of its ad sets, and only from that round's start.
+    round_ad_ids: set[str] | None = None
+    current = await latest_round(campaign.id)
+    if current is not None and await campaign_uses_ad_set_rounds(campaign.id):
+        in_round = {a.id for a in current.ad_sets}
+        ad_sets = [a for a in ad_sets if a.id in in_round]
+        round_ad_ids = {ad.id for a in ad_sets for ad in ads_by_set[a.id]}
+    metrics, window = await _ad_level_window(campaign.id, ad_ids=round_ad_ids)
     latest = _latest_by_ad(metrics)
     shared = window.per_ad if window.status == "ok" else {}
     snapshots: list[creative_test_rules.AdSnapshot] = []
-    for ad_set in await db.adset.find_many(where={"campaignId": campaign.id}):
-        for ad in await db.ad.find_many(where={"adSetId": ad_set.id}):
+    for ad_set in ad_sets:
+        for ad in ads_by_set[ad_set.id]:
             row = latest.get(ad.id)
             totals = shared.get(ad.id)
             snapshots.append(

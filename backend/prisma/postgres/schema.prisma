@@ -652,6 +652,12 @@ model AdSet {
   packNumber       Int?
   startDate        DateTime?
   dailyMinSpend    Float?
+  // Ad-set-budget rounds (2026-11-12): when this ad set stops (its round's 10th day,
+  // sent to Meta as end_time; set to now if the user ends the round early), and
+  // whether it is the round's "winners" ad set that carries earlier rounds' winning
+  // ads. packNumber is the round number for both ad sets of a round, round 1's too.
+  endDate          DateTime?
+  isWinners        Boolean  @default(false)
   createdAt        DateTime @default(now())
   updatedAt        DateTime @updatedAt
 }
@@ -727,6 +733,11 @@ model Creative {
   // Stored so results can later be compared by shape; nothing reads it yet. Null on older
   // creatives.
   hookType                  String?
+  // A winner carried into a later round's winners ad set: the creative it was
+  // copied from, and the round it first ran in. The new ad reuses the original's
+  // Facebook post, so likes, comments and shares carry over.
+  carriedFromCreativeId     String?
+  carriedFromRound          Int?
   // The library avatar (BuyerAvatar.id) this ad was written for, when the angle
   // had one. A plain string, not a relation: a deleted avatar keeps labeling the
   // ads and results it was used for.
@@ -814,6 +825,9 @@ model CreativeRound {
   generatedCount Int
   selectedCount  Int        @default(0)
   angles         String
+  // The earlier ads the user chose to carry into this round's winners ad set (a
+  // JSON list of Creative ids); null means every ad still active, up to the cap.
+  winnerCreativeIds String?
   creatives      Creative[]
   createdAt      DateTime   @default(now())
   updatedAt      DateTime   @updatedAt

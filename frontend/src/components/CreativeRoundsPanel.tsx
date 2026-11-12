@@ -3,21 +3,30 @@ import {
   ApiError,
   createRound,
   deleteRound,
+  endRoundEarly,
   getPublishStatus,
+  getRoundsOverview,
   listRounds,
   publishRound,
   setRoundCreativeSelected,
   type Campaign,
   type CreativeRound,
+  type RoundsOverview as RoundsOverviewData,
 } from '../lib/api'
 import { angleLabel } from '../lib/creativeAngle'
+import { RoundLaunchPanel } from './RoundLaunchPanel'
 import { RoundPauseOffer } from './RoundPauseOffer'
+import { RoundsOverview } from './RoundsOverview'
 import { SavedConceptNote } from './SavedConceptNote'
 
 interface CreativeRoundsPanelProps {
   businessId: string
   campaignId: string
   budgetLevel: Campaign['budgetLevel']
+  // Where the plan keeps its budget: 'AD_SET' rounds run on their own ad-set budgets for
+  // ten days and carry earlier winners into a winners ad set; anything else is the older
+  // campaign-budget pack.
+  roundsBudget?: 'CAMPAIGN' | 'AD_SET'
   // How often a background (video) publish is checked, in milliseconds.
   pollMs?: number
 }
@@ -37,9 +46,12 @@ export function CreativeRoundsPanel({
   businessId,
   campaignId,
   budgetLevel,
+  roundsBudget,
   pollMs = 2000,
 }: CreativeRoundsPanelProps) {
+  const adSetRounds = roundsBudget === 'AD_SET'
   const [rounds, setRounds] = useState<CreativeRound[] | null>(null)
+  const [overview, setOverview] = useState<RoundsOverviewData | null>(null)
   const [busy, setBusy] = useState<string | null>(null)
   const [step, setStep] = useState<string | null>(null)
   const [paused, setPaused] = useState(false)
@@ -48,12 +60,17 @@ export function CreativeRoundsPanel({
 
   const load = useCallback(async () => {
     try {
-      const next = await listRounds(businessId, campaignId)
-      if (mounted.current) setRounds(next)
+      const [next, published] = await Promise.all([
+        listRounds(businessId, campaignId),
+        adSetRounds ? getRoundsOverview(businessId, campaignId) : Promise.resolve(null),
+      ])
+      if (!mounted.current) return
+      setRounds(next)
+      setOverview(published)
     } catch (e) {
       if (mounted.current) setError(message(e, 'Could not load the rounds'))
     }
-  }, [businessId, campaignId])
+  }, [businessId, campaignId, adSetRounds])
 
   useEffect(() => {
     mounted.current = true
@@ -88,19 +105,41 @@ export function CreativeRoundsPanel({
       }
       if (status.state !== 'PROCESSING') return
       setStep(
-        status.progress != null ? `${status.step ?? 'Working'} ${status.progress}%` : status.step ?? 'Working',
+        status.progress != null
+          ? `${status.step ?? 'Working'} ${status.progress}%`
+          : (status.step ?? 'Working'),
       )
       await sleep(pollMs)
     }
   }
 
   const hasOpenRound = rounds?.some((r) => r.status === 'OPEN') ?? false
-  const canAdd = budgetLevel === 'CAMPAIGN'
+  const canAdd = adSetRounds || budgetLevel === 'CAMPAIGN'
+  const locked = adSetRounds && overview?.nextRoundProblem != null
 
   return (
     <section className="rounds-panel" aria-labelledby="rounds-heading">
       <h3 id="rounds-heading">New rounds</h3>
-      {canAdd ? (
+      {adSetRounds && (
+        <RoundsOverview
+          rounds={overview?.rounds ?? []}
+          busy={busy !== null}
+          onEndEarly={async () => {
+            try {
+              await endRoundEarly(businessId, campaignId)
+              await load()
+            } catch (e) {
+              if (mounted.current) setError(message(e, 'Could not end the round'))
+            }
+          }}
+        />
+      )}
+      {adSetRounds ? (
+        <p className="field-hint">
+          Each round is four new ads at the test&apos;s daily budget in their own ad set for ten
+          days. The earlier ads you left active carry on in a winners ad set beside them.
+        </p>
+      ) : canAdd ? (
         <p className="field-hint">
           Add four new ads on fresh angles (three if the product lacks a fourth photo or video),
           choose one to four, and publish them as a new pack in this campaign.
@@ -117,7 +156,7 @@ export function CreativeRoundsPanel({
         <button
           type="button"
           className="btn-outline"
-          disabled={busy !== null || hasOpenRound || rounds === null}
+          disabled={busy !== null || hasOpenRound || rounds === null || locked}
           onClick={() =>
             void run('add', async () => {
               await createRound(businessId, campaignId)
@@ -131,6 +170,7 @@ export function CreativeRoundsPanel({
       {canAdd && hasOpenRound && (
         <p className="field-hint">Publish or delete the open round before adding another.</p>
       )}
+      {locked && !hasOpenRound && <p className="field-hint">{overview?.nextRoundProblem}</p>}
       {canAdd && <RoundPauseOffer businessId={businessId} campaignId={campaignId} />}
 
       {error && (
@@ -147,7 +187,7 @@ export function CreativeRoundsPanel({
             <header className="round-card-header">
               <h4>Round {round.number}</h4>
               <span className="round-card-status">
-                {open ? 'Open' : `Published as Pack ${round.number}`}
+                {open ? 'Open' : adSetRounds ? 'Published' : `Published as Pack ${round.number}`}
               </span>
             </header>
             <ul className="round-angles">
@@ -204,7 +244,40 @@ export function CreativeRoundsPanel({
                 )
               })}
             </ul>
-            {open && (
+            {open && adSetRounds && (
+              <div className="round-actions">
+                <RoundLaunchPanel
+                  businessId={businessId}
+                  campaignId={campaignId}
+                  roundId={round.id}
+                  roundNumber={round.number}
+                  selectedCount={selected.length}
+                  busy={busy !== null}
+                  publishLabel={busy === `publish-${round.id}` ? (step ?? 'Publishing…') : null}
+                  onPublish={(confirmRestart) =>
+                    void run(`publish-${round.id}`, async () => {
+                      await publishRound(businessId, campaignId, round.id, { confirmRestart })
+                      await waitForPublish()
+                      await load()
+                    })
+                  }
+                />
+                <button
+                  type="button"
+                  className="btn-outline"
+                  disabled={busy !== null}
+                  onClick={() =>
+                    void run(`delete-${round.id}`, async () => {
+                      await deleteRound(businessId, campaignId, round.id)
+                      await load()
+                    })
+                  }
+                >
+                  Delete round
+                </button>
+              </div>
+            )}
+            {open && !adSetRounds && (
               <div className="round-actions">
                 <label className="round-paused">
                   <input

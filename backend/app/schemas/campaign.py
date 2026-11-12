@@ -109,6 +109,9 @@ class PublishCampaignRequest(CamelCaseModel):
     """
 
     paused: bool = False
+    # Only for a round of an ad-set-budget creative test published into a paused
+    # campaign: the user has seen both budgets and agrees to restart it.
+    confirm_restart: bool = False
 
 
 class CampaignResponse(CamelCaseModel):

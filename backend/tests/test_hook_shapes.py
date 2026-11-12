@@ -84,3 +84,33 @@ def test_the_system_lines_name_every_shape_and_are_the_same_every_time() -> None
     for slug in SLUGS:
         assert slug in text
     assert lines == hook_shapes.system_lines()
+
+
+# --- shapes the carried winners already use (ad-set rounds) -----------------------
+
+
+def test_avoided_shapes_come_last_so_new_ads_open_differently_from_the_winners() -> (
+    None
+):
+    avoid = hook_shapes.assign_shapes("c1", 2, 4)[:2]
+
+    shapes = hook_shapes.assign_shapes("c1", 2, 4, avoid=avoid)
+
+    assert len(set(shapes)) == 4  # still never repeats within a batch
+    # Five shapes, two avoided: the three others come first, then one avoided.
+    assert not any(s in avoid for s in shapes[:3])
+    assert shapes[3] in avoid
+
+
+def test_with_nothing_to_avoid_the_assignment_is_unchanged() -> None:
+    assert hook_shapes.assign_shapes("c1", 3, 4, avoid=()) == hook_shapes.assign_shapes(
+        "c1", 3, 4
+    )
+
+
+def test_when_everything_is_avoided_the_normal_order_is_kept() -> None:
+    every = list(hook_shapes.HOOK_TYPES)
+
+    assert hook_shapes.assign_shapes("c1", 2, 4, avoid=every) == (
+        hook_shapes.assign_shapes("c1", 2, 4)
+    )

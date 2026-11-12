@@ -147,12 +147,13 @@ def test_options_recommend_a_creative_test_for_a_new_account(
 
     assert options["recommended"] == "CREATIVE_TEST"
     by_type = _by_type(options)
+    carry_on = "The ads you keep active carry on in a $50/day winners ad set."
     assert by_type["CREATIVE_TEST"]["description"] == (
-        "4 ads per round, up to 3 rounds, budget moves to the winners."
+        "4 new ads per round at $100/day for 10 days, up to 3 rounds. " + carry_on
     )
     assert by_type["DATA_DRIVEN"]["description"] == (
-        "Uses your account history to choose audiences; 4 ads per round, "
-        "up to 3 rounds, budget moves to the winners."
+        "Uses your account history to choose audiences. "
+        "4 new ads per round at $100/day for 10 days, up to 3 rounds. " + carry_on
     )
     assert by_type["STANDARD"]["available"] is True
     assert "cannot run rounds" in by_type["STANDARD"]["warning"].lower()
@@ -664,3 +665,18 @@ async def test_the_backfill_types_existing_campaigns_and_is_idempotent(
             assert untouched is not None and untouched.campaignType is None
     finally:
         await db.disconnect()
+
+
+def test_the_round_limit_in_the_descriptions_follows_the_setting(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.core.config import get_settings
+
+    monkeypatch.setenv("CREATIVE_TEST_MAX_ROUNDS", "2")
+    get_settings.cache_clear()
+    try:
+        text = ct.describe("CREATIVE_TEST")
+    finally:
+        get_settings.cache_clear()
+
+    assert "up to 2 rounds" in text

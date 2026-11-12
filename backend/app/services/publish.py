@@ -33,7 +33,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Literal, NamedTuple
 
 from prisma.models import AdSet, Campaign, Creative, CreativeRound, MetaConnection
-from prisma.types import CampaignUpdateInput
+from prisma.types import AdSetCreateInput, CampaignUpdateInput
 
 from app.core.db import db
 from app.core.meta_connection import effective_instagram_user_id
@@ -48,6 +48,7 @@ from app.schemas.strategy import (
 )
 from app.services import creative_naming, geo, locales, meta
 from app.services.ad_naming import plan_ad_names
+from app.services.ad_set_rounds import RoundPublishError, WinnerCandidate
 from app.services.event_venues import EVENT_VENUES
 from app.services.interests import INTERESTS
 from app.services.meta import CustomLocation, MetaConnectionError, ResolvedGeoLocation
@@ -1505,7 +1506,7 @@ async def _publish_creative_test_plan(
         strategy=strategy,
         campaign=campaign,
         access_token=access_token,
-        suggest_interest=campaign_owns_budget,
+        suggest_interest=campaign_owns_budget or strategy.rounds_budget == "AD_SET",
     )
     meta_ad_set_id = await meta.create_meta_ad_set(
         access_token=access_token,
@@ -1535,16 +1536,20 @@ async def _publish_creative_test_plan(
         ),
         attribution_spec=meta.ATTRIBUTION_SPEC,
     )
-    ad_set = await db.adset.create(
-        data={
-            "campaignId": campaign.id,
-            "name": f"{object_name} — Creative test",
-            "budget": strategy.daily_budget,
-            "optimizationGoal": _OPTIMIZATION_GOAL_BY_OBJECTIVE[campaign.objective],
-            "status": local_status,
-            "metaAdSetId": meta_ad_set_id,
-        }
-    )
+    ad_set_data: AdSetCreateInput = {
+        "campaignId": campaign.id,
+        "name": f"{object_name} — Creative test",
+        "budget": strategy.daily_budget,
+        "optimizationGoal": _OPTIMIZATION_GOAL_BY_OBJECTIVE[campaign.objective],
+        "status": local_status,
+        "metaAdSetId": meta_ad_set_id,
+    }
+    if strategy.rounds_budget == "AD_SET":
+        # Round 1 of ad-set rounds: its window is what later rounds wait for.
+        ad_set_data["packNumber"] = 1
+        ad_set_data["startDate"] = datetime.now(UTC)
+        ad_set_data["endDate"] = end_time
+    ad_set = await db.adset.create(data=ad_set_data)
 
     await _create_creative_test_ads(
         campaign=campaign,
@@ -1739,6 +1744,331 @@ async def publish_round_to_meta(
         )
         raise
     return ad_set
+
+
+async def publish_ad_set_round(
+    *,
+    campaign: Campaign,
+    connection: MetaConnection,
+    round_: CreativeRound,
+    creatives: list[Creative],
+    strategy: CreativeTestPlanContent,
+    destination_url: str,
+    winners: list[WinnerCandidate],
+    report: StatusReporter | None = None,
+) -> list[AdSet]:
+    """Publish a round of an ad-set-budget creative test.
+
+    Two ad sets in the live campaign, both ending `duration_days` from now: one
+    with the round's new ads at the plan's daily budget, and (when earlier ads were
+    left active) a winners ad set at the plan's flat winners budget. Each winner
+    becomes a new ad built from the original ad's Facebook post, so its likes,
+    comments and shares carry over; the new Creative row keeps the original's
+    avatar, concept, pillar and hook type and says which round it came from. If the
+    campaign was paused between rounds it is resumed once the ad sets exist. On
+    success the round is CLOSED and the campaign's end date moves to the round's end.
+
+    Everything that can fail before anything exists on Meta comes first (each
+    winner's post is read, languages and videos are resolved). If a later step
+    fails, both ad sets, their Meta creatives and the local rows are removed and the
+    round stays OPEN; the campaign and earlier rounds are never touched.
+
+    Args:
+        campaign: The published campaign.
+        connection: The business's Meta connection (account and Page set).
+        round_: The OPEN round being published.
+        creatives: The round's SELECTED new creatives, one format.
+        strategy: The campaign's CREATIVE_TEST_PLAN (ad-set budgets).
+        destination_url: Where each new ad's CTA links to.
+        winners: The earlier ads to carry, at most `strategy.max_winners`.
+        report: Progress reporter for a background (video) publish.
+
+    Returns:
+        The ad sets created: the new ads' first, then the winners' if any.
+
+    Raises:
+        RoundPublishError: If a winner has no Facebook post yet.
+        MetaConnectionError: If a language has no Meta locale or any Graph API
+            call fails (after the cleanup above).
+    """
+    assert connection.adAccountId is not None
+    ad_account_id = connection.adAccountId
+    access_token = connection.accessToken
+    object_name = campaign.name or f"Sales Guru campaign {campaign.id}"
+
+    posts: dict[str, str] = {}
+    for winner in winners:
+        assert winner.ad.metaAdId is not None
+        post_id = await meta.fetch_ad_post_id(
+            access_token=access_token, meta_ad_id=winner.ad.metaAdId
+        )
+        if post_id is None:
+            raise RoundPublishError(
+                f"'{winner.ad.name}' has no Facebook post yet, so it can't be "
+                "carried. Leave it out, or wait until Meta has published it."
+            )
+        posts[winner.ad.id] = post_id
+    video_assets = await _resolve_video_assets(
+        creatives, access_token=access_token, ad_account_id=ad_account_id, report=report
+    )
+    locale_ids = await locales.resolve_languages(
+        access_token=access_token, languages=strategy.audience_constraints.languages
+    )
+    purchasers_audience_id = await _purchasers_audience_id(connection)
+    pixel_id = connection.pixelId if requires_pixel(campaign.objective) else None
+    targeting = await _creative_test_targeting(
+        strategy=strategy,
+        campaign=campaign,
+        access_token=access_token,
+        suggest_interest=True,
+    )
+    started = datetime.now(UTC)
+    end_time = started + timedelta(days=strategy.duration_days)
+
+    created: list[AdSet] = []
+    meta_ad_set_ids: list[str] = []
+    meta_creative_ids: list[str] = []
+
+    async def new_ad_set(name: str, budget: float, *, is_winners: bool) -> AdSet:
+        meta_ad_set_id = await meta.create_meta_ad_set(
+            access_token=access_token,
+            ad_account_id=ad_account_id,
+            name=name,
+            meta_campaign_id=_require_meta_campaign_id(campaign),
+            daily_budget_cents=round(budget * 100),
+            optimization_goal=_OPTIMIZATION_GOAL_BY_OBJECTIVE[campaign.objective],
+            age_min=targeting.age_min,
+            age_max=targeting.age_max,
+            pixel_id=pixel_id,
+            custom_location=targeting.custom_location,
+            resolved_locations=targeting.resolved_locations,
+            interests=targeting.interests,
+            advantage_audience=targeting.advantage_audience,
+            end_time=end_time,
+            target_cac_cents=None,
+            status="ACTIVE",
+            locales=locale_ids,
+            custom_event_type=(
+                "ADD_TO_CART"
+                if strategy.optimization_event == "ADD_TO_CART"
+                else "PURCHASE"
+            ),
+            excluded_custom_audience_ids=(
+                [purchasers_audience_id] if purchasers_audience_id else None
+            ),
+            attribution_spec=meta.ATTRIBUTION_SPEC,
+        )
+        meta_ad_set_ids.append(meta_ad_set_id)
+        row = await db.adset.create(
+            data={
+                "campaignId": campaign.id,
+                "name": name,
+                "budget": budget,
+                "optimizationGoal": _OPTIMIZATION_GOAL_BY_OBJECTIVE[campaign.objective],
+                "status": "LIVE",
+                "metaAdSetId": meta_ad_set_id,
+                "packNumber": round_.number,
+                "startDate": started,
+                "endDate": end_time,
+                "isWinners": is_winners,
+            }
+        )
+        created.append(row)
+        return row
+
+    try:
+        main = await new_ad_set(
+            f"{object_name} — Round {round_.number}",
+            strategy.daily_budget,
+            is_winners=False,
+        )
+        await _create_creative_test_ads(
+            campaign=campaign,
+            connection=connection,
+            creatives=creatives,
+            ad_set=main,
+            meta_ad_set_id=main.metaAdSetId or "",
+            object_name=object_name,
+            destination_url=destination_url,
+            meta_status="ACTIVE",
+            local_status="LIVE",
+            video_assets=video_assets,
+            created_meta_creative_ids=meta_creative_ids,
+        )
+        if winners:
+            winners_set = await new_ad_set(
+                f"{object_name} — Round {round_.number} winners",
+                strategy.winners_daily_budget,
+                is_winners=True,
+            )
+            for winner in winners:
+                await _carry_winner(
+                    winner=winner,
+                    post_id=posts[winner.ad.id],
+                    round_=round_,
+                    ad_set=winners_set,
+                    connection=connection,
+                    meta_creative_ids=meta_creative_ids,
+                )
+        await db.creativeround.update(
+            where={"id": round_.id}, data={"status": "CLOSED"}
+        )
+        await _resume_between_rounds(campaign, connection, end_time)
+    except Exception:
+        await _roll_back_ad_set_round(
+            campaign=campaign,
+            connection=connection,
+            round_=round_,
+            meta_ad_set_ids=meta_ad_set_ids,
+            ad_sets=created,
+            meta_creative_ids=meta_creative_ids,
+        )
+        raise
+    return created
+
+
+async def _carry_winner(
+    *,
+    winner: WinnerCandidate,
+    post_id: str,
+    round_: CreativeRound,
+    ad_set: AdSet,
+    connection: MetaConnection,
+    meta_creative_ids: list[str],
+) -> None:
+    """Put one earlier ad into a winners ad set, as a new ad on the same post."""
+    assert connection.adAccountId is not None
+    original = winner.creative
+    meta_creative_id = await meta.create_meta_post_ad_creative(
+        access_token=connection.accessToken,
+        ad_account_id=connection.adAccountId,
+        name=winner.ad.name,
+        object_story_id=post_id,
+    )
+    meta_creative_ids.append(meta_creative_id)
+    meta_ad_id = await meta.create_meta_ad(
+        access_token=connection.accessToken,
+        ad_account_id=connection.adAccountId,
+        name=winner.ad.name,
+        meta_ad_set_id=ad_set.metaAdSetId or "",
+        meta_creative_id=meta_creative_id,
+        status="ACTIVE",
+    )
+    ad = await db.ad.create(
+        data={
+            "adSetId": ad_set.id,
+            "name": winner.ad.name,
+            "status": "LIVE",
+            "metaAdId": meta_ad_id,
+        }
+    )
+    await db.creative.create(
+        data={
+            "campaignId": original.campaignId,
+            "roundId": round_.id,
+            "adId": ad.id,
+            "headline": original.headline,
+            "bodyText": original.bodyText,
+            "description": original.description,
+            "cta": original.cta,
+            "creativeAngle": original.creativeAngle,
+            "avatar": original.avatar,
+            "concept": original.concept,
+            "pillar": original.pillar,
+            "hookType": original.hookType,
+            "buyerAvatarId": original.buyerAvatarId,
+            "imagePrompt": original.imagePrompt,
+            "videoPrompt": original.videoPrompt,
+            "imageUrl": original.imageUrl,
+            "productImageId": original.productImageId,
+            "storyProductImageId": original.storyProductImageId,
+            "squareProductImageId": original.squareProductImageId,
+            "status": "SELECTED",
+            "metaCreativeId": meta_creative_id,
+            "sourceProductId": original.sourceProductId,
+            "sourceDescription": original.sourceDescription,
+            "sourceUrl": original.sourceUrl,
+            "sourcePersonalization": original.sourcePersonalization,
+            "sourceBusinessDescription": original.sourceBusinessDescription,
+            "format": original.format,
+            "carriedFromCreativeId": original.id,
+            "carriedFromRound": winner.first_round,
+        }
+    )
+
+
+async def _resume_between_rounds(
+    campaign: Campaign, connection: MetaConnection, end_time: datetime
+) -> None:
+    """Move the campaign's end to the new round's, and resume it if it was paused.
+
+    Rounds never overlap, so a campaign paused after the last round (its planned
+    end date, or End round early) is resumed here once the new ad sets exist. The
+    earlier rounds' ad sets stay paused or ended.
+    """
+    data: CampaignUpdateInput = {"endDate": end_time}
+    if campaign.status != "LIVE":
+        await meta.resume_meta_campaign(
+            access_token=connection.accessToken,
+            meta_campaign_id=_require_meta_campaign_id(campaign),
+        )
+        data["status"] = "LIVE"
+        data["pausedReason"] = None
+        data["pausedAt"] = None
+    await db.campaign.update(where={"id": campaign.id}, data=data)
+
+
+async def _roll_back_ad_set_round(
+    *,
+    campaign: Campaign,
+    connection: MetaConnection,
+    round_: CreativeRound,
+    meta_ad_set_ids: list[str],
+    ad_sets: list[AdSet],
+    meta_creative_ids: list[str],
+) -> None:
+    """Undo a failed ad-set round publish: both ad sets, their creatives, local rows.
+
+    Best effort, and never raises, so the publish's own error is the one the user
+    sees. Meta ad sets go first (taking their ads), then the Meta creatives made
+    for them. Locally the round's own creatives are detached from their ads, the
+    carried copies are deleted, and the new ads and ad sets are removed.
+    """
+    assert connection.adAccountId is not None
+    for object_id in [*meta_ad_set_ids, *dict.fromkeys(meta_creative_ids)]:
+        try:
+            await meta.delete_meta_object(
+                access_token=connection.accessToken,
+                ad_account_id=connection.adAccountId,
+                meta_object_id=object_id,
+            )
+        except MetaConnectionError:
+            logger.exception(
+                "Could not delete Meta object %s left by a failed publish of round "
+                "%s of campaign %s; delete it in Ads Manager",
+                object_id,
+                round_.id,
+                campaign.id,
+            )
+    try:
+        async with db.tx() as tx:
+            for creative in await tx.creative.find_many(where={"roundId": round_.id}):
+                if creative.carriedFromCreativeId is not None:
+                    await tx.creative.delete(where={"id": creative.id})
+                    continue
+                await tx.creative.update(
+                    where={"id": creative.id},
+                    data={"ad": {"disconnect": True}, "metaCreativeId": None},
+                )
+            for ad_set in ad_sets:
+                await tx.ad.delete_many(where={"adSetId": ad_set.id})
+                await tx.adset.delete(where={"id": ad_set.id})
+    except Exception:
+        logger.exception(
+            "Could not clear local rows of failed publish of round %s of campaign %s",
+            round_.id,
+            campaign.id,
+        )
 
 
 def _require_meta_campaign_id(campaign: Campaign) -> str:

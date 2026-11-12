@@ -2094,6 +2094,7 @@ async def _make_creative_plan_campaign(
     daily_budget: float = 50.0,
     target_cost_per_add_to_cart: float | None = None,
     bid_strategy: str = "COST_CAP",
+    rounds_budget: str = "CAMPAIGN",
 ) -> str:
     """A LIVE campaign whose stored strategy is a CREATIVE_TEST_PLAN."""
     _, campaign_id = _live_campaign(client)
@@ -2116,6 +2117,7 @@ async def _make_creative_plan_campaign(
         total_budget=daily_budget * 10,
         optimization_event=cast(Any, optimization_event),
         bid_strategy=cast(Any, bid_strategy),
+        rounds_budget=cast(Any, rounds_budget),
         target_cost_per_add_to_cart=target_cost_per_add_to_cart,
         success_criteria=strategist_module._build_creative_success_criteria(
             benchmark_context, None, target_cost_per_add_to_cart

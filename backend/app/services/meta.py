@@ -1909,6 +1909,73 @@ async def create_meta_carousel_ad_creative(
     )
 
 
+async def fetch_ad_post_id(*, access_token: str, meta_ad_id: str) -> str | None:
+    """The Facebook post an ad is built from.
+
+    Read from the ad's creative (`effective_object_story_id`, "<page id>_<post id>").
+    Checked live 2026-11-12 on the dev ad account: it is filled in for an ad Sales
+    Guru published.
+
+    Args:
+        access_token: The business's Meta access token.
+        meta_ad_id: The Meta ad id.
+
+    Returns:
+        The post id, or None when Meta has not made one yet.
+
+    Raises:
+        MetaConnectionError: If the call fails.
+    """
+    if get_settings().fake_meta_enabled:
+        return f"fake_page_{meta_ad_id}"
+    body = await _get_json(
+        f"{_GRAPH_BASE_URL}/{meta_ad_id}",
+        {
+            "fields": "creative{effective_object_story_id}",
+            "access_token": access_token,
+        },
+    )
+    creative = body.get("creative") or {}
+    post_id = creative.get("effective_object_story_id")
+    return str(post_id) if post_id else None
+
+
+async def create_meta_post_ad_creative(
+    *, access_token: str, ad_account_id: str, name: str, object_story_id: str
+) -> str:
+    """Create an ad creative that reuses an existing Facebook post.
+
+    A new ad built from it shows the same post, so the likes, comments and shares
+    the post has gathered carry over. The post fixes the copy, media and link, so
+    nothing else is sent. Checked live 2026-11-12: Meta makes a new creative object
+    for the post even when other creatives already use it.
+
+    Args:
+        access_token: The business's Meta access token.
+        ad_account_id: The ad account, with its "act_" prefix.
+        name: The creative's name on Meta.
+        object_story_id: The post, "<page id>_<post id>".
+
+    Returns:
+        The new Meta creative id.
+
+    Raises:
+        MetaConnectionError: If the call fails.
+    """
+    if get_settings().fake_meta_enabled:
+        return f"fake_creative_{uuid4().hex[:12]}"
+    body = await _post_json(
+        f"{_GRAPH_BASE_URL}/{ad_account_id}/adcreatives",
+        {
+            "access_token": access_token,
+            "name": name,
+            "object_story_id": object_story_id,
+        },
+    )
+    creative_id: str = body["id"]
+    return creative_id
+
+
 async def create_meta_ad(
     *,
     access_token: str,

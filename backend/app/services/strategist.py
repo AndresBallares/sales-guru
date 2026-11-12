@@ -37,7 +37,7 @@ and no dependency on live model output.
 import json
 import logging
 from collections.abc import Sequence
-from typing import Literal, cast
+from typing import Literal, NamedTuple, cast
 
 import anthropic
 from anthropic import AsyncAnthropic
@@ -1081,6 +1081,35 @@ def _build_creative_test_plan_prompt(
     return "\n".join(lines)
 
 
+class CarriedAd(NamedTuple):
+    """An earlier ad that stays live beside a round's new ads (a carried winner)."""
+
+    avatar: str | None
+    concept: str | None
+    pillar: str | None
+    hook_type: str | None
+    headline: str
+
+
+def _carried_lines(carried: Sequence[CarriedAd]) -> list[str]:
+    """The prompt block naming the ads that stay live in the round's winners ad set."""
+    if not carried:
+        return []
+    return [
+        "",
+        "Ads staying live in this round's winners ad set (they keep running beside "
+        "your new angles, so the new angles must complement them: do not repeat "
+        "their avatar and concept pairs, and prefer pillars and approaches they "
+        "do not already cover):",
+        *(
+            f"- {c.avatar or 'any avatar'} / {c.concept or 'no concept'}, "
+            f"pillar {c.pillar or 'unknown'}, hook {c.hook_type or 'unknown'}: "
+            f"{c.headline}"
+            for c in carried
+        ),
+    ]
+
+
 def _build_round_angles_prompt(
     business: Business,
     product: Product | None,
@@ -1091,6 +1120,7 @@ def _build_round_angles_prompt(
     brand_profile: BrandProfile | None,
     avatars: Sequence[BuyerAvatar] | None = None,
     results: RoundResults | None = None,
+    carried: Sequence[CarriedAd] | None = None,
 ) -> str:
     """Build the prompt for the angles of a follow-up creative round.
 
@@ -1108,6 +1138,8 @@ def _build_round_angles_prompt(
             angle names one by id; None or empty keeps the classic buyer types.
         results: The campaign's results so far (the dashboard's leader), if any
             ad has numbers.
+        carried: Earlier ads that stay live in the round's winners ad set; the new
+            angles are asked to complement them.
 
     Returns:
         The prompt text.
@@ -1191,6 +1223,7 @@ def _build_round_angles_prompt(
             "",
             *results_lines(results, steer_to=steer_to, explore=len(library) > 1),
         ]
+    lines += _carried_lines(carried or [])
     return "\n".join(lines)
 
 
@@ -1206,6 +1239,7 @@ async def generate_round_angles(
     campaign_id: str | None = None,
     buyer_avatars: Sequence[BuyerAvatar] | None = None,
     previous_results: RoundResults | None = None,
+    carried: Sequence[CarriedAd] = (),
 ) -> list[GeneratedCreativeAngle]:
     """Propose fresh angles for a follow-up creative round.
 
@@ -1229,6 +1263,8 @@ async def generate_round_angles(
         previous_results: The campaign's results so far (the dashboard's leader),
             if any ad has numbers. When the winning ad has an assignable library
             avatar, at least half of the angles should be written for it.
+        carried: Earlier ads that stay live in the round's winners ad set; the
+            angles are asked to complement them.
 
     Returns:
         ``count`` angles whose concepts no earlier angle used.
@@ -1249,6 +1285,7 @@ async def generate_round_angles(
         brand_profile,
         library_avatars,
         previous_results,
+        carried,
     )
     round_model: type[GeneratedRoundAngles] = (
         GeneratedLibraryRoundAngles if library else GeneratedRoundAngles
@@ -1661,7 +1698,8 @@ async def generate_strategy(
                 "copy_strategy": generated_creative.copy_strategy,
                 "bid_strategy": "LOWEST_COST",
                 "daily_budget": daily_budget,
-                # One ad set: the full daily rate, once per day.
+                # Each round's ad set owns its budget (see rounds_budget).
+                "rounds_budget": "AD_SET",
                 "duration_days": duration_days,
                 "total_budget": daily_budget * duration_days,
                 "optimization_event": optimization_event,

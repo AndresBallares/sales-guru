@@ -159,6 +159,9 @@ class Settings(BaseSettings):
     # instead of Purchase (CREATIVE_TEST_PLAN, decided once at creation —
     # a high-ticket product rarely produces enough purchases to learn from).
     high_ticket_price_threshold: float = 500.0
+    # How many rounds a creative test may run, round 1 included (env
+    # CREATIVE_TEST_MAX_ROUNDS). A setting, not a rule hard-coded in the routes.
+    creative_test_max_rounds: int = 3
     # Assumed share of add-to-carts that become purchases, used to turn the
     # target CAC into a target cost per add-to-cart for the cost cap. An
     # assumption, not measured data: tune it as real funnel data arrives.
