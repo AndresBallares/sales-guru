@@ -10,6 +10,7 @@ vi.mock('../lib/api', async (importOriginal) => {
   return {
     ...actual,
     getCampaignTypes: vi.fn<typeof actual.getCampaignTypes>(),
+    getCampaignTypesForObjective: vi.fn<typeof actual.getCampaignTypesForObjective>(),
   }
 })
 const mockedApi = vi.mocked(api)
@@ -59,6 +60,8 @@ const SALES_OPTIONS: CampaignTypeOptions = {
 beforeEach(() => {
   mockedApi.getCampaignTypes.mockReset()
   mockedApi.getCampaignTypes.mockResolvedValue(SALES_OPTIONS)
+  mockedApi.getCampaignTypesForObjective.mockReset()
+  mockedApi.getCampaignTypesForObjective.mockResolvedValue(SALES_OPTIONS)
 })
 
 function renderPicker(value: api.CampaignType | undefined, onChange = vi.fn<(type: api.CampaignType) => void>()) {
@@ -185,5 +188,24 @@ describe('CampaignTypePicker', () => {
 
     expect(await screen.findByRole('alert')).toHaveTextContent(/couldn't load the campaign types/i)
     expect(screen.queryByRole('combobox')).not.toBeInTheDocument()
+  })
+})
+
+describe('CampaignTypePicker before the campaign exists', () => {
+  it('loads the options by objective and preselects the recommendation', async () => {
+    const onChange = vi.fn<(type: api.CampaignType) => void>()
+    render(
+      <CampaignTypePicker
+        businessId="biz-1"
+        objective="SALES"
+        value={undefined}
+        onChange={onChange}
+      />,
+    )
+
+    expect(await screen.findByRole('combobox', { name: 'Campaign type' })).toBeInTheDocument()
+    expect(mockedApi.getCampaignTypesForObjective).toHaveBeenCalledWith('biz-1', 'SALES')
+    expect(mockedApi.getCampaignTypes).not.toHaveBeenCalled()
+    await waitFor(() => expect(onChange).toHaveBeenCalledWith('CREATIVE_TEST'))
   })
 })

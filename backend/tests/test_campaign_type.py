@@ -211,6 +211,79 @@ def test_other_objectives_only_offer_the_legacy_audience_test(
     assert by_type["STANDARD"]["available"] is False
 
 
+# --- the options before a campaign exists ---------------------------------
+
+
+def _business_options(client: TestClient, business_id: str, objective: str) -> Any:
+    response = client.get(
+        f"/businesses/{business_id}/campaign-types", params={"objective": objective}
+    )
+    assert response.status_code == 200, response.text
+    return response.json()
+
+
+def test_options_can_be_asked_for_before_the_campaign_exists(
+    client: TestClient,
+    mock_no_account_history: AsyncMock,  # noqa: F811
+) -> None:
+    _signed_up_client(client)
+    business_id = _create_business(client)
+    _connect_meta(client, business_id)
+
+    options = _business_options(client, business_id, "SALES")
+
+    assert options["recommended"] == "CREATIVE_TEST"
+    by_type = _by_type(options)
+    assert by_type["DATA_DRIVEN"]["available"] is True
+    assert by_type["GEO"]["available"] is False
+
+
+def test_options_before_a_campaign_recommend_data_driven_with_history(
+    client: TestClient,
+    mock_real_account_history: AsyncMock,  # noqa: F811
+) -> None:
+    _signed_up_client(client)
+    business_id = _create_business(client)
+    _connect_meta(client, business_id)
+
+    assert (
+        _business_options(client, business_id, "SALES")["recommended"] == "DATA_DRIVEN"
+    )
+
+
+def test_options_before_a_campaign_for_other_objectives(client: TestClient) -> None:
+    _signed_up_client(client)
+    business_id = _create_business(client)
+
+    options = _business_options(client, business_id, "TRAFFIC")
+
+    assert options["recommended"] == "LEGACY_AUDIENCE_TEST"
+    assert _by_type(options)["CREATIVE_TEST"]["available"] is False
+
+
+def test_options_before_a_campaign_reject_an_unknown_objective(
+    client: TestClient,
+) -> None:
+    _signed_up_client(client)
+    business_id = _create_business(client)
+
+    response = client.get(
+        f"/businesses/{business_id}/campaign-types", params={"objective": "NOPE"}
+    )
+
+    assert response.status_code == 422
+
+
+def test_options_before_a_campaign_hide_another_users_business(
+    client: TestClient,
+) -> None:
+    response = client.get(
+        "/businesses/not-mine/campaign-types", params={"objective": "SALES"}
+    )
+
+    assert response.status_code in (401, 404)
+
+
 async def _publish_marker(campaign_id: str, meta_campaign_id: str | None) -> None:
     seeder = Prisma()
     await seeder.connect()

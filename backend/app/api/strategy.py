@@ -11,13 +11,14 @@ falls back to the business's one-time self-reported answer, asking for it
 from typing import cast
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from prisma.models import Campaign, Strategy
+from prisma.models import Business, Campaign, Strategy
 
-from app.core.authz import get_owned_campaign
+from app.core.authz import get_owned_business, get_owned_campaign
 from app.core.config import get_settings
 from app.core.db import db
 from app.core.meta_connection import get_meta_connection
 from app.core.published_guard import ALREADY_PUBLISHED, ensure_not_published
+from app.schemas.campaign import Objective
 from app.schemas.strategy import (
     CAMPAIGN_BUDGET_LEVEL,
     CampaignTypeOption,
@@ -175,21 +176,9 @@ types_router = APIRouter(
 )
 
 
-@types_router.get("", response_model=CampaignTypeOptions)
-async def campaign_type_options(
-    campaign: Campaign = Depends(get_owned_campaign),
-) -> CampaignTypeOptions:
-    """The campaign-type dropdown for this campaign.
-
-    Args:
-        campaign: The campaign, resolved and ownership-checked.
-
-    Returns:
-        The recommended (preselected) type and every type with its description,
-        whether it can be picked and why not. The user can always pick another
-        available type; the recommendation never routes anything.
-    """
-    has_history = has_meaningful_history(await _account_history(campaign.businessId))
+async def _type_options(business_id: str, objective: str) -> CampaignTypeOptions:
+    """The dropdown for an objective on a business: every type, and the preselection."""
+    has_history = has_meaningful_history(await _account_history(business_id))
     options: list[CampaignTypeOption] = []
     for type_ in (
         "CREATIVE_TEST",
@@ -198,7 +187,7 @@ async def campaign_type_options(
         "GEO",
         "LEGACY_AUDIENCE_TEST",
     ):
-        problem = _type_problem(type_, campaign.objective)
+        problem = _type_problem(type_, objective)
         if type_ == "LEGACY_AUDIENCE_TEST" and problem is not None:
             continue  # only shown to the objectives that use it
         options.append(
@@ -213,10 +202,53 @@ async def campaign_type_options(
         )
     return CampaignTypeOptions(
         recommended=recommend_campaign_type(
-            objective=campaign.objective, has_history=has_history
+            objective=objective, has_history=has_history
         ),
         options=options,
     )
+
+
+@types_router.get("", response_model=CampaignTypeOptions)
+async def campaign_type_options(
+    campaign: Campaign = Depends(get_owned_campaign),
+) -> CampaignTypeOptions:
+    """The campaign-type dropdown for this campaign.
+
+    Args:
+        campaign: The campaign, resolved and ownership-checked.
+
+    Returns:
+        The recommended (preselected) type and every type with its description,
+        whether it can be picked and why not. The user can always pick another
+        available type; the recommendation never routes anything.
+    """
+    return await _type_options(campaign.businessId, campaign.objective)
+
+
+business_types_router = APIRouter(
+    prefix="/businesses/{business_id}/campaign-types", tags=["strategy"]
+)
+
+
+@business_types_router.get("", response_model=CampaignTypeOptions)
+async def business_campaign_type_options(
+    objective: Objective,
+    business: Business = Depends(get_owned_business),
+) -> CampaignTypeOptions:
+    """The campaign-type dropdown for a campaign that doesn't exist yet.
+
+    The create-campaign form shows the dropdown right after the objective, before
+    anything is saved.
+
+    Args:
+        objective: The objective chosen on the form.
+        business: The business, resolved and ownership-checked.
+
+    Returns:
+        The same options as the per-campaign endpoint would give for a campaign
+        with this objective.
+    """
+    return await _type_options(business.id, objective)
 
 
 @router.post("", response_model=StrategyResponse, status_code=status.HTTP_201_CREATED)

@@ -13,7 +13,7 @@ vi.mock('../lib/api', async (importOriginal) => {
     createProduct: vi.fn<typeof actual.createProduct>(),
     createAudience: vi.fn<typeof actual.createAudience>(),
     createStrategy: vi.fn<typeof actual.createStrategy>(),
-    getCampaignTypes: vi.fn<typeof actual.getCampaignTypes>(),
+    getCampaignTypesForObjective: vi.fn<typeof actual.getCampaignTypesForObjective>(),
   }
 })
 const mockedApi = vi.mocked(api)
@@ -130,7 +130,7 @@ function renderFlow({
 
 beforeEach(() => {
   vi.resetAllMocks()
-  mockedApi.getCampaignTypes.mockResolvedValue(TYPE_OPTIONS)
+  mockedApi.getCampaignTypesForObjective.mockResolvedValue(TYPE_OPTIONS)
 })
 
 describe('NewCampaignFlow, when the option lists could not load', () => {
@@ -627,50 +627,73 @@ async function reachStrategyStep(
   await screen.findByRole('button', { name: 'Generate strategy' })
 }
 
-describe('NewCampaignFlow — campaign type', () => {
-  it('offers the Campaign type dropdown on the last step of a Sales campaign', async () => {
+describe('NewCampaignFlow — campaign type on the first screen', () => {
+  it('puts the Campaign type dropdown between Objective and Event venue', async () => {
     renderFlow()
-    const user = userEvent.setup()
-
-    await reachStrategyStep(user)
 
     const picker = await screen.findByRole('combobox', { name: 'Campaign type' })
+
     expect(picker).toHaveValue('CREATIVE_TEST')
     expect(screen.getByRole('option', { name: 'Creative Test (recommended)' })).toBeInTheDocument()
     expect(screen.getByRole('option', { name: /Geo Targeting/ })).toBeDisabled()
-    expect(mockedApi.getCampaignTypes).toHaveBeenCalledWith('biz-1', 'camp-2')
+    expect(mockedApi.getCampaignTypesForObjective).toHaveBeenCalledWith('biz-1', 'SALES')
+    const objective = screen.getByLabelText('Objective')
+    const venue = screen.getByLabelText('Event venue')
+    expect(objective.compareDocumentPosition(picker) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(picker.compareDocumentPosition(venue) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
   })
 
-  it('generates the strategy with the chosen type', async () => {
+  it('hides the dropdown for an objective that is not Sales, and brings it back', async () => {
+    renderFlow()
+    const user = userEvent.setup()
+    await screen.findByRole('combobox', { name: 'Campaign type' })
+
+    await user.selectOptions(screen.getByLabelText('Objective'), 'LEADS')
+    expect(screen.queryByRole('combobox', { name: 'Campaign type' })).not.toBeInTheDocument()
+
+    await user.selectOptions(screen.getByLabelText('Objective'), 'SALES')
+    expect(await screen.findByRole('combobox', { name: 'Campaign type' })).toBeInTheDocument()
+  })
+
+  it('does not ask again on the last step', async () => {
+    renderFlow()
+    const user = userEvent.setup()
+    await screen.findByRole('combobox', { name: 'Campaign type' })
+
+    await reachStrategyStep(user)
+
+    expect(screen.queryByRole('combobox', { name: 'Campaign type' })).not.toBeInTheDocument()
+  })
+
+  it('generates the strategy with the type chosen on the first screen', async () => {
     mockedApi.createStrategy.mockResolvedValue({} as api.Strategy)
     const { onDone } = renderFlow()
     const user = userEvent.setup()
-    await reachStrategyStep(user)
-
     await user.selectOptions(
       await screen.findByRole('combobox', { name: 'Campaign type' }),
       'STANDARD',
     )
+    await reachStrategyStep(user)
+
     await user.click(screen.getByRole('button', { name: 'Generate strategy' }))
 
     await waitFor(() =>
-      expect(mockedApi.createStrategy).toHaveBeenCalledWith(
-        'biz-1',
-        'camp-2',
-        undefined,
-        'STANDARD',
-      ),
+      expect(mockedApi.createStrategy).toHaveBeenCalledWith('biz-1', 'camp-2', undefined, 'STANDARD'),
     )
     expect(onDone).toHaveBeenCalledWith('camp-2')
   })
 
-  it('shows no dropdown for a campaign that is not about sales', async () => {
+  it('sends no type for a campaign that is not about sales', async () => {
+    mockedApi.createStrategy.mockResolvedValue({} as api.Strategy)
     renderFlow()
     const user = userEvent.setup()
+    await user.selectOptions(screen.getByLabelText('Objective'), 'LEADS')
 
     await reachStrategyStep(user, { ...draftCampaign, objective: 'LEADS' })
+    await user.click(screen.getByRole('button', { name: 'Generate strategy' }))
 
-    expect(screen.queryByRole('combobox', { name: 'Campaign type' })).not.toBeInTheDocument()
-    expect(mockedApi.getCampaignTypes).not.toHaveBeenCalled()
+    await waitFor(() =>
+      expect(mockedApi.createStrategy).toHaveBeenCalledWith('biz-1', 'camp-2', undefined, undefined),
+    )
   })
 })

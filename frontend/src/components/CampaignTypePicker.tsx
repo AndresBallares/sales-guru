@@ -1,10 +1,15 @@
 import { useEffect, useId, useState } from 'react'
-import { ApiError, getCampaignTypes } from '../lib/api'
-import type { CampaignType, CampaignTypeOptions } from '../lib/api'
+import { ApiError, getCampaignTypes, getCampaignTypesForObjective } from '../lib/api'
+import type { CampaignType, CampaignTypeOptions, Objective } from '../lib/api'
 
+// Give a `campaignId` for a saved campaign, or an `objective` on the create form, where the
+// campaign doesn't exist yet. Remount (key) the picker when the objective changes.
 interface Props {
   businessId: string
-  campaignId: string
+  campaignId?: string
+  objective?: Objective
+  // Show the "Campaign type" label (the create form); the card's row supplies its own.
+  showLabel?: boolean
   // The type chosen so far; undefined until the recommendation is preselected.
   value: CampaignType | undefined
   onChange: (type: CampaignType) => void
@@ -12,7 +17,14 @@ interface Props {
 
 // The Campaign type dropdown: a native <select> (every dropdown in the app is one). It only
 // preselects the backend's recommendation; the user can always pick another available type.
-export function CampaignTypePicker({ businessId, campaignId, value, onChange }: Props) {
+export function CampaignTypePicker({
+  businessId,
+  campaignId,
+  objective,
+  showLabel,
+  value,
+  onChange,
+}: Props) {
   const [loaded, setLoaded] = useState<CampaignTypeOptions | null>(null)
   const [failed, setFailed] = useState(false)
   const selectId = useId()
@@ -20,7 +32,11 @@ export function CampaignTypePicker({ businessId, campaignId, value, onChange }: 
 
   useEffect(() => {
     let cancelled = false
-    getCampaignTypes(businessId, campaignId)
+    const request =
+      campaignId !== undefined
+        ? getCampaignTypes(businessId, campaignId)
+        : getCampaignTypesForObjective(businessId, objective ?? 'SALES')
+    request
       .then((options) => {
         if (cancelled) return
         setLoaded(options)
@@ -36,7 +52,7 @@ export function CampaignTypePicker({ businessId, campaignId, value, onChange }: 
     }
     // Fetched once per campaign; a later change of value must not refetch or re-preselect.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [businessId, campaignId])
+  }, [businessId, campaignId, objective])
 
   if (failed) {
     return <p role="alert">We couldn't load the campaign types. Reload the page to try again.</p>
@@ -46,7 +62,7 @@ export function CampaignTypePicker({ businessId, campaignId, value, onChange }: 
   const selected = loaded.options.find((option) => option.type === value)
   return (
     <div className="campaign-type-picker">
-      <label htmlFor={selectId} className="visually-hidden">
+      <label htmlFor={selectId} className={showLabel ? undefined : 'visually-hidden'}>
         Campaign type
       </label>
       <select

@@ -1029,6 +1029,16 @@ export interface CampaignTypeOptions {
   options: CampaignTypeOption[]
 }
 
+// The dropdown for a campaign that isn't saved yet (the create form), by objective.
+export function getCampaignTypesForObjective(
+  businessId: string,
+  objective: Objective,
+): Promise<CampaignTypeOptions> {
+  return request<CampaignTypeOptions>(
+    `/businesses/${businessId}/campaign-types?objective=${encodeURIComponent(objective)}`,
+  )
+}
+
 export function getCampaignTypes(
   businessId: string,
   campaignId: string,

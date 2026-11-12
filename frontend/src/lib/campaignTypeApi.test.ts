@@ -1,5 +1,10 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { createStrategy, getCampaignTypes, offerRoundPauses } from './api'
+import {
+  createStrategy,
+  getCampaignTypes,
+  getCampaignTypesForObjective,
+  offerRoundPauses,
+} from './api'
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -33,6 +38,18 @@ describe('getCampaignTypes', () => {
     await expect(getCampaignTypes('biz-1', 'camp-1')).resolves.toEqual(options)
     const [url] = fetchMock.mock.calls[0]
     expect(url).toContain('/businesses/biz-1/campaigns/camp-1/campaign-types')
+  })
+})
+
+describe('getCampaignTypesForObjective', () => {
+  it('reads the dropdown for an objective before the campaign exists', async () => {
+    const options = { recommended: 'CREATIVE_TEST', options: [] }
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(jsonResponse(options))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(getCampaignTypesForObjective('biz-1', 'SALES')).resolves.toEqual(options)
+    const [url] = fetchMock.mock.calls[0]
+    expect(url).toContain('/businesses/biz-1/campaign-types?objective=SALES')
   })
 })
 

@@ -156,7 +156,7 @@ export function NewCampaignFlow({
   }
 
   return (
-    <section aria-label="New campaign">
+    <section aria-label="New campaign" className="new-campaign-flow">
       <h2>New campaign</h2>
 
       {step === 'details' && (
@@ -174,7 +174,10 @@ export function NewCampaignFlow({
             <select
               id="new-campaign-objective"
               value={objective}
-              onChange={(event) => setObjective(event.target.value as Objective)}
+              onChange={(event) => {
+                setObjective(event.target.value as Objective)
+                setCampaignType(undefined)
+              }}
             >
               {objectiveOptions.map((option) => (
                 <option key={option.value} value={option.value}>
@@ -186,6 +189,18 @@ export function NewCampaignFlow({
               <OptionsLoadError message={optionsError} onRetry={onRetryOptions} />
             )}
           </div>
+          {objective === 'SALES' && (
+            <div className="field">
+              <CampaignTypePicker
+                key={objective}
+                businessId={businessId}
+                objective={objective}
+                showLabel
+                value={campaignType}
+                onChange={setCampaignType}
+              />
+            </div>
+          )}
           <div className="field">
             <label htmlFor="new-campaign-event-venue">Event venue</label>
             <select
@@ -358,19 +373,6 @@ export function NewCampaignFlow({
             Your campaign is ready — generate a strategy to see targeting, budget, and ad copy
             recommendations.
           </p>
-          {campaign?.objective === 'SALES' && (
-            <div className="field">
-              <span className="field-label" aria-hidden="true">
-                Campaign type
-              </span>
-              <CampaignTypePicker
-                businessId={businessId}
-                campaignId={campaign.id}
-                value={campaignType}
-                onChange={setCampaignType}
-              />
-            </div>
-          )}
           <button
             type="button"
             onClick={() => void handleGenerateStrategy()}

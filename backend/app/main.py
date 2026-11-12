@@ -29,6 +29,7 @@ from app.api.product import router as product_router
 from app.api.product_image import router as product_image_router
 from app.api.product_image import serve_router as product_image_serve_router
 from app.api.research_run import router as research_run_router
+from app.api.strategy import business_types_router as business_campaign_types_router
 from app.api.strategy import router as strategy_router
 from app.api.strategy import types_router as campaign_types_router
 from app.api.test_evaluation import router as test_evaluation_router
@@ -90,6 +91,7 @@ app.include_router(audience_router)
 app.include_router(campaign_router)
 app.include_router(strategy_router)
 app.include_router(campaign_types_router)
+app.include_router(business_campaign_types_router)
 app.include_router(creative_router)
 app.include_router(creative_round_router)
 app.include_router(meta_router)
