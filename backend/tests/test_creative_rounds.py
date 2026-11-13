@@ -21,6 +21,7 @@ from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from prisma import Prisma
 
+from tests.test_ad_set_rounds import ad_set_plan
 from tests.test_creative_test_plan_publish import (
     _creative_plan_campaign,
     _kwargs,
@@ -87,9 +88,16 @@ def _campaign(
     approve: bool = False,
     photo_count: int = 4,
 ) -> tuple[str, str, list[str]]:
+    # Rounds run on ad-set budgets. These tests are about generating a round, not
+    # about when one may start (the timing gate has its own tests in
+    # test_ad_set_rounds.py), so the gate is open.
+    monkeypatch.setattr(
+        round_module, "next_round_problem", AsyncMock(return_value=None)
+    )
     return _creative_plan_campaign(
         client,
         monkeypatch,
+        plan=ad_set_plan(),
         select=select,
         approve=approve,
         photo_count=photo_count,

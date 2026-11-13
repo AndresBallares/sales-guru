@@ -53,7 +53,6 @@ from app.schemas.creative_round import (
 )
 from app.schemas.optimization import RecommendationResponse
 from app.schemas.strategy import (
-    CAMPAIGN_BUDGET_LEVEL,
     MAX_CREATIVE_ANGLES,
     CreativeAngle,
     CreativeTestPlanContent,
@@ -81,11 +80,7 @@ from app.services.creative import (
     test_ads_required,
 )
 from app.services.meta import MetaConnectionError
-from app.services.publish import (
-    publish_ad_set_round,
-    publish_round_to_meta,
-    requires_pixel,
-)
+from app.services.publish import publish_ad_set_round, requires_pixel
 from app.services.round_results import load_round_results
 from app.services.strategist import CarriedAd, StrategistError, generate_round_angles
 
@@ -110,11 +105,10 @@ _ROUND_CLOSED = "This round is closed and can no longer be changed"
 _ROUND_HAS_LIVE_ADS = "This round has ads on Meta and cannot be deleted"
 _NO_PRODUCT_PHOTO = "Add a photo to the product before selecting an ad"
 _CAMPAIGN_NOT_PUBLISHED = "Publish the campaign before publishing a round"
-_NEEDS_CAMPAIGN_BUDGET = (
-    "This campaign was published before campaigns had one campaign budget "
-    "shared by their ad sets: its budget sits on its single ad set. A new "
-    "round needs a campaign budget to add a pack to, so start a new creative "
-    "test to run more rounds"
+_SHARED_BUDGET_ROUNDS_RETIRED = (
+    "This campaign uses a shared campaign budget, and new rounds can no longer be "
+    "added to those: every round now runs on ad sets that each have their own "
+    "budget. Start a new campaign to run more rounds."
 )
 _ROUND_NOT_OPEN = "This round is not open: it was already published"
 _NOTHING_SELECTED = "Select at least one ad of this round to publish"
@@ -122,7 +116,7 @@ _ALREADY_PUBLISHING = "This campaign is already being published — wait for it 
 _ROUND_FORMAT = "Every ad of a round must be a {format} ad, like the rest of the test"
 _ROUND_BUDGET_TOO_LOW = (
     "The campaign's daily budget must be at least ${minimum:,.0f} to run "
-    "{count} ads ($10 each). Raise it in the test settings before adding this pack."
+    "{count} ads ($10 each). Raise it in the test settings before adding this round."
 )
 
 
@@ -205,6 +199,20 @@ def _require_round_plan(plan: object) -> CreativeTestPlanContent:
     raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=detail)
 
 
+def _require_ad_set_rounds(plan: CreativeTestPlanContent) -> None:
+    """A 400 for a plan that keeps its budget on the campaign, not on each ad set.
+
+    Rounds used to be added to such a campaign as "packs": ad sets with no budget of
+    their own, drawing on the one campaign budget. That path was retired, so every
+    round is an ad-set round; an older campaign can keep running but not take more.
+    """
+    if not uses_ad_set_rounds(plan):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=_SHARED_BUDGET_ROUNDS_RETIRED,
+        )
+
+
 async def _ads_staying_live(campaign: Campaign) -> list[CarriedAd]:
     """The earlier ads still active, which a new round's ads should complement.
 
@@ -260,6 +268,7 @@ async def create_round(
         else None
     )
     plan = _require_round_plan(plan)
+    _require_ad_set_rounds(plan)
     if await db.creative.count(where={"campaignId": campaign.id, "roundId": None}) == 0:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST, detail=_NEEDS_FIRST_BATCH
@@ -272,12 +281,10 @@ async def create_round(
             status_code=status.HTTP_409_CONFLICT, detail=_ROUND_ALREADY_OPEN
         )
 
-    carried: list[CarriedAd] = []
-    if uses_ad_set_rounds(plan):
-        problem = await next_round_problem(campaign.id)
-        if problem is not None:
-            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=problem)
-        carried = await _ads_staying_live(campaign)
+    problem = await next_round_problem(campaign.id)
+    if problem is not None:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=problem)
+    carried = await _ads_staying_live(campaign)
     count = await test_ads_required(campaign, plan)
     excluded = list(plan.creative_angles)
     for r in earlier:
@@ -860,11 +867,11 @@ async def publish_round(
     payload: PublishCampaignRequest | None = None,
     campaign: Campaign = Depends(get_owned_campaign),
 ) -> CreativeRoundResponse:
-    """Publish an open round's selected ads as a new pack of the live campaign.
+    """Publish an open round's selected ads: a new ad set, plus a winners ad set.
 
-    The pack is a new ad set inside the campaign already on Meta (no second
-    campaign), with a 7-day minimum spend; the round is CLOSED on success. A
-    failure removes only that ad set and leaves the round open. A video round
+    Both ad sets are created in the campaign already on Meta (no second campaign),
+    each with its own daily budget and the same start and end. The round is CLOSED on
+    success. A failure removes what the round made and leaves it open. A video round
     runs as the campaign's background publish (answers 202; poll
     GET .../publish/status), like a first video publish.
 
@@ -878,8 +885,8 @@ async def publish_round(
         The round (CLOSED once published).
 
     Raises:
-        HTTPException: 400 if the campaign is not published, keeps its budget on
-            its ad set (published before campaign budgets), the round has no
+        HTTPException: 400 if the campaign is not published, keeps one shared
+            campaign budget (new rounds are no longer added to those), the round has no
             selected ad, an ad is stale, over-length or missing media, the
             destination URL or Pixel is missing, or Meta is not connected; 404
             if the round is not this campaign's; 409 if the round is not open or
@@ -898,6 +905,13 @@ async def publish_round(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT, detail=_ROUND_NOT_OPEN
         )
+    strategy = await db.strategy.find_unique(where={"campaignId": campaign.id})
+    plan = _require_round_plan(
+        StrategyContentAdapter.validate_json(strategy.content)
+        if strategy is not None
+        else None
+    )
+    _require_ad_set_rounds(plan)
     creatives = await db.creative.find_many(
         where={"roundId": round_.id, "status": "SELECTED"},
         order={"createdAt": "asc"},
@@ -908,18 +922,6 @@ async def publish_round(
             status_code=status.HTTP_400_BAD_REQUEST, detail=_NOTHING_SELECTED
         )
 
-    strategy = await db.strategy.find_unique(where={"campaignId": campaign.id})
-    plan = (
-        StrategyContentAdapter.validate_json(strategy.content)
-        if strategy is not None
-        else None
-    )
-    plan = _require_round_plan(plan)
-    ad_set_mode = uses_ad_set_rounds(plan)
-    if not ad_set_mode and campaign.budgetLevel != CAMPAIGN_BUDGET_LEVEL:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, detail=_NEEDS_CAMPAIGN_BUDGET
-        )
     connection = await get_meta_connection(campaign.businessId)
     if (
         connection is None
@@ -971,51 +973,26 @@ async def publish_round(
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST, detail=_NO_DESTINATION_URL
         )
-    if ad_set_mode:
-        winners = await _winners_for_publish(
-            campaign, connection, round_, plan, creatives, payload
-        )
-    ad_set_ids = [
-        a.id for a in await db.adset.find_many(where={"campaignId": campaign.id})
-    ]
-    live_ads = (
-        await db.ad.count(where={"adSetId": {"in": ad_set_ids}}) if ad_set_ids else 0
+    winners = await _winners_for_publish(
+        campaign, connection, round_, plan, creatives, payload
     )
-    # An ad-set round's new ad set carries only its own ads; a pack shares the
-    # campaign budget with every ad already running.
-    ads_sharing_budget = len(creatives) if ad_set_mode else live_ads + len(creatives)
-    minimum = min_creative_test_daily_budget(ads_sharing_budget)
+    # The round's new ad set carries only its own ads, each needing its own $10 a day.
+    minimum = min_creative_test_daily_budget(len(creatives))
     if plan.daily_budget < minimum:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=_ROUND_BUDGET_TOO_LOW.format(
-                minimum=minimum, count=ads_sharing_budget
-            ),
+            detail=_ROUND_BUDGET_TOO_LOW.format(minimum=minimum, count=len(creatives)),
         )
 
-    paused = payload.paused if payload is not None else False
-
     async def publish(report: Callable[[str, int | None], None] | None) -> None:
-        if ad_set_mode:
-            await publish_ad_set_round(
-                campaign=campaign,
-                connection=connection,
-                round_=round_,
-                creatives=creatives,
-                strategy=plan,
-                destination_url=destination_url,
-                winners=winners,
-                report=report,
-            )
-            return
-        await publish_round_to_meta(
+        await publish_ad_set_round(
             campaign=campaign,
             connection=connection,
             round_=round_,
             creatives=creatives,
             strategy=plan,
             destination_url=destination_url,
-            paused=paused,
+            winners=winners,
             report=report,
         )
 

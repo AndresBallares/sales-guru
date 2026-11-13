@@ -76,36 +76,13 @@ async def test_round_one_gives_its_ad_set_the_budget_and_a_ten_day_end(
 # --- round 2: a new ad set plus the winners ad set ---------------------------
 
 
-import itertools  # noqa: E402
-
-from app.services import meta as meta_service_module  # noqa: E402
-
 from tests.test_creative_rounds import _base, generate_mock  # noqa: E402, F401
 from tests.test_data_driven_rounds import mock_round_angles  # noqa: E402, F401
-from tests.test_round_publish import _publish_round, _round_with  # noqa: E402
-
-
-@pytest.fixture
-def post_mocks(
-    monkeypatch: pytest.MonkeyPatch,
-    mock_services: dict[str, AsyncMock],  # noqa: F811
-) -> dict[str, AsyncMock]:
-    """Unique Meta ids per call, and the post-reuse helpers."""
-    ad_sets = itertools.count(1)
-    ads = itertools.count(1)
-    creatives = itertools.count(1)
-    mock_services["create_ad_set"].side_effect = lambda **_: (
-        f"meta_adset_{next(ad_sets)}"
-    )
-    mock_services["create_ad"].side_effect = lambda **_: f"meta_ad_{next(ads)}"
-    mock_services["create_ad_creative"].side_effect = lambda **_: (
-        f"meta_creative_{next(creatives)}"
-    )
-    fetch = AsyncMock(side_effect=lambda **kw: f"page_post_of_{kw['meta_ad_id']}")
-    monkeypatch.setattr(meta_service_module, "fetch_ad_post_id", fetch)
-    reuse = AsyncMock(side_effect=lambda **_: f"post_creative_{next(creatives)}")
-    monkeypatch.setattr(meta_service_module, "create_meta_post_ad_creative", reuse)
-    return {"fetch_post": fetch, "reuse_post": reuse}
+from tests.test_round_publish import (  # noqa: E402
+    _publish_round,
+    _round_with,
+    post_mocks,  # noqa: F401  (fixture, must be in this namespace)
+)
 
 
 async def _round_two_ready(
@@ -147,7 +124,7 @@ async def test_round_two_is_a_new_ad_set_plus_a_winners_ad_set(
     client: TestClient,
     monkeypatch: pytest.MonkeyPatch,
     mock_services: dict[str, AsyncMock],  # noqa: F811
-    post_mocks: dict[str, AsyncMock],
+    post_mocks: dict[str, AsyncMock],  # noqa: F811
     generate_mock: AsyncMock,  # noqa: F811
 ) -> None:
     business_id, campaign_id, round_ = await _round_two_ready(client, monkeypatch)
@@ -178,7 +155,7 @@ async def test_each_winner_reuses_its_original_facebook_post(
     client: TestClient,
     monkeypatch: pytest.MonkeyPatch,
     mock_services: dict[str, AsyncMock],  # noqa: F811
-    post_mocks: dict[str, AsyncMock],
+    post_mocks: dict[str, AsyncMock],  # noqa: F811
     generate_mock: AsyncMock,  # noqa: F811
 ) -> None:
     business_id, campaign_id, round_ = await _round_two_ready(client, monkeypatch)
@@ -224,7 +201,7 @@ async def test_a_loser_paused_on_meta_is_not_carried(
     client: TestClient,
     monkeypatch: pytest.MonkeyPatch,
     mock_services: dict[str, AsyncMock],  # noqa: F811
-    post_mocks: dict[str, AsyncMock],
+    post_mocks: dict[str, AsyncMock],  # noqa: F811
     generate_mock: AsyncMock,  # noqa: F811
 ) -> None:
     business_id, campaign_id, round_ = await _round_two_ready(client, monkeypatch)
@@ -245,7 +222,7 @@ async def test_with_no_winners_the_round_is_one_ad_set_and_a_thousand_dollars(
     client: TestClient,
     monkeypatch: pytest.MonkeyPatch,
     mock_services: dict[str, AsyncMock],  # noqa: F811
-    post_mocks: dict[str, AsyncMock],
+    post_mocks: dict[str, AsyncMock],  # noqa: F811
     generate_mock: AsyncMock,  # noqa: F811
 ) -> None:
     business_id, campaign_id, round_ = await _round_two_ready(client, monkeypatch)
@@ -265,7 +242,7 @@ async def test_a_winner_without_a_post_stops_the_publish_before_anything_is_made
     client: TestClient,
     monkeypatch: pytest.MonkeyPatch,
     mock_services: dict[str, AsyncMock],  # noqa: F811
-    post_mocks: dict[str, AsyncMock],
+    post_mocks: dict[str, AsyncMock],  # noqa: F811
     generate_mock: AsyncMock,  # noqa: F811
 ) -> None:
     business_id, campaign_id, round_ = await _round_two_ready(client, monkeypatch)
@@ -284,7 +261,7 @@ async def test_a_failed_winners_ad_set_removes_everything_the_round_made(
     client: TestClient,
     monkeypatch: pytest.MonkeyPatch,
     mock_services: dict[str, AsyncMock],  # noqa: F811
-    post_mocks: dict[str, AsyncMock],
+    post_mocks: dict[str, AsyncMock],  # noqa: F811
     generate_mock: AsyncMock,  # noqa: F811
 ) -> None:
     from app.services.meta import MetaConnectionError

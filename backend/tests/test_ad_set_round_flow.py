@@ -14,7 +14,6 @@ from fastapi.testclient import TestClient
 from tests.test_ad_set_round_publish import (
     _finish_rounds,
     _published_round_one,
-    post_mocks,  # noqa: F401  (fixture, must be in this namespace)
 )
 from tests.test_creative_rounds import (
     _base,
@@ -30,6 +29,9 @@ from tests.test_data_driven_rounds import (
 )
 from tests.test_publish import (
     mock_services,  # noqa: F401  (autouse fixture, must be in this namespace)
+)
+from tests.test_round_publish import (
+    post_mocks,  # noqa: F401  (fixture, must be in this namespace)
 )
 
 
