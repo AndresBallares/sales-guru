@@ -288,9 +288,8 @@ export interface Campaign {
   // True once the campaign has results (a snapshot with spend or a purchase): it is
   // then archived (results kept) rather than deleted.
   hasDelivered?: boolean
-  // Where the daily budget lives: 'CAMPAIGN' (one budget shared by the ad sets,
-  // so the campaign can take a new round as a pack) or 'AD_SET' (published
-  // before that, with the budget on its single ad set).
+  // Where the daily budget lives: 'CAMPAIGN' (one budget shared by the ad sets; such
+  // a campaign can no longer take new rounds) or 'AD_SET' (each ad set has its own).
   budgetLevel?: 'CAMPAIGN' | 'AD_SET'
   // The structure the user chose; null until a strategy exists.
   campaignType?: CampaignType | null

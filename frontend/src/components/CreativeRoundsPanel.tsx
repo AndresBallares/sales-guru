@@ -9,7 +9,6 @@ import {
   listRounds,
   publishRound,
   setRoundCreativeSelected,
-  type Campaign,
   type CreativeRound,
   type RoundsOverview as RoundsOverviewData,
 } from '../lib/api'
@@ -22,10 +21,9 @@ import { SavedConceptNote } from './SavedConceptNote'
 interface CreativeRoundsPanelProps {
   businessId: string
   campaignId: string
-  budgetLevel: Campaign['budgetLevel']
   // Where the plan keeps its budget: 'AD_SET' rounds run on their own ad-set budgets for
-  // ten days and carry earlier winners into a winners ad set; anything else is the older
-  // campaign-budget pack.
+  // ten days and carry earlier winners into a winners ad set. Anything else is an older
+  // campaign that shares one budget between its ad sets, which can no longer take rounds.
   roundsBudget?: 'CAMPAIGN' | 'AD_SET'
   // How often a background (video) publish is checked, in milliseconds.
   pollMs?: number
@@ -41,11 +39,11 @@ function sleep(ms: number): Promise<void> {
 
 // Follow-up rounds of a published creative test: generate four new ads (three when
 // the product lacks a fourth photo or video) on angles the test has not used, pick
-// one to four of them, and publish them as a new pack inside the same campaign.
+// one to four of them, and publish them as a new ad set inside the same campaign.
+// A campaign that shares one budget between its ad sets can't take rounds any more.
 export function CreativeRoundsPanel({
   businessId,
   campaignId,
-  budgetLevel,
   roundsBudget,
   pollMs = 2000,
 }: CreativeRoundsPanelProps) {
@@ -54,7 +52,6 @@ export function CreativeRoundsPanel({
   const [overview, setOverview] = useState<RoundsOverviewData | null>(null)
   const [busy, setBusy] = useState<string | null>(null)
   const [step, setStep] = useState<string | null>(null)
-  const [paused, setPaused] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const mounted = useRef(true)
 
@@ -114,7 +111,6 @@ export function CreativeRoundsPanel({
   }
 
   const hasOpenRound = rounds?.some((r) => r.status === 'OPEN') ?? false
-  const canAdd = adSetRounds || budgetLevel === 'CAMPAIGN'
   const locked = adSetRounds && overview?.nextRoundProblem != null
 
   return (
@@ -139,20 +135,15 @@ export function CreativeRoundsPanel({
           Each round is four new ads at the test&apos;s daily budget in their own ad set for ten
           days. The earlier ads you left active carry on in a winners ad set beside them.
         </p>
-      ) : canAdd ? (
-        <p className="field-hint">
-          Add four new ads on fresh angles (three if the product lacks a fourth photo or video),
-          choose one to four, and publish them as a new pack in this campaign.
-        </p>
       ) : (
         <p className="field-hint rounds-unavailable">
-          This campaign was published before campaigns had one budget shared by their ad sets: its
-          budget sits on its single ad set, so it can&apos;t take a new pack. Start a new creative
-          test to run more rounds.
+          This campaign uses a shared campaign budget, and new rounds can no longer be added to
+          those: every round now runs on ad sets that each have their own budget. Start a new
+          campaign to run more rounds.
         </p>
       )}
 
-      {canAdd && (
+      {adSetRounds && (
         <button
           type="button"
           className="btn-outline"
@@ -167,11 +158,11 @@ export function CreativeRoundsPanel({
           {busy === 'add' ? 'Generating ads…' : 'Add new round'}
         </button>
       )}
-      {canAdd && hasOpenRound && (
+      {adSetRounds && hasOpenRound && (
         <p className="field-hint">Publish or delete the open round before adding another.</p>
       )}
       {locked && !hasOpenRound && <p className="field-hint">{overview?.nextRoundProblem}</p>}
-      {canAdd && <RoundPauseOffer businessId={businessId} campaignId={campaignId} />}
+      {adSetRounds && <RoundPauseOffer businessId={businessId} campaignId={campaignId} />}
 
       {error && (
         <p className="form-error" role="alert">
@@ -187,7 +178,7 @@ export function CreativeRoundsPanel({
             <header className="round-card-header">
               <h4>Round {round.number}</h4>
               <span className="round-card-status">
-                {open ? 'Open' : adSetRounds ? 'Published' : `Published as Pack ${round.number}`}
+                {open ? 'Open' : 'Published'}
               </span>
             </header>
             <ul className="round-angles">
@@ -279,30 +270,6 @@ export function CreativeRoundsPanel({
             )}
             {open && !adSetRounds && (
               <div className="round-actions">
-                <label className="round-paused">
-                  <input
-                    type="checkbox"
-                    checked={paused}
-                    onChange={(e) => setPaused(e.target.checked)}
-                  />
-                  Publish paused
-                </label>
-                <button
-                  type="button"
-                  className="btn-generate"
-                  disabled={busy !== null || selected.length === 0}
-                  onClick={() =>
-                    void run(`publish-${round.id}`, async () => {
-                      await publishRound(businessId, campaignId, round.id, { paused })
-                      await waitForPublish()
-                      await load()
-                    })
-                  }
-                >
-                  {busy === `publish-${round.id}`
-                    ? (step ?? 'Publishing…')
-                    : `Publish ${selected.length} ${selected.length === 1 ? 'ad' : 'ads'} as Pack ${round.number}`}
-                </button>
                 <button
                   type="button"
                   className="btn-outline"
