@@ -1,8 +1,9 @@
 """Application configuration."""
 
+import re
 from functools import lru_cache
 
-from pydantic import Field, model_validator
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -162,6 +163,12 @@ class Settings(BaseSettings):
     # How many rounds a creative test may run, round 1 included (env
     # CREATIVE_TEST_MAX_ROUNDS). A setting, not a rule hard-coded in the routes.
     creative_test_max_rounds: int = 3
+    # The Graph / Marketing API version every Meta call uses (env META_GRAPH_VERSION).
+    # Meta retires a Marketing API version a few months after the next one ships
+    # (v21.0 expired on 2025-09-09 and is auto-upgraded to the oldest live version),
+    # so the pin is a setting: bumping it is one line, and docs/phase-7.md lists the
+    # dates and the checks to run first.
+    meta_graph_version: str = "v26.0"
     # Assumed share of add-to-carts that become purchases, used to turn the
     # target CAC into a target cost per add-to-cart for the cost cap. An
     # assumption, not measured data: tune it as real funnel data arrives.
@@ -207,6 +214,27 @@ class Settings(BaseSettings):
         """
         origins = self.cors_origins.split(",")
         return [origin.strip() for origin in origins if origin.strip()]
+
+    @field_validator("meta_graph_version")
+    @classmethod
+    def _graph_version_looks_like_one(cls, value: str) -> str:
+        """Refuse a version that isn't "v" plus major.minor, such as v25.0.
+
+        A typo here would send every Meta call to a URL that doesn't exist, so the
+        app refuses to start instead.
+
+        Args:
+            value: The configured version.
+
+        Returns:
+            The same value.
+
+        Raises:
+            ValueError: If it doesn't look like v25.0.
+        """
+        if not re.fullmatch(r"v\d+\.\d+", value):
+            raise ValueError(f"META_GRAPH_VERSION must look like v26.0, got {value!r}")
+        return value
 
     @model_validator(mode="after")
     def _forbid_in_production(self) -> "Settings":

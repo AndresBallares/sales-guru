@@ -4,8 +4,11 @@ import socket
 
 import httpx
 import pytest
+from app.core.config import get_settings
 
 from tests.network_guard import assert_no_attempts, take_attempts
+
+GRAPH_BASE = "https://graph.facebook.com/" + get_settings().meta_graph_version
 
 
 def test_a_connection_to_a_public_address_is_refused_and_recorded() -> None:
@@ -73,6 +76,6 @@ def test_assert_no_attempts_passes_when_there_were_none() -> None:
 async def test_an_httpx_call_to_meta_is_caught_like_any_other() -> None:
     async with httpx.AsyncClient() as client:
         with pytest.raises(httpx.ConnectError):
-            await client.get("https://graph.facebook.com/v21.0/me")
+            await client.get(f"{GRAPH_BASE}/me")
 
     assert any("graph.facebook.com" in a for a in take_attempts())

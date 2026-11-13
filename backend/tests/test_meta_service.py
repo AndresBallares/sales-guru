@@ -12,9 +12,11 @@ from typing import Any
 
 import httpx
 import pytest
-from app.core.config import get_settings
+from app.core.config import Settings, get_settings
 from app.schemas.meta import MetaAdAccount, MetaPage, MetaPixel
 from app.services import meta
+
+GRAPH_BASE = "https://graph.facebook.com/" + get_settings().meta_graph_version
 
 pytestmark = pytest.mark.meta_helpers_under_test
 
@@ -308,7 +310,7 @@ async def test_list_ad_pixels_returns_parsed_pixels(
 
     assert pixels == [MetaPixel(id="pixel_1", name="venzi jewelry")]
     url, params = client.calls[0]
-    assert url == "https://graph.facebook.com/v21.0/act_1/adspixels"
+    assert url == f"{GRAPH_BASE}/act_1/adspixels"
     assert params["access_token"] == "some-token"
 
 
@@ -505,7 +507,7 @@ async def test_create_meta_campaign_returns_the_new_id(
     # ad_account_id already carries Meta's own "act_" prefix (that's the
     # literal `id` field /me/adaccounts returns) — never re-added here, or
     # it'd double up to "act_act_1".
-    assert url == "https://graph.facebook.com/v21.0/act_1/campaigns"
+    assert url == f"{GRAPH_BASE}/act_1/campaigns"
     assert data["objective"] == "OUTCOME_SALES"
     assert data["status"] == "ACTIVE"
     assert data["access_token"] == "token"
@@ -625,7 +627,7 @@ async def test_update_meta_campaign_budget_sends_the_new_budget(
     )
 
     url, data = client.calls[0]
-    assert url == "https://graph.facebook.com/v21.0/campaign_123"
+    assert url == f"{GRAPH_BASE}/campaign_123"
     assert data["daily_budget"] == "12000"
     assert data["access_token"] == "token"
 
@@ -670,7 +672,7 @@ async def test_create_meta_ad_set_returns_the_new_id(
 
     assert ad_set_id == "adset_123"
     url, data = client.calls[0]
-    assert url == "https://graph.facebook.com/v21.0/act_1/adsets"
+    assert url == f"{GRAPH_BASE}/act_1/adsets"
     assert data["campaign_id"] == "campaign_123"
     assert data["daily_budget"] == "2500"
     assert data["optimization_goal"] == "OFFSITE_CONVERSIONS"
@@ -968,7 +970,7 @@ async def test_search_ad_geolocations_returns_the_raw_result_list(
         }
     ]
     url, params = client.calls[0]
-    assert url == "https://graph.facebook.com/v21.0/search"
+    assert url == f"{GRAPH_BASE}/search"
     assert params["type"] == "adgeolocation"
     assert params["location_types"] == '["city"]'
     assert params["q"] == "New York"
@@ -1027,7 +1029,7 @@ async def test_create_meta_ad_creative_includes_the_image_when_present(
 
     assert creative_id == "creative_123"
     url, data = client.calls[0]
-    assert url == "https://graph.facebook.com/v21.0/act_1/adcreatives"
+    assert url == f"{GRAPH_BASE}/act_1/adcreatives"
     assert '"image_hash": "abc123hash"' in data["object_story_spec"]
     assert "picture" not in data["object_story_spec"]
     assert '"page_id": "page_1"' in data["object_story_spec"]
@@ -1123,7 +1125,7 @@ async def test_create_meta_carousel_ad_creative_builds_child_attachments(
 
     assert creative_id == "carousel_creative_123"
     url, data = client.calls[0]
-    assert url == "https://graph.facebook.com/v21.0/act_1/adcreatives"
+    assert url == f"{GRAPH_BASE}/act_1/adcreatives"
     spec = json.loads(data["object_story_spec"])
     assert spec["page_id"] == "page_1"
     assert spec["link_data"]["message"] == "Shop the whole collection"
@@ -1163,7 +1165,7 @@ async def test_create_meta_ad_returns_the_new_id(
 
     assert ad_id == "ad_123"
     url, data = client.calls[0]
-    assert url == "https://graph.facebook.com/v21.0/act_1/ads"
+    assert url == f"{GRAPH_BASE}/act_1/ads"
     assert data["adset_id"] == "adset_123"
     assert '"creative_id": "creative_123"' in data["creative"]
     assert data["status"] == "ACTIVE"
@@ -1254,7 +1256,7 @@ async def test_fetch_ad_set_insights_hits_the_ad_set_object_and_parses_the_row(
     assert insights.impressions == 500
     assert insights.spend == 5.0
     url, _params = client.calls[0]
-    assert url == "https://graph.facebook.com/v21.0/adset_123/insights"
+    assert url == f"{GRAPH_BASE}/adset_123/insights"
 
 
 @pytest.mark.asyncio
@@ -1677,7 +1679,7 @@ async def test_pause_meta_ad_sends_the_paused_status(
     await meta.pause_meta_ad(access_token="token", meta_ad_id="ad_123")
 
     url, data = client.calls[0]
-    assert url == "https://graph.facebook.com/v21.0/ad_123"
+    assert url == f"{GRAPH_BASE}/ad_123"
     assert data["status"] == "PAUSED"
     assert data["access_token"] == "token"
 
@@ -1702,7 +1704,7 @@ async def test_pause_meta_ad_set_sends_the_paused_status(
     await meta.pause_meta_ad_set(access_token="token", meta_ad_set_id="adset_123")
 
     url, data = client.calls[0]
-    assert url == "https://graph.facebook.com/v21.0/adset_123"
+    assert url == f"{GRAPH_BASE}/adset_123"
     assert data["status"] == "PAUSED"
     assert data["access_token"] == "token"
 
@@ -1730,7 +1732,7 @@ async def test_resume_meta_ad_set_sends_the_active_status(
     await meta.resume_meta_ad_set(access_token="token", meta_ad_set_id="adset_123")
 
     url, data = client.calls[0]
-    assert url == "https://graph.facebook.com/v21.0/adset_123"
+    assert url == f"{GRAPH_BASE}/adset_123"
     assert data["status"] == "ACTIVE"
     assert data["access_token"] == "token"
 
@@ -1764,7 +1766,7 @@ async def test_resume_campaign_and_ad_send_the_active_status(
     await func(access_token="token", **{kwarg: "obj_123"})
 
     url, data = client.calls[0]
-    assert url == "https://graph.facebook.com/v21.0/obj_123"
+    assert url == f"{GRAPH_BASE}/obj_123"
     assert data["status"] == "ACTIVE"
     assert data["access_token"] == "token"
 
@@ -1803,7 +1805,7 @@ async def test_fetch_meta_object_status_reads_the_status_field(
 
     assert status == "ACTIVE"
     url, params = client.calls[0]
-    assert url == "https://graph.facebook.com/v21.0/ad_1"
+    assert url == f"{GRAPH_BASE}/ad_1"
     assert params == {"access_token": "token", "fields": "status"}
 
 
@@ -1844,7 +1846,7 @@ async def test_update_meta_ad_set_budget_sends_the_new_budget(
     )
 
     url, data = client.calls[0]
-    assert url == "https://graph.facebook.com/v21.0/adset_123"
+    assert url == f"{GRAPH_BASE}/adset_123"
     assert data["daily_budget"] == "4000"
     assert data["access_token"] == "token"
 
@@ -1897,7 +1899,7 @@ async def test_search_ad_interests_returns_the_raw_result_list(
         }
     ]
     url, params = client.calls[0]
-    assert url == "https://graph.facebook.com/v21.0/search"
+    assert url == f"{GRAPH_BASE}/search"
     assert params["type"] == "adinterest"
     assert params["q"] == "engagement rings"
     assert params["access_token"] == "token"
@@ -1928,7 +1930,7 @@ async def test_validate_ad_interests_sends_the_fbid_list_param(
         {"id": "6002969885729", "valid": True, "audience_size": 60000000}
     ]
     url, params = client.calls[0]
-    assert url == "https://graph.facebook.com/v21.0/search"
+    assert url == f"{GRAPH_BASE}/search"
     assert params["type"] == "adinterestvalid"
     assert params["interest_fbid_list"] == '["6002969885729"]'
     assert params["access_token"] == "token"
@@ -2161,7 +2163,7 @@ async def test_upload_meta_ad_image_returns_the_hash(
 
     assert image_hash == "img_hash_123"
     url, data = client.calls[0]
-    assert url == "https://graph.facebook.com/v21.0/act_1/adimages"
+    assert url == f"{GRAPH_BASE}/act_1/adimages"
     assert data == {"access_token": "token"}
     files = client.post_files[0]
     assert files is not None
@@ -2440,7 +2442,7 @@ async def test_search_ad_locales_returns_the_raw_result_list(
         {"name": "English (All)", "key": 1001},
     ]
     url, params = client.calls[0]
-    assert url == "https://graph.facebook.com/v21.0/search"
+    assert url == f"{GRAPH_BASE}/search"
     assert params["type"] == "adlocale"
     assert params["q"] == "English"
     assert params["access_token"] == "token"
@@ -2587,7 +2589,7 @@ async def test_fetch_ad_insights_hits_the_ad_object_and_parses_the_row(
     assert insights.impressions == 300
     assert insights.spend == 4.0
     url, _params = client.calls[0]
-    assert url == "https://graph.facebook.com/v21.0/ad_123/insights"
+    assert url == f"{GRAPH_BASE}/ad_123/insights"
 
 
 @pytest.mark.asyncio
@@ -2675,7 +2677,7 @@ async def test_update_meta_ad_set_bid_posts_the_new_bid_amount(
     )
 
     url, data = client.calls[0]
-    assert url == "https://graph.facebook.com/v21.0/adset_1"
+    assert url == f"{GRAPH_BASE}/adset_1"
     assert data["bid_amount"] == "2500"
     assert data["access_token"] == "token"
 
@@ -2713,7 +2715,7 @@ async def test_upload_meta_video_posts_the_file_to_advideos_and_returns_the_id(
 
     assert video_id == "vid_1"
     url, data = client.calls[0]
-    assert url == "https://graph.facebook.com/v21.0/act_1/advideos"
+    assert url == f"{GRAPH_BASE}/act_1/advideos"
     assert data == {"access_token": "token", "name": "Spring clip"}
     files = client.post_files[0]
     assert files is not None
@@ -2906,7 +2908,7 @@ async def test_waiting_for_a_video_returns_once_it_is_ready(
     assert no_sleep == [2, 2]
     assert seen == [10, 60, None]
     url, params = client.calls[0]
-    assert url == "https://graph.facebook.com/v21.0/vid_1"
+    assert url == f"{GRAPH_BASE}/vid_1"
     assert params == {"access_token": "t", "fields": "status"}
 
 
@@ -2984,7 +2986,7 @@ async def test_create_meta_video_ad_creative_builds_video_data(
 
     assert creative_id == "creative_9"
     url, data = client.calls[0]
-    assert url == "https://graph.facebook.com/v21.0/act_1/adcreatives"
+    assert url == f"{GRAPH_BASE}/act_1/adcreatives"
     assert data["name"] == "Ad name"
     spec = json.loads(data["object_story_spec"])
     assert spec == {
@@ -3131,7 +3133,7 @@ async def test_fetch_page_instagram_account_prefers_the_business_account(
 
     assert account == "ig_business"
     url, params = client.calls[0]
-    assert url == "https://graph.facebook.com/v21.0/page_1"
+    assert url == f"{GRAPH_BASE}/page_1"
     assert params["access_token"] == "token"
     assert "instagram_business_account" in params["fields"]
     assert "connected_instagram_account" in params["fields"]
@@ -3294,7 +3296,7 @@ async def test_validate_instagram_account_is_a_validate_only_creative(
     await _instagram_check()
 
     url, data = client.calls[0]
-    assert url == "https://graph.facebook.com/v21.0/act_1/adcreatives"
+    assert url == f"{GRAPH_BASE}/act_1/adcreatives"
     assert data["instagram_user_id"] == "17841400000000001"
     assert json.loads(data["execution_options"]) == ["validate_only"]
     assert json.loads(data["object_story_spec"])["page_id"] == "page_1"
@@ -3563,8 +3565,8 @@ async def test_fetch_meta_delivery_status_reads_the_campaign_and_its_ad_sets(
 
     assert status == meta.MetaDeliveryStatus("ACTIVE", ["PAUSED", "ACTIVE"])
     assert [url for url, _params in client.calls] == [
-        "https://graph.facebook.com/v21.0/campaign_123",
-        "https://graph.facebook.com/v21.0/campaign_123/adsets",
+        f"{GRAPH_BASE}/campaign_123",
+        f"{GRAPH_BASE}/campaign_123/adsets",
     ]
     assert all(params["fields"] == "effective_status" for _url, params in client.calls)
 
@@ -3659,7 +3661,7 @@ async def _placement_creative(
     )
     assert creative_id == "creative_pair"
     url, data = client.calls[0]
-    assert url == "https://graph.facebook.com/v21.0/act_1/adcreatives"
+    assert url == f"{GRAPH_BASE}/act_1/adcreatives"
     assert data["name"] == "Ad name"
     assert json.loads(data["object_story_spec"]) == {"page_id": "page_1"}
     return json.loads(data["asset_feed_spec"]), client
@@ -4080,8 +4082,8 @@ async def test_delete_meta_object_deletes_an_existing_object(
     assert await _delete_object() is True
 
     assert [(m, u) for m, u, _ in client.calls] == [
-        ("GET", "https://graph.facebook.com/v21.0/camp_9"),
-        ("DELETE", "https://graph.facebook.com/v21.0/camp_9"),
+        ("GET", f"{GRAPH_BASE}/camp_9"),
+        ("DELETE", f"{GRAPH_BASE}/camp_9"),
     ]
     assert client.calls[1][2] == {"access_token": "token"}
 
@@ -4106,7 +4108,7 @@ async def test_delete_meta_object_calls_an_object_gone_when_the_account_is_reada
     client = _scripted(monkeypatch, [_not_found(), _FakeResponse({"id": "act_1"})])
 
     assert await _delete_object() is False
-    assert client.calls[1][1] == "https://graph.facebook.com/v21.0/act_1"
+    assert client.calls[1][1] == f"{GRAPH_BASE}/act_1"
 
 
 @pytest.mark.asyncio
@@ -4925,7 +4927,7 @@ async def test_the_ad_accounts_lifetime_spend_is_read_in_major_units(
 
     assert spent == 16.6
     url, params = client.calls[0]
-    assert url == "https://graph.facebook.com/v21.0/act_1"
+    assert url == f"{GRAPH_BASE}/act_1"
     assert params["fields"] == "amount_spent,currency"
 
 
@@ -4981,7 +4983,7 @@ async def test_fetch_ad_post_id_reads_the_posts_id_off_the_ads_creative(
 
     assert post_id == "page_1_post_9"
     url, params = client.calls[0]
-    assert url == "https://graph.facebook.com/v21.0/ad_1"
+    assert url == f"{GRAPH_BASE}/ad_1"
     assert params["fields"] == "creative{effective_object_story_id}"
 
 
@@ -5011,7 +5013,7 @@ async def test_create_meta_post_ad_creative_builds_the_creative_from_the_post(
 
     assert creative_id == "creative_77"
     url, data = client.calls[0]
-    assert url == "https://graph.facebook.com/v21.0/act_1/adcreatives"
+    assert url == f"{GRAPH_BASE}/act_1/adcreatives"
     assert data["object_story_id"] == "page_1_post_9"
     assert data["name"] == "Ring — carried from round 1"
     # The post carries the copy, image and link; nothing else describes the ad.
@@ -5034,3 +5036,57 @@ async def test_post_reuse_helpers_answer_without_meta_in_fake_mode(
 
     assert post == "fake_page_fake_ad_1"
     assert creative.startswith("fake_creative_")
+
+
+# --- the Graph API version is a setting (2026-11-12) ---------------------------
+
+
+def test_the_graph_version_defaults_to_v26() -> None:
+    """Meta serves every older version as v26.0, so v26.0 is what has been running."""
+    assert Settings().meta_graph_version == "v26.0"
+    assert meta.graph_base_url() == "https://graph.facebook.com/v26.0"
+
+
+def test_every_graph_url_and_the_oauth_dialog_follow_the_setting(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("META_GRAPH_VERSION", "v27.0")
+    get_settings.cache_clear()
+    try:
+        base = meta.graph_base_url()
+        dialog = meta.auth_dialog_url()
+    finally:
+        get_settings.cache_clear()
+
+    assert base == "https://graph.facebook.com/v27.0"
+    assert dialog == "https://www.facebook.com/v27.0/dialog/oauth"
+
+
+@pytest.mark.asyncio
+async def test_a_call_goes_to_the_configured_version(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("META_GRAPH_VERSION", "v27.0")
+    get_settings.cache_clear()
+    try:
+        client = _mock_client_returning(monkeypatch, _FakeResponse({"id": "adset_123"}))
+        await meta.update_meta_campaign_budget(
+            access_token="token", meta_campaign_id="campaign_123", daily_budget_cents=1
+        )
+    finally:
+        get_settings.cache_clear()
+
+    assert client.calls[0][0] == "https://graph.facebook.com/v27.0/campaign_123"
+
+
+@pytest.mark.parametrize("bad", ["25.0", "v25", "latest", ""])
+def test_a_malformed_version_is_refused(
+    monkeypatch: pytest.MonkeyPatch, bad: str
+) -> None:
+    monkeypatch.setenv("META_GRAPH_VERSION", bad)
+    get_settings.cache_clear()
+    try:
+        with pytest.raises(ValueError, match="META_GRAPH_VERSION"):
+            get_settings()
+    finally:
+        get_settings.cache_clear()
