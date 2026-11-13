@@ -49,9 +49,25 @@ from app.schemas.meta import MetaAdAccount, MetaPage, MetaPixel
 
 logger = logging.getLogger(__name__)
 
-_GRAPH_VERSION = "v21.0"
-_GRAPH_BASE_URL = f"https://graph.facebook.com/{_GRAPH_VERSION}"
-_AUTH_DIALOG_URL = f"https://www.facebook.com/{_GRAPH_VERSION}/dialog/oauth"
+
+def graph_base_url() -> str:
+    """The Graph API root every call uses, at the configured version.
+
+    Returns:
+        For example "https://graph.facebook.com/v25.0" (META_GRAPH_VERSION).
+    """
+    return f"https://graph.facebook.com/{get_settings().meta_graph_version}"
+
+
+def auth_dialog_url() -> str:
+    """The OAuth consent dialog URL, at the configured version.
+
+    Returns:
+        For example "https://www.facebook.com/v25.0/dialog/oauth".
+    """
+    return f"https://www.facebook.com/{get_settings().meta_graph_version}/dialog/oauth"
+
+
 # pages_read_engagement lets us read the chosen Page's linked Instagram account
 # (fetch_page_instagram_account). App Review must list it with the ads
 # permissions (see PRD.md).
@@ -385,7 +401,7 @@ def build_authorization_url(state: str) -> str:
         "response_type": "code",
     }
     query = "&".join(f"{key}={value}" for key, value in params.items())
-    return f"{_AUTH_DIALOG_URL}?{query}"
+    return f"{auth_dialog_url()}?{query}"
 
 
 async def exchange_code_for_token(code: str) -> str:
@@ -403,7 +419,7 @@ async def exchange_code_for_token(code: str) -> str:
     """
     app_id, app_secret, redirect_uri = _require_app_credentials()
     body = await _get_json(
-        f"{_GRAPH_BASE_URL}/oauth/access_token",
+        f"{graph_base_url()}/oauth/access_token",
         {
             "client_id": app_id,
             "client_secret": app_secret,
@@ -430,7 +446,7 @@ async def get_long_lived_token(short_lived_token: str) -> tuple[str, datetime]:
     """
     app_id, app_secret, _redirect_uri = _require_app_credentials()
     body = await _get_json(
-        f"{_GRAPH_BASE_URL}/oauth/access_token",
+        f"{graph_base_url()}/oauth/access_token",
         {
             "grant_type": "fb_exchange_token",
             "client_id": app_id,
@@ -455,7 +471,7 @@ async def get_meta_user_id(access_token: str) -> str:
     Raises:
         MetaConnectionError: If the call fails.
     """
-    body = await _get_json(f"{_GRAPH_BASE_URL}/me", {"access_token": access_token})
+    body = await _get_json(f"{graph_base_url()}/me", {"access_token": access_token})
     user_id: str = body["id"]
     return user_id
 
@@ -485,7 +501,7 @@ async def list_ad_accounts(access_token: str) -> list[MetaAdAccount]:
             ),
         ]
     body = await _get_json(
-        f"{_GRAPH_BASE_URL}/me/adaccounts",
+        f"{graph_base_url()}/me/adaccounts",
         {"fields": "id,name", "access_token": access_token},
     )
     return [MetaAdAccount.model_validate(item) for item in body.get("data", [])]
@@ -506,7 +522,7 @@ async def list_pages(access_token: str) -> list[MetaPage]:
     if get_settings().fake_meta_enabled:
         return [MetaPage(id="fake_page", name="Fake Page")]
     body = await _get_json(
-        f"{_GRAPH_BASE_URL}/me/accounts",
+        f"{graph_base_url()}/me/accounts",
         {"fields": "id,name", "access_token": access_token},
     )
     return [MetaPage.model_validate(item) for item in body.get("data", [])]
@@ -532,7 +548,7 @@ async def fetch_page_instagram_account(access_token: str, page_id: str) -> str |
     if get_settings().fake_meta_enabled:
         return "fake_instagram_account"
     body = await _get_json(
-        f"{_GRAPH_BASE_URL}/{page_id}",
+        f"{graph_base_url()}/{page_id}",
         {
             "fields": "instagram_business_account{id},connected_instagram_account{id}",
             "access_token": access_token,
@@ -583,7 +599,7 @@ async def validate_instagram_account(
     }
     try:
         await _post_json(
-            f"{_GRAPH_BASE_URL}/{ad_account_id}/adcreatives",
+            f"{graph_base_url()}/{ad_account_id}/adcreatives",
             {
                 "access_token": access_token,
                 "name": "Instagram account check",
@@ -635,7 +651,7 @@ async def list_ad_pixels(access_token: str, ad_account_id: str) -> list[MetaPixe
             )
         ]
     body = await _get_json(
-        f"{_GRAPH_BASE_URL}/{ad_account_id}/adspixels",
+        f"{graph_base_url()}/{ad_account_id}/adspixels",
         # last_fired_time and is_unavailable checked against Meta 2026-11-08. Do not add
         # owner_ad_account: Meta refuses it with error 200.
         {
@@ -709,7 +725,7 @@ async def create_meta_campaign(
         # (create_meta_ad_set's daily_budget), not shared/optimized
         # across ad sets at the campaign level.
         payload["is_adset_budget_sharing_enabled"] = "false"
-    body = await _post_json(f"{_GRAPH_BASE_URL}/{ad_account_id}/campaigns", payload)
+    body = await _post_json(f"{graph_base_url()}/{ad_account_id}/campaigns", payload)
     campaign_id: str = body["id"]
     return campaign_id
 
@@ -776,7 +792,7 @@ async def create_purchasers_audience(
         }
     }
     body = await _post_json(
-        f"{_GRAPH_BASE_URL}/{ad_account_id}/customaudiences",
+        f"{graph_base_url()}/{ad_account_id}/customaudiences",
         {
             "access_token": access_token,
             "name": name,
@@ -1008,7 +1024,7 @@ async def create_meta_ad_set(
     if attribution_spec:
         data["attribution_spec"] = json.dumps(attribution_spec)
     try:
-        body = await _post_json(f"{_GRAPH_BASE_URL}/{ad_account_id}/adsets", data)
+        body = await _post_json(f"{graph_base_url()}/{ad_account_id}/adsets", data)
     except MetaConnectionError as exc:
         has_engaged_view = bool(
             attribution_spec
@@ -1022,7 +1038,7 @@ async def create_meta_ad_set(
             exc,
         )
         data["attribution_spec"] = json.dumps(ATTRIBUTION_WITHOUT_ENGAGED_VIEW)
-        body = await _post_json(f"{_GRAPH_BASE_URL}/{ad_account_id}/adsets", data)
+        body = await _post_json(f"{graph_base_url()}/{ad_account_id}/adsets", data)
     ad_set_id: str = body["id"]
     return ad_set_id
 
@@ -1086,7 +1102,7 @@ async def upload_meta_ad_image(
     """
     if get_settings().fake_meta_enabled:
         return f"fake_image_hash_{uuid4().hex[:12]}"
-    url = f"{_GRAPH_BASE_URL}/{ad_account_id}/adimages"
+    url = f"{graph_base_url()}/{ad_account_id}/adimages"
     # The multipart field name ("image") is arbitrary and has no bearing
     # on the response; the filename's base ("image.<ext>") does, though —
     # confirmed 2026-09-09 against a real ad account: Meta keys the
@@ -1161,7 +1177,7 @@ async def upload_meta_video(
     """
     if get_settings().fake_meta_enabled:
         return f"fake_video_{uuid4().hex[:12]}"
-    url = f"{_GRAPH_BASE_URL}/{ad_account_id}/advideos"
+    url = f"{graph_base_url()}/{ad_account_id}/advideos"
     extension = "mov" if content_type == "video/quicktime" else "mp4"
     try:
         # httpx's default 5s write timeout killed a real 31MB upload (found
@@ -1222,7 +1238,7 @@ async def wait_for_meta_video(
     waited = 0.0
     while True:
         body = await _get_json(
-            f"{_GRAPH_BASE_URL}/{video_id}",
+            f"{graph_base_url()}/{video_id}",
             {"access_token": access_token, "fields": "status"},
         )
         status = body.get("status", {})
@@ -1676,7 +1692,7 @@ async def _post_creative(
             )
         try:
             body = await _post_json(
-                f"{_GRAPH_BASE_URL}/{ad_account_id}/adcreatives",
+                f"{graph_base_url()}/{ad_account_id}/adcreatives",
                 attempt,
                 timeout=timeout,
             )
@@ -1929,7 +1945,7 @@ async def fetch_ad_post_id(*, access_token: str, meta_ad_id: str) -> str | None:
     if get_settings().fake_meta_enabled:
         return f"fake_page_{meta_ad_id}"
     body = await _get_json(
-        f"{_GRAPH_BASE_URL}/{meta_ad_id}",
+        f"{graph_base_url()}/{meta_ad_id}",
         {
             "fields": "creative{effective_object_story_id}",
             "access_token": access_token,
@@ -1965,7 +1981,7 @@ async def create_meta_post_ad_creative(
     if get_settings().fake_meta_enabled:
         return f"fake_creative_{uuid4().hex[:12]}"
     body = await _post_json(
-        f"{_GRAPH_BASE_URL}/{ad_account_id}/adcreatives",
+        f"{graph_base_url()}/{ad_account_id}/adcreatives",
         {
             "access_token": access_token,
             "name": name,
@@ -2007,7 +2023,7 @@ async def create_meta_ad(
         return f"fake_ad_{uuid4().hex[:12]}"
     creative_ref = json.dumps({"creative_id": meta_creative_id})
     body = await _post_json(
-        f"{_GRAPH_BASE_URL}/{ad_account_id}/ads",
+        f"{graph_base_url()}/{ad_account_id}/ads",
         {
             "access_token": access_token,
             "name": name,
@@ -2163,7 +2179,7 @@ async def _fetch_insights(
         MetaConnectionError: If the call fails.
     """
     body = await _get_json(
-        f"{_GRAPH_BASE_URL}/{meta_object_id}/insights",
+        f"{graph_base_url()}/{meta_object_id}/insights",
         {
             "fields": (
                 "impressions,reach,frequency,spend,clicks,cpm,ctr,cpc,"
@@ -2287,7 +2303,7 @@ async def fetch_campaign_window_insights(
     if get_settings().fake_meta_enabled:
         return None
     body = await _get_json(
-        f"{_GRAPH_BASE_URL}/{meta_campaign_id}/insights",
+        f"{graph_base_url()}/{meta_campaign_id}/insights",
         {
             "fields": "reach,impressions,frequency",
             "time_range": json.dumps(
@@ -2386,7 +2402,7 @@ async def fetch_ad_account_amount_spent(
     if get_settings().fake_meta_enabled:
         return None
     body = await _get_json(
-        f"{_GRAPH_BASE_URL}/{ad_account_id}",
+        f"{graph_base_url()}/{ad_account_id}",
         {"fields": "amount_spent,currency", "access_token": access_token},
     )
     raw = body.get("amount_spent")
@@ -2439,7 +2455,7 @@ async def fetch_account_historical_performance(
     if get_settings().fake_meta_enabled:
         return []
     body = await _get_json(
-        f"{_GRAPH_BASE_URL}/{ad_account_id}/insights",
+        f"{graph_base_url()}/{ad_account_id}/insights",
         {
             "level": "campaign",
             "fields": "campaign_name,impressions,clicks,spend,actions",
@@ -2503,7 +2519,7 @@ async def pause_meta_ad(*, access_token: str, meta_ad_id: str) -> None:
     if get_settings().fake_meta_enabled:
         return
     await _post_json(
-        f"{_GRAPH_BASE_URL}/{meta_ad_id}",
+        f"{graph_base_url()}/{meta_ad_id}",
         {"access_token": access_token, "status": "PAUSED"},
     )
 
@@ -2529,7 +2545,7 @@ async def pause_meta_ad_set(*, access_token: str, meta_ad_set_id: str) -> None:
     if get_settings().fake_meta_enabled:
         return
     await _post_json(
-        f"{_GRAPH_BASE_URL}/{meta_ad_set_id}",
+        f"{graph_base_url()}/{meta_ad_set_id}",
         {"access_token": access_token, "status": "PAUSED"},
     )
 
@@ -2553,7 +2569,7 @@ async def resume_meta_ad_set(*, access_token: str, meta_ad_set_id: str) -> None:
     if get_settings().fake_meta_enabled:
         return
     await _post_json(
-        f"{_GRAPH_BASE_URL}/{meta_ad_set_id}",
+        f"{graph_base_url()}/{meta_ad_set_id}",
         {"access_token": access_token, "status": "ACTIVE"},
     )
 
@@ -2576,7 +2592,7 @@ async def resume_meta_campaign(*, access_token: str, meta_campaign_id: str) -> N
     if get_settings().fake_meta_enabled:
         return
     await _post_json(
-        f"{_GRAPH_BASE_URL}/{meta_campaign_id}",
+        f"{graph_base_url()}/{meta_campaign_id}",
         {"access_token": access_token, "status": "ACTIVE"},
     )
 
@@ -2597,7 +2613,7 @@ async def resume_meta_ad(*, access_token: str, meta_ad_id: str) -> None:
     if get_settings().fake_meta_enabled:
         return
     await _post_json(
-        f"{_GRAPH_BASE_URL}/{meta_ad_id}",
+        f"{graph_base_url()}/{meta_ad_id}",
         {"access_token": access_token, "status": "ACTIVE"},
     )
 
@@ -2623,7 +2639,7 @@ async def fetch_meta_object_status(*, access_token: str, meta_object_id: str) ->
     if get_settings().fake_meta_enabled:
         return "ACTIVE"
     body = await _get_json(
-        f"{_GRAPH_BASE_URL}/{meta_object_id}",
+        f"{graph_base_url()}/{meta_object_id}",
         {"access_token": access_token, "fields": "status"},
     )
     return str(body.get("status", ""))
@@ -2662,7 +2678,7 @@ async def delete_meta_object(
         return True
     try:
         current = await _get_json(
-            f"{_GRAPH_BASE_URL}/{meta_object_id}",
+            f"{graph_base_url()}/{meta_object_id}",
             {"fields": "id,status", "access_token": access_token},
         )
     except MetaConnectionError as exc:
@@ -2670,14 +2686,14 @@ async def delete_meta_object(
             raise
         # Either gone or hidden: it is only gone if the account is readable.
         await _get_json(
-            f"{_GRAPH_BASE_URL}/{ad_account_id}",
+            f"{graph_base_url()}/{ad_account_id}",
             {"fields": "id", "access_token": access_token},
         )
         return False
     if current.get("status") == "DELETED":
         return False
     await _delete_json(
-        f"{_GRAPH_BASE_URL}/{meta_object_id}", {"access_token": access_token}
+        f"{graph_base_url()}/{meta_object_id}", {"access_token": access_token}
     )
     return True
 
@@ -2725,7 +2741,7 @@ async def require_funding_source(*, access_token: str, ad_account_id: str) -> No
         return
     try:
         body = await _get_json(
-            f"{_GRAPH_BASE_URL}/{ad_account_id}",
+            f"{graph_base_url()}/{ad_account_id}",
             {
                 "fields": "funding_source_details,account_status",
                 "access_token": access_token,
@@ -2763,7 +2779,7 @@ async def update_meta_ad_set_budget(
     if get_settings().fake_meta_enabled:
         return
     await _post_json(
-        f"{_GRAPH_BASE_URL}/{meta_ad_set_id}",
+        f"{graph_base_url()}/{meta_ad_set_id}",
         {"access_token": access_token, "daily_budget": str(daily_budget_cents)},
     )
 
@@ -2788,7 +2804,7 @@ async def update_meta_campaign_budget(
     if get_settings().fake_meta_enabled:
         return
     await _post_json(
-        f"{_GRAPH_BASE_URL}/{meta_campaign_id}",
+        f"{graph_base_url()}/{meta_campaign_id}",
         {"access_token": access_token, "daily_budget": str(daily_budget_cents)},
     )
 
@@ -2811,7 +2827,7 @@ async def update_meta_ad_set_bid(
     if get_settings().fake_meta_enabled:
         return
     await _post_json(
-        f"{_GRAPH_BASE_URL}/{meta_ad_set_id}",
+        f"{graph_base_url()}/{meta_ad_set_id}",
         {"access_token": access_token, "bid_amount": str(bid_amount_cents)},
     )
 
@@ -2854,11 +2870,11 @@ async def fetch_meta_delivery_status(
     if get_settings().fake_meta_enabled:
         return None
     campaign = await _get_json(
-        f"{_GRAPH_BASE_URL}/{meta_campaign_id}",
+        f"{graph_base_url()}/{meta_campaign_id}",
         {"fields": "effective_status", "access_token": access_token},
     )
     ad_sets = await _get_json(
-        f"{_GRAPH_BASE_URL}/{meta_campaign_id}/adsets",
+        f"{graph_base_url()}/{meta_campaign_id}/adsets",
         {"fields": "effective_status", "limit": "100", "access_token": access_token},
     )
     return MetaDeliveryStatus(
@@ -2898,7 +2914,7 @@ async def fetch_pixel_event_counts(
         return {}
     now = int(datetime.now(UTC).timestamp())
     body = await _get_json(
-        f"{_GRAPH_BASE_URL}/{pixel_id}/stats",
+        f"{graph_base_url()}/{pixel_id}/stats",
         {
             "aggregation": "event",
             "start_time": str(now - days * 86400),
@@ -2939,7 +2955,7 @@ async def search_ad_interests(*, access_token: str, query: str) -> list[dict[str
         MetaConnectionError: If the call fails.
     """
     body = await _get_json(
-        f"{_GRAPH_BASE_URL}/search",
+        f"{graph_base_url()}/search",
         {"type": "adinterest", "q": query, "access_token": access_token},
     )
     data: list[dict[str, Any]] = body.get("data", [])
@@ -2974,7 +2990,7 @@ async def validate_ad_interests(
         MetaConnectionError: If the call fails.
     """
     body = await _get_json(
-        f"{_GRAPH_BASE_URL}/search",
+        f"{graph_base_url()}/search",
         {
             "type": "adinterestvalid",
             "interest_fbid_list": json.dumps(meta_ids),
@@ -3026,7 +3042,7 @@ async def search_ad_geolocations(
             }
         ]
     body = await _get_json(
-        f"{_GRAPH_BASE_URL}/search",
+        f"{graph_base_url()}/search",
         {
             "type": "adgeolocation",
             "location_types": json.dumps([location_type]),
@@ -3060,7 +3076,7 @@ async def search_ad_locales(*, access_token: str, query: str) -> list[dict[str, 
     if get_settings().fake_meta_enabled:
         return [{"name": f"{query} (All)", "key": 1001}]
     body = await _get_json(
-        f"{_GRAPH_BASE_URL}/search",
+        f"{graph_base_url()}/search",
         {"type": "adlocale", "q": query, "access_token": access_token},
     )
     data: list[dict[str, Any]] = body.get("data", [])

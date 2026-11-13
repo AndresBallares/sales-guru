@@ -5,6 +5,13 @@ item to the pull request that does it, and delete it here when that merges.
 
 ## Open
 
+### Move to Meta Marketing API v27.0 (or newer) on purpose (found 2026-11-12)
+Move to Meta Marketing API v27.0 (or newer) deliberately when no campaign is mid-round; decide the new "more
+mobile devices" default (send `device: 0` or accept wider reach); check Meta's expiry date for v26.0 and do the
+upgrade at least 2 months before it. v26.0 was released 2026-07-29 and v27.0 on 2026-11-04 (both expiry "TBD" when
+checked). The app is pinned to v26.0 through `META_GRAPH_VERSION`; `docs/phase-7.md` ("Meta API version") lists the
+endpoints to check against the changelog and the paused live check to repeat.
+
 ### Billing and plans for the Avatar Research Agent
 Billing does not exist yet (PRD.md §3 and the post-MVP "Billing" step). When it is built, plans must hook
 into the two per-business settings the research agent adds in 7b (`docs/phase-7.md`, "Plan change"): the

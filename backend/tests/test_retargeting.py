@@ -13,6 +13,8 @@ from app.services import retargeting as rt
 
 from tests.test_meta_service import _FakeResponse, _mock_client_returning
 
+GRAPH_BASE = "https://graph.facebook.com/" + get_settings().meta_graph_version
+
 # ── The visitor signal ───────────────────────────────────────
 
 
@@ -168,7 +170,7 @@ async def test_fetch_pixel_event_counts_sums_every_hourly_bucket(
 
     assert counts == {"PageView": 7, "ViewContent": 2}
     url, params = client.calls[0]
-    assert url == "https://graph.facebook.com/v21.0/px_1/stats"
+    assert url == f"{GRAPH_BASE}/px_1/stats"
     assert params["aggregation"] == "event"
     assert int(params["end_time"]) - int(params["start_time"]) == 30 * 86400
     assert params["access_token"] == "token"
