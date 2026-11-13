@@ -276,6 +276,7 @@ async def _publish_single_variant(
     )
     local_status = "PAUSED" if meta_status == "PAUSED" else "LIVE"
 
+    require_ad_set_budget(campaign, daily_budget_cents)
     meta_ad_set_id = await meta.create_meta_ad_set(
         access_token=connection.accessToken,
         ad_account_id=ad_account_id,
@@ -360,6 +361,7 @@ async def _publish_test_plan_variant(
         custom_location=custom_location,
     )
     local_status = "PAUSED" if meta_status == "PAUSED" else "LIVE"
+    require_ad_set_budget(campaign, daily_budget_cents)
     meta_ad_set_id = await meta.create_meta_ad_set(
         access_token=connection.accessToken,
         ad_account_id=ad_account_id,
@@ -1268,7 +1270,7 @@ async def _create_creative_test_ads(
 ) -> None:
     """Create one Meta ad, with its creative, per selected creative, in an ad set.
 
-    Shared by a creative test's first ad set and by a round's pack, so both get
+    Shared by a creative test's first ad set and by a round's ad sets, so all get
     the same naming, UTM tags, creative-test enhancement policy and logging.
     Each creative is linked to its local Ad and Meta creative id as it goes.
 
@@ -1508,12 +1510,14 @@ async def _publish_creative_test_plan(
         access_token=access_token,
         suggest_interest=campaign_owns_budget or strategy.rounds_budget == "AD_SET",
     )
+    first_ad_set_budget_cents = None if campaign_owns_budget else daily_budget_cents
+    require_ad_set_budget(campaign, first_ad_set_budget_cents)
     meta_ad_set_id = await meta.create_meta_ad_set(
         access_token=access_token,
         ad_account_id=ad_account_id,
         name=f"{object_name} — Creative test",
         meta_campaign_id=meta_campaign_id,
-        daily_budget_cents=None if campaign_owns_budget else daily_budget_cents,
+        daily_budget_cents=first_ad_set_budget_cents,
         optimization_goal=_OPTIMIZATION_GOAL_BY_OBJECTIVE[campaign.objective],
         age_min=targeting.age_min,
         age_max=targeting.age_max,
@@ -1574,176 +1578,6 @@ async def _publish_creative_test_plan(
     updated = await db.campaign.update(where={"id": campaign.id}, data=update_data)
     assert updated is not None  # just fetched by the caller, can't vanish mid-request
     return updated
-
-
-# A pack's daily minimum spend is capped at this share of the campaign's daily
-# budget (PRD.md "Pack lifecycle"): the floor must never starve the packs
-# already running.
-PACK_MIN_SPEND_BUDGET_SHARE = 0.2
-
-
-def pack_daily_min_spend(campaign_daily_budget: float, target_cac: float) -> float:
-    """The daily minimum spend a new pack gets for its 7-day test window.
-
-    About 1x the target CPA, but never more than 20% of the campaign budget:
-    below roughly 5x CPA of campaign budget the cap wins (at $150/day and a CPA
-    near $100 it is $30).
-
-    Args:
-        campaign_daily_budget: The CBO campaign's daily budget.
-        target_cac: The campaign's target cost per acquisition.
-
-    Returns:
-        The daily minimum, in the campaign's currency, to the cent.
-    """
-    return round(
-        min(target_cac, PACK_MIN_SPEND_BUDGET_SHARE * campaign_daily_budget), 2
-    )
-
-
-async def publish_round_to_meta(
-    *,
-    campaign: Campaign,
-    connection: MetaConnection,
-    round_: CreativeRound,
-    creatives: list[Creative],
-    strategy: CreativeTestPlanContent,
-    destination_url: str,
-    paused: bool,
-    report: StatusReporter | None = None,
-) -> AdSet:
-    """Publish a creative round as a new pack: one new ad set in the live campaign.
-
-    The campaign is already on Meta and owns its budget (CBO), so this adds an
-    ad set to it, with the first test's targeting and exclusions, no budget or
-    bid of its own and a daily minimum spend for its 7-day test window
-    (pack_daily_min_spend). The round's selected ads become that ad set's ads.
-    On success the round is CLOSED and the ad set row records its pack number
-    (the round's number), start date and minimum.
-
-    If anything fails, only this ad set is removed: the Meta ad set (which takes
-    its ads with it) and the local ad set, ads and creative links. The campaign,
-    its first ad set and round 1's ads are never touched, and the round stays
-    OPEN with its selection so the user can retry.
-
-    Args:
-        campaign: The published campaign (CBO, already on Meta).
-        connection: The business's Meta connection (account and Page set).
-        round_: The OPEN round being published.
-        creatives: The round's SELECTED creatives, one format.
-        strategy: The campaign's CREATIVE_TEST_PLAN.
-        destination_url: Where each ad's CTA links to.
-        paused: Create the ad set and ads PAUSED instead of ACTIVE.
-        report: Progress reporter for a video upload.
-
-    Returns:
-        The new local ad set row.
-
-    Raises:
-        MetaConnectionError: If a language has no Meta locale or any Graph API
-            call fails (after the cleanup above).
-    """
-    assert connection.adAccountId is not None
-    ad_account_id = connection.adAccountId
-    access_token = connection.accessToken
-    constraints = strategy.audience_constraints
-    meta_status: Literal["ACTIVE", "PAUSED"] = "PAUSED" if paused else "ACTIVE"
-    local_status = "PAUSED" if paused else "LIVE"
-    object_name = campaign.name or f"Sales Guru campaign {campaign.id}"
-
-    # Everything that can fail before anything exists on Meta comes first.
-    video_assets = await _resolve_video_assets(
-        creatives, access_token=access_token, ad_account_id=ad_account_id, report=report
-    )
-    locale_ids = await locales.resolve_languages(
-        access_token=access_token, languages=constraints.languages
-    )
-    purchasers_audience_id = await _purchasers_audience_id(connection)
-    pixel_id = connection.pixelId if requires_pixel(campaign.objective) else None
-    min_spend = pack_daily_min_spend(
-        strategy.daily_budget, resolve_target_cac(strategy.unit_economics)
-    )
-    pack_name = f"{object_name} — Pack {round_.number}"
-
-    meta_ad_set_id: str | None = None
-    ad_set: AdSet | None = None
-    created_meta_creative_ids: list[str] = []
-    targeting = await _creative_test_targeting(
-        strategy=strategy,
-        campaign=campaign,
-        access_token=access_token,
-        suggest_interest=True,
-    )
-    try:
-        meta_ad_set_id = await meta.create_meta_ad_set(
-            access_token=access_token,
-            ad_account_id=ad_account_id,
-            name=pack_name,
-            meta_campaign_id=_require_meta_campaign_id(campaign),
-            daily_budget_cents=None,
-            optimization_goal=_OPTIMIZATION_GOAL_BY_OBJECTIVE[campaign.objective],
-            age_min=targeting.age_min,
-            age_max=targeting.age_max,
-            pixel_id=pixel_id,
-            custom_location=targeting.custom_location,
-            resolved_locations=targeting.resolved_locations,
-            interests=targeting.interests,
-            advantage_audience=targeting.advantage_audience,
-            end_time=campaign.endDate,
-            target_cac_cents=None,
-            status=meta_status,
-            locales=locale_ids,
-            custom_event_type=(
-                "ADD_TO_CART"
-                if strategy.optimization_event == "ADD_TO_CART"
-                else "PURCHASE"
-            ),
-            excluded_custom_audience_ids=(
-                [purchasers_audience_id] if purchasers_audience_id else None
-            ),
-            attribution_spec=meta.ATTRIBUTION_SPEC,
-            daily_min_spend_cents=round(min_spend * 100),
-        )
-        ad_set = await db.adset.create(
-            data={
-                "campaignId": campaign.id,
-                "name": pack_name,
-                "budget": strategy.daily_budget,
-                "optimizationGoal": _OPTIMIZATION_GOAL_BY_OBJECTIVE[campaign.objective],
-                "status": local_status,
-                "metaAdSetId": meta_ad_set_id,
-                "packNumber": round_.number,
-                "startDate": datetime.now(UTC),
-                "dailyMinSpend": min_spend,
-            }
-        )
-        await _create_creative_test_ads(
-            campaign=campaign,
-            connection=connection,
-            creatives=creatives,
-            ad_set=ad_set,
-            meta_ad_set_id=meta_ad_set_id,
-            object_name=object_name,
-            destination_url=destination_url,
-            meta_status=meta_status,
-            local_status=local_status,
-            video_assets=video_assets,
-            created_meta_creative_ids=created_meta_creative_ids,
-        )
-        await db.creativeround.update(
-            where={"id": round_.id}, data={"status": "CLOSED"}
-        )
-    except Exception:
-        await _roll_back_failed_round_publish(
-            campaign=campaign,
-            connection=connection,
-            round_=round_,
-            meta_ad_set_id=meta_ad_set_id,
-            ad_set=ad_set,
-            meta_creative_ids=created_meta_creative_ids,
-        )
-        raise
-    return ad_set
 
 
 async def publish_ad_set_round(
@@ -1830,6 +1664,7 @@ async def publish_ad_set_round(
     meta_creative_ids: list[str] = []
 
     async def new_ad_set(name: str, budget: float, *, is_winners: bool) -> AdSet:
+        require_ad_set_budget(campaign, round(budget * 100))
         meta_ad_set_id = await meta.create_meta_ad_set(
             access_token=access_token,
             ad_account_id=ad_account_id,
@@ -2071,87 +1906,39 @@ async def _roll_back_ad_set_round(
         )
 
 
+class AdSetBudgetError(RuntimeError):
+    """An ad set was about to be created without a budget it should have."""
+
+
+def require_ad_set_budget(campaign: Campaign, daily_budget_cents: int | None) -> None:
+    """Refuse to create an ad set with no daily budget on an ad-set-budget campaign.
+
+    An ad set with no budget of its own only works under a campaign that holds one
+    budget for all its ad sets (CBO). On a campaign whose ad sets own their budgets
+    it would be created with nothing to spend from, or would quietly share another
+    ad set's money and muddy a comparison. So it fails loudly instead of falling back.
+
+    Args:
+        campaign: The campaign the ad set is for.
+        daily_budget_cents: The ad set's own daily budget, in cents, or None.
+
+    Raises:
+        AdSetBudgetError: If the campaign's budget lives on its ad sets and this
+            ad set has none.
+    """
+    if campaign.budgetLevel != CAMPAIGN_BUDGET_LEVEL and daily_budget_cents is None:
+        raise AdSetBudgetError(
+            f"Refusing to create an ad set for campaign {campaign.id} without its "
+            "own daily budget: this campaign keeps its budget on each ad set, so an "
+            "ad set with none would not spend as planned or would share another "
+            "ad set's budget."
+        )
+
+
 def _require_meta_campaign_id(campaign: Campaign) -> str:
     """The campaign's Meta id; a round can only be published into a live campaign."""
     assert campaign.metaCampaignId is not None, "the campaign is published"
     return campaign.metaCampaignId
-
-
-async def _roll_back_failed_round_publish(
-    *,
-    campaign: Campaign,
-    connection: MetaConnection,
-    round_: CreativeRound,
-    meta_ad_set_id: str | None,
-    ad_set: AdSet | None,
-    meta_creative_ids: list[str],
-) -> None:
-    """Undo a failed round publish: delete the new ad set and what was made for it.
-
-    Best effort, and never raises, so the publish's own error is the one the
-    user sees. Deleting the Meta ad set removes its ads; then the Meta ad
-    creatives made for them are deleted too, after the ad set so no ad still
-    uses them, so a failed round publish leaves nothing behind on Meta.
-    (Deleting a creative on Meta is not yet verified against a live account.)
-    Locally the round's creatives are detached from their ads,
-    then the ads and the ad set row are deleted. The campaign and every other
-    ad set are not touched.
-
-    Args:
-        campaign: The campaign the round belongs to.
-        connection: The business's Meta connection.
-        round_: The round whose publish failed.
-        meta_ad_set_id: The Meta ad set this attempt created, if it got that far.
-        ad_set: The local ad set row this attempt created, if it got that far.
-        meta_creative_ids: The Meta ad creatives this attempt created.
-    """
-    assert connection.adAccountId is not None
-    if meta_ad_set_id is not None:
-        try:
-            await meta.delete_meta_object(
-                access_token=connection.accessToken,
-                ad_account_id=connection.adAccountId,
-                meta_object_id=meta_ad_set_id,
-            )
-        except MetaConnectionError:
-            logger.exception(
-                "Could not delete Meta ad set %s left by a failed publish of "
-                "round %s of campaign %s; delete it in Ads Manager",
-                meta_ad_set_id,
-                round_.id,
-                campaign.id,
-            )
-    for meta_creative_id in dict.fromkeys(meta_creative_ids):
-        try:
-            await meta.delete_meta_object(
-                access_token=connection.accessToken,
-                ad_account_id=connection.adAccountId,
-                meta_object_id=meta_creative_id,
-            )
-        except MetaConnectionError:
-            logger.exception(
-                "Could not delete Meta ad creative %s left by a failed publish of "
-                "round %s of campaign %s; delete it in Ads Manager",
-                meta_creative_id,
-                round_.id,
-                campaign.id,
-            )
-    try:
-        async with db.tx() as tx:
-            for creative in await tx.creative.find_many(where={"roundId": round_.id}):
-                await tx.creative.update(
-                    where={"id": creative.id},
-                    data={"ad": {"disconnect": True}, "metaCreativeId": None},
-                )
-            if ad_set is not None:
-                await tx.ad.delete_many(where={"adSetId": ad_set.id})
-                await tx.adset.delete(where={"id": ad_set.id})
-    except Exception:
-        logger.exception(
-            "Could not clear local rows of failed publish of round %s of campaign %s",
-            round_.id,
-            campaign.id,
-        )
 
 
 async def pause_campaign(

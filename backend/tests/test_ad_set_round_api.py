@@ -18,7 +18,6 @@ from tests.test_ad_set_round_publish import (
     _finish_rounds,
     _published_round_one,
     _round_two_ready,
-    post_mocks,  # noqa: F401  (fixture, must be in this namespace)
 )
 from tests.test_creative_rounds import (
     _base,
@@ -35,7 +34,11 @@ from tests.test_data_driven_rounds import (
 from tests.test_publish import (
     mock_services,  # noqa: F401  (autouse fixture, must be in this namespace)
 )
-from tests.test_round_publish import _publish_round, _round_with
+from tests.test_round_publish import (
+    _publish_round,
+    _round_with,
+    post_mocks,  # noqa: F401  (fixture, must be in this namespace)
+)
 
 
 def _url(campaign_id: str, business_id: str, tail: str) -> str:

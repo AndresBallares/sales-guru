@@ -75,6 +75,8 @@ def matched_variants(
 def _plan(*, saved: bool) -> Any:  # noqa: ANN401
     """A creative test plan whose first angle did (or did not) reuse a saved concept."""
     return _creative_plan(
+        bid_strategy="LOWEST_COST",
+        rounds_budget="AD_SET",
         creative_angles=[
             CreativeAngle(
                 avatar="self_purchaser",
@@ -85,7 +87,7 @@ def _plan(*, saved: bool) -> Any:  # noqa: ANN401
                 from_saved_concept=saved and concept == _SAVED,
             )
             for concept, pillar in _ANGLES
-        ]
+        ],
     )
 
 
@@ -291,6 +293,11 @@ def test_a_rounds_angles_and_ads_carry_the_note(
     ]
     monkeypatch.setattr(
         round_module, "generate_round_angles", AsyncMock(return_value=round_angles)
+    )
+
+    # Not about when a round may start: the timing gate has its own tests.
+    monkeypatch.setattr(
+        round_module, "next_round_problem", AsyncMock(return_value=None)
     )
 
     response = _new_round(client, business_id, campaign_id)

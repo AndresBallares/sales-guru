@@ -40,7 +40,12 @@ from tests.test_creative_test_plan_publish import (
 from tests.test_publish import (
     mock_services,  # noqa: F401  (autouse fixture, must be in this namespace)
 )
-from tests.test_round_publish import _live_campaign, _round_with
+from tests.test_round_publish import (
+    _finish_rounds,
+    _live_campaign,
+    _round_with,
+    post_mocks,  # noqa: F401  (fixture, must be in this namespace)
+)
 
 
 @pytest.fixture(autouse=True)
@@ -78,8 +83,8 @@ def test_a_data_driven_first_ad_set_targets_the_history_audience(
     assert kwargs["age_min"] == 30
     assert kwargs["age_max"] == 55
     assert [i["name"] for i in kwargs["interests"]]  # the resolved Meta interests
-    # The budget still sits on the campaign, not on the ad set.
-    assert kwargs["daily_budget_cents"] is None
+    # The ad set owns its budget, not the campaign.
+    assert kwargs["daily_budget_cents"] == 10000
 
 
 def test_a_creative_test_keeps_the_broad_advantage_audience(
@@ -97,43 +102,51 @@ def test_a_creative_test_keeps_the_broad_advantage_audience(
 # --- later rounds ----------------------------------------------------------
 
 
-def test_a_data_driven_round_targets_the_same_history_audience(
+@pytest.mark.asyncio
+async def test_a_data_driven_round_targets_the_same_history_audience(
     client: TestClient,
     monkeypatch: pytest.MonkeyPatch,
     mock_services: dict[str, AsyncMock],  # noqa: F811
+    post_mocks: dict[str, AsyncMock],  # noqa: F811
     generate_mock: AsyncMock,  # noqa: F811
 ) -> None:
     business_id, campaign_id = _live_campaign(
         client, monkeypatch, audience_source=_history_audience()
     )
+    await _finish_rounds(campaign_id)
     round_ = _round_with(client, business_id, campaign_id, select=4)
+    mock_services["create_ad_set"].reset_mock()
 
     response = client.post(
         f"{_base(campaign_id, business_id)}/rounds/{round_['id']}/publish"
     )
 
     assert response.status_code == 200, response.text
-    kwargs = _kwargs(mock_services["create_ad_set"])
-    assert kwargs["advantage_audience"] == 0
-    assert kwargs["age_min"] == 30
-    assert kwargs["age_max"] == 55
-    assert kwargs["daily_budget_cents"] is None
+    for call in mock_services["create_ad_set"].await_args_list:
+        assert call.kwargs["advantage_audience"] == 0
+        assert call.kwargs["age_min"] == 30
+        assert call.kwargs["age_max"] == 55
+        assert call.kwargs["daily_budget_cents"] is not None  # each ad set's own
 
 
-def test_a_creative_test_round_keeps_the_broad_audience(
+@pytest.mark.asyncio
+async def test_a_creative_test_round_keeps_the_broad_audience(
     client: TestClient,
     monkeypatch: pytest.MonkeyPatch,
     mock_services: dict[str, AsyncMock],  # noqa: F811
+    post_mocks: dict[str, AsyncMock],  # noqa: F811
     generate_mock: AsyncMock,  # noqa: F811
 ) -> None:
     business_id, campaign_id = _live_campaign(client, monkeypatch)
+    await _finish_rounds(campaign_id)
     round_ = _round_with(client, business_id, campaign_id, select=4)
+    mock_services["create_ad_set"].reset_mock()
 
     client.post(f"{_base(campaign_id, business_id)}/rounds/{round_['id']}/publish")
 
-    kwargs = _kwargs(mock_services["create_ad_set"])
-    assert kwargs["advantage_audience"] == 1
-    assert kwargs["age_max"] is None
+    for call in mock_services["create_ad_set"].await_args_list:
+        assert call.kwargs["advantage_audience"] == 1
+        assert call.kwargs["age_max"] is None
 
 
 # --- generating a Data-Driven plan ----------------------------------------
