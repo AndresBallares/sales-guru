@@ -45,7 +45,7 @@ describe('AvatarsTab', () => {
   it('shows the avatar library and no research button while research is off', async () => {
     mockedApi.listResearchRuns.mockRejectedValue(new api.ApiError(404, 'off'))
     renderTab()
-    expect(await screen.findByRole('heading', { level: 2, name: 'Buyer avatars' })).toBeInTheDocument()
+    expect(await screen.findByRole('heading', { level: 2, name: 'AI Customer Avatars' })).toBeInTheDocument()
     await vi.waitFor(() => expect(mockedApi.listResearchRuns).toHaveBeenCalled())
     expect(screen.queryByRole('button', { name: 'Research avatars (AI)' })).not.toBeInTheDocument()
   })
@@ -59,7 +59,7 @@ describe('AvatarsTab', () => {
     it('is shown at the bottom of the Avatars tab, after the library', async () => {
       mockedApi.listResearchRuns.mockResolvedValue(runs())
       renderTab('/businesses/biz-1?metaLater=1#avatars')
-      const library = await screen.findByRole('heading', { level: 2, name: 'Buyer avatars' })
+      const library = await screen.findByRole('heading', { level: 2, name: 'AI Customer Avatars' })
       const table = await screen.findByRole('table', { name: 'Past research runs' })
       expect(library.compareDocumentPosition(table) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
       expect(screen.getAllByRole('button', { name: /^Open run from/ })).toHaveLength(2)
@@ -157,7 +157,7 @@ describe('AvatarsTab', () => {
     renderTab('/businesses/biz-1?research=run-1#avatars')
     expect(await screen.findByRole('heading', { level: 2, name: 'Research discarded' })).toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: 'Back to avatars' }))
-    expect(await screen.findByRole('heading', { level: 2, name: 'Buyer avatars' })).toBeInTheDocument()
+    expect(await screen.findByRole('heading', { level: 2, name: 'AI Customer Avatars' })).toBeInTheDocument()
     expect(screen.getByTestId('where')).toHaveTextContent('/businesses/biz-1#avatars')
   })
 
@@ -178,7 +178,7 @@ describe('AvatarsTab', () => {
     ])
     renderTab('/businesses/biz-1?research=run-1#avatars')
     await user.click(await screen.findByRole('link', { name: 'The Plain-Gold Loyalist' }))
-    expect(await screen.findByRole('heading', { level: 2, name: 'Buyer avatars' })).toBeInTheDocument()
+    expect(await screen.findByRole('heading', { level: 2, name: 'AI Customer Avatars' })).toBeInTheDocument()
     expect(screen.getByTestId('where')).toHaveTextContent('/businesses/biz-1?avatar=a1#avatars')
     await vi.waitFor(() =>
       expect(screen.getByRole('listitem', { name: /^The Plain-Gold Loyalist/ })).toHaveFocus(),

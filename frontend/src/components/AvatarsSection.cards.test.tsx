@@ -90,10 +90,10 @@ describe('the header', () => {
   it('names the section, explains it, and shows the real usage count', async () => {
     await renderLoaded()
 
-    expect(screen.getByRole('heading', { name: 'Buyer avatars', level: 2 })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'AI Customer Avatars', level: 2 })).toBeInTheDocument()
     expect(
       screen.getByText(
-        'Define and prioritize the customer segments Sales Guru uses to develop your marketing campaigns.',
+        'Discover the customer profiles identified through AI-powered market research. Explore their motivations, challenges, and purchasing behaviors.',
       ),
     ).toBeInTheDocument()
     expect(screen.getByText('3 of 12 avatars')).toBeInTheDocument()
@@ -177,19 +177,19 @@ describe('an avatar card', () => {
     expect(screen.getAllByRole('button', { name: /^More actions for / })).toHaveLength(3)
   })
 
-  it('keeps the whole description in the page and offers Show more only for a long one', async () => {
+  it('keeps the whole description in the page, clamped until View details opens the card', async () => {
     const long = 'Someone who shops carefully and compares everything. '.repeat(8).trim()
     await renderLoaded([makeAvatar('a1', 'Long One', { who: long }), gift])
 
-    expect(within(card('Long One')).getByText(long)).toBeInTheDocument()
-    const toggle = within(card('Long One')).getByRole('button', { name: /Show more/ })
-    expect(toggle).toHaveAttribute('aria-expanded', 'false')
-    await userEvent.click(toggle)
-    expect(within(card('Long One')).getByRole('button', { name: /Show less/ })).toHaveAttribute(
+    const who = within(card('Long One')).getByText(long)
+    expect(who).not.toHaveClass('is-expanded')
+    await userEvent.click(within(card('Long One')).getByRole('button', { name: /View details/ }))
+    expect(who).toHaveClass('is-expanded')
+    expect(within(card('Long One')).getByRole('button', { name: /Hide details/ })).toHaveAttribute(
       'aria-expanded',
       'true',
     )
-    expect(within(card('The Deadline Gift-Giver')).queryByRole('button', { name: /Show more/ })).toBeNull()
+    expect(within(card('Long One')).queryByRole('button', { name: /Show more/ })).toBeNull()
   })
 
   it('lists every action in the menu, with Move to top', async () => {
@@ -514,5 +514,131 @@ describe('the empty state', () => {
     await userEvent.click(within(empty).getByRole('button', { name: 'Create avatar' }))
 
     expect(screen.getByRole('form', { name: 'New buyer avatar' })).toBeInTheDocument()
+  })
+})
+
+describe('the card design', () => {
+  beforeEach(() => vi.resetAllMocks())
+
+  const rich = makeAvatar('r1', 'The Chipped-Color Veteran', {
+    sortOrder: 0,
+    primaryProblems: ['Painted color wears off', 'Cannot tell inlay from coating'],
+    unknownProblems: ['Does not know about fired ceramic'],
+    mechanisms: ['Ceramic inlay is fired into the gold'],
+    alternatives: ['Enamel jewelry'],
+    objections: ['Is ceramic really more durable?'],
+    hooks: ['Not painted. Fired.'],
+    creativeAngles: ['Care card test'],
+    concepts: [{ slug: 'care-card-test', pillar: 'mechanism', description: 'Show the care card.' }],
+  })
+
+  it('shows the first mechanism as why it works, and the first problem as the pain point', async () => {
+    await renderLoaded([rich])
+
+    const c = within(card('The Chipped-Color Veteran'))
+    expect(c.getByText('Why it works for them')).toBeInTheDocument()
+    expect(c.getByText('Ceramic inlay is fired into the gold', { selector: 'p' })).toBeInTheDocument()
+    expect(c.getByText('Primary pain point')).toBeInTheDocument()
+    expect(c.getByText('Painted color wears off', { selector: 'p' })).toBeInTheDocument()
+  })
+
+  it('leaves out a section the research did not fill in, and invents nothing', async () => {
+    await renderLoaded([
+      makeAvatar('b1', 'Bare One', { mechanisms: [], primaryProblems: [] }),
+      makeAvatar('b2', 'No Mechanism', { mechanisms: [], primaryProblems: ['Logo tax'] }),
+    ])
+
+    expect(within(card('Bare One')).queryByText('Why it works for them')).toBeNull()
+    expect(within(card('Bare One')).queryByText('Primary pain point')).toBeNull()
+    expect(within(card('No Mechanism')).queryByText('Why it works for them')).toBeNull()
+    expect(within(card('No Mechanism')).getByText('Primary pain point')).toBeInTheDocument()
+  })
+
+  it('highlights the top four priorities and leaves the rest neutral', async () => {
+    await renderLoaded(manyAvatars(5))
+
+    const badge = (name: string) => within(card(name)).getByText('Priority', { exact: false })
+    for (const n of [0, 1, 2, 3]) {
+      expect(badge(`Avatar ${n}`)).toHaveClass('is-top')
+    }
+    expect(badge('Avatar 4')).not.toHaveClass('is-top')
+    expect(within(card('Avatar 0')).getByText('(top audience)')).toBeInTheDocument()
+    expect(within(card('Avatar 4')).queryByText('(top audience)')).toBeNull()
+  })
+
+  it('draws a portrait with the initials when there is no image', async () => {
+    await renderLoaded([rich, gift])
+
+    expect(within(card('The Chipped-Color Veteran')).getByText('CC')).toBeInTheDocument()
+    expect(within(card('The Deadline Gift-Giver')).getByText('DG')).toBeInTheDocument()
+    expect(screen.queryAllByRole('img')).toHaveLength(0)
+  })
+
+  it('shows a portrait when the avatar has an image URL', async () => {
+    await renderLoaded([makeAvatar('i1', 'Pictured One', { imageUrl: '/portraits/one.jpg' })])
+
+    const image = within(card('Pictured One')).getByRole('presentation', { hidden: true })
+    expect(image).toHaveAttribute('src', '/portraits/one.jpg')
+    expect(image).toHaveAttribute('loading', 'lazy')
+  })
+
+  it('keeps every saved field out of view until View details, then shows all of them', async () => {
+    await renderLoaded([rich])
+    const c = within(card('The Chipped-Color Veteran'))
+
+    const toggle = c.getByRole('button', { name: /View details/ })
+    expect(toggle).toHaveAttribute('aria-expanded', 'false')
+    expect(c.queryByText('Is ceramic really more durable?')).not.toBeVisible()
+
+    await userEvent.click(toggle)
+
+    expect(toggle).toHaveAttribute('aria-expanded', 'true')
+    expect(c.getByText('Primary problems')).toBeVisible()
+    expect(c.getByText('Cannot tell inlay from coating')).toBeVisible()
+    expect(c.getByText('Unknown problems')).toBeVisible()
+    expect(c.getByText('Mechanisms')).toBeVisible()
+    expect(c.getByText('Current alternatives')).toBeVisible()
+    expect(c.getByText('Is ceramic really more durable?')).toBeVisible()
+    expect(c.getByText('Not painted. Fired.')).toBeVisible()
+    expect(c.getByText('Care card test')).toBeVisible()
+    expect(c.getByText('Ad concepts')).toBeVisible()
+    expect(c.getByText('care-card-test: Show the care card.')).toBeVisible()
+
+    await userEvent.click(toggle)
+    expect(c.getByText('Is ceramic really more durable?')).not.toBeVisible()
+  })
+
+  it('lists only the fields an avatar has', async () => {
+    await renderLoaded([makeAvatar('p1', 'Plain One', { primaryProblems: ['Logo tax'] })])
+    const c = within(card('Plain One'))
+
+    await userEvent.click(c.getByRole('button', { name: /View details/ }))
+
+    expect(c.getByText('Primary problems')).toBeVisible()
+    expect(c.queryByText('Objections')).toBeNull()
+    expect(c.queryByText('Ad concepts')).toBeNull()
+  })
+
+  it('does not open from a click on the card itself, only from View details', async () => {
+    await renderLoaded([rich])
+    const c = within(card('The Chipped-Color Veteran'))
+
+    await userEvent.click(c.getByRole('heading', { name: 'The Chipped-Color Veteran' }))
+    await userEvent.click(c.getByText('Why it works for them'))
+
+    expect(c.getByRole('button', { name: /View details/ })).toHaveAttribute(
+      'aria-expanded',
+      'false',
+    )
+  })
+
+  it('adds no heading inside a card besides the avatar name', async () => {
+    await renderLoaded([rich])
+
+    await userEvent.click(
+      within(card('The Chipped-Color Veteran')).getByRole('button', { name: /View details/ }),
+    )
+
+    expect(within(card('The Chipped-Color Veteran')).getAllByRole('heading')).toHaveLength(1)
   })
 })
