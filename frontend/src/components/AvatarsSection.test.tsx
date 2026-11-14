@@ -337,7 +337,7 @@ describe('AvatarsSection', () => {
       expect(names()).toEqual(['The Deadline Gift-Giver', 'The Heirloom Commissioner']),
     )
     await waitFor(() =>
-      expect(screen.getByRole('heading', { name: 'Buyer avatars', level: 2 })).toHaveFocus(),
+      expect(screen.getByRole('heading', { name: 'AI Customer Avatars', level: 2 })).toHaveFocus(),
     )
   })
 
@@ -389,7 +389,7 @@ describe('AvatarsSection', () => {
       expect(names()).toEqual(['The Deadline Gift-Giver', 'The Promotion Ring Buyer']),
     )
     await waitFor(() =>
-      expect(screen.getByRole('heading', { name: 'Buyer avatars', level: 2 })).toHaveFocus(),
+      expect(screen.getByRole('heading', { name: 'AI Customer Avatars', level: 2 })).toHaveFocus(),
     )
   })
   describe('concepts', () => {

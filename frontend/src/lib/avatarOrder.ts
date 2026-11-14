@@ -16,3 +16,12 @@ export function moveItem<T>(items: T[], from: number, to: number): T[] {
 export function priorityLabel(index: number): string {
   return String(index + 1).padStart(2, '0')
 }
+
+// How many of the highest-priority avatars the cards highlight: a creative test's first round
+// uses four different avatars, so the top four are the ones that can run first.
+export const TOP_PRIORITY_COUNT = 4
+
+// Whether the avatar at this place in the priority order is one of the top ones.
+export function isTopPriority(index: number): boolean {
+  return index >= 0 && index < TOP_PRIORITY_COUNT
+}
