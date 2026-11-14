@@ -5,6 +5,59 @@ item to the pull request that does it, and delete it here when that merges.
 
 ## Open
 
+### A real "primary motivation" field in the research output (asked 2026-11-14)
+A buyer avatar has no field for why the customer buys: `BuyerAvatarDraft` holds `who`, `purchaseFor`, the seven lists
+(primary problems, unknown problems, mechanisms, alternatives, objections, hooks, creative angles) and concepts. The
+Avatars tab cards therefore show the avatar's first mechanism under the honest label "Why it works for them". Add a
+real primary-motivation field, written by the research agent. Prompt: add it to the avatar drafts in the research
+template and the `submit_findings` schema (one short sentence, grounded in the cited evidence, inferred ones flagged as
+today). Backend: the draft and avatar schemas, `prisma/schema.prisma` and `prisma/postgres/schema.prisma` with a
+migration for each (verified on a throwaway Postgres), the import parser, bulk create and update. Frontend: the avatar
+form and the review screens, and the card switches from `mechanisms[0]` to the new field (keeping the old behavior for
+avatars saved before it). A paid research run to check the output needs an approved dollar cap first.
+
+### Set Render's health check path to `/health` (asked 2026-11-13)
+Catch a broken deploy before it goes live. `GET /health` already exists (`read_health` in `backend/app/main.py`; the
+e2e web server waits on it), so what is missing is the Render side: `render.yaml` has no `healthCheckPath` and the live
+service's setting is unconfirmed. Set `healthCheckPath: /health` in the Blueprint and the service, and decide whether
+`/health` should also do a cheap database check (it only returns a fixed status today, so it proves the process started,
+not that the database connection works). Watch the first deploy after the change.
+
+### Hard campaign spend cap (asked 2026-11-14)
+Let the user set one fixed maximum for a campaign and have Meta enforce it: the app sets the Meta campaign's `spend_cap`
+to that amount (an integer in the account's minor currency unit, so $1,000 is `100000`; Meta's minimum is $100 USD; the
+documented way to remove a cap is `922337203685478`), and the existing circuit breaker (`planned_rounds_budget` in
+`ad_set_rounds.py`, checked in `optimization_jobs.py`) stays as the backup. Two things to settle first. It depends on
+every round living in one Meta campaign: true under the ad-set round design (each round is ad sets in the same
+campaign), so the cap covers all rounds together, and the planned total grows with each round ($1,000 for round 1, then
+$1,500 per later round with a winners ad set), so the cap must be raised by the user when they add a round or the app
+must say that the next round would exceed it. And v26.0 support is not verified: Meta's reference lists `spend_cap` on
+campaign create and update with no minimum version, but it needs one real test write when this is built (set it on a
+throwaway PAUSED campaign in the dev ad account, read it back, delete it; announce it first, per `CLAUDE.md`).
+
+### Recommend the top two winners at the end of a round (asked 2026-11-14)
+Today the user pauses losers in Meta and every ad left active carries into the winners ad set, up to four (`winner_candidates`
+and `chosen_winners` in `ad_set_rounds.py`); nothing ranks ads, and the "How each ad is doing" table is display-only.
+Build a recommendation, not an auto-pick: at the end of a round the launch summary pre-selects the **top two** ads, the
+user can change the selection, and the limit of four carried winners stays. Rank on the existing fair **72-hour
+common-window** comparison, not lifetime numbers, with a **minimum-spend threshold** below which an ad is not ranked
+(say so on the card, so thin data is not read as a result). **Exclude ads that are paused.** Prompt the user to launch round 2
+promptly when the round ends, because the round window does not move if they wait. The ranking metric (purchases, then cost
+per purchase, then a softer signal such as add-to-carts, given a target CPA near $400 and few purchases per round) is
+decided when it is built. One change with tests first, and the PRD and `docs/phase-7.md` updated with it.
+
+### Fix the frontend dependency audit warnings (found 2026-11-13)
+`npm audit` in `frontend/` reports 6 vulnerabilities (3 high, 3 moderate), all fixable by updating, none in what ships
+to browsers (the app's only runtime dependencies are `react`, `react-dom` and `react-router-dom`; the rest are build and
+test tooling). High: `vite` 8.2.0 to 8.2.2 (a direct dependency; its `launch-editor` issues, an unescaped-argument bug
+on Windows and an editor-flag misreading that can run a command); `undici` 8.0.0 to 8.12.1 (transitive; denial of service
+from an unhandled error in WebSocket decompression, and a second denial of service); `source-map-js` 1.0.0 to 1.2.1
+(transitive; event-loop denial of service through source-map section offsets). Moderate: `vitest` and
+`@vitest/coverage-v8` (direct, 2.1.0-beta.1 to 4.1.10) and `@vitest/mocker` (transitive, up to 4.1.11): a path
+traversal or arbitrary file read and a code injection through mock registration. Update `vite`, `vitest` and
+`@vitest/coverage-v8` together, rerun lint, `tsc`, the coverage gate and e2e, and check that `npm audit` is clean. The
+pre-commit and CI hooks run the same tools, so do it on its own branch.
+
 ### Move to Meta Marketing API v27.0 (or newer) on purpose (found 2026-11-12)
 Move to Meta Marketing API v27.0 (or newer) deliberately when no campaign is mid-round; decide the new "more
 mobile devices" default (send `device: 0` or accept wider reach); check Meta's expiry date for v26.0 and do the
