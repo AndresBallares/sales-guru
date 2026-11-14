@@ -277,7 +277,7 @@ test('the past research runs section stays at the bottom of the Avatars tab, and
 
   // The address the owner lands on with the Meta step skipped: the section must be there.
   await openAvatars(page, id, '?metaLater=1')
-  const library = page.getByRole('heading', { level: 2, name: 'Buyer avatars' })
+  const library = page.getByRole('heading', { level: 2, name: 'AI Customer Avatars' })
   const table = page.getByRole('table', { name: 'Past research runs' })
   await expect(library).toBeVisible()
   await expect(table).toBeVisible()

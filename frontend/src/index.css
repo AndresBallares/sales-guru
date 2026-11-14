@@ -6235,15 +6235,14 @@ main > section.campaigns-overview {
   position: relative;
   display: flex;
   flex-direction: column;
-  gap: 0.5rem;
   min-width: 0;
-  padding: 0.75rem 1rem 1rem;
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius-card);
   transition:
     border-color 0.15s ease,
-    box-shadow 0.15s ease,
+    box-shadow 0.2s ease,
+    transform 0.2s ease,
     opacity 0.15s ease;
 }
 
@@ -6253,12 +6252,21 @@ main > section.campaigns-overview {
   box-shadow: var(--shadow-card);
 }
 
+.avatar-card:hover:not(.is-dragging, .is-editing) {
+  transform: translateY(-2px);
+}
+
 .avatar-card.is-inactive {
   opacity: 0.72;
 }
 
 .avatar-card.is-editing {
   grid-column: 1 / -1;
+}
+
+/* One open card makes its row taller; the others keep their own height instead of stretching. */
+.avatar-grid:has(.avatar-card.is-expanded) .avatar-card:not(.is-expanded) {
+  align-self: start;
 }
 
 .avatar-card.is-dragging {
@@ -6271,18 +6279,93 @@ main > section.campaigns-overview {
   box-shadow: 0 0 0 2px var(--accent);
 }
 
-.avatar-card-top {
-  display: flex;
-  align-items: center;
-  gap: 0.25rem;
+/* The portrait, with the priority badge and the card's controls laid over its top edge. */
+.avatar-card-media {
+  position: relative;
 }
 
-.avatar-card-rank {
-  margin-right: auto;
-  font-size: 1.1rem;
+.avatar-portrait {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  overflow: hidden;
+  border-radius: calc(var(--radius-card) - 1px) calc(var(--radius-card) - 1px) 0 0;
+  background:
+    radial-gradient(
+      circle at 30% 20%,
+      color-mix(in srgb, hsl(var(--portrait-hue) 70% 60%) 34%, var(--surface)),
+      transparent 60%
+    ),
+    linear-gradient(
+      140deg,
+      color-mix(in srgb, hsl(var(--portrait-hue) 60% 55%) 24%, var(--surface)),
+      color-mix(in srgb, hsl(calc(var(--portrait-hue) + 40) 60% 50%) 38%, var(--surface))
+    );
+}
+
+.avatar-portrait img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.avatar-portrait-initials {
+  display: grid;
+  place-items: center;
+  width: 4.5rem;
+  height: 4.5rem;
+  border-radius: 50%;
+  border: 1px solid color-mix(in srgb, hsl(var(--portrait-hue) 60% 40%) 30%, transparent);
+  background: color-mix(in srgb, var(--surface) 62%, transparent);
+  font-size: 1.5rem;
   font-weight: 700;
+  letter-spacing: 0.04em;
+  color: color-mix(in srgb, hsl(var(--portrait-hue) 60% 38%) 75%, var(--text));
+}
+
+.avatar-card-top {
+  position: absolute;
+  inset: 0.5rem 0.5rem auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.avatar-priority {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.3rem;
+  padding: 0.2rem 0.65rem;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--surface) 88%, transparent);
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+}
+
+.avatar-priority.is-top {
+  border-color: color-mix(in srgb, var(--primary) 40%, transparent);
+  background: var(--primary-soft);
+  color: var(--primary);
+}
+
+.avatar-priority-num {
+  font-size: 0.9rem;
   font-variant-numeric: tabular-nums;
-  color: var(--accent);
+}
+
+.avatar-card-controls {
+  display: flex;
+  align-items: center;
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--surface) 88%, transparent);
+  border: 1px solid var(--border);
 }
 
 .avatar-card-handle {
@@ -6313,10 +6396,20 @@ main > section.campaigns-overview {
   margin-left: 0;
 }
 
+.avatar-card-body {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 0.6rem;
+  min-width: 0;
+  padding: 0.9rem 1rem 0.5rem;
+}
+
 .avatar-card-name {
   margin: 0;
-  font-size: 1.05rem;
-  font-weight: 600;
+  font-size: 1.1rem;
+  font-weight: 650;
+  line-height: 1.25;
   overflow-wrap: anywhere;
 }
 
@@ -6335,12 +6428,13 @@ main > section.campaigns-overview {
 .avatar-card-who {
   margin: 0;
   font-size: 0.9rem;
+  line-height: 1.45;
   color: var(--text-secondary);
   overflow-wrap: anywhere;
   display: -webkit-box;
   -webkit-box-orient: vertical;
-  -webkit-line-clamp: 3;
-  line-clamp: 3;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
   overflow: hidden;
 }
 
@@ -6351,21 +6445,141 @@ main > section.campaigns-overview {
   overflow: visible;
 }
 
-.avatar-card-more {
-  align-self: flex-start;
+/* The two things worth knowing at a glance, each in its own quiet panel. */
+.avatar-insight {
+  padding: 0.55rem 0.7rem;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface-alpha);
+}
+
+.avatar-insight-label {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  margin-bottom: 0.2rem;
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.avatar-insight-label svg {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+}
+
+.avatar-insight-motivation .avatar-insight-label {
+  color: var(--accent);
+}
+
+.avatar-insight-pain .avatar-insight-label {
+  color: var(--warning);
+}
+
+.avatar-insight-text {
+  margin: 0;
+  font-size: 0.88rem;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  line-clamp: 3;
+  overflow: hidden;
+}
+
+.avatar-insight-text.is-expanded {
+  display: block;
+  -webkit-line-clamp: unset;
+  line-clamp: unset;
+  overflow: visible;
+}
+
+.avatar-details[hidden] {
+  display: none;
+}
+
+.avatar-details dl {
+  display: grid;
+  gap: 0.65rem;
+  margin: 0;
+  padding-top: 0.6rem;
+  border-top: 1px solid var(--border);
+}
+
+.avatar-detail dt {
+  margin-bottom: 0.2rem;
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-tertiary);
+}
+
+.avatar-detail dd {
+  margin: 0;
+}
+
+.avatar-detail ul {
+  margin: 0;
+  padding-left: 1.1rem;
+  font-size: 0.85rem;
+  line-height: 1.4;
+  color: var(--text-secondary);
+  overflow-wrap: anywhere;
+}
+
+.avatar-card-footer {
+  display: flex;
+  padding: 0.25rem 1rem 0.75rem;
+}
+
+.avatar-card-details {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
   min-height: 0;
-  padding: 0.15rem 0;
+  padding: 0.25rem 0;
   border: 0;
   background: transparent;
-  font-size: 0.85rem;
-  color: var(--accent);
+  font-size: 0.88rem;
+  font-weight: 600;
+  color: var(--primary);
   cursor: pointer;
 }
 
-.avatar-card-more:hover {
+.avatar-card-details:hover {
   background: transparent;
   box-shadow: none;
   text-decoration: underline;
+}
+
+.avatar-card-details:focus-visible {
+  outline: 2px solid var(--border-focus);
+  outline-offset: 3px;
+  border-radius: 4px;
+}
+
+.avatar-card-details-arrow {
+  display: inline-grid;
+  transition: transform 0.2s ease;
+}
+
+.avatar-card-details[aria-expanded='true'] .avatar-card-details-arrow {
+  transform: rotate(180deg);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .avatar-card,
+  .avatar-card-details-arrow {
+    transition: none;
+  }
+
+  .avatar-card:hover:not(.is-dragging, .is-editing) {
+    transform: none;
+  }
 }
 
 /* The Products tab: a library of cards (header, search, grid) and the drawer that adds or edits. */

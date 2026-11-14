@@ -243,15 +243,15 @@ export function AvatarsSection({
         <div className="avatars-header-text">
           <div className="avatars-title-row">
             <h2 id="avatars-heading" ref={headingRef} tabIndex={-1}>
-              Buyer avatars
+              AI Customer Avatars
             </h2>
             {avatars !== null && (
               <span className="avatars-count">{`${count} of ${MAX_BUYER_AVATARS} avatars`}</span>
             )}
           </div>
           <p className="avatars-subtitle">
-            Define and prioritize the customer segments Sales Guru uses to develop your marketing
-            campaigns.
+            Discover the customer profiles identified through AI-powered market research. Explore
+            their motivations, challenges, and purchasing behaviors.
           </p>
         </div>
         <div className="avatars-header-actions">
