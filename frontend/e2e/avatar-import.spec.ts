@@ -11,9 +11,10 @@ test('pasted research becomes drafts, and only the kept ones are saved', async (
   expect(businessId).toBeTruthy()
   const avatarsUrl = `${E2E_API_URL}/businesses/${businessId}/avatars`
 
-  // The import lives in the Avatars tab.
+  // The import lives in the Avatars tab. With no avatars yet the empty state repeats the
+  // header's button, so take the first one (the header's).
   await page.getByRole('tab', { name: 'Avatars' }).click()
-  await page.getByRole('button', { name: 'Import from document' }).click()
+  await page.getByRole('button', { name: 'Import from document' }).first().click()
   await page.getByLabel('Research document').fill('Gift buyers panic two days before an anniversary.')
   await page.getByRole('button', { name: 'Read document' }).click()
 
