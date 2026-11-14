@@ -348,8 +348,20 @@ describe('AdPreviewPage', () => {
 
     it('offers new rounds once a creative test is published', async () => {
       mockedApi.listCreatives.mockResolvedValue(three)
+      mockedApi.getStrategy.mockResolvedValue({
+        ...strategyOf('CREATIVE_TEST_PLAN'),
+        content: {
+          planType: 'CREATIVE_TEST_PLAN',
+          roundsBudget: 'AD_SET',
+        } as api.Strategy['content'],
+      })
+      mockedApi.getRoundsOverview.mockResolvedValue({
+        maxRounds: 3,
+        nextRoundProblem: null,
+        rounds: [],
+      })
       mockedApi.listCampaigns.mockResolvedValue([
-        makeCampaign({ status: 'LIVE', metaCampaignId: 'meta-1', budgetLevel: 'CAMPAIGN' }),
+        makeCampaign({ status: 'LIVE', metaCampaignId: 'meta-1', budgetLevel: 'AD_SET' }),
       ])
 
       renderPage()
@@ -385,10 +397,10 @@ describe('AdPreviewPage', () => {
       await waitFor(() =>
         expect(mockedApi.getRoundsOverview).toHaveBeenCalledWith('biz-1', 'camp-1'),
       )
-      expect(screen.queryByText(/start a new creative test/i)).not.toBeInTheDocument()
+      expect(screen.queryByText(/new rounds can no longer be added/i)).not.toBeInTheDocument()
     })
 
-    it('explains why a test published before campaign budgets gets no new round', async () => {
+    it('explains why a test on a shared campaign budget gets no new round', async () => {
       mockedApi.listCreatives.mockResolvedValue(three)
       mockedApi.listCampaigns.mockResolvedValue([
         makeCampaign({ status: 'LIVE', metaCampaignId: 'meta-1', budgetLevel: 'AD_SET' }),
@@ -396,7 +408,7 @@ describe('AdPreviewPage', () => {
 
       renderPage()
 
-      expect(await screen.findByText(/start a new creative test/i)).toBeInTheDocument()
+      expect(await screen.findByText(/new rounds can no longer be added/i)).toBeInTheDocument()
       expect(screen.queryByRole('button', { name: 'Add new round' })).not.toBeInTheDocument()
     })
 

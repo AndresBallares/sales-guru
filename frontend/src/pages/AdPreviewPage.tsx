@@ -589,7 +589,6 @@ export function AdPreviewPage() {
                     <CreativeRoundsPanel
                       businessId={businessId}
                       campaignId={campaignId}
-                      budgetLevel={campaign?.budgetLevel}
                       roundsBudget={roundsBudget}
                     />
                   </section>
