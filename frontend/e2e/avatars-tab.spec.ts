@@ -53,11 +53,11 @@ test('the selected tab is kept in the URL, so a refresh or a link opens the same
 
   await avatarsTab.click()
   await expect(page).toHaveURL(/#avatars$/)
-  await expect(page.getByRole('heading', { name: 'Buyer avatars', level: 2 })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'AI Customer Avatars', level: 2 })).toBeVisible()
 
   await page.reload()
   await expect(avatarsTab).toHaveAttribute('aria-selected', 'true')
-  await expect(page.getByRole('heading', { name: 'Buyer avatars', level: 2 })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'AI Customer Avatars', level: 2 })).toBeVisible()
 
   // Arrow keys move between the tabs (and focus with them), and the hash follows.
   await avatarsTab.focus()
@@ -74,7 +74,7 @@ test('the back button on the Avatars tab returns to the business page without #a
   const businessUrl = page.url().split('#')[0]
   await page.getByRole('tab', { name: 'Avatars' }).click()
   await expect(page).toHaveURL(/#avatars$/)
-  await expect(page.getByRole('heading', { name: 'Buyer avatars', level: 2 })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'AI Customer Avatars', level: 2 })).toBeVisible()
 
   await page.getByRole('button', { name: 'Back to business page' }).click()
 
@@ -83,7 +83,7 @@ test('the back button on the Avatars tab returns to the business page without #a
     'aria-selected',
     'true',
   )
-  await expect(page.getByRole('heading', { name: 'Buyer avatars', level: 2 })).toHaveCount(0)
+  await expect(page.getByRole('heading', { name: 'AI Customer Avatars', level: 2 })).toHaveCount(0)
   // A refresh stays on the business page, and its back button goes to the dashboard again.
   await page.reload()
   await expect(page.getByRole('tab', { name: 'Results and campaigns' })).toHaveAttribute(
@@ -143,7 +143,7 @@ test('lists, edits, reorders, deactivates and deletes avatars', async ({ page })
   await chooseAction(page, 'The Heirloom Commissioner', 'Delete avatar')
   await confirm.getByRole('button', { name: 'Delete avatar' }).click()
   await expect.poll(() => shownNames(page)).toEqual([NAMES[1], 'Milestone Buyer'])
-  await expect(page.getByRole('heading', { name: 'Buyer avatars', level: 2 })).toBeFocused()
+  await expect(page.getByRole('heading', { name: 'AI Customer Avatars', level: 2 })).toBeFocused()
   expect((await apiAvatars(page, url)).map((a) => a.name)).toEqual([NAMES[1], 'Milestone Buyer'])
   const withDeleted = await apiAvatars(page, url, '?includeDeleted=true')
   expect(withDeleted.find((a) => a.name === NAMES[2])?.deletedAt).not.toBeNull()
@@ -154,7 +154,7 @@ test('the Avatars tab passes the axe checks with an edit form open, and with a d
 }) => {
   await businessWithAvatars(page)
   await page.getByRole('tab', { name: 'Avatars' }).click()
-  await expect(page.getByRole('heading', { name: 'Buyer avatars', level: 2 })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'AI Customer Avatars', level: 2 })).toBeVisible()
   await expect.poll(() => shownNames(page)).toEqual(NAMES)
   await page.getByRole('button', { name: 'Import from document' }).click()
 

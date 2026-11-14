@@ -2199,6 +2199,9 @@ export interface BuyerAvatar extends BuyerAvatarDraft {
   deletedAt: string | null
   // The research run it was saved from, if any.
   sourceRunId?: string | null
+  // A portrait for the card. Nothing stores one yet, so the card draws its own fallback;
+  // once a backend field fills this in, the card shows the image with no other change.
+  imageUrl?: string | null
 }
 
 export interface AvatarImportResult {

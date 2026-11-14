@@ -935,14 +935,14 @@ describe('BusinessDetailPage tabs', () => {
     const resultsTab = await screen.findByRole('tab', { name: 'Results and campaigns' })
     expect(resultsTab).toHaveAttribute('aria-selected', 'true')
     expect(screen.getByRole('tab', { name: 'Avatars' })).toHaveAttribute('aria-selected', 'false')
-    expect(screen.queryByRole('heading', { name: 'Buyer avatars' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: 'AI Customer Avatars' })).not.toBeInTheDocument()
     expect(mockedApi.listAvatars).not.toHaveBeenCalled()
   })
 
   it('opens the avatars tab straight from #avatars (a refresh or a shared link)', async () => {
     renderWithLocation('/businesses/biz-1#avatars')
 
-    expect(await screen.findByRole('heading', { name: 'Buyer avatars', level: 2 })).toBeInTheDocument()
+    expect(await screen.findByRole('heading', { name: 'AI Customer Avatars', level: 2 })).toBeInTheDocument()
     expect(screen.getByRole('tab', { name: 'Avatars' })).toHaveAttribute('aria-selected', 'true')
     expect(screen.getByRole('button', { name: 'Import from document' })).toBeInTheDocument()
     // The list is requested by an effect after the heading is on screen, so wait for it.
@@ -952,7 +952,7 @@ describe('BusinessDetailPage tabs', () => {
   it('on the Avatars tab the back button returns to the business page (no #avatars), not the dashboard', async () => {
     renderWithLocation('/businesses/biz-1#avatars')
 
-    expect(await screen.findByRole('heading', { name: 'Buyer avatars', level: 2 })).toBeInTheDocument()
+    expect(await screen.findByRole('heading', { name: 'AI Customer Avatars', level: 2 })).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Back to dashboard' })).not.toBeInTheDocument()
     await userEvent.click(screen.getByRole('button', { name: 'Back to business page' }))
 
@@ -961,7 +961,7 @@ describe('BusinessDetailPage tabs', () => {
       'aria-selected',
       'true',
     )
-    expect(screen.queryByRole('heading', { name: 'Buyer avatars' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: 'AI Customer Avatars' })).not.toBeInTheDocument()
     // Now on the first tab, the button goes back to the dashboard again.
     expect(screen.getByRole('button', { name: 'Back to dashboard' })).toBeInTheDocument()
   })
@@ -1003,11 +1003,11 @@ describe('BusinessDetailPage tabs', () => {
 
     await userEvent.click(await screen.findByRole('tab', { name: 'Avatars' }))
     expect(screen.getByTestId('location')).toHaveTextContent('/businesses/biz-1#avatars')
-    expect(await screen.findByRole('heading', { name: 'Buyer avatars', level: 2 })).toBeInTheDocument()
+    expect(await screen.findByRole('heading', { name: 'AI Customer Avatars', level: 2 })).toBeInTheDocument()
 
     await userEvent.click(screen.getByRole('tab', { name: 'Results and campaigns' }))
     expect(screen.getByTestId('location').textContent).toBe('/businesses/biz-1')
-    expect(screen.queryByRole('heading', { name: 'Buyer avatars' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: 'AI Customer Avatars' })).not.toBeInTheDocument()
   })
 
   it('has a Products tab, closed until it is chosen', async () => {
@@ -1052,7 +1052,7 @@ describe('BusinessDetailPage tabs', () => {
 
   it('keeps the query string when it changes tab', async () => {
     renderWithLocation('/businesses/biz-1?skipMeta=1#avatars')
-    await screen.findByRole('heading', { name: 'Buyer avatars', level: 2 })
+    await screen.findByRole('heading', { name: 'AI Customer Avatars', level: 2 })
 
     await userEvent.click(screen.getByRole('tab', { name: 'Results and campaigns' }))
 
@@ -1075,6 +1075,6 @@ describe('BusinessDetailPage tabs', () => {
     await waitFor(() => expect(mockedApi.getBrandProfile).toHaveBeenCalled())
     await screen.findAllByText(/brand/i)
     expect(screen.queryByRole('tablist')).not.toBeInTheDocument()
-    expect(screen.queryByRole('heading', { name: 'Buyer avatars' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: 'AI Customer Avatars' })).not.toBeInTheDocument()
   })
 })

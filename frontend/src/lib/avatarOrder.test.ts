@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { moveItem, priorityLabel } from './avatarOrder'
+import { isTopPriority, moveItem, priorityLabel, TOP_PRIORITY_COUNT } from './avatarOrder'
 
 describe('moveItem', () => {
   const ids = ['a', 'b', 'c', 'd']
@@ -40,5 +40,15 @@ describe('priorityLabel', () => {
     expect(priorityLabel(0)).toBe('01')
     expect(priorityLabel(8)).toBe('09')
     expect(priorityLabel(11)).toBe('12')
+  })
+})
+
+describe('isTopPriority', () => {
+  it('is true for the first few places only', () => {
+    expect(TOP_PRIORITY_COUNT).toBe(4)
+    expect([0, 1, 2, 3].every(isTopPriority)).toBe(true)
+    expect(isTopPriority(4)).toBe(false)
+    expect(isTopPriority(11)).toBe(false)
+    expect(isTopPriority(-1)).toBe(false)
   })
 })
